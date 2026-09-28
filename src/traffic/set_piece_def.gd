@@ -1,5 +1,6 @@
 class_name SetPieceDef
 extends Resource
+# lint: not-sim data schema; defaults are placeholders overwritten by data/set_pieces/*.tres
 ## A traffic set piece. Spec: Traffic director → set-piece table; fairness rules 4
 ## and 6. Files: data/set_pieces/<id>.tres (WP6.3). Spec values to author there:
 ##   truck_wall: all lanes but one blocked; warning = silhouettes

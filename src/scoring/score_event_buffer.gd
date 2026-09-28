@@ -83,8 +83,8 @@ func reset() -> void:
 func hash_into(h: int) -> int:
 	h = TraceHash.mix_int(h, _size)
 	for i in _size:
-		h = TraceHash.mix_int(h, Rng.fnv1a32(String(kind[i])))
-		h = TraceHash.mix_int(h, Rng.fnv1a32(String(tag[i])))
+		h = TraceHash.mix_int(h, Rng.fnv1a32(String(kind[i])))  # lint: allow-alloc trace-rate hashing, not a sim tick
+		h = TraceHash.mix_int(h, Rng.fnv1a32(String(tag[i])))  # lint: allow-alloc trace-rate hashing, not a sim tick
 		h = TraceHash.mix_int(h, points[i])
 		h = TraceHash.mix_float(h, multiplier[i])
 		h = TraceHash.mix_float(h, clearance_m[i])

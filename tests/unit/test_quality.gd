@@ -14,6 +14,23 @@ var _quality_events: Array[StringName] = []
 var _governor_events: Array[int] = []
 
 
+## The live `Quality` autoload also listens to Settings/Game events; detach it
+## so it doesn't apply to the viewport or emit alongside the node under test.
+func before_all() -> void:
+	var autoload := tree.root.get_node_or_null("Quality")
+	if autoload != null:
+		Events.settings_changed.disconnect(autoload._on_settings_changed)
+		Events.game_state_changed.disconnect(autoload._on_game_state_changed)
+
+
+func after_all() -> void:
+	var autoload := tree.root.get_node_or_null("Quality")
+	if autoload != null:
+		Events.settings_changed.connect(autoload._on_settings_changed)
+		Events.game_state_changed.connect(autoload._on_game_state_changed)
+		autoload.apply()
+
+
 func before_each() -> void:
 	_tuning = TuningFixture.new()
 	_saved_max_fps = Engine.max_fps

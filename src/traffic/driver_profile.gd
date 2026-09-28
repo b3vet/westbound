@@ -1,5 +1,6 @@
 class_name DriverProfile
 extends Resource
+# lint: not-sim data schema; defaults are placeholders overwritten by data/driver_profiles/*.tres
 ## A driver personality: IDM and MOBIL parameters plus lane-change behavior.
 ## Spec: Traffic → IDM, MOBIL, Fairness rules 1 and 7, Driver types table.
 ## Files: data/driver_profiles/<id>.tres (the eight profiles: cruiser, commuter,

@@ -281,7 +281,7 @@ Updated by the orchestrator at every merge.
 
 | Phase | Milestone | Status | Gate |
 | --- | --- | --- | --- |
-| 0 | M0 Foundation | 🟡 in progress: WP0.1 merged; Wave 0b running | continue |
+| 0 | M0 Foundation | 🟡 all WPs merged; awaiting CI green + owner web/iPhone check (async) | continue |
 | 1 | M1 Road & look (+ Track A) | ⬜ | ⏸ pause |
 | 2 | M2 Car, controls, cameras (+ Track B) | ⬜ | ⏸ pause |
 | 3 | M3 Traffic (+ Track C) | ⬜ | ⏸ pause |
