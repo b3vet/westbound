@@ -46,6 +46,6 @@ func to_dict() -> Dictionary:
 
 
 func from_dict(data: Dictionary) -> void:
-	for key in data:
+	for key: Variant in data:
 		if DEFAULTS.has(StringName(key)):
 			_values[StringName(key)] = data[key]

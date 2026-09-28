@@ -1,3 +1,4 @@
+@warning_ignore_start("unused_signal")
 extends Node
 ## Global event bus (autoload `Events`). Spec: Architecture rule 4.
 ##

@@ -18,6 +18,7 @@ Events="*res://src/core/events.gd"
 Settings="*res://src/core/settings.gd"
 Save="*res://src/core/save.gd"
 Game="*res://src/core/game.gd"
+Quality="*res://src/platform/quality.gd"
 
 [debug]
 
