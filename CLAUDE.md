@@ -39,6 +39,7 @@ tools/snap.sh <scene.tscn> [--renderer=compat|mobile|both] [--sweep=sky_t:0,0.5]
 - Units: meters, seconds, radians, m/s internally. km/h and degrees only at the tuning/UI boundary, converted once when params load.
 - Sim math in `float` (64-bit in GDScript). Avoid `Vector3` (32-bit) in simulation state; use it for rendering.
 - A short `##` doc comment at the top of each script names the spec section it implements.
+- **Touch input:** never index arrays by `InputEventScreenTouch/Drag.index`. On web it is the browser's raw `Touch.identifier`, which is a large arbitrary number on iOS Safari. Map it through `TouchSlots` (`src/input/touch_slots.gd`). Tests should use iOS-style ids such as `1_893_457_201`.
 
 ## Tests
 
