@@ -27,6 +27,7 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | D4 | Acceptance is on device | Web (Compatibility renderer) is the everyday playtest path. Thermal and fps acceptance numbers count **only from native iOS** | Owner decision. A web build on Safari is a feel check, not a thermal proxy. |
 | D5 | M0 done needs an Android phone | Android is exported and CI-built, but device verification is **pending an Android device** | Only an iPhone is confirmed. See [§10](#10-open-items-for-the-owner). |
 | D6 | Braking 9 m/s² *and* 250→100 km/h in ~1.3 s (contradictory: 9 m/s² alone gives ~4.6 s) | **Owner decision:** 9 m/s² stands; the 1.3 s feel target becomes the model's measured time (≈ 3.5–3.8 s: drag, engine braking and rolling resistance add to the 9 m/s²) | Heavy, committed braking; rewards reading traffic early |
+| D7 | Density 16 vehicles/km/lane at leg 8+ **and** max 60 active vehicles | At 3+ lanes the active window (200 m behind to ~1.15 km ahead) needs ~65–87 vehicles; the director thins batches evenly when capped. **Open:** raise the cap if the WP2.4 tick budget allows, else accept thinning | Spec numbers conflict mildly; decide with measured sim cost |
 
 New deviations get a row here before they are built.
 
