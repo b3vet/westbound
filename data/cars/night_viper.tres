@@ -5,6 +5,7 @@
 [resource]
 script = ExtResource("1_script")
 id = &"night_viper"
+model_scene_path = "res://assets/cars/placeholder/night_viper.glb"
 display_name = "Night Viper"
 top_speed_kmh = 285.0
 zero_to_200_s = 9.4

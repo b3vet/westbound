@@ -1,0 +1,13 @@
+{
+	"root_name": "Car_BruteV8",
+	"source": "cool_drive models/brute_v8.glb (owner's project; Tripo P1 wheel-less body)",
+	"forward_axis": "+X",
+	"length_m": 4.8,
+	"width_m": 1.95,
+	"height_m": 1.35,
+	"lift_frac": 0.0,
+	"wheel_radius_frac": 0.078,
+	"wheel_track_frac": 0.75,
+	"wheel_base_frac": 0.58,
+	"wheel_offset_z_frac": 0.0
+}
