@@ -9,7 +9,8 @@ extends Node3D
 ## No traffic, collisions or scoring yet: leaving the carriageway resets the car.
 ##
 ## Dev buttons (DriveControls), top-right: CAM, HUD; STEER (drag/gyro),
-## THROTTLE (auto/manual), MIRROR; CAR, RECAL (gyro neutral), RESET.
+## THROTTLE (auto/manual), MIRROR; CAR, RECAL (gyro neutral), RESET; top-left SANDBOX
+## (the traffic sandbox; on web also `?scene=sandbox` in the URL, reload to come back).
 ## Keys: A/D steer, W gas (manual), S brake, Shift boost, C camera, backtick HUD.
 
 const CAR_PATHS: Array[String] = [
@@ -23,6 +24,7 @@ const START_SPEED_KMH := 120.0
 const LAYOUT_BUTTON := Vector2(150.0, 48.0)
 const CAM_BUTTON := Vector2(190.0, 48.0)
 const FORGET_EVERY_M := 500.0
+const SANDBOX_SCENE := "res://src/traffic/dev/traffic_sandbox.tscn"
 
 @export var run_seed: int = 20260928
 
@@ -52,6 +54,13 @@ var _speed_label: Label
 
 
 func _ready() -> void:
+	# Web: `?scene=sandbox` in the page URL opens the traffic sandbox instead
+	# (browsers can't pass scene paths on the command line).
+	if OS.has_feature("web") and _url_scene() == "sandbox":
+		set_physics_process(false)
+		set_process(false)
+		_open_sandbox.call_deferred()
+		return
 	# After the car (0), before the camera rig (100): follow the car's new position.
 	process_physics_priority = 50
 	_tuning = Tuning.load_default()
@@ -206,9 +215,24 @@ func _build_controls() -> void:
 	_car_button = _controls.add_button(top_right, 2, "CAR", LAYOUT_BUTTON, _next_car, true)
 	_controls.add_button(top_right, 2, "RECAL", LAYOUT_BUTTON, _hub.recalibrate_gyro, true)
 	_controls.add_button(top_right, 2, "RESET", LAYOUT_BUTTON, func() -> void: _reset_car(_car.state.v), true)
+	_controls.add_button(DriveControls.Corner.TOP_LEFT, 1, "SANDBOX", LAYOUT_BUTTON, _open_sandbox, true)
 	_speed_label = _controls.add_label(DriveControls.Corner.TOP_LEFT, 0, 200.0)
 	add_child(_controls)
 	_refresh_buttons()
+
+
+func _open_sandbox() -> void:
+	get_tree().change_scene_to_file(SANDBOX_SCENE)
+
+
+static func _url_scene() -> String:
+	var query: Variant = JavaScriptBridge.eval("window.location.search", true)
+	if not (query is String):
+		return ""
+	for part: String in (query as String).trim_prefix("?").split("&"):
+		if part.begins_with("scene="):
+			return part.trim_prefix("scene=").to_lower()
+	return ""
 
 
 func _toggle_steering() -> void:
