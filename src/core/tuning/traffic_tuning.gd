@@ -45,11 +45,43 @@ extends Resource
 @export var spawn_ahead_m: float = 750.0
 @export var spawn_behind_m: float = 150.0
 @export var despawn_behind_m: float = 200.0
+## Ahead spawns land at least this far past the fog end (fairness rule 5). The ahead
+## distance is max(spawn_ahead_m, fog end + this); the fog end comes from the run.
+@export var spawn_fog_margin_m: float = 30.0   # not in spec: "past the fog end"
+## Despawn ahead once beyond the ahead distance + one batch + this ("beyond the active window").
+@export var spawn_despawn_ahead_margin_m: float = 100.0   # not in spec
+## Behind spawns use this many lanes from the median (clamped to lane_count - 1, at least 1).
+@export var spawn_behind_lane_count: int = 2   # not in spec: "the left lanes"
+## A behind spawn must be at least this much faster than the player.
+@export var spawn_behind_speed_margin_kmh: float = 10.0   # not in spec: "only when the player is slower"
+## Default ghost zone (no spawns): the player's box grown by these margins.
+@export var spawn_ghost_margin_long_m: float = 20.0   # not in spec
+@export var spawn_ghost_margin_lat_m: float = 1.0   # not in spec
+## A profile may spawn in a lane if its top desired speed reaches the lane flow minus
+## this; its desired speed is then drawn from [flow - this, max] within its range.
+@export var spawn_lane_speed_tolerance_kmh: float = 10.0   # not in spec: "slow profiles keep right"
+## keep_right profiles spawn only in this many rightmost lanes.
+@export var spawn_keep_right_lane_count: int = 1   # not in spec: "keeps right"
+## Mix of the non-aggressive traffic (the aggressive share comes from DirectorTuning by
+## leg). Ids name DriverProfiles; a profile missing here never spawns from Flow.
+@export var spawn_profile_ids: Array[StringName] = [&"cruiser", &"commuter", &"truck", &"bus", &"van", &"motorbike", &"hesitant"]
+@export var spawn_profile_weights_pct: PackedFloat64Array = [26.0, 34.0, 12.0, 4.0, 10.0, 4.0, 10.0]   # not in spec
+@export var spawn_aggressive_profile_id: StringName = &"aggressive"
+## Only from DirectorTuning.hesitant_first_leg (and the profile's own min_leg).
+@export var spawn_hesitant_profile_id: StringName = &"hesitant"
+## Color-index range when the biome has no traffic palette.
+@export var spawn_palette_fallback_count: int = 8   # not in spec
 
 @export_group("Opposite carriageway (visual only)")
 @export var opposite_max_vehicles: int = 30   # not in spec: "lower density"
 @export var opposite_density_pct: float = 50.0   # not in spec: share of the leg's density
 @export var opposite_speed_kmh: float = 110.0   # not in spec: "constant speed"
+## Opposite lanes run faster toward their median: lane i of n adds (n - 1 - i) x this.
+@export var opposite_lane_speed_step_kmh: float = 15.0   # not in spec
+## Spacing jitter around the mean (1000 / density) when placing opposite vehicles.
+@export var opposite_spacing_jitter_pct: float = 50.0   # not in spec
+## Recycled once this far behind the player (behind the camera).
+@export var opposite_recycle_behind_m: float = 30.0   # not in spec: "recycled as it passes behind the camera"
 
 @export_group("Reactions to the player")
 @export var tailgate_high_beam_distance_m: float = 10.0   # at night
