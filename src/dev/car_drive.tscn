@@ -1,0 +1,29 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://src/dev/car_drive.gd" id="1_drive"]
+[ext_resource type="PackedScene" path="res://src/ui/dev_hud.tscn" id="2_hud"]
+[ext_resource type="PackedScene" path="res://src/sun/sky.tscn" id="3_sky"]
+[ext_resource type="PackedScene" path="res://src/sun/dev/sky_t_slider.tscn" id="4_slider"]
+[ext_resource type="Script" path="res://src/input/player_input.gd" id="5_hub"]
+[ext_resource type="PackedScene" path="res://src/ui/controls_overlay.tscn" id="6_overlay"]
+[ext_resource type="PackedScene" path="res://src/camera/camera_rig.tscn" id="7_rig"]
+
+[node name="CarDrive" type="Node3D"]
+script = ExtResource("1_drive")
+
+[node name="Sky" parent="." instance=ExtResource("3_sky")]
+
+[node name="PlayerInput" type="Node" parent="."]
+script = ExtResource("5_hub")
+
+[node name="CameraRig" parent="." instance=ExtResource("7_rig")]
+
+[node name="Overlay" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="ControlsOverlay" parent="Overlay" instance=ExtResource("6_overlay")]
+
+[node name="DevHud" parent="." instance=ExtResource("2_hud")]
+
+[node name="SkyTSlider" parent="." instance=ExtResource("4_slider")]
+sky_path = NodePath("../Sky")

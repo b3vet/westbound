@@ -25,6 +25,8 @@ const RIGS := {
 const SPEEDS_KMH: Array[float] = [100.0, 160.0, 200.0, 250.0, 280.0]
 const CAR_SIZE := Vector3(1.9, 1.3, 4.5)
 const LANE_CHANGE_S := 1.0
+## Fits "CAM CHASE" and the other mode labels so the row never resizes.
+const CAM_BUTTON_SIZE := Vector2(190.0, 48.0)
 
 @export var run_seed: int = 20260928
 @export var start_speed_index: int = 2
@@ -39,6 +41,8 @@ var _builder: RoadBuilder
 var _roadside: Roadside
 var _sky: SkyRig
 var _controls: DriveControls
+var _speed_label: Label
+var _cam_button: Button
 var _camera: Camera3D
 var _car: MeshInstance3D
 var _shadow: BlobShadow
@@ -84,13 +88,14 @@ func _ready() -> void:
 	_sky = $Sky
 	_controls = DriveControls.new()
 	_controls.name = "DriveControls"
+	_controls.add_button(DriveControls.Corner.BOTTOM_LEFT, 0, "<", DriveControls.SQUARE, _change_lane.bind(-1))
+	_controls.add_button(DriveControls.Corner.BOTTOM_LEFT, 0, ">", DriveControls.SQUARE, _change_lane.bind(1))
+	_controls.add_button(DriveControls.Corner.BOTTOM_RIGHT, 0, "-", DriveControls.SQUARE, _change_speed.bind(-1))
+	_speed_label = _controls.add_label(DriveControls.Corner.BOTTOM_RIGHT, 0, 110.0)
+	_controls.add_button(DriveControls.Corner.BOTTOM_RIGHT, 0, "+", DriveControls.SQUARE, _change_speed.bind(1))
+	_cam_button = _controls.add_button(DriveControls.Corner.TOP_RIGHT, 0, "CAM", CAM_BUTTON_SIZE, _cycle_camera)
+	_controls.add_button(DriveControls.Corner.TOP_RIGHT, 0, "HUD", DriveControls.WIDE, Callable($DevHud, &"toggle"))
 	add_child(_controls)
-	_controls.lane_left.connect(_change_lane.bind(-1))
-	_controls.lane_right.connect(_change_lane.bind(1))
-	_controls.speed_down.connect(_change_speed.bind(-1))
-	_controls.speed_up.connect(_change_speed.bind(1))
-	_controls.camera_cycle.connect(_cycle_camera)
-	_controls.hud_toggle.connect(Callable($DevHud, &"toggle"))
 	_camera = $Camera3D
 	_car = _make_car()
 	add_child(_car)
@@ -213,8 +218,8 @@ func _change_speed(dir: int) -> void:
 
 
 func _refresh_controls() -> void:
-	_controls.set_speed_text("%d km/h" % int(SPEEDS_KMH[_speed_index]))
-	_controls.set_camera_text(String(CAMERAS[_cam_index]))
+	DriveControls.set_text(_speed_label, "%d km/h" % int(SPEEDS_KMH[_speed_index]))
+	DriveControls.set_text(_cam_button, "CAM %s" % String(CAMERAS[_cam_index]).to_upper())
 
 
 func _view_ahead() -> float:

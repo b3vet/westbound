@@ -10,11 +10,37 @@ extends SceneTree
 ## Equivalent raw call (after `godot --headless --import`):
 ##   godot --headless --script res://tests/run_all.gd -- [args]
 ## Exits non-zero if any test fails or any test script fails to load.
+## Any engine error, push_error() or script runtime error logged while a test runs
+## fails that test (a runtime error aborts the method silently otherwise). Tests
+## that deliberately trigger an error call `expect_errors(n)` first.
 
 const TEST_ROOT := "res://tests"
 const SKIP_DIRS := ["lib", "out", "baselines", "fixtures"]
 const SLOW_FAST_TEST_S := 5.0
 
+## Captures errors logged through the engine (OS.add_logger) while tests run.
+class ErrorCapture extends Logger:
+	var _mutex := Mutex.new()
+	var _messages := PackedStringArray()
+
+	func _log_error(function: String, file: String, line: int, code: String, rationale: String,
+			_editor_notify: bool, error_type: int, _script_backtraces: Array[ScriptBacktrace]) -> void:
+		if error_type == ERROR_TYPE_WARNING:
+			return
+		var text := rationale if not rationale.is_empty() else code
+		_mutex.lock()
+		_messages.append("%s (%s:%d %s)" % [text, file.get_file(), line, function])
+		_mutex.unlock()
+
+	func take() -> PackedStringArray:
+		_mutex.lock()
+		var out := _messages
+		_messages = PackedStringArray()
+		_mutex.unlock()
+		return out
+
+
+var _errors := ErrorCapture.new()
 var _tier := "fast"
 var _filter := ""
 var _list_only := false
@@ -52,6 +78,7 @@ func _prefixes() -> PackedStringArray:
 
 
 func _run() -> void:
+	OS.add_logger(_errors)
 	var prefixes := _prefixes()
 	var scripts := PackedStringArray()
 	_discover(TEST_ROOT, scripts)
@@ -83,15 +110,28 @@ func _run() -> void:
 			for m in methods:
 				print("    %s" % m)
 			continue
+		_errors.take()
 		await suite.before_all()
 		suite._take_failures()
+		for e in _errors.take():
+			failed += 1
+			failures.append("%s::before_all: engine error: %s" % [path, e])
+			print("    ERROR in before_all: %s" % e)
 		for m in methods:
+			_errors.take()
 			await suite.before_each()
 			var t0 := Time.get_ticks_usec()
 			await suite.call(m)
 			var dt_s := (Time.get_ticks_usec() - t0) / 1_000_000.0
 			await suite.after_each()
 			var errs: PackedStringArray = suite._take_failures()
+			var logged := _errors.take()
+			var allowed: int = suite._take_expected_errors()
+			if logged.size() > allowed:
+				for e in logged:
+					errs.append("engine error: %s" % e)
+			elif logged.size() < allowed:
+				errs.append("expected %d engine error(s), got %d" % [allowed, logged.size()])
 			var timing := "%.2fs" % dt_s
 			if m.begins_with("test_") and dt_s > SLOW_FAST_TEST_S:
 				timing += " SLOW (fast tier budget %.0fs)" % SLOW_FAST_TEST_S

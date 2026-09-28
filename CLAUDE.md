@@ -45,6 +45,7 @@ tools/snap.sh <scene.tscn> [--renderer=compat|mobile|both] [--sweep=sky_t:0,0.5]
 - `tests/**/test_<system>.gd`, extending `WBTest` (`tests/lib/wb_test.gd`). Auto-discovered, no registry.
 - `test_*` methods = fast tier (keep each under 5 s). `soak_*` methods = soak tier.
 - Assertions: `check`, `eq`, `ne`, `near`, `within_pct`, `lt/le/gt/ge`, `finite`, `fail`.
+- **Any engine error, `push_error()` or script runtime error during a test fails it.** A runtime error otherwise aborts the method silently. A test that deliberately triggers errors calls `expect_errors(n)` first.
 - Seeded systems get a determinism test (hash of the state trace).
 - Nodes created in tests go under `tree.root` and are freed in `after_each()`.
 

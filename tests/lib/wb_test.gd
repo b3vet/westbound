@@ -14,6 +14,7 @@ extends RefCounted
 var tree: SceneTree
 
 var _failures: PackedStringArray = []
+var _expected_errors: int = 0
 
 
 # ---------------------------------------------------------------- Lifecycle hooks
@@ -119,7 +120,19 @@ func finite(value: float, message: String = "") -> bool:
 	return true
 
 
+## Declare that the current test deliberately triggers `count` engine errors
+## (push_error, script errors). Otherwise any logged error fails the test.
+func expect_errors(count: int) -> void:
+	_expected_errors += count
+
+
 # ---------------------------------------------------------------- Runner interface
+
+func _take_expected_errors() -> int:
+	var n := _expected_errors
+	_expected_errors = 0
+	return n
+
 
 func _take_failures() -> PackedStringArray:
 	var out := _failures

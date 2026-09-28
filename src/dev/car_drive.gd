@@ -1,0 +1,249 @@
+extends Node3D
+## M2 integration scene: drive the real car (plan Phase 2, Gate M2; spec M2
+## "the drag and gyro layouts both feel precise on device"). Dev-only, replaced
+## by the real run loop in Phase 4.
+##
+## World stack as in the M1 drive scene (ProceduralRoadPath, FloatingOrigin,
+## RoadBuilder, Roadside, BiomeDirector, SkyRig) plus the physics PlayerCar driven
+## by PlayerInput through a PlayerController, the ControlsOverlay and the CameraRig.
+## No traffic, collisions or scoring yet: leaving the carriageway resets the car.
+##
+## Dev buttons (DriveControls), top-right: CAM, HUD; STEER (drag/gyro),
+## THROTTLE (auto/manual), MIRROR; CAR, RECAL (gyro neutral), RESET.
+## Keys: A/D steer, W gas (manual), S brake, Shift boost, C camera, backtick HUD.
+
+const CAR_PATHS: Array[String] = [
+	"res://data/cars/falcon_gt.tres",
+	"res://data/cars/night_viper.tres",
+	"res://data/cars/brute_v8.tres",
+]
+const START_LANE := 1
+const START_SPEED_KMH := 120.0
+## Dev scene sizes (canvas px).
+const LAYOUT_BUTTON := Vector2(150.0, 48.0)
+const CAM_BUTTON := Vector2(190.0, 48.0)
+const FORGET_EVERY_M := 500.0
+
+@export var run_seed: int = 20260928
+
+var _tuning: Tuning
+var _ctx: RunContext
+var _road: ProceduralRoadPath
+var _origin: FloatingOrigin
+var _director: BiomeDirector
+var _builder: RoadBuilder
+var _roadside: Roadside
+var _sky: SkyRig
+var _hub: PlayerInput
+var _rig: CameraRig
+var _car: PlayerCar
+var _controls: DriveControls
+var _car_index: int = 0
+var _params_cache: Dictionary = {}
+var _next_forget_s: float = 0.0
+var _resets: int = 0
+
+var _cam_button: Button
+var _steer_button: Button
+var _throttle_button: Button
+var _mirror_button: Button
+var _car_button: Button
+var _speed_label: Label
+
+
+func _ready() -> void:
+	# After the car (0), before the camera rig (100): follow the car's new position.
+	process_physics_priority = 50
+	_tuning = Tuning.load_default()
+	_ctx = RunContext.new(run_seed)
+	_road = ProceduralRoadPath.new(_ctx)
+
+	_origin = FloatingOrigin.new()
+	_origin.name = "FloatingOrigin"
+	add_child(_origin)
+	_origin.setup(_tuning.road.floating_origin_shift_km)
+
+	_director = BiomeDirector.new()
+	_director.name = "BiomeDirector"
+	add_child(_director)
+	_builder = RoadBuilder.new()
+	_builder.name = "RoadBuilder"
+	_builder.biome_director = _director
+	add_child(_builder)
+	_roadside = Roadside.new()
+	_roadside.name = "Roadside"
+	_roadside.biome_director = _director
+	add_child(_roadside)
+
+	_sky = $Sky
+	_hub = $PlayerInput
+	_rig = $CameraRig
+	_hub.camera_cycle_requested.connect(_rig.cycle_mode)
+	Events.camera_mode_changed.connect(func(_m: StringName) -> void: _refresh_buttons())
+	Events.settings_changed.connect(func(_k: StringName) -> void: _refresh_buttons())
+
+	_road.ensure_generated_to(_view_ahead(0.0))
+	var smp := _road.sample(0.0)
+	_origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+	_director.setup(_ctx, _road, _origin)
+	_builder.setup(_ctx, _road, _origin)
+	_roadside.setup(_ctx, _road, _origin)
+	_sky.setup(_ctx, _road, _origin)
+	_builder.build_all_now(0.0)
+
+	_spawn_car(0, 0.0)
+	_build_controls()
+
+	if Game.can_change_to(Game.COUNTDOWN):
+		Game.change_state(Game.COUNTDOWN)
+	if Game.can_change_to(Game.RUNNING):
+		Game.change_state(Game.RUNNING)
+
+
+func _physics_process(_delta: float) -> void:
+	var st := _car.state
+	_road.ensure_generated_to(_view_ahead(st.s))
+	if st.s >= _next_forget_s:
+		_road.forget_before(st.s - _roadside.reach_behind_m() - _tuning.road.chunk_length_m)
+		_next_forget_s = st.s + FORGET_EVERY_M
+	var smp := _car.road_sample()
+	_origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+	# No collisions until Phase 4: leaving the carriageway puts the car back.
+	if st.d < _road.median_barrier_d(st.s) or st.d > _road.guardrail_d(st.s):
+		_reset_car(st.v * 0.5)
+
+
+func _process(_delta: float) -> void:
+	var st := _car.state
+	_director.update_view(st.s)
+	_builder.update_view(st.s)
+	_roadside.update_view(st.s)
+	_sky.update_view(st.s)
+	var kmh := st.v * 3.6
+	DriveControls.set_text(_speed_label, "%d km/h  G%d" % [roundi(kmh), st.gear])
+	DevStats.report(&"car", _car.car.id)
+	DevStats.report(&"speed_kmh", roundi(kmh))
+	DevStats.report(&"gear", st.gear)
+	DevStats.report(&"rpm", roundi(st.rpm))
+	DevStats.report(&"s_m", roundi(st.s))
+	DevStats.report(&"d_m", snappedf(st.d, 0.01))
+	DevStats.report(&"lane", _road.lane_index_at(st.d, st.s))
+	DevStats.report(&"yaw_deg", snappedf(rad_to_deg(st.yaw), 0.1))
+	DevStats.report(&"lat_g", snappedf(st.accel_lat / 9.81, 0.01))
+	DevStats.report(&"in_steer", snappedf(_car.input.steer, 0.01))
+	DevStats.report(&"in_throttle", snappedf(_car.input.throttle, 0.01))
+	DevStats.report(&"in_brake", snappedf(_car.input.brake, 0.01))
+	DevStats.report(&"boost", snappedf(st.boost_meter, 0.01))
+	DevStats.report(&"layout", "%s/%s%s" % [_hub.effective_steering, _hub.throttle_mode,
+		" mirrored" if _hub.left_handed else ""])
+	DevStats.report(&"camera", _rig.mode)
+	DevStats.report(&"sky_t", snappedf(_sky.sky_t, 0.001))
+	DevStats.report(&"resets", _resets)
+	DevStats.report(&"seed", run_seed)
+
+
+## Snap hook (tools/snap.sh): --s=, --sky_t=, --car=0..2, --cam=, --speed_kmh=.
+func snap_setup(args: Dictionary) -> void:
+	if args.has("sky_t"):
+		_sky.sky_t = float(args["sky_t"])
+	if args.has("car"):
+		_car_index = int(args["car"]) % CAR_PATHS.size()
+	var s := float(args.get("s", 0.0))
+	var v := Units.kmh_to_mps(float(args.get("speed_kmh", START_SPEED_KMH)))
+	_road.ensure_generated_to(_view_ahead(s))
+	var smp := _road.sample(s)
+	_origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+	_builder.build_all_now(s)
+	_spawn_car(_car_index, s, v)
+	if args.has("cam"):
+		_rig.set_mode(StringName(str(args["cam"])))
+	_rig.snap_to_target()
+
+
+func _spawn_car(index: int, s: float, v_mps: float = -1.0) -> void:
+	var car_def: CarDef = load(CAR_PATHS[index])
+	if not _params_cache.has(index):
+		_params_cache[index] = VehicleParams.build(_tuning, car_def)
+	if _car != null:
+		remove_child(_car)
+		_car.queue_free()
+	_car = (load("res://src/vehicle/player_car.tscn") as PackedScene).instantiate()
+	_car.name = "PlayerCar"
+	add_child(_car)
+	_car.setup(_ctx, _road, _origin, car_def, _params_cache[index])
+	_car.controller = PlayerController.new(_hub)
+	var v := v_mps if v_mps >= 0.0 else Units.kmh_to_mps(START_SPEED_KMH)
+	_car.place_at(s, _road.lane_center_d(START_LANE, s), v)
+	_rig.set_target(_car, _car.state, _car.params.top_speed_mps)
+	_rig.snap_to_target()
+
+
+func _reset_car(v_mps: float) -> void:
+	_resets += 1
+	var s := _car.state.s
+	var lane := clampi(_road.lane_index_at(_car.state.d, s), 0, _road.lane_count(s) - 1)
+	if lane < 0:
+		lane = START_LANE
+	_car.place_at(s, _road.lane_center_d(lane, s), maxf(v_mps, 0.0))
+	_rig.snap_to_target()
+
+
+func _view_ahead(s: float) -> float:
+	return s + _builder.view_distance_m() + _tuning.road.chunk_length_m * 2.0
+
+
+# ---------------------------------------------------------------- Dev buttons
+
+func _build_controls() -> void:
+	_controls = DriveControls.new()
+	_controls.name = "DriveControls"
+	var top_right := DriveControls.Corner.TOP_RIGHT
+	_cam_button = _controls.add_button(top_right, 0, "CAM", CAM_BUTTON, _hub.request_camera_cycle)
+	_controls.add_button(top_right, 0, "HUD", DriveControls.WIDE, Callable($DevHud, &"toggle"))
+	_steer_button = _controls.add_button(top_right, 1, "STEER", LAYOUT_BUTTON, _toggle_steering, true)
+	_throttle_button = _controls.add_button(top_right, 1, "THR", LAYOUT_BUTTON, _toggle_throttle, true)
+	_mirror_button = _controls.add_button(top_right, 1, "MIRROR", LAYOUT_BUTTON, _toggle_mirror, true)
+	_car_button = _controls.add_button(top_right, 2, "CAR", LAYOUT_BUTTON, _next_car, true)
+	_controls.add_button(top_right, 2, "RECAL", LAYOUT_BUTTON, _hub.recalibrate_gyro, true)
+	_controls.add_button(top_right, 2, "RESET", LAYOUT_BUTTON, func() -> void: _reset_car(_car.state.v), true)
+	_speed_label = _controls.add_label(DriveControls.Corner.TOP_LEFT, 0, 200.0)
+	add_child(_controls)
+	_refresh_buttons()
+
+
+func _toggle_steering() -> void:
+	var gyro: bool = Settings.get_value(&"steering_mode") != &"gyro"
+	Settings.set_value(&"steering_mode", &"gyro" if gyro else &"drag")
+	if gyro:
+		# Web: arms the one-shot motion-permission request on the next tap (iOS Safari).
+		_hub.gyro.source.activate()
+		_hub.recalibrate_gyro()
+
+
+func _toggle_throttle() -> void:
+	var manual: bool = Settings.get_value(&"throttle_mode") != &"manual"
+	Settings.set_value(&"throttle_mode", &"manual" if manual else &"auto")
+
+
+func _toggle_mirror() -> void:
+	Settings.set_value(&"left_handed", not bool(Settings.get_value(&"left_handed")))
+
+
+func _next_car() -> void:
+	_car_index = (_car_index + 1) % CAR_PATHS.size()
+	var st := _car.state
+	_spawn_car(_car_index, st.s, st.v)
+	_refresh_buttons()
+
+
+func _refresh_buttons() -> void:
+	if _controls == null:
+		return
+	DriveControls.set_text(_cam_button, "CAM %s" % String(_rig.mode).to_upper())
+	var steering := String(_hub.effective_steering).to_upper()
+	if Settings.get_value(&"steering_mode") == &"gyro" and _hub.effective_steering != &"gyro":
+		steering = "GYRO N/A"
+	DriveControls.set_text(_steer_button, "STEER %s" % steering)
+	DriveControls.set_text(_throttle_button, "THR %s" % String(Settings.get_value(&"throttle_mode")).to_upper())
+	DriveControls.set_text(_mirror_button, "LEFT-H" if Settings.get_value(&"left_handed") else "RIGHT-H")
+	DriveControls.set_text(_car_button, String(_car.car.id).to_upper() if _car != null else "CAR")
