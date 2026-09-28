@@ -123,6 +123,21 @@ vec3 wb_output(vec3 linear_color) {
 #endif
 }
 
+// Alpha for a translucent layer that darkens toward (near) black, e.g. blob
+// shadows: pass the intended (linear-light) coverage, assign to ALPHA, and pass
+// the color through wb_output(). Mobile blends linear values; Compatibility
+// blends the sRGB-encoded values in its buffer, where the same alpha darkens far
+// more. dst * (1 - a) in linear light is ~ dst_srgb * (1 - a)^(1/2.2) encoded.
+const float WB_BLEND_GAMMA = 2.2;
+
+float wb_darken_alpha(float a) {
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+	return 1.0 - pow(clamp(1.0 - a, 0.0, 1.0), 1.0 / WB_BLEND_GAMMA);
+#else
+	return a;
+#endif
+}
+
 // ---------------------------------------------------------------- Surfaces
 
 // Vertex color -> linear albedo, with tint class and biome offset applied.

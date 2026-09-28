@@ -16,7 +16,7 @@ const EDGE_TOLERANCE_SKIP := 2
 
 func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
-	var max_limit := 8.0
+	var max_limit := 12.0
 	var mean_limit := 2.0
 	var diff_dir := ""
 	var files: PackedStringArray = []

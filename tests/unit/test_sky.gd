@@ -186,3 +186,20 @@ func test_origin_shift_keeps_horizon_absolute() -> void:
 	var mat := (_sky.get_node("Horizon") as MeshInstance3D).material_override as ShaderMaterial
 	eq(mat.get_shader_parameter(&"origin_xz"), Vector2(0.0, -2500.0), "horizon samples absolute positions")
 	fo.free()
+
+
+func test_sky_t_slider_scrubs_and_plays() -> void:
+	var slider := (load("res://src/sun/dev/sky_t_slider.tscn") as PackedScene).instantiate()
+	slider.set_process(false)
+	tree.root.add_child(slider)
+	slider.call(&"_process", 0.0)
+	eq(slider.call(&"get_sky"), _sky, "finds the rig through its group")
+	(slider.get_node("Panel/Row/Slider") as HSlider).value = 0.5
+	near(_sky.sky_t, 0.5, 1e-9, "dragging sets sky_t")
+	(slider.get_node("Panel/Row/Play") as Button).button_pressed = true
+	var cycle: float = slider.get(&"cycle_s")
+	slider.call(&"_process", cycle * 0.25)
+	near(_sky.sky_t, 0.75, 1e-6, "play advances a quarter cycle")
+	slider.call(&"_process", cycle * 0.5)
+	near(_sky.sky_t, 0.25, 1e-6, "and wraps")
+	slider.free()
