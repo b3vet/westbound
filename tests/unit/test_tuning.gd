@@ -416,7 +416,9 @@ func test_vehicle_controls_camera_numbers() -> void:
 	near(v.body_pitch_max_deg, 2.0, EPS)
 	near(v.body_spring_hz, 2.5, EPS)
 	near(v.body_damping_ratio, 0.6, EPS)
-	near(v.brake_target_s, 1.3, EPS)
+	# Owner decision 2026-09-28: braking stays 9 m/s^2; the spec's "250 -> 100 km/h in
+	# about 1.3 s" is dropped for the model's time (WP1.5, docs/PHYSICS.md).
+	near(v.brake_target_s, 3.6, EPS)
 	near(v.car_top_speed_min_kmh, 240.0, EPS)
 	near(v.car_top_speed_max_kmh, 300.0, EPS)
 	var c := t.controls

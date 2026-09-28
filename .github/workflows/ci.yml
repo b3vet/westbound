@@ -24,5 +24,7 @@ jobs:
         run: |
           tools/lint --self-test
           tools/lint
+      - name: GDScript warnings
+        run: tools/check_warnings.sh
       - name: Headless tests
         run: tools/test.sh --tier=${{ github.event.inputs.tier || 'fast' }}

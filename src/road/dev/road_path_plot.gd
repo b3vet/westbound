@@ -87,9 +87,9 @@ func _draw_plan(box: Rect2) -> void:
 		min_z = minf(min_z, smp.pos_z)
 		max_z = maxf(max_z, smp.pos_z)
 		s += step
-	var scale := minf(box.size.x / maxf(max_z - min_z, 1.0), box.size.y / maxf(max_x - min_x, 1.0)) * 0.95
+	var plot_scale := minf(box.size.x / maxf(max_z - min_z, 1.0), box.size.y / maxf(max_x - min_x, 1.0)) * 0.95
 	var center := Vector2((min_z + max_z) * 0.5, -(min_x + max_x) * 0.5)
-	var to_screen := func(p: Vector2) -> Vector2: return box.get_center() + (p - center) * scale
+	var to_screen := func(p: Vector2) -> Vector2: return box.get_center() + (p - center) * plot_scale
 	var screen := PackedVector2Array()
 	for p in pts:
 		screen.append(to_screen.call(p))
@@ -109,8 +109,8 @@ func _draw_plan(box: Rect2) -> void:
 			draw_circle(to_screen.call(Vector2(smp.pos_z, -smp.pos_x)), 4.0, CHECKPOINT)
 	draw_line(box.position + Vector2(40, 30), box.position + Vector2(10, 30), SUN, 3.0)
 	_label(box.position + Vector2(48, 36), "sun (heading 0, -Z)", SUN)
-	_label(box.position + Vector2(8, box.size.y - 8), "plan view %d km, seed %d, uniform scale 1 px = %.0f m (bends orange, checkpoints green)" % [
-		plan_km, seed_value, 1.0 / scale])
+	_label(box.position + Vector2(8, box.size.y - 8), "plan view %d km, seed %d, uniform plot_scale 1 px = %.0f m (bends orange, checkpoints green)" % [
+		plan_km, seed_value, 1.0 / plot_scale])
 
 
 func _draw_heading(box: Rect2) -> void:

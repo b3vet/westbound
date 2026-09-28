@@ -404,10 +404,10 @@ func _wind_turbine() -> void:
 		var a := TAU * float(i) / 3.0 + 0.3
 		var dir := Vector3(0.0, cos(a), sin(a))
 		var side := Vector3(0.0, -sin(a), cos(a))
-		var root := hub + dir * 1.0
+		var blade_root := hub + dir * 1.0
 		var tip := hub + dir * 36.0
-		_b.quad(root + side * 1.3, root - side * 0.6, tip - side * 0.25, tip + side * 0.35, Vector3.LEFT, &"white")
-		_b.quad(root + side * 1.3, root - side * 0.6, tip - side * 0.25, tip + side * 0.35, Vector3.RIGHT, &"concrete")
+		_b.quad(blade_root + side * 1.3, blade_root - side * 0.6, tip - side * 0.25, tip + side * 0.35, Vector3.LEFT, &"white")
+		_b.quad(blade_root + side * 1.3, blade_root - side * 0.6, tip - side * 0.25, tip + side * 0.35, Vector3.RIGHT, &"concrete")
 	_save(FARMLAND + "wind_turbine.res")
 
 
@@ -420,7 +420,7 @@ func _palette_png() -> void:
 	img.fill(Color.BLACK)
 	for i in _pal.size():
 		var x := (i % SWATCH_COLS) * SWATCH_PX
-		var y := (i / SWATCH_COLS) * SWATCH_PX
+		var y := floori(float(i) / float(SWATCH_COLS)) * SWATCH_PX
 		img.fill_rect(Rect2i(x + 1, y + 1, SWATCH_PX - 2, SWATCH_PX - 2), _pal.colors[i])
 	img.save_png(ProjectSettings.globalize_path(PALETTE_PNG))
 	_written.append(PALETTE_PNG)

@@ -109,8 +109,14 @@ The generator must keep radius ≥ 1,200 m, grade ≤ 5%, C1 continuity, and the
 
 **`VehicleState`** (`src/vehicle/vehicle_state.gd`, RefCounted, plain floats): `s, d, yaw, v` (forward speed), `v_lat, yaw_rate, steer_angle, accel_long, accel_lat, rpm, gear, boost_active, boost_meter` (0..1). It also has `reset()`, `copy_from(o)`, `hash_into(h)` and `trace_hash()`, which hash exact bits over every field. World heading = road heading at `s` + `yaw`.
 
-- **Writers:** `vehicle_physics`, which owns every field except the gearbox placeholders and the boost-meter fill. The caller adds `ScoringRuleSet.take_boost_fill()` to `boost_meter`, clamped to 1. Physics drains `boost_meter` and sets `boost_active`.
+- **Writers:** `vehicle_physics`, which owns every field (gearbox `rpm`/`gear` included) except the boost-meter fill. The caller adds `ScoringRuleSet.take_boost_fill()` to `boost_meter`, clamped to 1. Physics drains `boost_meter` and sets `boost_active`.
 - **Readers:** scoring, camera, `car_visual`, traffic (the player as participant), passability and the HUD.
+
+**`VehiclePhysics`** (`src/vehicle/vehicle_physics.gd`, WP1.5) is static and pure. `step(state, input, dt, params: VehicleParams, road: RoadPath = null)` mutates `state` in place and allocates nothing; `road` supplies curvature feed-forward.
+
+- **Road-relative quantities:** `VehicleState.yaw_rate` is relative to the road (it is d(yaw)/dt). World yaw rate = `yaw_rate + curvature·s_dot`. `accel_lat` includes the road's own curve.
+- **Params:** `VehicleParams.build(tuning, car, vtype = null)` runs once at load. It solves engine power and drag from the car's specs and precomputes the **lane-change capability curve** through `step` itself: `lane_change_time(v)`, `move_time(v, distance)`, `max_lateral_offset(v, t)`, `predicted_brake_time(v0, v1)`. Passability must use these.
+- Details are in `docs/PHYSICS.md`.
 
 **`VehicleInput`** (`src/vehicle/vehicle_input.gd`): `steer` (−1..1, + right), `throttle` (0..1), `brake` (0..1) and `boost` (bool, edge-triggered: true for the one tick a boost is requested). It has `clear()`, `copy_from()` and `hash_into()`. Every control layout produces exactly this, and physics and scoring can't tell layouts apart.
 
@@ -351,6 +357,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
+| 2026-09-28 | §4 VehiclePhysics API, road-relative yaw_rate, gearbox owned by physics, capability curve (WP1.5) | Orchestrator merge review |
 | 2026-09-28 | BiomeDef: parallel `prop_scenes`/`prop_densities_per_km` replaced by typed `scatter_props`/`field_grid` (WP1.4) | Orchestrator merge review |
 | 2026-09-28 | §3 ProceduralRoadPath notes (WP1.1) | Orchestrator merge review |
 | 2026-09-28 | §13 look contract: shader globals, world include, material paths, FloatingOrigin, world-system node API | Orchestrator, pre-Phase 1 |

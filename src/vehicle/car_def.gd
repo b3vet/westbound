@@ -3,8 +3,10 @@ extends Resource
 ## A player car. Spec: Car physics and feel → Car stats; Garage and progression.
 ## Files: data/cars/<id>.tres. Stats stay within about +-10% across the roster
 ## (VehicleTuning.car_stat_spread_pct); top speed within VehicleTuning's 240-300 km/h.
-## Physics coefficients (drag, rolling resistance, cornering stiffness...) that WP1.5
-## derives or needs are added here by WP1.5.
+## Physics coefficients are derived from these stats by VehicleParams (WP1.5): engine
+## power and aero drag from top_speed_kmh + zero_to_200_s, boost thrust from the
+## boost top-speed bonus, lane-change dynamics from handling_scale. The shared model
+## constants live in VehicleTuning. See docs/PHYSICS.md.
 ## Defaults below are neutral placeholders (not in spec); every data file sets its own values.
 
 @export var id: StringName = &""
@@ -27,6 +29,8 @@ extends Resource
 @export var width_m: float = 1.9
 @export var height_m: float = 1.3
 @export var mass_kg: float = 1500.0
+## Bicycle-model wheelbase (steady yaw rate = v tan(steer) / wheelbase, before understeer).
+@export var wheelbase_m: float = 2.7
 @export var gear_count: int = 6
 
 @export_group("Cosmetics")

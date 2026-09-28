@@ -40,7 +40,7 @@ func _init(pool_mesh: Mesh, max_per_block: int) -> void:
 		var arrays := mesh.surface_get_arrays(i)
 		var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
-		faces += (idx.size() if idx.size() > 0 else verts.size()) / 3
+		faces += int((idx.size() if idx.size() > 0 else verts.size()) / 3.0)
 	triangles_per_instance = faces
 
 

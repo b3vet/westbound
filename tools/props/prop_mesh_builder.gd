@@ -34,7 +34,7 @@ func _init(p: WBPalette) -> void:
 
 
 func triangle_count() -> int:
-	return _v.size() / 3
+	return int(_v.size() / 3.0)
 
 
 # ---------------------------------------------------------------- Faces
@@ -62,7 +62,7 @@ func face(points: PackedVector3Array, outward: Vector3, color_name: StringName,
 			var t := b
 			b = c
 			c = t
-		for p in [a, b, c]:
+		for p: Vector3 in [a, b, c]:
 			_v.append(p)
 			_n.append(n)
 			_c.append(col)

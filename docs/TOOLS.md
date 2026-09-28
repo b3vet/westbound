@@ -127,3 +127,13 @@ func test_traffic_tick_budget() -> void:
 - Set the budget at about 3× the median you measure locally. It must still sit well inside the real frame share (e.g. traffic at 120 Hz has an 8.3 ms tick and shares it). A budget test catches order-of-magnitude regressions, not 10% drift.
 - Keep each fast-tier bench under about 0.5 s. Longer or more precise runs go in `soak_*` methods.
 - Allocation freedom is not measured here. That is WB104 plus review.
+
+## tools/check_warnings.sh — GDScript warnings as errors
+
+Headless Godot never prints GDScript warnings, so a clean `tools/test.sh` run doesn't mean the code has none. This script temporarily writes an `override.cfg` that raises every warning the project enables (level 1 in `project.godot`) to an error. Warnings the project disables stay off. It then loads every `.gd` file under `src/`, `tests/` and `tools/`, skipping fixtures and `out/`.
+
+```
+tools/check_warnings.sh        # exit 1 and list offending scripts with the warning text
+```
+
+It runs in CI before the tests. To silence one warning, use `@warning_ignore("name")` with a short reason.
