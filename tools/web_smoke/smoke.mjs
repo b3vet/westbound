@@ -199,7 +199,17 @@ async function main() {
       if (msg.type() === 'error') failures.push(`console error: ${text}`);
     });
     page.on('pageerror', (err) => failures.push(`page error: ${err.message}`));
-    page.on('requestfailed', (req) => failures.push(`request failed: ${req.url()} (${req.failure()?.errorText})`));
+    page.on('requestfailed', (req) => {
+      // net::ERR_ABORTED is the browser cancelling a request it no longer needs
+      // (e.g. a duplicate prefetch of index.wasm); a missing file shows up as an
+      // HTTP error below and a failed boot as missing engine output.
+      const err = req.failure()?.errorText ?? '';
+      if (err.includes('ERR_ABORTED')) {
+        console.log(`smoke: note: aborted request ignored: ${req.url()}`);
+        return;
+      }
+      failures.push(`request failed: ${req.url()} (${err})`);
+    });
     page.on('response', (res) => {
       // Browsers may probe /favicon.ico on their own; Pages would 404 it too.
       if (res.status() >= 400 && !res.url().endsWith('/favicon.ico')) {
