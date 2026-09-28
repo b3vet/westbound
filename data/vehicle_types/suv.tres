@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="VehicleType" format=3]
+
+[ext_resource type="Script" uid="uid://dfcoc7c2vdpug" path="res://src/vehicle/vehicle_type.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"suv"
+display_name = "SUV"
+length_m = 4.9
+width_m = 1.95
+height_m = 1.8
+blocks_sightlines = false
+is_motorbike = false
+mass_kg = 2000.0
+allowed_profiles = Array[StringName]([&"commuter", &"hesitant"])
