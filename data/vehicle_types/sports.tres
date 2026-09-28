@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="VehicleType" format=3]
+
+[ext_resource type="Script" uid="uid://dfcoc7c2vdpug" path="res://src/vehicle/vehicle_type.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"sports"
+display_name = "Sports car"
+length_m = 4.5
+width_m = 1.95
+height_m = 1.2
+blocks_sightlines = false
+is_motorbike = false
+mass_kg = 1450.0
+allowed_profiles = Array[StringName]([&"aggressive", &"hesitant"])

@@ -40,6 +40,9 @@ extends Resource
 ## Hesitant: probability of cancelling after signaling (blinker off, stays in lane).
 @export var cancel_probability: float = 0.0
 @export var keep_right: bool = false
+## Keep-right profiles (trucks, buses: "right lanes") may only use the rightmost N lanes;
+## 0 = any lane. A vehicle spawned further left may always move right.
+@export var keep_right_lane_count: int = 0
 ## Motorbike: splits lanes in slow traffic (never during the player's lane change).
 @export var lane_split: bool = false
 

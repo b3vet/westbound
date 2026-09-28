@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="DriverProfile" format=3]
+
+[ext_resource type="Script" uid="uid://nuob0r5kscpw" path="res://src/traffic/driver_profile.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"cruiser"
+display_name = "Cruiser"
+desired_speed_min_kmh = 80.0
+desired_speed_max_kmh = 100.0
+idm_a_max_mps2 = 1.2
+idm_b_comfort_mps2 = 2.0
+idm_headway_s = 1.6
+idm_s0_m = 2.5
+idm_delta = 4.0
+mobil_politeness = 0.6
+mobil_threshold_mps2 = 0.3
+mobil_keep_right_bias_mps2 = 0.5
+mobil_b_safe_mps2 = 3.0
+signal_time_s = 1.0
+lane_change_move_min_s = 2.5
+lane_change_move_max_s = 3.0
+lane_change_frequency_scale = 0.5
+cancel_probability = 0.0
+keep_right = true
+keep_right_lane_count = 0
+lane_split = false
+min_leg = 1

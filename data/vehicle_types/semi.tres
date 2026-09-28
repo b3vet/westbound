@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="VehicleType" format=3]
+
+[ext_resource type="Script" uid="uid://dfcoc7c2vdpug" path="res://src/vehicle/vehicle_type.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"semi"
+display_name = "Semi"
+length_m = 16.0
+width_m = 2.55
+height_m = 4.0
+blocks_sightlines = true
+is_motorbike = false
+mass_kg = 15000.0
+allowed_profiles = Array[StringName]([&"truck"])
