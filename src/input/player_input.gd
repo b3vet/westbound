@@ -14,7 +14,16 @@ extends Node
 ##   throttle = auto: 1; manual: gas pedal / W / right trigger
 ##   boost    = edge; consume_boost() returns it once (PlayerController, per tick)
 ## The layout follows Settings (steering_mode, throttle_mode, left_handed and the
-## steer_* scales) until set_layout() pins one; use_settings() goes back.
+## steer_* scales) until set_layout() pins one; use_settings() goes back. The look
+## settings (controls_scale, drag_visual) are always followed.
+##
+## Manual pedals (plan D9, one thumb per side): a finger that lands on the gas column
+## (gas pedal + the boost cap on top) is captured until it lifts and gives full gas
+## wherever it slides, except clearly onto the brake. Sliding up past the joint line
+## onto the cap, or flicking up, fires one boost; the thumb must come back down below
+## the cap (and stop flicking) before it can boost again. A brake finger is captured
+## the same way (proportional to its height on the pedal) and switches to gas only
+## when clearly on the gas column.
 ##
 ## Per-event and per-tick code allocates nothing (packed per-finger arrays sized once).
 
@@ -47,6 +56,11 @@ const SET_LEFT_HANDED := &"left_handed"
 const SET_SENSITIVITY := &"steer_sensitivity"
 const SET_DEAD_ZONE := &"steer_dead_zone"
 const SET_CURVE := &"steer_curve"
+const SET_DRAG_VISUAL := &"drag_visual"
+const SET_CONTROLS_SCALE := &"controls_scale"
+## drag_visual values (plan D10): anchor ring + thumb dot, or a turning steering wheel.
+const RING := &"ring"
+const WHEEL := &"wheel"
 const SETTING_FALLBACKS := {
 	SET_STEERING: DRAG,
 	SET_THROTTLE: AUTO,
@@ -54,6 +68,8 @@ const SETTING_FALLBACKS := {
 	SET_SENSITIVITY: 1.0,
 	SET_DEAD_ZONE: 1.0,
 	SET_CURVE: 1.0,
+	SET_DRAG_VISUAL: RING,
+	SET_CONTROLS_SCALE: 1.0,
 }
 
 ## false: the owner calls advance(dt) itself (tests, scripted runs).
@@ -87,6 +103,9 @@ var layout_version: int = 0
 var sensitivity: float = 1.0
 var dead_zone_scale: float = 1.0
 var curve_scale: float = 1.0
+## Look settings: touch control size multiplier (clamped) and the drag visual.
+var controls_scale: float = 1.0
+var drag_visual: StringName = RING
 
 ## Touch-derived state (overlay).
 var gas_pressed: bool = false
@@ -100,6 +119,9 @@ var _screen_set: bool = false
 var _zone: PackedInt32Array = PackedInt32Array()
 var _slot_brake: PackedFloat64Array = PackedFloat64Array()
 var _pos: PackedVector2Array = PackedVector2Array()
+## Gas fingers: on the boost cap now (1/0), and allowed to boost again (1/0).
+var _in_cap: PackedByteArray = PackedByteArray()
+var _boost_armed: PackedByteArray = PackedByteArray()
 var _flicks: Array[FlickMeter] = []
 var _was_paused: bool = false
 ## Browser touch ids (large on iOS Safari) → slots 0..MAX_TOUCHES-1.
@@ -113,6 +135,10 @@ func _init() -> void:
 	_slot_brake.resize(SLOTS)
 	_slot_brake.fill(0.0)
 	_pos.resize(SLOTS)
+	_in_cap.resize(SLOTS)
+	_in_cap.fill(0)
+	_boost_armed.resize(SLOTS)
+	_boost_armed.fill(0)
 	for i in SLOTS:
 		_flicks.append(FlickMeter.new())
 
@@ -239,6 +265,8 @@ func release_all() -> void:
 	_touch_slots.clear()
 	_zone.fill(ControlsLayout.Zone.NONE)
 	_slot_brake.fill(0.0)
+	_in_cap.fill(0)
+	_boost_armed.fill(0)
 	gas_pressed = false
 	boost_pressed = false
 	pedal_brake = 0.0
@@ -334,13 +362,15 @@ func _down(slot: int, pos: Vector2, time_s: float) -> void:
 		ControlsLayout.Zone.HOLD:
 			_flicks[slot].start(pos, time_s)
 			hold_pos = pos
-		ControlsLayout.Zone.GAS:
-			pass
+		ControlsLayout.Zone.GAS, ControlsLayout.Zone.BOOST:
+			# The cap is part of the gas control: gas, plus a boost on landing.
+			_zone[slot] = ControlsLayout.Zone.GAS
+			_flicks[slot].start(pos, time_s)
+			_start_gas(slot)
+			_gas_moved(slot, pos, false)
 		ControlsLayout.Zone.BRAKE:
-			_slot_brake[slot] = ThrottleInput.pedal_brake(layout.brake_up_frac(pos.y),
-					controls.pedal_brake_min_frac())
-		ControlsLayout.Zone.BOOST:
-			_boost_pending = true
+			_flicks[slot].start(pos, time_s)
+			_set_pedal_brake(slot, pos)
 	_refresh_touch_state()
 
 
@@ -359,10 +389,52 @@ func _move(slot: int, pos: Vector2, time_s: float) -> void:
 				_boost_pending = true
 			hold_pos = pos
 			_refresh_touch_state()
-		ControlsLayout.Zone.BRAKE:
-			_slot_brake[slot] = ThrottleInput.pedal_brake(layout.brake_up_frac(pos.y),
-					controls.pedal_brake_min_frac())
+		ControlsLayout.Zone.GAS, ControlsLayout.Zone.BRAKE:
+			_pedal_moved(slot, pos, time_s)
 			_refresh_touch_state()
+
+
+## A captured pedal finger moved: switch pedals only when clearly on the other one.
+func _pedal_moved(slot: int, pos: Vector2, time_s: float) -> void:
+	var flicked := _flicks[slot].move(pos, time_s)
+	if _zone[slot] == ControlsLayout.Zone.GAS:
+		if layout.brake_takes(pos):
+			_zone[slot] = ControlsLayout.Zone.BRAKE
+			_in_cap[slot] = 0
+		else:
+			_gas_moved(slot, pos, flicked)
+			return
+	elif layout.gas_takes(pos):
+		_zone[slot] = ControlsLayout.Zone.GAS
+		_slot_brake[slot] = 0.0
+		_start_gas(slot)
+		_gas_moved(slot, pos, false)
+		return
+	_set_pedal_brake(slot, pos)
+
+
+func _start_gas(slot: int) -> void:
+	_in_cap[slot] = 0
+	_boost_armed[slot] = 1
+
+
+## Gas finger: boost on entering the cap or on an upward flick, once until re-armed
+## (back below the cap by the re-arm distance, with the flick meter settled).
+func _gas_moved(slot: int, pos: Vector2, flicked: bool) -> void:
+	var in_cap := layout.above_gas_joint(pos.y)
+	var entered := in_cap and _in_cap[slot] == 0
+	if (entered or flicked) and _boost_armed[slot] == 1:
+		_boost_pending = true
+		_boost_armed[slot] = 0
+	elif _boost_armed[slot] == 0 and _flicks[slot].is_armed() \
+			and pos.y > layout.gas_rect.position.y + layout.boost_rearm_px:
+		_boost_armed[slot] = 1
+	_in_cap[slot] = 1 if in_cap else 0
+
+
+func _set_pedal_brake(slot: int, pos: Vector2) -> void:
+	_slot_brake[slot] = ThrottleInput.pedal_brake(layout.brake_up_frac(pos.y),
+			controls.pedal_brake_min_frac())
 
 
 func _up(slot: int, time_s: float) -> void:
@@ -371,6 +443,7 @@ func _up(slot: int, time_s: float) -> void:
 		return
 	_zone[slot] = ControlsLayout.Zone.NONE
 	_slot_brake[slot] = 0.0
+	_in_cap[slot] = 0
 	if zone == ControlsLayout.Zone.DRAG:
 		drag.touch_up(slot, time_s)
 	_refresh_touch_state()
@@ -386,8 +459,8 @@ func _refresh_touch_state() -> void:
 		match _zone[i]:
 			ControlsLayout.Zone.GAS:
 				gas = true
-			ControlsLayout.Zone.BOOST:
-				boost = true
+				if _in_cap[i] == 1:
+					boost = true
 			ControlsLayout.Zone.BRAKE:
 				pb = maxf(pb, _slot_brake[i])
 			ControlsLayout.Zone.HOLD:
@@ -410,8 +483,18 @@ func _read_settings() -> void:
 
 
 func _on_setting_changed(key: StringName) -> void:
-	if follows_settings and SETTING_FALLBACKS.has(key):
+	if key == SET_DRAG_VISUAL:
+		# Visual only: the overlay redraws, the fingers stay down.
+		drag_visual = _read_drag_visual()
+	elif key == SET_CONTROLS_SCALE:
+		if controls != null:
+			_apply_layout()
+	elif follows_settings and SETTING_FALLBACKS.has(key):
 		_read_settings()
+
+
+func _read_drag_visual() -> StringName:
+	return WHEEL if StringName(_setting(SET_DRAG_VISUAL)) == WHEEL else RING
 
 
 func _setting(key: StringName) -> Variant:
@@ -427,13 +510,16 @@ func _apply_layout() -> void:
 	sensitivity = clampf(float(_setting(SET_SENSITIVITY)), lo, hi)
 	dead_zone_scale = clampf(float(_setting(SET_DEAD_ZONE)), lo, hi)
 	curve_scale = clampf(float(_setting(SET_CURVE)), lo, hi)
+	controls_scale = clampf(float(_setting(SET_CONTROLS_SCALE)), controls.controls_scale_min_factor,
+			controls.controls_scale_max_factor)
+	drag_visual = _read_drag_visual()
 	var exponent := controls.response_curve_exponent * curve_scale
 
 	effective_steering = GYRO if steering_mode == GYRO and gyro.source.is_supported() else DRAG
 	throttle_input.mode = MANUAL if throttle_mode == MANUAL else AUTO
 	var px_per_cm := layout.px_per_cm
 	layout.build(controls, layout.full, layout.safe, px_per_cm, effective_steering,
-			throttle_input.mode, left_handed)
+			throttle_input.mode, left_handed, controls_scale)
 
 	var px_per_m := px_per_cm / M_PER_CM
 	drag.configure(controls, controls.drag_max_m() / sensitivity,

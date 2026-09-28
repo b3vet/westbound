@@ -37,6 +37,11 @@ func start(pos: Vector2, time_s: float) -> void:
 	velocity = Vector2.ZERO
 
 
+## False from a flick until the finger slows down again (the re-arm).
+func is_armed() -> bool:
+	return _armed
+
+
 ## Returns true on the sample that completes a flick.
 func move(pos: Vector2, time_s: float) -> bool:
 	var span := time_s - _ref_t

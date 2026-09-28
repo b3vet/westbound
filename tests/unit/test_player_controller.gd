@@ -71,31 +71,81 @@ func _key(h: PlayerInput, code: Key, pressed: bool, physical: bool = false) -> v
 
 func test_layout_rects_right_and_left_handed() -> void:
 	var l := hub.layout
+	var c := t.controls
 	hub.set_layout(PlayerInput.DRAG, PlayerInput.MANUAL, false)
 	check(l.has(l.gas_rect) and l.has(l.brake_rect) and l.has(l.boost_rect), "drag+manual has pedals")
 	eq(l.drag_zone, Rect2(0.0, 0.0, 640.0, 720.0), "drag zone = left half")
 	gt(l.gas_rect.position.x, 640.0, "gas on the right")
-	lt(l.brake_rect.end.x, l.gas_rect.position.x, "brake beside the gas")
-	lt(l.boost_rect.end.y, l.brake_rect.position.y, "boost above brake")
-	near(l.gas_rect.size.x, t.controls.pedal_width_cm * PX_PER_CM, 1e-4, "pedal size in cm")
+	lt(l.brake_rect.end.x, l.gas_rect.position.x, "brake beside the gas, inward")
+	near(l.brake_rect.end.y, l.gas_rect.end.y, 1e-4, "brake bottom-aligned with the gas")
+	_check_joined(l, "drag+manual")
+	near(l.gas_rect.size.x, c.pedal_width_cm * PX_PER_CM, 1e-4, "pedal size in cm")
+	near(l.gas_rect.size.y, c.pedal_height_cm * PX_PER_CM, 1e-4)
+	near(l.boost_rect.size.y, c.boost_cap_height_cm * PX_PER_CM, 1e-4, "cap height in cm")
+	_near_v(l.brake_rect.size, Vector2(c.brake_width_cm, c.brake_height_cm) * PX_PER_CM, 1e-4, "brake size")
+	near(SCREEN.end.x - l.gas_rect.end.x, c.controls_margin_cm * PX_PER_CM, 1e-4, "margin to the edge")
 	hub.set_layout(PlayerInput.DRAG, PlayerInput.MANUAL, true)
 	eq(l.drag_zone, Rect2(640.0, 0.0, 640.0, 720.0), "mirrored: drag zone right half")
 	lt(l.gas_rect.end.x, 640.0, "mirrored: gas on the left")
 	gt(l.brake_rect.position.x, l.gas_rect.end.x, "mirrored: brake beside")
+	_check_joined(l, "drag+manual mirrored")
 
 	hub.set_layout(PlayerInput.GYRO, PlayerInput.MANUAL, false)
 	lt(l.brake_rect.end.x, 640.0, "gyro+manual: brake bottom-left")
 	gt(l.gas_rect.position.x, 640.0, "gas bottom-right")
-	lt(l.boost_rect.end.y, l.gas_rect.position.y, "boost above gas")
+	_check_joined(l, "gyro+manual")
 	check(not l.has(l.drag_zone) and not l.has(l.hold_zone), "no drag or hold zone")
 	hub.set_layout(PlayerInput.GYRO, PlayerInput.MANUAL, true)
 	gt(l.brake_rect.position.x, 640.0, "mirrored: brake bottom-right")
 	lt(l.gas_rect.end.x, 640.0, "mirrored: gas bottom-left")
+	_check_joined(l, "gyro+manual mirrored")
 
 	hub.set_layout(PlayerInput.GYRO, PlayerInput.AUTO, false)
 	eq(l.hold_zone, SCREEN, "gyro+auto: hold anywhere")
+	check(not l.has(l.gas_rect) and not l.has(l.boost_rect), "auto: no pedals")
 	hub.set_layout(PlayerInput.DRAG, PlayerInput.AUTO, true)
 	eq(l.drag_zone, SCREEN, "drag+auto: the whole screen")
+
+
+func _near_v(actual: Vector2, expected: Vector2, tolerance: float, message: String = "") -> void:
+	near(actual.x, expected.x, tolerance, message + " (x)")
+	near(actual.y, expected.y, tolerance, message + " (y)")
+
+
+## The boost cap sits directly on top of the gas pedal: one contiguous control.
+func _check_joined(l: ControlsLayout, what: String) -> void:
+	near(l.boost_rect.end.y, l.gas_rect.position.y, 1e-4, what + ": cap touches the pedal")
+	near(l.boost_rect.position.x, l.gas_rect.position.x, 1e-4, what + ": same column")
+	near(l.boost_rect.size.x, l.gas_rect.size.x, 1e-4, what + ": same width")
+	eq(l.gas_control, l.gas_rect.merge(l.boost_rect), what + ": joined control rect")
+
+
+func test_controls_scale_scales_every_rect_and_is_clamped() -> void:
+	var c := t.controls
+	for steering: StringName in [PlayerInput.DRAG, PlayerInput.GYRO]:
+		for mirrored: bool in [false, true]:
+			hub.set_layout(steering, PlayerInput.MANUAL, mirrored)
+			var l := hub.layout
+			var base: Array[Rect2] = [l.gas_rect, l.boost_rect, l.brake_rect]
+			var base_gap := absf(l.gas_rect.get_center().x - l.brake_rect.get_center().x)
+			Settings.set_value(&"controls_scale", 1.2)
+			near(hub.controls_scale, 1.2, 1e-12, "follows the setting")
+			var scaled: Array[Rect2] = [l.gas_rect, l.boost_rect, l.brake_rect]
+			for i in base.size():
+				_near_v(scaled[i].size, base[i].size * 1.2, 1e-3, "%s rect %d scaled" % [steering, i])
+			var edge_gas := SCREEN.end.x - l.gas_rect.end.x if not mirrored else l.gas_rect.position.x
+			near(edge_gas, c.controls_margin_cm * PX_PER_CM, 1e-4, "the margin is not scaled")
+			if steering == PlayerInput.DRAG:
+				var gap := absf(l.gas_rect.get_center().x - l.brake_rect.get_center().x)
+				near(gap, base_gap * 1.2, 1e-3, "the gas-brake spacing scales")
+			_check_joined(l, "scaled")
+			Settings.set_value(&"controls_scale", 5.0)
+			near(hub.controls_scale, c.controls_scale_max_factor, 1e-12, "clamped high")
+			_near_v(l.gas_rect.size, base[0].size * c.controls_scale_max_factor, 1e-3)
+			Settings.set_value(&"controls_scale", 0.1)
+			near(hub.controls_scale, c.controls_scale_min_factor, 1e-12, "clamped low")
+			_near_v(l.brake_rect.size, base[2].size * c.controls_scale_min_factor, 1e-3)
+			Settings.set_value(&"controls_scale", 1.0)
 
 
 func test_pedals_respect_the_safe_area() -> void:
@@ -200,6 +250,178 @@ func test_boost_button_is_one_edge() -> void:
 	hub.advance(DT)
 	ctrl.update(DT, state, input)
 	check(not input.boost, "and only this tick, although the finger is still down")
+
+
+## Every manual layout, both hands: [steering, mirrored].
+const MANUAL_CASES: Array = [
+	[&"drag", false], [&"drag", true], [&"gyro", false], [&"gyro", true],
+]
+
+
+## Counts boost edges over one tick (PlayerController consumes once per tick).
+func _tick_boosts() -> int:
+	hub.advance(DT)
+	return 1 if hub.consume_boost() else 0
+
+
+func test_gas_hold_and_slide_up_onto_the_cap_boosts_once() -> void:
+	for case: Array in MANUAL_CASES:
+		hub.set_layout(StringName(case[0]), PlayerInput.MANUAL, bool(case[1]))
+		var what := "%s mirrored=%s" % case
+		var l := hub.layout
+		var g := l.gas_rect
+		var x := g.get_center().x
+		_touch(IOS_ID_A, g.get_center(), true, 0.0)
+		eq(_tick_boosts(), 0, what + ": holding gas does not boost")
+		eq(hub.throttle, 1.0, what + ": hold anywhere on the pedal = full gas")
+		check(not hub.boost_pressed)
+		# Slide slowly (well under flick speed) up onto the cap without lifting.
+		var boosts := 0
+		var steps := 10
+		for k in steps:
+			var y := lerpf(g.get_center().y, l.boost_rect.get_center().y, float(k + 1) / float(steps))
+			_drag(IOS_ID_A, Vector2(x, y), 0.1 * float(k + 1))
+			boosts += _tick_boosts()
+			eq(hub.throttle, 1.0, what + ": gas stays on while sliding")
+		eq(boosts, 1, what + ": exactly one boost edge")
+		check(hub.boost_pressed, what + ": the cap shows pressed")
+		# Jitter across the joint line (less than the re-arm distance): no second boost.
+		var rearm := t.controls.boost_cap_rearm_cm * PX_PER_CM
+		_drag(IOS_ID_A, Vector2(x, g.position.y + rearm * 0.5), 1.2)
+		boosts += _tick_boosts()
+		_drag(IOS_ID_A, Vector2(x, g.position.y - 2.0), 1.3)
+		boosts += _tick_boosts()
+		eq(boosts, 1, what + ": jitter at the joint does not boost again")
+		# Back down onto the pedal, then up again: a new, deliberate boost.
+		_drag(IOS_ID_A, g.get_center(), 1.5)
+		boosts += _tick_boosts()
+		check(not hub.boost_pressed)
+		_drag(IOS_ID_A, l.boost_rect.get_center(), 1.8)
+		boosts += _tick_boosts()
+		eq(boosts, 2, what + ": slide down and up again boosts again")
+		_touch(IOS_ID_A, l.boost_rect.get_center(), false, 2.0)
+		eq(_tick_boosts(), 0)
+		eq(hub.throttle, 0.0, what + ": lifting releases the gas")
+		check(not hub.gas_pressed and not hub.boost_pressed)
+
+
+func test_flick_up_from_the_gas_boosts_once() -> void:
+	for case: Array in MANUAL_CASES:
+		hub.set_layout(StringName(case[0]), PlayerInput.MANUAL, bool(case[1]))
+		var what := "%s mirrored=%s" % case
+		var g := hub.layout.gas_rect
+		var p := Vector2(g.get_center().x, g.end.y - 4.0)
+		_touch(IOS_ID_B, p, true, 0.0)
+		eq(_tick_boosts(), 0)
+		# 150 px (3.75 cm) in 50 ms = 0.75 m/s, straight up: a flick (it leaves the cap too).
+		_drag(IOS_ID_B, p + Vector2(0.0, -40.0), 0.02)
+		_drag(IOS_ID_B, p + Vector2(0.0, -150.0), 0.05)
+		var boosts := _tick_boosts()
+		_drag(IOS_ID_B, p + Vector2(0.0, -160.0), 0.2)
+		boosts += _tick_boosts()
+		eq(boosts, 1, what + ": one flick, one boost")
+		eq(hub.throttle, 1.0, what + ": gas stays on after the flick")
+		_touch(IOS_ID_B, p, false, 0.3)
+		hub.advance(DT)
+		eq(hub.throttle, 0.0)
+
+
+func test_touching_the_cap_is_gas_and_boost() -> void:
+	for case: Array in MANUAL_CASES:
+		hub.set_layout(StringName(case[0]), PlayerInput.MANUAL, bool(case[1]))
+		var what := "%s mirrored=%s" % case
+		_touch(IOS_ID_A, hub.layout.boost_rect.get_center(), true, 0.0)
+		eq(_tick_boosts(), 1, what + ": the cap boosts")
+		eq(hub.throttle, 1.0, what + ": and gives gas")
+		eq(_tick_boosts(), 0, what + ": once")
+		# Slide down onto the pedal: still gas, no boost.
+		_drag(IOS_ID_A, hub.layout.gas_rect.get_center(), 0.3)
+		eq(_tick_boosts(), 0)
+		eq(hub.throttle, 1.0)
+		_touch(IOS_ID_A, hub.layout.gas_rect.get_center(), false, 0.5)
+		hub.advance(DT)
+		eq(hub.throttle, 0.0)
+
+
+func test_gas_thumb_is_captured_until_lift() -> void:
+	for case: Array in MANUAL_CASES:
+		hub.set_layout(StringName(case[0]), PlayerInput.MANUAL, bool(case[1]))
+		var what := "%s mirrored=%s" % case
+		var l := hub.layout
+		var g := l.gas_rect
+		var outward := -1.0 if bool(case[1]) else 1.0
+		var inward := -outward
+		_touch(IOS_ID_A, g.get_center(), true, 0.0)
+		# Sideways off the pedal, towards the screen edge, and down past the pedal.
+		_drag(IOS_ID_A, g.get_center() + Vector2(outward * g.size.x, 0.0), 0.2)
+		hub.advance(DT)
+		eq(hub.throttle, 1.0, what + ": sliding off sideways keeps the gas")
+		_drag(IOS_ID_A, Vector2(g.get_center().x, g.end.y + 30.0), 0.4)
+		hub.advance(DT)
+		eq(hub.throttle, 1.0, what + ": sliding off the bottom keeps the gas")
+		# Inward, just off the pedal (within the capture margin): still gas.
+		var capture := t.controls.pedal_capture_cm * PX_PER_CM
+		var edge_in := g.position.x if inward < 0.0 else g.end.x
+		_drag(IOS_ID_A, Vector2(edge_in + inward * capture * 0.75, g.get_center().y), 0.6)
+		hub.advance(DT)
+		eq(hub.throttle, 1.0, what + ": within the capture margin")
+		eq(hub.brake, 0.0)
+		# A sideways wander does not boost.
+		eq(_tick_boosts(), 0)
+		_touch(IOS_ID_A, g.get_center(), false, 0.8)
+		hub.advance(DT)
+		eq(hub.throttle, 0.0, what + ": lift releases")
+
+
+func test_drag_manual_one_thumb_slides_between_gas_and_brake() -> void:
+	for mirrored: bool in [false, true]:
+		hub.set_layout(PlayerInput.DRAG, PlayerInput.MANUAL, mirrored)
+		var l := hub.layout
+		var br := l.brake_rect
+		var min_b := t.controls.pedal_brake_min_frac()
+		_touch(IOS_ID_A, l.gas_rect.get_center(), true, 0.0)
+		hub.advance(DT)
+		eq(hub.throttle, 1.0)
+		# Clearly onto the brake (its far half, past the capture margin): brakes.
+		var far_x := br.position.x + br.size.x * 0.25 if not mirrored else br.end.x - br.size.x * 0.25
+		_drag(IOS_ID_A, Vector2(far_x, br.get_center().y), 0.3)
+		hub.advance(DT)
+		near(hub.brake, min_b + (1.0 - min_b) * 0.5, 1e-6, "mirrored=%s: halfway up the brake" % mirrored)
+		eq(hub.throttle, 0.0, "brake cuts the gas")
+		check(not hub.gas_pressed)
+		_drag(IOS_ID_A, Vector2(far_x, br.position.y), 0.5)
+		hub.advance(DT)
+		eq(hub.brake, 1.0, "top of the brake")
+		# Back onto the gas.
+		_drag(IOS_ID_A, l.gas_rect.get_center(), 0.7)
+		hub.advance(DT)
+		eq(hub.brake, 0.0, "back on the gas")
+		eq(hub.throttle, 1.0)
+		eq(_tick_boosts(), 0, "no boost from sliding between pedals")
+		_touch(IOS_ID_A, l.gas_rect.get_center(), false, 0.9)
+		hub.advance(DT)
+		eq(hub.throttle, 0.0)
+
+
+func test_brake_pedal_proportional_every_manual_layout() -> void:
+	for case: Array in MANUAL_CASES:
+		hub.set_layout(StringName(case[0]), PlayerInput.MANUAL, bool(case[1]))
+		var what := "%s mirrored=%s" % case
+		var br := hub.layout.brake_rect
+		var min_b := t.controls.pedal_brake_min_frac()
+		_touch(IOS_ID_B, Vector2(br.get_center().x, br.end.y - 0.001), true, 0.0)
+		hub.advance(DT)
+		near(hub.brake, min_b, 1e-4, what + ": bottom edge")
+		for f: float in [0.25, 0.5, 0.75]:
+			_drag(IOS_ID_B, Vector2(br.get_center().x, br.end.y - br.size.y * f), f)
+			hub.advance(DT)
+			near(hub.brake, min_b + (1.0 - min_b) * f, 1e-6, "%s: %.2f up" % [what, f])
+		_drag(IOS_ID_B, Vector2(br.get_center().x, br.position.y - 200.0), 1.0)
+		hub.advance(DT)
+		eq(hub.brake, 1.0, what + ": above the pedal = full brake, finger kept")
+		_touch(IOS_ID_B, br.get_center(), false, 1.1)
+		hub.advance(DT)
+		eq(hub.brake, 0.0)
 
 
 func test_gyro_auto_hold_brakes_and_swipe_boosts() -> void:
