@@ -1,0 +1,84 @@
+[gd_resource type="Resource" script_class="BiomeDef" load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://src/road/biome_def.gd" id="1_biome"]
+[ext_resource type="Script" path="res://src/road/roadside/field_grid_def.gd" id="2_grid"]
+[ext_resource type="Script" path="res://src/road/roadside/roadside_prop.gd" id="3_prop"]
+
+[sub_resource type="Resource" id="FieldGrid_farmland"]
+script = ExtResource("2_grid")
+cell_length_m = 120.0
+band_depth_m = 70.0
+band_count = 5
+gap_m = 6.0
+setback_m = 5.0
+crop_mesh_paths = PackedStringArray("res://assets/props/farmland/crop_wheat.res", "res://assets/props/farmland/crop_straw.res", "res://assets/props/farmland/crop_green.res", "res://assets/props/farmland/crop_plowed.res")
+crop_weights = PackedFloat64Array(0.45, 0.25, 0.18, 0.12)
+bare_chance_frac = 0.08
+yard_chance_frac = 0.12
+yard_band_count = 3
+yard_mesh_paths = PackedStringArray("res://assets/props/farmland/farmstead.res", "res://assets/props/farmland/grain_bins.res", "res://assets/props/farmland/windpump.res", "res://assets/props/farmland/water_tower.res")
+yard_weights = PackedFloat64Array(0.35, 0.3, 0.2, 0.15)
+tree_row_chance_frac = 0.22
+tree_mesh_paths = PackedStringArray("res://assets/props/farmland/tree_poplar.res", "res://assets/props/farmland/tree_round.res")
+tree_weights = PackedFloat64Array(0.7, 0.3)
+tree_spacing_m = 9.0
+tree_scale_min_factor = 0.85
+tree_scale_max_factor = 1.15
+
+[sub_resource type="Resource" id="Prop_wind_turbines"]
+script = ExtResource("3_prop")
+id = &"wind_turbines"
+mesh_paths = PackedStringArray("res://assets/props/farmland/wind_turbine.res")
+pattern = 1
+sides = 0
+density_per_km = 0.3
+cell_length_m = 1000.0
+setback_min_m = 160.0
+setback_max_m = 420.0
+facing = 0
+yaw_jitter_deg = 12.0
+scale_min_factor = 0.9
+scale_max_factor = 1.1
+row_count_min = 3
+row_count_max = 5
+row_spacing_m = 200.0
+
+[sub_resource type="Resource" id="Prop_lone_trees"]
+script = ExtResource("3_prop")
+id = &"lone_trees"
+mesh_paths = PackedStringArray("res://assets/props/farmland/tree_round.res")
+pattern = 0
+sides = 0
+density_per_km = 4.0
+cell_length_m = 250.0
+setback_min_m = 2.0
+setback_max_m = 5.0
+facing = 1
+scale_min_factor = 0.8
+scale_max_factor = 1.2
+
+[resource]
+script = ExtResource("1_biome")
+id = &"farmland"
+display_name = "Farmland Plains"
+order = 1
+lane_count = 3
+curve_frequency_scale = 0.8
+crest_frequency_scale = 0.8
+tunnel_frequency_scale = 0.0
+prop_scenes = PackedStringArray()
+prop_densities_per_km = PackedFloat64Array()
+scatter_props = Array[ExtResource("3_prop")]([SubResource("Prop_wind_turbines"), SubResource("Prop_lone_trees")])
+field_grid = SubResource("FieldGrid_farmland")
+fence_mesh_path = "res://assets/props/farmland/fence_ranch.res"
+fence_setback_m = 2.0
+world_tint_offset = Color(0.02, 0.012, -0.01, 0)
+fog_tint_offset = Color(0.015, 0.01, 0, 0)
+horizon_cards = PackedStringArray()
+horizon_set = &"farmland_hills"
+ground_color = Color(0.62, 0.58, 0.33, 1)
+verge_color = Color(0.47, 0.56, 0.25, 1)
+traffic_palette = PackedColorArray(0.94, 0.93, 0.89, 1, 0.6, 0.63, 0.66, 1, 0.11, 0.11, 0.13, 1, 0.64, 0.17, 0.13, 1, 0.13, 0.17, 0.35, 1, 0.1, 0.58, 0.6, 1, 0.95, 0.89, 0.74, 1, 0.96, 0.46, 0.13, 1)
+set_piece_ids = Array[StringName]([&"slalom", &"merge_zone", &"road_works", &"convoy", &"truck_wall"])
+set_piece_weights = PackedFloat64Array(1, 1, 1, 0.6, 0.4)
+landmark_style = &"toll_gantry"
