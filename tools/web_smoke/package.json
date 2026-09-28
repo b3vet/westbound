@@ -1,0 +1,15 @@
+{
+  "name": "westbound-web-smoke",
+  "private": true,
+  "description": "Headless-Chromium smoke test for the Westbound web export (see docs/BUILDING.md).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.56.1"
+  }
+}
