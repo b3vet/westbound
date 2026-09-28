@@ -281,7 +281,7 @@ Updated by the orchestrator at every merge.
 
 | Phase | Milestone | Status | Gate |
 | --- | --- | --- | --- |
-| 0 | M0 Foundation | ⬜ not started | continue |
+| 0 | M0 Foundation | 🟡 in progress: WP0.1 merged; Wave 0b running | continue |
 | 1 | M1 Road & look (+ Track A) | ⬜ | ⏸ pause |
 | 2 | M2 Car, controls, cameras (+ Track B) | ⬜ | ⏸ pause |
 | 3 | M3 Traffic (+ Track C) | ⬜ | ⏸ pause |
@@ -294,7 +294,7 @@ Updated by the orchestrator at every merge.
 
 ## 10. Open items for the owner
 
-1. **Web playtest hosting.** The plan deploys each web build to GitHub Pages from CI. This needs the owner to enable Pages (Settings → Pages → Source: GitHub Actions) and to allow this branch in the `github-pages` environment's deployment rules. On a private repo, Pages needs a paid GitHub plan. If Pages isn't an option, name another host.
-2. **Android device.** Is one available for M0 and later gates? If not, D5 stands.
-3. **iOS export.** The Apple Team ID and bundle ID for the iOS preset. They are set locally, never committed.
+1. **Web playtest hosting:** GitHub Pages confirmed. The owner enables it (Settings → Pages → Source: GitHub Actions, and allows this branch in the `github-pages` environment) when the first playable web build is ready. Until then the CI web job only uploads the build as an artifact.
+2. **Android:** no device testing for now (D5 stands). Presets and CI builds are kept working.
+3. **iOS export:** handled by the owner when the time comes. Team ID and bundle ID are set locally, never committed.
 4. **Spec open questions** (final car roster, music direction, two-way stretches, web gyro, cloud save) stay open. The web-gyro one gets answered at the M2 gate.

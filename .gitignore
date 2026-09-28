@@ -1,0 +1,13 @@
+# Godot
+.godot/
+*.translation
+# Builds and exports
+build/
+*.apk
+*.aab
+*.ipa
+*.pck
+# Local-only
+export_credentials.cfg
+.DS_Store
+tests/out/
