@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="DirectorTuning" format=3 uid="uid://ddsblggqbqoaa"]
+
+[ext_resource type="Script" uid="uid://fugb8jbbaegk" path="res://src/core/tuning/director_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+wave_period_min_s = 45.0
+wave_period_max_s = 90.0
+breather_min_s = 10.0
+breather_max_s = 15.0
+ramp_first_leg = 1
+ramp_last_leg = 8
+density_first_per_km_lane = 8.0
+density_last_per_km_lane = 16.0
+aggressive_share_first_pct = 5.0
+aggressive_share_last_pct = 20.0
+hesitant_first_leg = 3
+blind_window_m = 150.0
+blind_density_cap_pct = 60.0
+set_piece_min_warning_m = 300.0
+spawn_batch_length_m = 300.0

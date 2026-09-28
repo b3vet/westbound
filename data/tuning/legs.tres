@@ -1,0 +1,23 @@
+[gd_resource type="Resource" script_class="LegsTuning" format=3 uid="uid://bt0oo7gnr6cuu"]
+
+[ext_resource type="Script" uid="uid://dnt02pxb2av8n" path="res://src/core/tuning/legs_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+leg_length_km = 3.5
+legs_to_coast = 8
+checkpoint_warning_distances_m = PackedFloat64Array(1000, 500)
+fork_sign_distance_m = 1000.0
+pace_target_kmh = 170.0
+pace_full_lift_margin_kmh = 40.0
+bonus_threads_min_count = 3
+bonus_heat_multiplier = 10.0
+bonus_heat_hold_s = 15.0
+bonus_clean_points = 5000
+bonus_pace_points = 3000
+bonus_threads_points = 3000
+bonus_heat_points = 5000
+objective_close_passes_count = 5
+objective_threads_count = 2
+objective_bonus_points = 2500
+journey_bonus_points = 50000

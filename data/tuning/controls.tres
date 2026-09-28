@@ -1,0 +1,17 @@
+[gd_resource type="Resource" script_class="ControlsTuning" format=3 uid="uid://dluwwsvm3j5dw"]
+
+[ext_resource type="Script" uid="uid://bt13b0j7no0ym" path="res://src/core/tuning/controls_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+drag_max_cm = 2.5
+drag_dead_zone_pct = 4.0
+response_curve_exponent = 1.6
+drag_release_ms = 80.0
+drag_brake_threshold_pct = 30.0
+flick_boost_min_mps = 0.6
+gyro_max_angle_deg = 25.0
+gyro_dead_zone_deg = 2.0
+gyro_smoothing_ms = 60.0
+keyboard_steer_ramp_s = 0.15
+first_run_warmup_s = 20.0

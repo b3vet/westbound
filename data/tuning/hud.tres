@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="HudTuning" format=3 uid="uid://b65iva0d51nhw"]
+
+[ext_resource type="Script" uid="uid://dsqjmnn05ifx1" path="res://src/core/tuning/hud_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+event_stack_lines = 4
+multiplier_display_max = 999.0
+multiplier_wobble_above = 20.0
+glitter_min_multiplier = 10.0
+min_speed_bar_show_below_kmh = 120.0
+leg_toast_s = 2.5
+countdown_from = 3
+retry_max_s = 2.0
+text_scales = PackedFloat64Array(1, 1.25)
+panel_bevel_px = 13.0
+control_bevel_px = 7.0
+neon_border_px = 1.5
+speed_tilt_deg = -7.0
+layout_grid_px = 46.0
+spacing_grid_px = 8.0

@@ -1,0 +1,45 @@
+[gd_resource type="Resource" script_class="VehicleTuning" format=3 uid="uid://bk5bktneofah5"]
+
+[ext_resource type="Script" uid="uid://cxc3oregkekqs" path="res://src/core/tuning/vehicle_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+physics_tick_hz = 120
+lane_change_speeds_kmh = PackedFloat64Array(100, 200, 280)
+lane_change_times_s = PackedFloat64Array(0.8, 1, 1.15)
+lane_change_tolerance_pct = 5.0
+handling_scale_min = 0.9
+handling_scale_max = 1.1
+steer_max_deg_at_rest = 30.0
+steer_max_deg_at_speed = 3.5
+steer_ease_end_kmh = 250.0
+steer_full_lock_s = 0.12
+braking_mps2 = 9.0
+slip_angle_max_deg = 8.0
+boost_top_speed_bonus_pct = 8.0
+boost_thrust_mps2 = 3.0
+brake_target_from_kmh = 250.0
+brake_target_to_kmh = 100.0
+brake_target_s = 1.3
+input_to_yaw_max_ms = 50.0
+boost_feel_max_s = 0.1
+settle_overshoot_max_pct = 5.0
+settle_drift_max_m = 0.3
+settle_window_s = 1.0
+straight_stability_s = 60.0
+straight_stability_drift_max_m = 0.3
+performance_tolerance_pct = 2.0
+fuzz_duration_min = 10.0
+car_top_speed_min_kmh = 240.0
+car_top_speed_max_kmh = 300.0
+car_stat_spread_pct = 10.0
+gear_count_min = 6
+gear_count_max = 7
+shift_dip_pct = 10.0
+shift_dip_s = 0.12
+body_roll_max_deg = 4.0
+body_pitch_max_deg = 2.0
+body_spring_hz = 2.5
+body_damping_ratio = 0.6
+tire_smoke_min_decel_mps2 = 4.0
+tire_smoke_min_speed_kmh = 150.0

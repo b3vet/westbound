@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="SunTuning" format=3 uid="uid://ne6q4vdt3r3p"]
+
+[ext_resource type="Script" uid="uid://mc0gknyy41ip" path="res://src/core/tuning/sun_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+sky_t_morning = 0.0
+sky_t_afternoon = 0.2
+sky_t_golden_hour = 0.38
+sky_t_sunset = 0.5
+sky_t_dusk = 0.58
+sky_t_night = 0.66
+sky_t_dawn = 0.85
+sky_t_run_start = 0.2
+sunset_from_start_min = 5.0
+too_slow_sink_factor = 3.0
+nightfall_s = 8.0
+checkpoint_lift_pct = 40.0
+checkpoint_pace_lift_max_pct = 20.0
+thread_nudge_pct = 1.0
+close_pass_nudge_count = 5
+close_pass_nudge_window_s = 10.0
+close_pass_nudge_pct = 1.0
+dawn_transition_s = 6.0
