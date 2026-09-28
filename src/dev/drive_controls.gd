@@ -91,9 +91,9 @@ func _add(row: HBoxContainer, text: String, size: Vector2, on_press: Callable) -
 	b.custom_minimum_size = size
 	b.focus_mode = Control.FOCUS_NONE
 	b.add_theme_font_size_override(&"font_size", FONT_SIZE)
-	for state in [&"normal", &"hover", &"pressed", &"disabled", &"focus"]:
+	for state: StringName in [&"normal", &"hover", &"pressed", &"disabled", &"focus"]:
 		b.add_theme_stylebox_override(state, _style(state == &"pressed"))
-	for col in [&"font_color", &"font_hover_color", &"font_pressed_color", &"font_focus_color"]:
+	for col: StringName in [&"font_color", &"font_hover_color", &"font_pressed_color", &"font_focus_color"]:
 		b.add_theme_color_override(col, TEXT)
 	b.pressed.connect(on_press)
 	row.add_child(b)
