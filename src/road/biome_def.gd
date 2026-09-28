@@ -24,11 +24,7 @@ const LANDMARK_TUNNEL_PORTAL := &"tunnel_portal"
 @export var tunnel_frequency_scale: float = 0.0
 
 @export_group("Props (roadside MultiMesh sets)")
-## Parallel arrays: prop scene path and its density (instances per km, per side).
-@export var prop_scenes: PackedStringArray = []
-@export var prop_densities_per_km: PackedFloat64Array = []
 ## Typed prop sets placed by roadside.gd (WP1.4): scattered props and rows.
-## The parallel arrays above predate it and stay empty for now.
 @export var scatter_props: Array[RoadsideProp] = []
 ## Field grid (farmland); null = none.
 @export var field_grid: FieldGridDef
