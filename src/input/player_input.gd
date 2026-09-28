@@ -102,6 +102,8 @@ var _slot_brake: PackedFloat64Array = PackedFloat64Array()
 var _pos: PackedVector2Array = PackedVector2Array()
 var _flicks: Array[FlickMeter] = []
 var _was_paused: bool = false
+## Browser touch ids (large on iOS Safari) → slots 0..MAX_TOUCHES-1.
+var _touch_slots := TouchSlots.new(MAX_TOUCHES)
 
 
 func _init() -> void:
@@ -234,6 +236,7 @@ func release_all() -> void:
 	drag.reset()
 	keys.reset()
 	gyro.reset()
+	_touch_slots.clear()
 	_zone.fill(ControlsLayout.Zone.NONE)
 	_slot_brake.fill(0.0)
 	gas_pressed = false
@@ -269,15 +272,19 @@ func advance(dt: float) -> void:
 func handle_pointer(event: InputEvent, time_s: float) -> void:
 	if event is InputEventScreenTouch:
 		var t := event as InputEventScreenTouch
-		if t.index >= 0 and t.index < MAX_TOUCHES:
-			if t.pressed and not t.canceled:
-				_down(t.index, t.position, time_s)
-			else:
-				_up(t.index, time_s)
+		if t.pressed and not t.canceled:
+			var slot := _touch_slots.acquire(t.index)
+			if slot != TouchSlots.FREE:
+				_down(slot, t.position, time_s)
+		else:
+			var slot := _touch_slots.release(t.index)
+			if slot != TouchSlots.FREE:
+				_up(slot, time_s)
 	elif event is InputEventScreenDrag:
 		var d := event as InputEventScreenDrag
-		if d.index >= 0 and d.index < MAX_TOUCHES:
-			_move(d.index, d.position, time_s)
+		var slot := _touch_slots.find(d.index)
+		if slot != TouchSlots.FREE:
+			_move(slot, d.position, time_s)
 	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.device == InputEvent.DEVICE_ID_EMULATION or mb.button_index != MOUSE_BUTTON_LEFT:

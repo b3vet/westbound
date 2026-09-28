@@ -605,3 +605,45 @@ func test_input_preview_scene_runs_every_layout() -> void:
 			var label := preview.get_node("Panel/Readout") as Label
 			check(label.text.contains(steering + " + " + throttle_kind), "readout shows the layout")
 	preview.free()
+
+
+# ---------------------------------------------------------------- iOS Safari touch ids
+
+## Godot's web export passes the browser's Touch.identifier as the index; iOS Safari
+## uses large arbitrary ids (M2 playtest: every gameplay touch was dropped).
+const IOS_ID_A := 1_893_457_201
+const IOS_ID_B := 1_893_457_202
+
+
+func test_ios_touch_ids_drag_steer() -> void:
+	_touch(IOS_ID_A, Vector2(640.0, 400.0), true, 0.0)
+	_drag(IOS_ID_A, Vector2(740.0, 400.0), 0.05)
+	hub.advance(DT)
+	gt(hub.steer, 0.5, "drag right with an iOS touch id steers right")
+	_touch(IOS_ID_A, Vector2(740.0, 400.0), false, 0.1)
+	for i in 30:
+		hub.advance(DT)
+	eq(hub.steer, 0.0, "released")
+
+
+func test_ios_touch_ids_gyro_hold_brakes() -> void:
+	hub.set_layout(PlayerInput.GYRO, PlayerInput.AUTO, false)
+	_touch(IOS_ID_B, Vector2(900.0, 500.0), true, 0.0)
+	hub.advance(DT)
+	eq(hub.brake, 1.0, "hold anywhere brakes with an iOS touch id")
+	_touch(IOS_ID_B, Vector2(900.0, 500.0), false, 0.5)
+	hub.advance(DT)
+	eq(hub.brake, 0.0)
+
+
+func test_touch_slots_map_arbitrary_ids() -> void:
+	var slots := TouchSlots.new(3)
+	eq(slots.acquire(IOS_ID_A), 0)
+	eq(slots.acquire(IOS_ID_B), 1)
+	eq(slots.acquire(IOS_ID_A), 0, "same id keeps its slot")
+	eq(slots.find(IOS_ID_B), 1)
+	eq(slots.release(IOS_ID_A), 0)
+	eq(slots.acquire(7), 0, "freed slot is reused")
+	slots.acquire(8)
+	eq(slots.acquire(9), TouchSlots.FREE, "full")
+	eq(slots.release(12345), TouchSlots.FREE, "unknown id")

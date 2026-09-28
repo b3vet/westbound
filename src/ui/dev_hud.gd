@@ -62,6 +62,8 @@ var _last_refresh_usec: int = 0
 ## Press time per touch index, or -1 while that finger is up.
 var _touch_down_msec: PackedInt64Array = PackedInt64Array()
 var _tap_armed: bool = true
+## Browser touch ids (large on iOS Safari) → slots 0..MAX_TOUCHES-1.
+var _touch_slots := TouchSlots.new(MAX_TOUCHES)
 
 
 func _ready() -> void:
@@ -83,7 +85,9 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 	elif event is InputEventScreenTouch:
 		var touch := event as InputEventScreenTouch
-		if handle_touch(touch.index, touch.pressed and not touch.canceled, Time.get_ticks_msec()):
+		var down := touch.pressed and not touch.canceled
+		var slot := _touch_slots.acquire(touch.index) if down else _touch_slots.release(touch.index)
+		if handle_touch(slot, down, Time.get_ticks_msec()):
 			toggle()
 
 
