@@ -8,18 +8,20 @@ extends Node3D
 ##
 ## snap_setup args: --fixture=straight|arc_right|arc_left|procedural, --seed=N,
 ## --s=<focus s>, --cam=driver|chase|high|side, --tier=low|medium|high,
-## --standins=false (props only: no stand-in road, ground or sky),
-## --light=review (bright afternoon globals for judging shapes).
-## The road, ground and sky here are crude stand-ins drawn by this scene only
-## (the real ones are WP1.2 / WP1.3). Prints and shows the frame's draw calls and
-## primitives (Performance monitors) and the roadside's own share.
+## --standins=false (props only: no stand-in road or ground), --sky=false (no sky),
+## --sky_t=<0..1> (position on the color-script timeline, default 0.2),
+## --light=review (a high sun behind the camera and a brighter ambient, for judging
+## shapes; pushed once after the sky, as linear values like every color global).
+## The road and ground here are crude stand-ins drawn by this scene only (the real
+## road is WP1.2's); the sky, fog and light are the real SkyRig's (WP1.3). Prints and
+## shows the frame's draw calls and primitives (Performance monitors) and the
+## roadside's own share.
 
 const WORLD_MATERIAL := "res://assets/shaders/materials/world.tres"
+const SKY_SCENE := "res://src/sun/sky.tscn"
 const STANDIN_STEP_M := 10.0
 const STANDIN_BEHIND_M := 120.0
 const GROUND_HALF_WIDTH_M := 900.0
-## Inside the far plane (it is drawn without depth writes, props show through).
-const SKY_RADIUS_FRAC := 0.97
 const STATS_FRAME := 4
 const CAM_FOV_DEG := 68.0
 const CAM_NEAR_M := 0.1
@@ -32,6 +34,7 @@ const CAMS := {
 }
 const SIDE_CAM_D_M := 70.0
 const REVIEW_SUN_DIR := Vector3(-0.4, 0.7, 0.6)
+## sRGB as authored; converted to linear before it is pushed (globals are linear).
 const REVIEW_AMBIENT := Color(0.62, 0.6, 0.62)
 const REVIEW_FOG_START_M := 300.0
 
@@ -47,7 +50,7 @@ var _roadside: Roadside
 var _standins: Node3D
 var _camera: Camera3D
 var _label: Label
-var _sky_mi: MeshInstance3D
+var _sky: SkyRig
 
 
 func _ready() -> void:
@@ -111,8 +114,14 @@ func _build() -> void:
 	add_child(_camera)
 	_place_camera(String(_args.get("cam", "driver")), focus_s)
 	_camera.make_current()
-	if _sky_mi != null:
-		_sky_mi.position = _camera.position
+	if bool(_args.get("sky", true)):
+		_sky = (load(SKY_SCENE) as PackedScene).instantiate() as SkyRig
+		_sky.name = "Sky"
+		_sky.view_distance_override_m = view_m
+		_sky.sky_t = float(_args.get("sky_t", _sky.sky_t))
+		add_child(_sky)
+		_sky.setup(_ctx, _road, _origin)
+		_sky.push_now()
 	if String(_args.get("light", "")) == "review":
 		_review_light()
 
@@ -191,9 +200,11 @@ func _place_camera(cam: String, focus_s: float) -> void:
 
 ## --light=review: a high afternoon sun behind the camera and a brighter ambient,
 ## to judge shapes and composition (the color script, WP1.3, owns real values).
+## Pushed after the SkyRig's own push; the rig only re-pushes values that change, so
+## these hold while sky_t stays put.
 func _review_light() -> void:
 	RenderingServer.global_shader_parameter_set(&"wb_sun_dir", REVIEW_SUN_DIR.normalized())
-	RenderingServer.global_shader_parameter_set(&"wb_ambient", REVIEW_AMBIENT)
+	RenderingServer.global_shader_parameter_set(&"wb_ambient", REVIEW_AMBIENT.srgb_to_linear())
 	RenderingServer.global_shader_parameter_set(&"wb_fog_start", REVIEW_FOG_START_M)
 
 
@@ -232,8 +243,6 @@ func _build_standins(focus_s: float, view_m: float, rt: RoadTuning) -> void:
 	road_mi.mesh = st.commit()
 	road_mi.material_override = load(WORLD_MATERIAL)
 	_standins.add_child(road_mi)
-	_sky_mi = _sky(view_m)
-	_standins.add_child(_sky_mi)
 
 
 ## A flat strip from |d0| to |d1| on one side, at height h (+ lift against z-fighting).
@@ -290,33 +299,3 @@ func _quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, col:
 		st.set_color(col)
 		st.set_uv2(Vector2.ZERO)
 		st.add_vertex(p)
-
-
-## A gradient sky sphere (preview only; the real sky dome is WP1.3's).
-func _sky(view_m: float) -> MeshInstance3D:
-	var sh := Shader.new()
-	sh.code = """shader_type spatial;
-render_mode unshaded, cull_front, depth_draw_never, fog_disabled;
-global uniform vec4 wb_sky_zenith : source_color;
-global uniform vec4 wb_sky_horizon : source_color;
-global uniform vec4 wb_fog_color : source_color;
-varying vec3 v_dir;
-void vertex() { v_dir = normalize(VERTEX); }
-void fragment() {
-	float h = clamp(v_dir.y, 0.0, 1.0);
-	vec3 sky = mix(wb_sky_horizon.rgb, wb_sky_zenith.rgb, pow(h, 0.6));
-	ALBEDO = mix(wb_fog_color.rgb, sky, smoothstep(-0.02, 0.12, v_dir.y));
-}
-"""
-	var mat := ShaderMaterial.new()
-	mat.shader = sh
-	var sphere := SphereMesh.new()
-	sphere.radius = view_m * SKY_RADIUS_FRAC
-	sphere.height = sphere.radius * 2.0
-	sphere.radial_segments = 24
-	sphere.rings = 12
-	var mi := MeshInstance3D.new()
-	mi.name = "SkyStandIn"
-	mi.mesh = sphere
-	mi.material_override = mat
-	return mi
