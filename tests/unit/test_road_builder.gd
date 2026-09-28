@@ -170,6 +170,44 @@ func test_ground_color_setter_rebuilds_within_budget() -> void:
 	eq(b.builds_last_update, 0, "then idle")
 
 
+func test_ground_colors_follow_biome_director() -> void:
+	var road := StraightRoadPath.new(3, t)
+	var director := BiomeDirector.new()
+	tree.root.add_child(director)
+	_nodes.append(director)
+	director.setup(RunContext.new(1), road, null)
+	var farmland := director.current()
+	_origin = FloatingOrigin.new()
+	_origin.setup(t.floating_origin_shift_km)
+	tree.root.add_child(_origin)
+	_nodes.append(_origin)
+	_builder = RoadBuilder.new()
+	_builder.view_distance_override_m = VIEW_M
+	_builder.biome_director = director
+	tree.root.add_child(_builder)
+	_nodes.append(_builder)
+	_builder.setup(RunContext.new(1), road, _origin)
+	var b := _builder
+	b.build_all_now(0.0)
+	for k in range(b.needed_range_min(), b.needed_range_max() + 1):
+		eq(b.get_chunk(k).field, farmland.ground_color, "chunk %d: biome ground color" % k)
+		eq(b.get_chunk(k).verge, farmland.verge_color, "chunk %d: biome verge color" % k)
+	# A different biome from s = 400 on: chunks from there rebuild, the others don't.
+	var other := farmland.duplicate() as BiomeDef
+	other.ground_color = Color(0.8, 0.4, 0.3)
+	other.verge_color = Color(0.5, 0.3, 0.2)
+	director.set_biome_from(400.0, other)
+	Events.biome_changed.emit(&"test")
+	var builds0 := b.builds_total
+	for i in 20:
+		b.update_view(0.0)
+	var k_other := floori(400.0 / t.chunk_length_m)
+	eq(b.builds_total - builds0, b.needed_range_max() - k_other + 1, "only the chunks in the new biome rebuilt")
+	eq(b.get_chunk(0).field, farmland.ground_color)
+	eq(b.get_chunk(k_other).field, other.ground_color)
+	eq(b.get_chunk(b.needed_range_max()).verge, other.verge_color)
+
+
 # ---------------------------------------------------------------- Floating origin
 
 func test_origin_shift_moves_nodes_once_without_rebuild() -> void:

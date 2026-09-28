@@ -97,7 +97,7 @@ func test_build_tuning_fields_loaded() -> void:
 	gt(t.median_barrier_height_m, t.median_barrier_kink_height_m)
 	le(t.median_barrier_kink_half_width_m, t.median_half_width_m)
 	gt(t.guardrail_top_m, t.guardrail_bottom_m)
-	gt(t.ground_ribbon_width_m, t.ground_verge_width_m)
+	ge(t.ground_ribbon_width_m, 400.0, "ground reaches past the roadside fields")
 	lt(t.ground_ribbon_width_m, t.min_curve_radius_m, "ground ribbon must not fold on the inside of a bend")
 	ge(t.chunk_builds_per_frame_count, 1)
 	gt(t.lane_taper_length_m, 0.0)

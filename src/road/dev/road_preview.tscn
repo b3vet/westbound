@@ -51,5 +51,5 @@ surface_material_override/0 = ExtResource("5_world")
 offset_left = 16.0
 offset_top = 12.0
 offset_right = 1260.0
-offset_bottom = 40.0
+offset_bottom = 70.0
 label_settings = SubResource("LabelSettings_hud")

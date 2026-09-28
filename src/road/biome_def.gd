@@ -24,9 +24,14 @@ const LANDMARK_TUNNEL_PORTAL := &"tunnel_portal"
 @export var tunnel_frequency_scale: float = 0.0
 
 @export_group("Props (roadside MultiMesh sets)")
-## Parallel arrays: prop scene path and its density (instances per km, per side).
-@export var prop_scenes: PackedStringArray = []
-@export var prop_densities_per_km: PackedFloat64Array = []
+## Typed prop sets placed by roadside.gd (WP1.4): scattered props and rows.
+@export var scatter_props: Array[RoadsideProp] = []
+## Field grid (farmland); null = none.
+@export var field_grid: FieldGridDef
+## Right-of-way fence segment (ArrayMesh .res with a `length_m` meta); "" = none.
+@export var fence_mesh_path: String = ""
+## Scenery line (guardrail face + prop clearance) to the fence line.
+@export var fence_setback_m: float = 0.0
 
 @export_group("Look")
 ## Additive tint offsets applied over the color script (desert warmer, coast cooler).
@@ -34,6 +39,11 @@ const LANDMARK_TUNNEL_PORTAL := &"tunnel_portal"
 @export var fog_tint_offset: Color = Color(0, 0, 0, 0)
 ## Horizon silhouette cards, nearest first (3-4 layers).
 @export var horizon_cards: PackedStringArray = []
+## Horizon silhouette set id (the sky WP maps it to its cards).
+@export var horizon_set: StringName = &""
+## Ground albedo (sRGB) for the ground ribbon beyond the verge, and the verge strip.
+@export var ground_color: Color = Color(0.5, 0.5, 0.5)
+@export var verge_color: Color = Color(0.5, 0.5, 0.5)
 ## Per-instance traffic colors ("colors come from the biome palette").
 @export var traffic_palette: PackedColorArray = []
 

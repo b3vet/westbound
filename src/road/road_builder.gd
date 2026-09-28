@@ -28,6 +28,10 @@ extends Node3D
 ## physics interpolation: no rebuild, no seam. An in-flight build is unaffected
 ## (it is anchor-relative and placed on commit).
 ##
+## Ground colors: per chunk from `biome_director.biome_at(chunk start)` when a
+## director is set (BiomeDef.verge_color / ground_color), else set_ground_colors().
+## Chunks whose colors went stale rebuild within the frame budget.
+##
 ## Draw calls: two per visible chunk (road + world material).
 
 const ROAD_MATERIAL: Material = preload("res://assets/shaders/materials/road.tres")
@@ -50,6 +54,9 @@ class Chunk extends RefCounted:
 	var anchor_z: float = 0.0
 	var dirty: bool = false
 	var triangles: int = 0
+	## Ground colors the mesh was built with.
+	var verge: Color
+	var field: Color
 
 
 var tuning: RoadTuning
@@ -61,6 +68,10 @@ var view_distance_override_m: float = -1.0:
 		_refresh_view_distance()
 var road: RoadPath
 var origin: FloatingOrigin
+## Optional: ground ribbon colors follow BiomeDef.verge_color / ground_color of the
+## biome at each chunk's start (re-checked on Events.biome_changed / fork_taken).
+## Without one, set_ground_colors() sets them.
+var biome_director: BiomeDirector
 
 ## Stats (dev HUD, tests).
 var builds_total: int = 0
@@ -85,6 +96,19 @@ var _pending_k: int = FREE
 var _pending_rebuild: bool = false
 ## The palette changed while the in-flight chunk was being built.
 var _pending_stale: bool = false
+var _pending_verge: Color
+var _pending_field: Color
+## Ground colors without a biome director (set_ground_colors), and the scratch
+## result of _want_colors().
+var _manual_verge: Color
+var _manual_field: Color
+var _want_verge: Color
+var _want_field: Color
+
+
+func _init() -> void:
+	_manual_verge = palette.ground_verge
+	_manual_field = palette.ground_field
 
 
 # ---------------------------------------------------------------- World-system API
@@ -116,15 +140,17 @@ func build_all_now(focus_s: float) -> void:
 	_update(focus_s, UNLIMITED, UNLIMITED)
 
 
-## Sets the ground ribbon colors (biome); live chunks rebuild within the frame budget.
+## Sets the ground ribbon colors when no biome_director is set; live chunks
+## rebuild within the frame budget.
 func set_ground_colors(verge: Color, field: Color) -> void:
-	palette.ground_verge = verge
-	palette.ground_field = field
-	for c in _pool:
-		if c.index != FREE:
-			c.dirty = true
-	if _pending != null:
-		_pending_stale = true
+	_manual_verge = verge
+	_manual_field = field
+	_recheck_colors()
+
+
+## Ground colors from a biome (convenience for set_ground_colors).
+func apply_biome(biome: BiomeDef) -> void:
+	set_ground_colors(biome.verge_color, biome.ground_color)
 
 
 # ---------------------------------------------------------------- Queries
@@ -240,6 +266,11 @@ func _generated(k: int) -> bool:
 
 func _begin(k: int, c: Chunk, rebuild: bool) -> void:
 	var s0 := float(k) * tuning.chunk_length_m
+	_want_colors(k)
+	_pending_verge = _want_verge
+	_pending_field = _want_field
+	palette.ground_verge = _want_verge
+	palette.ground_field = _want_field
 	_mesher.begin(road, s0, s0 + tuning.chunk_length_m)
 	_pending = c
 	_pending_k = k
@@ -252,6 +283,8 @@ func _commit_pending() -> void:
 	_mesher.commit(c.mesh, ROAD_MATERIAL, WORLD_MATERIAL)
 	c.index = _pending_k
 	c.dirty = _pending_stale
+	c.verge = _pending_verge
+	c.field = _pending_field
 	c.triangles = _mesher.triangle_count()
 	c.anchor_x = _mesher.anchor_x
 	c.anchor_y = _mesher.anchor_y
@@ -278,6 +311,34 @@ func _cancel_pending() -> void:
 	_pending = null
 	_pending_k = FREE
 	_pending_rebuild = false
+
+
+## Ground colors chunk k should have, into _want_verge / _want_field.
+func _want_colors(k: int) -> void:
+	if biome_director != null:
+		var b := biome_director.biome_at(float(k) * tuning.chunk_length_m)
+		if b != null:
+			_want_verge = b.verge_color
+			_want_field = b.ground_color
+			return
+	_want_verge = _manual_verge
+	_want_field = _manual_field
+
+
+## Marks live chunks whose ground colors are out of date (and the one in flight).
+func _recheck_colors() -> void:
+	if tuning == null:
+		return
+	for c in _pool:
+		if c.index == FREE:
+			continue
+		_want_colors(c.index)
+		if c.verge != _want_verge or c.field != _want_field:
+			c.dirty = true
+	if _pending != null:
+		_want_colors(_pending_k)
+		if _pending_verge != _want_verge or _pending_field != _want_field:
+			_pending_stale = true
 
 
 func _find(k: int) -> Chunk:
@@ -355,12 +416,18 @@ func _on_governor_changed(_rung: int) -> void:
 	_refresh_view_distance()
 
 
+func _on_biome_changed(_biome: StringName) -> void:
+	_recheck_colors()
+
+
 func _enter_tree() -> void:
 	_prewarm_pool()
 	if not _events_connected:
 		Events.origin_shifted.connect(_on_origin_shifted)
 		Events.quality_changed.connect(_on_quality_changed)
 		Events.governor_changed.connect(_on_governor_changed)
+		Events.biome_changed.connect(_on_biome_changed)
+		Events.fork_taken.connect(_on_biome_changed)
 		_events_connected = true
 
 
@@ -369,4 +436,6 @@ func _exit_tree() -> void:
 		Events.origin_shifted.disconnect(_on_origin_shifted)
 		Events.quality_changed.disconnect(_on_quality_changed)
 		Events.governor_changed.disconnect(_on_governor_changed)
+		Events.biome_changed.disconnect(_on_biome_changed)
+		Events.fork_taken.disconnect(_on_biome_changed)
 		_events_connected = false

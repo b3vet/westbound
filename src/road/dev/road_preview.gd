@@ -11,7 +11,10 @@ extends Node3D
 ## Options (snap_setup args): fixture = straight | arc_left | arc_right | taper |
 ## procedural; seed (procedural); s (focus, m); cam = near | high | driver | top; lanes;
 ## grade (straight, rise/run); radius (arcs, m); view (view distance, m);
-## speed_kmh (drive along the road every frame, time-sliced building + origin shifts).
+## speed_kmh (drive along the road every frame, time-sliced building + origin shifts);
+## roadside=true (adds WP1.4's Roadside props, to check the combined look).
+## Ground colors come from a BiomeDirector (farmland). The label shows the road's own
+## numbers and, a few frames in, the renderer's draw calls and primitives for the frame.
 
 const FIXTURES := ["straight", "arc_left", "arc_right", "taper", "procedural"]
 const CAMS := ["near", "high", "driver", "top"]
@@ -28,6 +31,8 @@ const CAM_TOP := Vector2(40.0, 45.0)
 const CAR_AHEAD_M := 16.0
 const SHADOW_AHEAD_M := 24.0
 const FAR_MARGIN_M := 20.0
+## Frames after setup before the renderer monitors are read.
+const STATS_FRAME := 3
 
 @onready var _origin: FloatingOrigin = $FloatingOrigin
 @onready var _builder: RoadBuilder = $RoadBuilder
@@ -44,6 +49,10 @@ var _cam: String = "near"
 var _s: float = 0.0
 var _speed_mps: float = 0.0
 var _smp := RoadSample.new()
+var _director: BiomeDirector
+var _roadside: Roadside
+var _frames: int = 0
+var _info: String = ""
 
 
 func _ready() -> void:
@@ -84,21 +93,49 @@ func _configure(args: Dictionary) -> void:
 	_road.ensure_generated_to(_s + _builder.view_distance_m() + rt.chunk_length_m * 2.0)
 	_road.sample_into(_s, _smp)
 	_origin.update_focus(_smp.pos_x, _smp.pos_y, _smp.pos_z)
+	if _director != null:
+		_director.free()
+	_director = BiomeDirector.new()
+	add_child(_director)
+	_director.setup(ctx, _road, _origin)
+	if _roadside != null:
+		_roadside.free()
+		_roadside = null
+	if bool(args.get("roadside", false)):
+		_roadside = Roadside.new()
+		_roadside.biome_director = _director
+		if _builder.view_distance_override_m >= 0.0:
+			_roadside.view_distance_override_m = _builder.view_distance_override_m
+		add_child(_roadside)
+		_roadside.setup(ctx, _road, _origin)
+		_roadside.update_view(_s)
+	_builder.biome_director = _director
 	_builder.setup(ctx, _road, _origin)
 	_builder.build_all_now(_s)
+	_frames = 0
 	_camera.far = _builder.view_distance_m() + FAR_MARGIN_M
 	_place_view()
 
 
 func _process(delta: float) -> void:
-	if _road == null or _speed_mps <= 0.0:
+	if _road == null:
 		return
-	_s += _speed_mps * delta
-	_road.ensure_generated_to(_s + _builder.view_distance_m() + _tuning.road.chunk_length_m * 2.0)
-	_road.sample_into(_s, _smp)
-	_origin.update_focus(_smp.pos_x, _smp.pos_y, _smp.pos_z)
-	_builder.update_view(_s)
-	_place_view()
+	_frames += 1
+	if _speed_mps > 0.0:
+		_s += _speed_mps * delta
+		_road.ensure_generated_to(_s + _builder.view_distance_m() + _tuning.road.chunk_length_m * 2.0)
+		_road.sample_into(_s, _smp)
+		_origin.update_focus(_smp.pos_x, _smp.pos_y, _smp.pos_z)
+		_director.update_view(_s)
+		_builder.update_view(_s)
+		if _roadside != null:
+			_roadside.update_view(_s)
+		_place_view()
+	if _frames >= STATS_FRAME:
+		_label.text = "%s\nframe: %d draw calls, %d primitives (road chunks: %d draw calls before culling)" % [
+			_info, int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+			int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)),
+			_builder.draw_call_count()]
 
 
 func _place_view() -> void:
@@ -132,10 +169,11 @@ func _place_view() -> void:
 	_road.sample_into(_s + SHADOW_AHEAD_M, _smp)
 	_lone_shadow.place(_smp, _road.lane_center_d(0, _s), 0.0, CAR_SIZE.z, CAR_SIZE.x, _origin)
 
-	_label.text = "%s  s=%.0f m  cam=%s  lanes=%d  view=%.0f m  |  chunks %d (pool %d)  draw calls %d  tris %d  shifts %d" % [
+	_info = "%s  s=%.0f m  cam=%s  lanes=%d  view=%.0f m  |  chunks %d (pool %d)  draw calls %d  tris %d  shifts %d" % [
 		_fixture, _s, _cam, _road.lane_count(_s), _builder.view_distance_m(),
 		_builder.active_chunk_count(), _builder.pool_size(), _builder.draw_call_count(),
 		_builder.triangle_count(), _origin.shift_count]
+	_label.text = _info
 
 
 func _local(s: float, d: float, h: float) -> Vector3:

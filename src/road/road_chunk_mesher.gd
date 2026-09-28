@@ -578,7 +578,6 @@ func _emit_world_interval(i: int) -> void:
 	var gb := _row_guard[b]
 	var outa := _row_outer[a]
 	var outb := _row_outer[b]
-	var verge := t.ground_verge_width_m
 	var far := t.ground_ribbon_width_m
 	for side in 2:
 		var sg := 1.0 if side == 0 else -1.0
@@ -588,10 +587,11 @@ func _emit_world_interval(i: int) -> void:
 				sg * (ga + dep), top, sg * (gb + dep), top, sg, palette.guardrail, uv)
 		_profile_panel(pa, ra, ua, pb, rb, ub, sg * (ga + dep), top, sg * (gb + dep), top,
 				sg * (ga + dep), bot, sg * (gb + dep), bot, sg, palette.guardrail, uv)
+		# Verge (clear zone) out to the scenery line, as the roadside layers use it.
 		var d0a := sg * outa
 		var d0b := sg * outb
-		var d1a := sg * (outa + verge)
-		var d1b := sg * (outb + verge)
+		var d1a := sg * maxf(ga + t.prop_clearance_m, outa)
+		var d1b := sg * maxf(gb + t.prop_clearance_m, outb)
 		var d2a := sg * (outa + far)
 		var d2b := sg * (outb + far)
 		_world_quad(pa + ra * d0a, pa + ra * d1a, pb + rb * d1b, pb + rb * d0b, ua, palette.ground_verge, uv)
