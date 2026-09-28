@@ -7,12 +7,12 @@ extends Node3D
 ## physics yet) with the real world stack: ProceduralRoadPath, FloatingOrigin,
 ## RoadBuilder, Roadside, BiomeDirector, the sky/color script and the dev HUD.
 ##
-## Controls (desktop / phone):
-##   C or tap the upper-right quarter  cycle camera (chase, far, hood, high)
-##   Up/Down or tap the right edge     speed +/- (100 / 160 / 200 / 250 / 280 km/h)
-##   Left/Right or tap the left edge   change lane
-##   backtick / three-finger tap       dev HUD
-##   bottom slider                     scrub sky_t live; play runs the whole timeline
+## Controls: on-screen buttons (DriveControls) on every platform, plus keys:
+##   lane < >            Left / Right
+##   speed - +           Down / Up (100 / 160 / 200 / 250 / 280 km/h)
+##   CAM                 C (chase, far, hood, high)
+##   HUD                 backtick (three-finger tap also works where the OS delivers it)
+##   bottom slider       scrub sky_t live; play runs the whole timeline
 
 const CAMERAS: Array[StringName] = [&"chase", &"far", &"hood", &"high"]
 ## Camera rigs: [behind_m, height_m, look_ahead_m, look_height_m]. Dev values.
@@ -38,6 +38,7 @@ var _director: BiomeDirector
 var _builder: RoadBuilder
 var _roadside: Roadside
 var _sky: SkyRig
+var _controls: DriveControls
 var _camera: Camera3D
 var _car: MeshInstance3D
 var _shadow: BlobShadow
@@ -81,6 +82,15 @@ func _ready() -> void:
 	add_child(_roadside)
 
 	_sky = $Sky
+	_controls = DriveControls.new()
+	_controls.name = "DriveControls"
+	add_child(_controls)
+	_controls.lane_left.connect(_change_lane.bind(-1))
+	_controls.lane_right.connect(_change_lane.bind(1))
+	_controls.speed_down.connect(_change_speed.bind(-1))
+	_controls.speed_up.connect(_change_speed.bind(1))
+	_controls.camera_cycle.connect(_cycle_camera)
+	_controls.hud_toggle.connect(Callable($DevHud, &"toggle"))
 	_camera = $Camera3D
 	_car = _make_car()
 	add_child(_car)
@@ -107,6 +117,7 @@ func _ready() -> void:
 	if Game.can_change_to(Game.RUNNING):
 		Game.change_state(Game.RUNNING)
 	_place_all()
+	_refresh_controls()
 	_car.reset_physics_interpolation()
 	_camera.reset_physics_interpolation()
 
@@ -144,25 +155,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_C:
 				_cycle_camera()
 			KEY_UP:
-				_speed_index = mini(_speed_index + 1, SPEEDS_KMH.size() - 1)
+				_change_speed(1)
 			KEY_DOWN:
-				_speed_index = maxi(_speed_index - 1, 0)
+				_change_speed(-1)
 			KEY_LEFT:
 				_change_lane(-1)
 			KEY_RIGHT:
 				_change_lane(1)
-	elif event is InputEventScreenTouch and event.pressed:
-		var p: Vector2 = (event as InputEventScreenTouch).position
-		var size := get_viewport().get_visible_rect().size
-		if p.x < size.x * 0.15:
-			_change_lane(-1 if p.y < size.y * 0.5 else 1)
-		elif p.x > size.x * 0.85:
-			if p.y < size.y * 0.5:
-				_speed_index = mini(_speed_index + 1, SPEEDS_KMH.size() - 1)
-			else:
-				_speed_index = maxi(_speed_index - 1, 0)
-		elif p.x > size.x * 0.5 and p.y < size.y * 0.25:
-			_cycle_camera()
 
 
 ## Snap hook (tools/snap.sh): --s=, --cam=, --lane=, --sky_t=.
@@ -171,6 +170,7 @@ func snap_setup(args: Dictionary) -> void:
 		_sky.sky_t = float(args["sky_t"])
 	if args.has("cam"):
 		_cam_index = maxi(CAMERAS.find(StringName(str(args["cam"]))), 0)
+		_refresh_controls()
 	if args.has("lane"):
 		_lane = int(args["lane"])
 	if args.has("s"):
@@ -197,6 +197,17 @@ func _change_lane(dir: int) -> void:
 
 func _cycle_camera() -> void:
 	_cam_index = (_cam_index + 1) % CAMERAS.size()
+	_refresh_controls()
+
+
+func _change_speed(dir: int) -> void:
+	_speed_index = clampi(_speed_index + dir, 0, SPEEDS_KMH.size() - 1)
+	_refresh_controls()
+
+
+func _refresh_controls() -> void:
+	_controls.set_speed_text("%d km/h" % int(SPEEDS_KMH[_speed_index]))
+	_controls.set_camera_text(String(CAMERAS[_cam_index]))
 
 
 func _view_ahead() -> float:

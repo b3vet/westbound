@@ -283,7 +283,7 @@ Updated by the orchestrator at every merge.
 | Phase | Milestone | Status | Gate |
 | --- | --- | --- | --- |
 | 0 | M0 Foundation | ✅ merged; owner device check folded into M1 | continue |
-| 1 | M1 Road & look (+ Track A) | 🟡 all WPs merged; ⏸ awaiting owner playtest (docs/playtests/M1.md) | ⏸ pause |
+| 1 | M1 Road & look (+ Track A) | ✅ web playtest passed (owner); native thermal soak still open (D4) | ⏸ pause |
 | 2 | M2 Car, controls, cameras (+ Track B) | 🟡 started in parallel with the M1 playtest | ⏸ pause |
 | 3 | M3 Traffic (+ Track C) | ⬜ | ⏸ pause |
 | 4 | M4 Scoring & lives | ⬜ | continue |
