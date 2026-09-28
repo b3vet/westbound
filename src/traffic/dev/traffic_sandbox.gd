@@ -11,8 +11,8 @@ extends Node3D
 ## real PlayerCar, driven either by PlayerInput (touch / keys, PlayerController) or by
 ## SandboxBot (lane keeping or weaving). The player takes part in the sim as in a run
 ## (tick order: car physics, traffic_sim.step, director.step; CONTRACTS §4) and hits
-## are reported with notify_hit. Traffic is drawn by TrafficDebugView (swap point:
-## _make_traffic_view()); overlays by TrafficOverlay; the camera by SandboxCamera.
+## are reported with notify_hit. Traffic is drawn by TrafficView (TrafficDebugView
+## remains available at _make_traffic_view()); overlays by TrafficOverlay; the camera by SandboxCamera.
 ##
 ## Time: an accumulator runs 120 Hz ticks at time_scale (0.1x..4x), capped per frame.
 ## Pause holds the sim; STEP runs exactly one tick, +1 S runs 120.
@@ -218,7 +218,7 @@ func _ready() -> void:
 ##   var v: Node3D = (load("res://src/traffic/traffic_view.tscn") as PackedScene).instantiate()
 ## (or TrafficView.new()); everything else talks to it through setup / capture_tick.
 func _make_traffic_view() -> Node3D:
-	var v: Node3D = TrafficDebugView.new()
+	var v: Node3D = TrafficView.new()
 	v.name = "TrafficView"
 	add_child(v)
 	return v
@@ -233,7 +233,6 @@ func _physics_process(delta: float) -> void:
 ## One physics frame: snapshot for interpolation, then as many 120 Hz ticks as the
 ## time scale asks for (or the queued steps while paused), then the world upkeep.
 func advance_frame(delta: float) -> void:
-	view.call(&"capture_tick")
 	var n := 0
 	if paused:
 		n = _pending_steps
@@ -276,6 +275,8 @@ func _tick() -> void:
 		director.step(DT, st)
 	else:
 		director.step_despawn(st.s)
+	# TrafficView interpolates between the last two captured ticks: capture every tick.
+	view.call(&"capture_tick")
 	_check_contacts()
 	_forward_events()
 	events.clear()
@@ -345,6 +346,7 @@ func _process(delta: float) -> void:
 	_builder.update_view(st.s)
 	_roadside.update_view(st.s)
 	sky.update_view(st.s)
+	view.call(&"update_view", st.s)
 	cam.view_distance_m = _builder.view_distance_m()
 	overlay.camera = cam.current_camera()
 	_stats_t -= delta

@@ -6,7 +6,9 @@ extends Node3D
 ## World stack as in the M1 drive scene (ProceduralRoadPath, FloatingOrigin,
 ## RoadBuilder, Roadside, BiomeDirector, SkyRig) plus the physics PlayerCar driven
 ## by PlayerInput through a PlayerController, the ControlsOverlay and the CameraRig.
-## No traffic, collisions or scoring yet: leaving the carriageway resets the car.
+## M3: traffic (TrafficSim + TrafficDirector + TrafficView, you as a participant) and
+## hits with the lives rules (ghost, deflection; infinite lives until Phase 4). No
+## scoring HUD yet. Leaving the carriageway resets the car.
 ##
 ## Dev buttons (DriveControls), top-right: CAM, HUD; STEER (drag/gyro),
 ## THROTTLE (auto/manual), MIRROR; CAR, RECAL (gyro neutral), RESET; top-left SANDBOX
@@ -20,6 +22,10 @@ const CAR_PATHS: Array[String] = [
 ]
 const START_LANE := 1
 const START_SPEED_KMH := 120.0
+const START_LEG := 3
+const LEG_COUNT := 8
+## Headlights on when the color script's headlight ramp passes this (dev scene value).
+const HEADLIGHTS_ON := 0.3
 ## Dev scene sizes (canvas px).
 const LAYOUT_BUTTON := Vector2(150.0, 48.0)
 const CAM_BUTTON := Vector2(190.0, 48.0)
@@ -41,6 +47,20 @@ var _rig: CameraRig
 var _car: PlayerCar
 var _controls: DriveControls
 var _car_index: int = 0
+
+# Traffic (M3): sim + director + view, hits with the lives rules (infinite lives here).
+var _registry: TrafficRegistry
+var _sim: TrafficSim
+var _tdir: TrafficDirector
+var _traffic_view: TrafficView
+var _events: ScoreEventBuffer
+var _hits: HitDetection
+var _contact := HitDetection.Contact.new()
+var _lives: Lives
+var _frustum_smp := RoadSample.new()
+var _leg: int = START_LEG
+var _night: bool = false
+var _leg_button: Button
 var _params_cache: Dictionary = {}
 var _next_forget_s: float = 0.0
 var _resets: int = 0
@@ -100,8 +120,10 @@ func _ready() -> void:
 	_sky.setup(_ctx, _road, _origin)
 	_builder.build_all_now(0.0)
 
+	_setup_traffic()
 	_spawn_car(0, 0.0)
 	_build_controls()
+	_build_traffic_controls()
 
 	if Game.can_change_to(Game.COUNTDOWN):
 		Game.change_state(Game.COUNTDOWN)
@@ -115,9 +137,10 @@ func _physics_process(_delta: float) -> void:
 	if st.s >= _next_forget_s:
 		_road.forget_before(st.s - _roadside.reach_behind_m() - _tuning.road.chunk_length_m)
 		_next_forget_s = st.s + FORGET_EVERY_M
+	_traffic_tick(1.0 / float(Engine.physics_ticks_per_second))
 	var smp := _car.road_sample()
 	_origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
-	# No collisions until Phase 4: leaving the carriageway puts the car back.
+	# Crash hand-off is Phase 4: leaving the carriageway puts the car back.
 	if st.d < _road.median_barrier_d(st.s) or st.d > _road.guardrail_d(st.s):
 		_reset_car(st.v * 0.5)
 
@@ -128,6 +151,17 @@ func _process(_delta: float) -> void:
 	_builder.update_view(st.s)
 	_roadside.update_view(st.s)
 	_sky.update_view(st.s)
+	_traffic_view.update_view(st.s)
+	var night := _sky.current().emissive_headlight > HEADLIGHTS_ON
+	if night != _night:
+		_night = night
+		_sim.set_headlights(night)
+		_tdir.set_night(night)
+	DevStats.report(DevStats.VEHICLES, _sim.state.count)
+	DevStats.report(&"opposite", _tdir.opposite.state.count)
+	DevStats.report(&"leg", _leg)
+	DevStats.report(&"hits", _lives.hits)
+	DevStats.report(&"ghost", _lives.is_ghost())
 	var kmh := st.v * 3.6
 	DriveControls.set_text(_speed_label, "%d km/h  G%d" % [roundi(kmh), st.gear])
 	DevStats.report(&"car", _car.car.id)
@@ -164,6 +198,13 @@ func snap_setup(args: Dictionary) -> void:
 	_origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
 	_builder.build_all_now(s)
 	_spawn_car(_car_index, s, v)
+	# Teleported: respawn traffic around the new position.
+	for i in _sim.state.capacity:
+		if _sim.state.active[i] != 0:
+			_sim.despawn(i)
+	_tdir.set_leg(_leg, s)
+	_tdir.reset(_car.state)
+	_hits.reset(_car.state, _sim.state)
 	if args.has("cam"):
 		_rig.set_mode(StringName(str(args["cam"])))
 	_rig.snap_to_target()
@@ -185,6 +226,14 @@ func _spawn_car(index: int, s: float, v_mps: float = -1.0) -> void:
 	_car.place_at(s, _road.lane_center_d(START_LANE, s), v)
 	_rig.set_target(_car, _car.state, _car.params.top_speed_mps)
 	_rig.snap_to_target()
+	if _sim != null:
+		_sim.set_player_body(car_def.length_m, car_def.width_m)
+		_hits.set_player_body(car_def.length_m, car_def.width_m)
+		_hits.reset(_car.state, _sim.state)
+		_tdir.set_player_box(car_def.length_m, car_def.width_m)
+		if _sim.state.count == 0:
+			_tdir.set_leg(_leg, s)
+			_tdir.reset(_car.state)
 
 
 func _reset_car(v_mps: float) -> void:
@@ -195,10 +244,70 @@ func _reset_car(v_mps: float) -> void:
 		lane = START_LANE
 	_car.place_at(s, _road.lane_center_d(lane, s), maxf(v_mps, 0.0))
 	_rig.snap_to_target()
+	if _hits != null:
+		_hits.reset(_car.state, _sim.state)
 
 
 func _view_ahead(s: float) -> float:
 	return s + _builder.view_distance_m() + _tuning.road.chunk_length_m * 2.0
+
+
+# ---------------------------------------------------------------- Traffic (M3)
+
+func _setup_traffic() -> void:
+	_registry = TrafficRegistry.load_default(_tuning.traffic)
+	_sim = TrafficSim.new(_ctx, _road, _registry)
+	_events = ScoreEventBuffer.new(_tuning.scoring.event_buffer_capacity)
+	var car_def: CarDef = load(CAR_PATHS[_car_index])
+	_tdir = TrafficDirector.new(_ctx, _road, _sim, _registry.profiles, _registry.types,
+		car_def.length_m, car_def.width_m)
+	_tdir.frustum_check = _in_frustum
+	_tdir.set_fog_end(_builder.view_distance_m())
+	_hits = HitDetection.new(_tuning.lives, _tuning.traffic.max_active_vehicles)
+	_lives = Lives.new(_tuning.lives)
+	_traffic_view = TrafficView.new()
+	_traffic_view.name = "TrafficView"
+	add_child(_traffic_view)
+	_traffic_view.setup(_ctx, _road, _origin, _registry, _sim.state, _tdir.opposite.state)
+	var biome := _director.current()
+	if biome != null and not biome.traffic_palette.is_empty():
+		_traffic_view.set_palette(biome.traffic_palette)
+
+
+## One 120 Hz traffic tick after the car's physics (contract order: car, traffic,
+## director, collisions). Hits use the lives rules; this dev scene never ends a run.
+func _traffic_tick(dt: float) -> void:
+	var st := _car.state
+	var t0 := Time.get_ticks_usec()
+	_sim.step(dt, st, _car.params, _events)
+	DevStats.report_sim_tick_usec(Time.get_ticks_usec() - t0)
+	_tdir.step(dt, st)
+	_traffic_view.capture_tick()
+	if _hits.step(dt, st, _sim.state, _road, _contact):
+		var outcome := _lives.on_contact(_contact, st, _events)
+		if outcome != Lives.Outcome.NONE and outcome != Lives.Outcome.IGNORED and _contact.slot >= 0:
+			_sim.notify_hit(_contact.slot)
+		if outcome == Lives.Outcome.RUN_OVER:
+			_lives.reset()   # infinite lives until the Phase 4 crash hand-off
+	_lives.step(dt, st, _events)
+	_events.clear()
+
+
+func _in_frustum(s: float, d: float) -> bool:
+	_road.sample_into(s, _frustum_smp)
+	var p := _frustum_smp.local_point(d, _origin.origin_x, _origin.origin_y, _origin.origin_z)
+	return _rig.camera().is_position_in_frustum(p)
+
+
+func _build_traffic_controls() -> void:
+	_leg_button = _controls.add_button(DriveControls.Corner.TOP_LEFT, 2, "LEG", LAYOUT_BUTTON, _next_leg, true)
+	DriveControls.set_text(_leg_button, "LEG %d" % _leg)
+
+
+func _next_leg() -> void:
+	_leg = _leg % LEG_COUNT + 1
+	_tdir.set_leg(_leg, _car.state.s)
+	DriveControls.set_text(_leg_button, "LEG %d" % _leg)
 
 
 # ---------------------------------------------------------------- Dev buttons

@@ -219,6 +219,9 @@ func _billboard_prop() -> RoadsideProp:
 
 func _load_meshes(paths: PackedStringArray) -> Array[Mesh]:
 	var out: Array[Mesh] = []
+	if paths.is_empty():
+		# An empty list in data means the export dropped it (see project.godot [editor]).
+		push_warning("Roadside: a prop layer has no mesh paths; it will draw nothing")
 	for path in paths:
 		var m: Mesh = load(path)
 		if m == null:

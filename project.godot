@@ -156,6 +156,13 @@ window/stretch/aspect="expand"
 window/handheld/orientation=4
 window/vsync/vsync_mode=1
 
+[editor]
+
+; Godot 4.7's export-time text→binary conversion empties PackedStringArray
+; properties holding res:// paths (vehicle-type models, biome prop meshes), which
+; silently removed traffic and farmland scenery from web builds. Keep text.
+export/convert_text_resources_to_binary=false
+
 [physics]
 
 common/physics_ticks_per_second=120

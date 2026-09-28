@@ -31,6 +31,8 @@ func _emit(c: int) -> void:
 
 
 func _side(c: int, salt: int, side: float) -> void:
+	if pools.is_empty():
+		return
 	ctx.seed_cell(_seed, c, salt)
 	var rng := ctx.rng
 	var mean := prop.per_cell_mean()

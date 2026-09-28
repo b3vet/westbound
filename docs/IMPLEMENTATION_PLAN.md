@@ -194,6 +194,7 @@ The orchestrator then integrates `scenes/dev/road_drive.tscn`: an auto-driven em
 | WP4.3 HUD & theme | `ui/theme.tres` design system (chamfered `StyleBoxFlat`, neon edges, speed-tilt shader, Chakra Petch); full HUD layout; 4-line event stack; multiplier hue cycle and wobble; banking count-up; TOO SLOW bar; lives; boost meter; safe areas; labels update only on change |
 | WP4.4 Screens | Countdown (gyro calibration), pause menu, results screen (all stats, PB comparison), retry within 2 s |
 | WP4.5 Integration tests | End-to-end scripted bot runs through the event bus: every scoring event fires; anti-exploit rules hold in the full loop; the first hit leaves the car drivable above minimum speed within 1 s; boost hooked into physics |
+| WP4.6 Draw-call budget | M3 frame with traffic measured 98 of 100 draw calls with dev overlays (~25). Merge the player car's surfaces (~15 → ~4); draw road + markings as one surface per chunk (road and world shaders are identical, ~12 → ~6); keep the gameplay HUD cheap. Target at most ~70 in gameplay with the real HUD |
 
 **Gate M4 (continue):** the scoring suite passes; a full playable loop works in the web build.
 
