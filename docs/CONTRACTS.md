@@ -98,6 +98,13 @@ The base implements the cross-section queries from `RoadTuning` (`configure_cros
 
 The generator must keep radius ≥ 1,200 m, grade ≤ 5%, C1 continuity, and the sun 15–30° off the camera axis (`RoadTuning`).
 
+**`ProceduralRoadPath`** (WP1.1) is the implementation, built with `ProceduralRoadPath.new(ctx)`.
+
+- **Geometry:** clothoid transitions give continuous curvature; vertical curves are parabolic. The heading stays within ±[15°, 30°] of the sun (world heading 0). The road switches sides every 15–40 km in one R = 1200 m bend.
+- **Extra tick-safe queries:** `heading_at(s)`, `elevation_at(s)`, `grade_at(s)`.
+- **Lane hook:** `schedule_lane_count(s_start, count, taper_m)`, scheduled in increasing s.
+- **Features:** `features_in` only reports generated ranges, so call `ensure_generated_to(s1)` first. Checkpoint `tag` (the landmark style) is filled in by the biome director.
+
 ## 4. Vehicles
 
 **`VehicleState`** (`src/vehicle/vehicle_state.gd`, RefCounted, plain floats): `s, d, yaw, v` (forward speed), `v_lat, yaw_rate, steer_angle, accel_long, accel_lat, rpm, gear, boost_active, boost_meter` (0..1). It also has `reset()`, `copy_from(o)`, `hash_into(h)` and `trace_hash()`, which hash exact bits over every field. World heading = road heading at `s` + `yaw`.
@@ -344,4 +351,5 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
+| 2026-09-28 | §3 ProceduralRoadPath notes (WP1.1) | Orchestrator merge review |
 | 2026-09-28 | §13 look contract: shader globals, world include, material paths, FloatingOrigin, world-system node API | Orchestrator, pre-Phase 1 |

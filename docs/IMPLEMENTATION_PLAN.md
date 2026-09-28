@@ -26,6 +26,7 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | D3 | `data/tuning.tres` holds every constant | `data/tuning.tres` is the root `Tuning` resource. It references one sub-resource per system (`data/tuning/vehicle.tres`, `traffic.tres`, `scoring.tres`, …) | Parallel agents editing one `.tres` would conflict on every merge. All constants still live in data, reachable from one root. |
 | D4 | Acceptance is on device | Web (Compatibility renderer) is the everyday playtest path. Thermal and fps acceptance numbers count **only from native iOS** | Owner decision. A web build on Safari is a feel check, not a thermal proxy. |
 | D5 | M0 done needs an Android phone | Android is exported and CI-built, but device verification is **pending an Android device** | Only an iPhone is confirmed. See [§10](#10-open-items-for-the-owner). |
+| D6 | Braking 9 m/s² *and* 250→100 km/h in ~1.3 s (contradictory: 9 m/s² gives ~4.5 s) | **Owner decision:** 9 m/s² stands; the 1.3 s feel target becomes the model's measured time (~4.5 s) | Heavy, committed braking; rewards reading traffic early |
 
 New deviations get a row here before they are built.
 
