@@ -284,7 +284,7 @@ Updated by the orchestrator at every merge.
 | --- | --- | --- | --- |
 | 0 | M0 Foundation | ✅ merged; owner device check folded into M1 | continue |
 | 1 | M1 Road & look (+ Track A) | 🟡 all WPs merged; ⏸ awaiting owner playtest (docs/playtests/M1.md) | ⏸ pause |
-| 2 | M2 Car, controls, cameras (+ Track B) | ⬜ | ⏸ pause |
+| 2 | M2 Car, controls, cameras (+ Track B) | 🟡 started in parallel with the M1 playtest | ⏸ pause |
 | 3 | M3 Traffic (+ Track C) | ⬜ | ⏸ pause |
 | 4 | M4 Scoring & lives | ⬜ | continue |
 | 5 | M5 Sun loop & legs | ⬜ | continue |
@@ -295,7 +295,7 @@ Updated by the orchestrator at every merge.
 
 ## 10. Open items for the owner
 
-1. **Web playtest hosting:** GitHub Pages confirmed. The owner enables it (Settings → Pages → Source: GitHub Actions, and allows this branch in the `github-pages` environment) when the first playable web build is ready. Until then the CI web job only uploads the build as an artifact.
+1. **Web playtest hosting:** GitHub Pages is enabled (owner, M1). Every push to this branch deploys the web build to `https://b3vet.github.io/westbound/`.
 2. **Android:** no device testing for now (D5 stands). Presets and CI builds are kept working.
 3. **iOS export:** handled by the owner when the time comes. Team ID and bundle ID are set locally, never committed.
 4. **Spec open questions** (final car roster, music direction, two-way stretches, web gyro, cloud save) stay open. The web-gyro one gets answered at the M2 gate.
