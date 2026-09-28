@@ -32,6 +32,44 @@ extends Resource
 @export var light_pole_spacing_m: float = 50.0
 @export var reflector_post_spacing_m: float = 25.0
 
+@export_group("Road build: markings (WP1.2)")
+## Dashed lane lines: dash and gap lengths. The dash phase is taken from absolute s
+## (a dash starts at every s = n * (dash + gap)), so it is continuous across chunks.
+@export var dash_length_m: float = 3.0   # not in spec: US-style 10 ft dash
+@export var dash_gap_m: float = 9.0   # not in spec: 30 ft gap (a 12 m speed rhythm)
+@export var lane_line_width_m: float = 0.15   # not in spec: typical dashed lane line
+@export var edge_line_width_m: float = 0.2   # not in spec: typical solid edge line
+## Raised reflectors on the lane lines (emissive class 1), centred in the dash gaps.
+@export var reflector_spacing_m: float = 24.0   # not in spec: one every two dash periods
+@export var reflector_width_m: float = 0.12   # not in spec: raised pavement marker footprint
+@export var reflector_length_m: float = 0.12   # not in spec: raised pavement marker footprint
+@export var reflector_height_m: float = 0.025   # not in spec: raised pavement marker height
+
+@export_group("Road build: barriers and ground (WP1.2)")
+## Concrete median barrier profile (centred on d = 0, base = median_half_width_m).
+@export var median_barrier_height_m: float = 0.85   # not in spec: Jersey-style barrier height
+@export var median_barrier_kink_height_m: float = 0.25   # not in spec: height of the lower slope break
+@export var median_barrier_kink_half_width_m: float = 0.3   # not in spec: half-width at the slope break
+@export var median_barrier_top_half_width_m: float = 0.1   # not in spec: half-width of the top
+## Guardrail rail (W-beam) at guardrail_d: continuous chunk geometry (posts are roadside props).
+@export var guardrail_bottom_m: float = 0.45   # not in spec: rail bottom above the road surface
+@export var guardrail_top_m: float = 0.75   # not in spec: rail top above the road surface
+@export var guardrail_depth_m: float = 0.1   # not in spec: W-beam depth, away from the road
+## Ground ribbon from the paved shoulder edge outward, far enough to vanish in the fog.
+@export var ground_ribbon_width_m: float = 500.0   # not in spec: past the fog at typical lateral view angles
+## Near strip of the ground ribbon (gravel/verge color) before the field color.
+@export var ground_verge_width_m: float = 6.0   # not in spec: gravel verge beyond the shoulder
+
+@export_group("Road build: chunks (WP1.2)")
+## Longest mesh row spacing along s (rows also fall on every dash boundary).
+@export var mesh_max_step_m: float = 10.0   # not in spec: ~1 cm chord error at the minimum radius
+## Chunks are kept from this far behind the focus to the quality view distance ahead.
+@export var chunk_keep_behind_m: float = 150.0   # not in spec: matches the behind-spawn distance
+## Chunk (re)builds allowed per frame, so a new chunk never costs more than one build.
+@export var chunk_builds_per_frame_count: int = 1   # not in spec: one 200 m chunk per frame is ~100x the needed rate
+## Taper length used when lane_count(s) changes without a LANE_COUNT_CHANGE feature.
+@export var lane_taper_default_m: float = 150.0   # not in spec: fallback taper for bare lane-count steps
+
 
 func lane_center_d(lane: int) -> float:
 	return median_half_width_m + inner_shoulder_m + (float(lane) + 0.5) * lane_width_m
