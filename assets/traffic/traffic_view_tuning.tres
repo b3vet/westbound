@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="TrafficViewTuning" format=3]
+
+[ext_resource type="Script" path="res://src/traffic/view/traffic_view_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+blinker_hz = 1.5
+blinker_duty_pct = 55.0
+yaw_min_speed_kmh = 20.0
+yaw_max_deg = 20.0
+body_roll_max_deg = 2.5
+body_roll_full_accel_mps2 = 4.0
+body_pitch_max_deg = 1.5
+body_pitch_full_accel_mps2 = 6.0
+body_motion_time_constant_s = 0.25
+teleport_distance_m = 20.0
+cull_distance_m = 0.0
+cull_behind_m = 20.0
+cull_behind_focus_m = 40.0
+shadow_distance_m = 250.0
+glow_day_tail = false
+pool_start_m = 0.5
+pool_length_m = 16.0
+pool_near_width_m = 1.8
+pool_far_width_m = 5.5

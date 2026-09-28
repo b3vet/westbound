@@ -13,3 +13,4 @@ blocks_sightlines = true
 is_motorbike = false
 mass_kg = 2800.0
 allowed_profiles = Array[StringName]([&"van"])
+model_scene_paths = PackedStringArray("res://assets/traffic/van_a.tscn")

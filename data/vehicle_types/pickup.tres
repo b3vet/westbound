@@ -13,3 +13,4 @@ blocks_sightlines = false
 is_motorbike = false
 mass_kg = 2200.0
 allowed_profiles = Array[StringName]([&"commuter", &"hesitant"])
+model_scene_paths = PackedStringArray("res://assets/traffic/pickup_a.tscn")

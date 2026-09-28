@@ -13,3 +13,4 @@ blocks_sightlines = false
 is_motorbike = false
 mass_kg = 1250.0
 allowed_profiles = Array[StringName]([&"cruiser", &"hesitant"])
+model_scene_paths = PackedStringArray("res://assets/traffic/hatchback_a.tscn", "res://assets/traffic/hatchback_b.tscn")

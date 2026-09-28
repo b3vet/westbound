@@ -17,6 +17,7 @@ No third-party assets yet.
 | Roadside furniture: light pole, reflector post, guardrail post, sign gantry, billboards (invented brands: Sundog Diner, Mesa Cola, Coyote Motel) | `assets/props/common/*.res` | `tools/props/build_props.gd` (WP1.4) |
 | Farmland props: crop tiles, fence, trees, farmstead, grain bins, windpump, water tower, wind turbine | `assets/props/farmland/*.res` | `tools/props/build_props.gd` (WP1.4) |
 | Style-guide palette sheet | `assets/palette/palette.png` | `tools/props/build_props.gd` from `assets/palette/palette.tres` (WP1.4) |
+| Traffic vehicles (17 models: 3 sedans, 2 hatchbacks, 2 SUVs, pickup, delivery van, semi with box and tank trailers, coach, 2 motorbikes with riders, 2 sports cars, coupe; the coach livery and motorcycle brands are invented or absent) | `assets/traffic/*.res`, `assets/traffic/*.tscn` | `tools/traffic_models/build_traffic_models.gd` (WP3.1) |
 
 ## Owner-supplied placeholders
 
