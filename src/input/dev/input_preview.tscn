@@ -1,0 +1,72 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/input/dev/input_preview.gd" id="1_preview"]
+[ext_resource type="Script" path="res://src/input/player_input.gd" id="2_hub"]
+[ext_resource type="PackedScene" path="res://src/ui/controls_overlay.tscn" id="3_overlay"]
+
+[node name="InputPreview" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("1_preview")
+
+[node name="PlayerInput" type="Node" parent="."]
+script = ExtResource("2_hub")
+
+[node name="Panel" type="PanelContainer" parent="."]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 16.0
+offset_bottom = 16.0
+mouse_filter = 2
+
+[node name="Readout" type="Label" parent="Panel"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.956863, 0.968627, 1, 1)
+theme_override_font_sizes/font_size = 13
+text = "input preview"
+
+[node name="Meters" type="Control" parent="."]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 180.0
+offset_right = 376.0
+offset_bottom = 234.0
+mouse_filter = 2
+
+[node name="Buttons" type="HBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -560.0
+offset_top = 16.0
+offset_right = -16.0
+offset_bottom = 56.0
+grow_horizontal = 0
+alignment = 2
+
+[node name="Steering" type="Button" parent="Buttons"]
+layout_mode = 2
+text = "STEER"
+
+[node name="Throttle" type="Button" parent="Buttons"]
+layout_mode = 2
+text = "THROTTLE"
+
+[node name="Mirror" type="Button" parent="Buttons"]
+layout_mode = 2
+text = "MIRROR"
+
+[node name="Recalibrate" type="Button" parent="Buttons"]
+layout_mode = 2
+text = "RECAL"
+
+[node name="Overlay" type="CanvasLayer" parent="."]
+
+[node name="ControlsOverlay" parent="Overlay" instance=ExtResource("3_overlay")]
