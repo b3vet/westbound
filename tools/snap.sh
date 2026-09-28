@@ -49,6 +49,9 @@ if [[ " ${renderers[*]} " == *" mobile "* && ! -f "$lvp_icd" ]]; then
   exit 1
 fi
 
+# Keep Godot from importing screenshots (tests/out is gitignored scratch).
+mkdir -p "$root/tests/out" && : >"$root/tests/out/.gdignore"
+
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
 
