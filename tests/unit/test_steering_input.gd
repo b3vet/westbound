@@ -78,9 +78,15 @@ func test_tuning_additions_load_from_data() -> void:
 	near(c.flick_rearm_frac(), 0.5, EPS)
 	near(c.gamepad_dead_zone_frac(), 0.12, EPS)
 	near(c.pedal_brake_min_frac(), 0.2, EPS)
+	near(c.wheel_visual_max_rad(), deg_to_rad(c.wheel_visual_max_deg), EPS)
+	eq(c.wheel_facets, defaults.wheel_facets, "int field matches its default")
 	var text := FileAccess.get_file_as_string("res://data/tuning/controls.tres")
 	for key: String in ["flick_window_ms", "gyro_min_gravity_mps2", "gamepad_dead_zone_pct",
-			"fallback_screen_height_cm", "pedal_width_cm", "pedal_height_cm", "button_size_cm",
+			"fallback_screen_height_cm", "pedal_width_cm", "pedal_height_cm",
+			"boost_cap_height_cm", "brake_width_cm", "brake_height_cm", "pedal_capture_cm",
+			"boost_cap_rearm_cm", "controls_scale_min_factor", "controls_scale_max_factor",
+			"wheel_visual_diameter_cm", "wheel_visual_max_deg", "wheel_facets",
+			"wheel_rim_inner_pct", "wheel_hub_pct", "wheel_spoke_width_pct", "wheel_edge_alpha_pct",
 			"controls_margin_cm", "controls_gap_cm", "pedal_brake_min_pct",
 			"setting_scale_min_factor", "setting_scale_max_factor", "overlay_ring_alpha_pct",
 			"overlay_ring_radius_px", "overlay_dot_radius_px", "overlay_idle_alpha_pct",

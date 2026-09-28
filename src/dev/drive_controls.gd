@@ -13,13 +13,15 @@ enum Corner { TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
 const PANEL := Color(0.067, 0.102, 0.188, 0.82)
 const EDGE := Color(0.54, 0.576, 0.678, 0.9)
 const TEXT := Color(0.957, 0.969, 1.0)
+## Canvas px on the 720 px tall canvas (a phone in landscape: ~106 px per cm). Owner
+## M2 feedback: smaller buttons; kept at 44 px tall or more so they stay tappable.
 const BEVEL_PX := 7
-const SQUARE := Vector2(76.0, 60.0)
-const WIDE := Vector2(116.0, 48.0)
-const MARGIN_PX := 16.0
-const GAP_PX := 10.0
-const FONT_SIZE := 22
-const SMALL_FONT_SIZE := 17
+const SQUARE := Vector2(64.0, 52.0)
+const WIDE := Vector2(96.0, 44.0)
+const MARGIN_PX := 12.0
+const GAP_PX := 8.0
+const FONT_SIZE := 19
+const SMALL_FONT_SIZE := 15
 
 var _root: Control
 ## Rows keyed by corner * 16 + row (row 0 = nearest the corner edge).

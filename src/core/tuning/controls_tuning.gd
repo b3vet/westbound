@@ -37,12 +37,22 @@ extends Resource
 @export var fallback_screen_height_cm: float = 6.8   # not in spec: typical phone landscape height
 
 @export_group("Touch layout")
-## Manual layouts: pedals and buttons, in physical cm (converted via DPI).
-@export var pedal_width_cm: float = 2.2   # not in spec: thumb-sized pedal
-@export var pedal_height_cm: float = 2.6   # not in spec: leaves the top HUD band clear
-@export var button_size_cm: float = 1.3   # not in spec: boost button (and drag-manual brake width)
-@export var controls_margin_cm: float = 0.5   # not in spec: gap to the safe-area edge
-@export var controls_gap_cm: float = 0.3   # not in spec: gap between pedals and buttons
+## Manual layouts, in physical cm (converted via DPI), all multiplied by the
+## controls_scale setting. One thumb per side (plan D9): the gas pedal carries the
+## boost cap directly above it (one joined control), the brake is its own pedal.
+@export var pedal_width_cm: float = 1.3   # not in spec: gas pedal and boost cap width
+@export var pedal_height_cm: float = 1.6   # not in spec: gas pedal (below the cap)
+@export var boost_cap_height_cm: float = 0.8   # not in spec: boost cap on top of the gas pedal
+@export var brake_width_cm: float = 1.2   # not in spec
+@export var brake_height_cm: float = 1.8   # not in spec
+@export var controls_margin_cm: float = 0.4   # not in spec: gap to the safe-area edge (not scaled)
+@export var controls_gap_cm: float = 0.3   # not in spec: gap between the gas column and the brake
+## A pedal finger is captured until it lifts: it only switches to the other pedal once
+## it is on that pedal and this far outside its own control.
+@export var pedal_capture_cm: float = 0.6   # not in spec: a moving thumb doesn't drop gas
+## After a boost, the thumb must come back this far below the cap before sliding up
+## boosts again (the joint line can't jitter out a second boost).
+@export var boost_cap_rearm_cm: float = 0.25   # not in spec
 ## Brake pedal: a touch at the pedal's bottom edge brakes this much, rising to 100% at
 ## the top ("proportional to how far up the pedal the thumb sits").
 @export var pedal_brake_min_pct: float = 20.0   # not in spec: the bottom edge still brakes
@@ -52,6 +62,9 @@ extends Resource
 ## clamped to this range (1 = the spec's numbers).
 @export var setting_scale_min_factor: float = 0.5   # not in spec: settings slider range
 @export var setting_scale_max_factor: float = 2.0   # not in spec: settings slider range
+## The controls_scale setting (size of every touch control and the drag visuals).
+@export var controls_scale_min_factor: float = 0.6   # not in spec: settings slider range
+@export var controls_scale_max_factor: float = 1.6   # not in spec: settings slider range
 
 @export_group("Overlay")
 @export var overlay_ring_alpha_pct: float = 40.0   # not in spec: "faint ring"
@@ -59,6 +72,15 @@ extends Resource
 @export var overlay_dot_radius_px: float = 12.0   # not in spec
 @export var overlay_idle_alpha_pct: float = 55.0   # not in spec: pedals at rest
 @export var overlay_label_px: float = 15.0   # not in spec
+## Drag visual "wheel" (plan D10): a faceted steering wheel on the anchor, turning with
+## the steer value. Visual only.
+@export var wheel_visual_diameter_cm: float = 2.4   # not in spec
+@export var wheel_visual_max_deg: float = 135.0   # not in spec: wheel angle at full steer
+@export var wheel_facets: int = 12   # not in spec: low-poly rim
+@export var wheel_rim_inner_pct: float = 76.0   # not in spec: inner rim radius, % of outer
+@export var wheel_hub_pct: float = 26.0   # not in spec: hub radius, % of outer
+@export var wheel_spoke_width_pct: float = 18.0   # not in spec: spoke width, % of outer radius
+@export var wheel_edge_alpha_pct: float = 85.0   # not in spec: rim and spoke edges
 
 @export_group("Keyboard")
 @export var keyboard_steer_ramp_s: float = 0.15
@@ -106,3 +128,7 @@ func gamepad_dead_zone_frac() -> float:
 
 func pedal_brake_min_frac() -> float:
 	return Units.pct_to_frac(pedal_brake_min_pct)
+
+
+func wheel_visual_max_rad() -> float:
+	return deg_to_rad(wheel_visual_max_deg)

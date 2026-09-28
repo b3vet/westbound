@@ -11,7 +11,8 @@ extends Node3D
 ## scoring HUD yet. Leaving the carriageway resets the car.
 ##
 ## Dev buttons (DriveControls), top-right: CAM, HUD; STEER (drag/gyro),
-## THROTTLE (auto/manual), MIRROR; CAR, RECAL (gyro neutral), RESET; top-left SANDBOX
+## THROTTLE (auto/manual), MIRROR; CAR, RECAL (gyro neutral), RESET; RING/WHEEL (drag
+## visual), SIZE (controls_scale 0.8/1.0/1.2); top-left SANDBOX
 ## (the traffic sandbox; on web also `?scene=sandbox` in the URL, reload to come back).
 ## Keys: A/D steer, W gas (manual), S brake, Shift boost, C camera, backtick HUD.
 
@@ -27,8 +28,8 @@ const LEG_COUNT := 8
 ## Headlights on when the color script's headlight ramp passes this (dev scene value).
 const HEADLIGHTS_ON := 0.3
 ## Dev scene sizes (canvas px).
-const LAYOUT_BUTTON := Vector2(150.0, 48.0)
-const CAM_BUTTON := Vector2(190.0, 48.0)
+const LAYOUT_BUTTON := Vector2(124.0, 44.0)
+const CAM_BUTTON := Vector2(160.0, 44.0)
 const FORGET_EVERY_M := 500.0
 const SANDBOX_SCENE := "res://src/traffic/dev/traffic_sandbox.tscn"
 
@@ -70,6 +71,8 @@ var _steer_button: Button
 var _throttle_button: Button
 var _mirror_button: Button
 var _car_button: Button
+var _visual_button: Button
+var _size_button: Button
 var _speed_label: Label
 
 
@@ -324,6 +327,8 @@ func _build_controls() -> void:
 	_car_button = _controls.add_button(top_right, 2, "CAR", LAYOUT_BUTTON, _next_car, true)
 	_controls.add_button(top_right, 2, "RECAL", LAYOUT_BUTTON, _hub.recalibrate_gyro, true)
 	_controls.add_button(top_right, 2, "RESET", LAYOUT_BUTTON, func() -> void: _reset_car(_car.state.v), true)
+	_visual_button = _controls.add_button(top_right, 3, "RING", LAYOUT_BUTTON, _toggle_drag_visual, true)
+	_size_button = _controls.add_button(top_right, 3, "SIZE", LAYOUT_BUTTON, _cycle_controls_scale, true)
 	_controls.add_button(DriveControls.Corner.TOP_LEFT, 1, "SANDBOX", LAYOUT_BUTTON, _open_sandbox, true)
 	_speed_label = _controls.add_label(DriveControls.Corner.TOP_LEFT, 0, 200.0)
 	add_child(_controls)
@@ -362,6 +367,22 @@ func _toggle_mirror() -> void:
 	Settings.set_value(&"left_handed", not bool(Settings.get_value(&"left_handed")))
 
 
+func _toggle_drag_visual() -> void:
+	var wheel: bool = Settings.get_value(&"drag_visual") != PlayerInput.WHEEL
+	Settings.set_value(&"drag_visual", PlayerInput.WHEEL if wheel else PlayerInput.RING)
+
+
+## Cycles the touch-control size: 0.8, 1.0, 1.2 (dev steps of the controls_scale setting).
+func _cycle_controls_scale() -> void:
+	var steps: Array[float] = [0.8, 1.0, 1.2]
+	var current := float(Settings.get_value(&"controls_scale"))
+	var next := steps[0]
+	for i in steps.size():
+		if is_equal_approx(steps[i], current):
+			next = steps[(i + 1) % steps.size()]
+	Settings.set_value(&"controls_scale", next)
+
+
 func _next_car() -> void:
 	_car_index = (_car_index + 1) % CAR_PATHS.size()
 	var st := _car.state
@@ -380,3 +401,5 @@ func _refresh_buttons() -> void:
 	DriveControls.set_text(_throttle_button, "THR %s" % String(Settings.get_value(&"throttle_mode")).to_upper())
 	DriveControls.set_text(_mirror_button, "LEFT-H" if Settings.get_value(&"left_handed") else "RIGHT-H")
 	DriveControls.set_text(_car_button, String(_car.car.id).to_upper() if _car != null else "CAR")
+	DriveControls.set_text(_visual_button, String(Settings.get_value(&"drag_visual")).to_upper())
+	DriveControls.set_text(_size_button, "SIZE %.1f" % float(Settings.get_value(&"controls_scale")))

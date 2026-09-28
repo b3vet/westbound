@@ -1,4 +1,4 @@
-# Controls (WP2.2)
+# Controls (WP2.2, revised in WP2.6)
 
 How every control layout turns fingers, tilt, keys and gamepads into the one set of signals physics reads. Spec: [Controls](../WESTBOUND%20HANDOFF.md#controls), UI → HUD elements (controls overlay), Accessibility. Contract: [CONTRACTS.md §4](CONTRACTS.md#4-vehicles) (`VehicleInput`, `VehicleController`).
 
@@ -19,8 +19,9 @@ Every layout produces the same `VehicleInput`: `steer` −1..1 (+ right), `throt
 | `src/input/throttle_input.gd` | `ThrottleInput`: auto/manual throttle, brake priority, brake-pedal mapping |
 | `src/input/keys_gamepad.gd` | `KeysGamepad`: runtime input actions, key ramp, stick and triggers, edge keys |
 | `src/input/controls_layout.gd` | `ControlsLayout`: where each touch control sits (hit-testing and drawing share it) |
-| `src/ui/controls_overlay.gd/.tscn` | `ControlsOverlay`: anchor ring, thumb dot, pedals and buttons |
-| `src/input/dev/input_preview.tscn` | Dev scene: raw and mapped values per source, layout buttons, the overlay |
+| `src/ui/controls_overlay.gd/.tscn` | `ControlsOverlay`: anchor ring and thumb dot or the steering wheel, the joined gas + boost control, the brake pedal |
+| `src/input/dev/input_preview.tscn` | Dev scene: raw and mapped values per source, layout, visual and size buttons, the overlay |
+| `src/input/dev/controls_snap.tscn` | Snap wrapper: the real drive scene (`car_drive.tscn`) with a scripted layout and fingers, for phone-size screenshots |
 
 ## Hub API
 
@@ -37,6 +38,8 @@ func recalibrate_gyro() -> void               # countdown; pause menu "Recalibra
 func request_camera_cycle() -> void           # the HUD camera button
 func is_gyro_supported() -> bool              # hide the gyro setting when false
 var effective_steering: StringName            # gyro falls back to drag where there is no tilt
+var controls_scale: float                     # the controls_scale setting, clamped 0.6..1.6
+var drag_visual: StringName                   # PlayerInput.RING or PlayerInput.WHEEL (setting drag_visual)
 
 class_name PlayerController extends VehicleController
 func _init(hub: PlayerInput) -> void          # update() copies the hub; allocation-free
@@ -50,12 +53,23 @@ func _init(hub: PlayerInput) -> void          # update() copies the hub; allocat
 
 | | Auto | Manual |
 | --- | --- | --- |
-| **Drag** | Drag zone = whole screen. One thumb: left/right steers, down brakes, flick up boosts | Drag zone = left half. Gas pedal bottom-right, with a column beside it: boost button on top, brake below |
-| **Gyro** | Tilt steers. Touch and hold anywhere brakes; swipe up boosts | Brake pedal bottom-left, gas pedal bottom-right, boost button above the gas |
+| **Drag** | Drag zone = whole screen. One thumb: left/right steers, down brakes, flick up boosts | Drag zone = left half. The gas column bottom-right (gas pedal with the boost cap on top), the brake pedal beside it, inward |
+| **Gyro** | Tilt steers. Touch and hold anywhere brakes; swipe up boosts | Brake pedal bottom-left, the gas column bottom-right |
 
+- **Gas column (plan D9).** One thumb per side: the boost cap sits directly on top of the gas pedal, same width, as one joined control (see [Gas and boost](#gas-and-boost-one-thumb)). There is no separate boost button in any layout.
 - **Left-handed** mirrors every rect across the safe area's centre (and the manual drag zone across the screen).
-- **Safe areas.** Pedals and buttons sit inside `DisplayServer.get_display_safe_area()`, converted to canvas pixels, with `controls_margin_cm` to its edge.
-- **Sizes** are physical (`pedal_width_cm` 2.2 × `pedal_height_cm` 2.6, `button_size_cm` 1.3, gaps 0.3 cm). The pedal stack stays below the top HUD band on a phone held in landscape.
+- **Safe areas.** Pedals sit inside `DisplayServer.get_display_safe_area()`, converted to canvas pixels, with `controls_margin_cm` (0.4) to its edge.
+- **Sizes** are physical and multiplied by the `controls_scale` setting (1.0, clamped `controls_scale_min_factor`..`controls_scale_max_factor` = 0.6..1.6):
+
+| Control | Size (cm, at scale 1) | Before WP2.6 |
+| --- | --- | --- |
+| Gas pedal (`pedal_width_cm` × `pedal_height_cm`) | 1.3 × 1.6 | 2.2 × 2.6 |
+| Boost cap (`pedal_width_cm` × `boost_cap_height_cm`) | 1.3 × 0.8, on the gas | 1.3 × 1.3 button |
+| Brake (`brake_width_cm` × `brake_height_cm`) | 1.2 × 1.8 | 1.3 wide column (drag), 2.2 × 2.6 (gyro) |
+| Gap gas ↔ brake (`controls_gap_cm`, drag + manual) | 0.3 | 0.3 |
+| Margin to the safe-area edge (`controls_margin_cm`, not scaled) | 0.4 | 0.5 |
+
+  The scale also applies to the gap, the capture and re-arm distances, the ring, dot, wheel and labels. The margin stays, so the controls stay in the corner.
 - **Physical scale.** Native mobile uses `DisplayServer.screen_get_dpi()`, converted from window to canvas pixels. On web and desktop the DPI is unknown or in CSS inches, which are not physical on phones, so the canvas height is taken to be `fallback_screen_height_cm` (6.8 cm, a phone in landscape). The snaps therefore show the phone proportions.
 
 ## Math
@@ -104,7 +118,18 @@ The live range is rescaled after the dead zone, so the output is continuous at t
 - **Manual:**
   - The gas pedal (or W/↑, or the right trigger, analog) gives the throttle.
   - Released, the car coasts under the physics' engine braking.
-  - The brake pedal is `brake = min + (1 − min) · up`. `up` is how far up the pedal the thumb sits (0 at the bottom edge, 1 at the top) and `min` = `pedal_brake_min_pct` (20%). A finger keeps its pedal if it slides off.
+  - The brake pedal is `brake = min + (1 − min) · up`. `up` is how far up the pedal the thumb sits (0 at the bottom edge, 1 at the top, clamped) and `min` = `pedal_brake_min_pct` (20%). A finger keeps its pedal if it slides off.
+
+### Gas and boost (one thumb)
+
+Plan D9 (owner, M2: "a single finger for a single side"). Per finger (touch slot), in `PlayerInput`:
+
+- **Hold.** A finger that lands anywhere on the gas pedal or the boost cap is a gas finger: full throttle until it lifts.
+- **Captured.** It keeps the gas wherever it slides (off the side, off the bottom, up past the cap). The one exception: sliding *clearly* onto the brake pedal (on the brake and more than `pedal_capture_cm` (0.6) outside the gas column) turns it into a brake finger. The same rule turns a brake finger back into a gas finger when it slides clearly onto the gas column. So in drag + manual one right thumb can move gas → brake → gas without lifting, and a thumb that drifts a little over the brake's edge keeps the gas.
+- **Boost by slide.** Crossing the joint line (the top of the gas pedal) upwards fires one boost edge (`consume_boost()`), while the gas stays on. Landing directly on the cap is gas plus one boost.
+- **Boost by flick.** An upward flick from the pedal (the same `FlickMeter` as drag + auto: over 0.6 m/s, mostly upward) also fires it. A real flick travels at least 2.4 cm in the 40 ms window, so it nearly always crosses the joint as well: both share one arming, so that is still one boost.
+- **Re-arm.** After a boost the finger must come back below the joint by `boost_cap_rearm_cm` (0.25) with the flick meter settled before it can boost again, so jitter at the joint line never double-fires. Sliding down and up again is a new, deliberate boost.
+- **Overlay.** `gas_pressed` lights the whole column; `boost_pressed` (a gas finger above the joint) fills the cap.
 - **Both modes:**
   - Brake is the strongest brake source.
   - Any brake above 0 cuts the throttle to 0. The spec states this only for auto; it applies to manual too so that "brake 0.5" means the same to physics in every layout (equivalence).
@@ -120,6 +145,7 @@ The live range is rescaled after the dead zone, so the output is continuous at t
 
 ### Settings
 
+- **Look.** `controls_scale` (size of every touch control and drag visual, clamped 0.6..1.6) and `drag_visual` (`ring` | `wheel`) are followed even while a layout is pinned. Changing the scale rebuilds the layout (fingers are released); changing the visual only redraws.
 - **Scales.** Sensitivity, dead zone and curve are multipliers of the tuned spec values (1.0 = spec), clamped to `setting_scale_min_factor`..`setting_scale_max_factor` (0.5..2).
   - Sensitivity divides max_drag and the max angle (higher = less travel).
   - The dead-zone setting scales both dead zones.
@@ -147,12 +173,18 @@ WASD are physical keys (the same positions on AZERTY and similar layouts). The l
 
 `ControlsOverlay` draws the hub's `ControlsLayout`, so what you see is exactly what the touch zones are, mirroring and safe areas included.
 
-- **Drag.**
+- **Drag, `drag_visual = ring` (default).**
   - A faint faceted (octagonal) anchor ring in the accent color, `overlay_ring_radius_px` wide, drawn with a 1.5 px antialiased edge.
   - A solid octagonal dot at the thumb. It turns hot (#ff5a4d) while the drag brakes.
-- **Pedals and buttons:**
+- **Drag, `drag_visual = wheel` (plan D10).** Visual only: the input math is the same as the ring's.
+  - A faceted low-poly steering wheel centred on the anchor, `wheel_visual_diameter_cm` (2.4) × `controls_scale` across: a `wheel_facets` (12)-sided rim, three spokes (left, right, bottom), an octagonal hub, and a solid rim facet at 12 o'clock so the rotation reads at a glance.
+  - Rotation = `steer × wheel_visual_max_deg` (135°), clockwise for right. It follows the anchor (including anchor follow past max_drag) and appears and disappears with the touch, like the ring.
+  - Subtle panel fill, accent edges at `wheel_edge_alpha_pct`; the edges and marker turn hot while the drag brakes (drag + auto). No thumb dot.
+  - Two canvas commands (one triangle array for every fill, one antialiased multiline for every edge), so it costs one draw call more than the ring.
+- **Pedals:**
   - Faceted panels: a `StyleBoxFlat` with the bevel as corner radius and `corner_detail = 1`, which draws chamfers.
-  - A 1.5 px chamfered neon edge polyline (`HudTuning.neon_border_px`), in the line color at rest and the accent (gas, boost) or hot (brake) when pressed.
+  - A 1.5 px chamfered neon edge polyline (`HudTuning.neon_border_px`), in the line color at rest and the accent (gas) or hot (brake) when pressed.
+  - The gas column is one panel and one edge around pedal + cap, with a divider at the joint, an up chevron and BOOST on the cap, GAS on the pedal. The cap fills with the accent while a gas finger is on it.
   - The brake pedal fills bottom-up with the brake amount.
   - Uppercase labels: GAS, BRAKE and BOOST. Color is never the only cue.
 - **Gyro + auto.** A hot ring and dot where the braking finger holds.
@@ -212,7 +244,8 @@ The layouts' own feel dynamics (80 ms release, 60 ms gyro filter, 0.15 s key ram
 - **Gyro:** the sensor-present threshold (2 m/s²).
 - **Gamepad:** the stick/trigger dead zone (12%), and Start = pause.
 - **Screen:** the fallback screen height (6.8 cm) when the DPI is unknown.
-- **Pedals:** sizes, margins, gaps and the brake pedal's 20% floor at its bottom edge.
+- **Pedals:** sizes, margins, gaps, the brake pedal's 20% floor at its bottom edge, the joined gas + boost column with its capture (0.6 cm) and re-arm (0.25 cm) distances (plan D9).
+- **Look settings:** `controls_scale` (0.6–1.6) and `drag_visual` = ring | wheel (plan D10), with the wheel's size (2.4 cm), max angle (135°), facets and proportions.
 - **Settings:** the range 0.5–2 for the sensitivity, dead-zone and curve scales.
 - **Overlay:** ring alpha and radius, dot radius, idle alpha, label size.
-- **Behavior:** brake cuts throttle in manual mode too; gyro + auto brakes immediately on touch, and a swipe-up cancels it for that finger; the drag + manual brake is a proportional button in the column beside the gas.
+- **Behavior:** brake cuts throttle in manual mode too; gyro + auto brakes immediately on touch, and a swipe-up cancels it for that finger; the drag + manual brake is a proportional pedal beside the gas column; a pedal finger can slide between gas and brake.

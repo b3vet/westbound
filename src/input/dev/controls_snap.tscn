@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://src/input/dev/controls_snap.gd" id="1_snap"]
+[ext_resource type="PackedScene" path="res://src/dev/car_drive.tscn" id="2_drive"]
+
+[node name="ControlsSnap" type="Node"]
+script = ExtResource("1_snap")
+
+[node name="CarDrive" parent="." instance=ExtResource("2_drive")]
