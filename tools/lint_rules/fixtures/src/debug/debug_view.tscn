@@ -1,0 +1,8 @@
+[gd_scene format=3]
+
+; Materials are allowed under a debug/ or dev/ directory; lights are not.
+[sub_resource type="StandardMaterial3D" id="dbg"]
+
+[node name="DebugView" type="Node3D"]
+
+[node name="Lamp" type="OmniLight3D" parent="."] ; expect: WB001
