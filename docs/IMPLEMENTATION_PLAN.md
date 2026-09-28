@@ -34,7 +34,7 @@ New deviations get a row here before they are built.
 
 - **Godot 4.7-stable** (`4.7.stable.official.5b4e0cb0f`): the Linux binary downloads from the GitHub release and runs headless. `tools/godot.sh` pins the version and fetches the binary plus web export templates.
 - **Headless tests:** `godot --headless --script tests/run_all.gd`. It exits non-zero on failure.
-- **Visual review in the container:** Xvfb + Mesa llvmpipe render the **Compatibility** renderer to PNG (verified). `tools/snap.sh <scene> [--sky_t=…] [--cam=…]` gives agents and the orchestrator screenshots for look reviews. The Mobile/Vulkan renderer cannot be screenshotted here; that is checked on device.
+- **Visual review in the container:** Xvfb + Mesa llvmpipe render both renderers to PNG: **Compatibility** (llvmpipe) and **Mobile** (Vulkan on lavapipe via `mesa-vulkan-drivers`). `tools/snap.sh <scene> [--renderer=both] [--sky_t=…] [--cam=…]` gives screenshots for look reviews, and `tools/parity.sh` checks that the two renderers produce the same pixels. Thermal and fps are still checked on device.
 - **Web smoke test:** Chromium and Playwright are available. `tools/web_smoke` loads the web export headless, fails on console errors and saves a screenshot.
 - **Reference project:** `b3vet/cool_drive` is cloned read-only for porting (camera spring follow, DESIGN.md system, the physics *approach*, the 3 placeholder `.glb` cars and the music MP3s). cool_drive is a drift game, so its constants are **not** carried over. The spec's grip-driving targets are.
 - **CI (GitHub Actions):** fast test tier on every push; web export; deploy to GitHub Pages for phone playtesting (see [§10](#10-open-items-for-the-owner)). The soak tier runs on demand and before every gate.
@@ -282,8 +282,8 @@ Updated by the orchestrator at every merge.
 
 | Phase | Milestone | Status | Gate |
 | --- | --- | --- | --- |
-| 0 | M0 Foundation | 🟡 all WPs merged; awaiting CI green + owner web/iPhone check (async) | continue |
-| 1 | M1 Road & look (+ Track A) | ⬜ | ⏸ pause |
+| 0 | M0 Foundation | ✅ merged; owner device check folded into M1 | continue |
+| 1 | M1 Road & look (+ Track A) | 🟡 all WPs merged; ⏸ awaiting owner playtest (docs/playtests/M1.md) | ⏸ pause |
 | 2 | M2 Car, controls, cameras (+ Track B) | ⬜ | ⏸ pause |
 | 3 | M3 Traffic (+ Track C) | ⬜ | ⏸ pause |
 | 4 | M4 Scoring & lives | ⬜ | continue |

@@ -345,7 +345,15 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
     - `assets/shaders/materials/world.tres`: props, landmarks, barriers
     - `assets/shaders/materials/road.tres`: road surface and markings, as geometry
     - Later: `vehicle.tres`, `sky.tres`, `glow.tres`, `decal.tres`
-- **Renderer parity:** the engine clear color differs between renderers, so the sky dome must always cover the frame. Shaders must produce the same pixels on Mobile and Compatibility (`tools/snap.sh --renderer=both`). *Known issue for WP1.3:* the Phase-0 starter shaders give different results on the two renderers (color-space handling of vertex colors and/or `source_color` globals).
+- **Renderer parity** (WP1.3; check with `tools/parity.sh`):
+    - **Color globals hold linear values.** `SkyRig` converts them on the CPU. They carry no `source_color` hint. Vertex `COLOR` stays sRGB and goes through `wb_albedo()`.
+    - **Every world or sky shader ends with `ALBEDO = wb_output(linear_color)`.** On Compatibility it pre-inverts the renderer's sRGB round trips (`#if CURRENT_RENDERER == RENDERER_COMPATIBILITY`).
+    - **Darkening alpha blends use `ALPHA = wb_darken_alpha(a)`**, as in blob shadows.
+    - **The sky draws in the transparent pass without depth writes,** ordered by `render_priority`: dome −100, stars −99, horizon −98, clouds −97. Every other transparent world effect must use a priority above −97. The dome always covers the frame, so the clear color never shows.
+    - **No full-screen pass.** The color script grades every color inside the shared shaders.
+- **Sky node:** `SkyRig` (`src/sun/sky.gd` / `sky.tscn`; the name `Sky` clashes with a Godot class).
+    - Methods: `setup(ctx, road, origin)`, `update_view(s)`, a settable `sky_t`, `get_accent()` / `accent_changed`, `set_biome_tint_offset()`, `set_player_light()`, `set_horizon_layer()`.
+    - The color script lives in `data/color_script.tres` (`ColorScript`/`ColorKey`). Keyframe positions come only from `SunTuning.sky_t_*`, and fog distances are fractions of the quality view distance.
 - **Floating origin:** `FloatingOrigin` (`src/road/floating_origin.gd`, a Node) holds the 64-bit `origin_x/y/z` and a `shift_distance_m` taken from `road.floating_origin_shift_km`.
     - The run calls `update_focus(x, y, z)` with the focus's absolute position. When the horizontal distance exceeds the shift distance, the origin moves to the focus and `Events.origin_shifted(offset)` fires once.
     - World systems either rebuild with `to_local(x, y, z)` / `RoadSample.local_point(...)`, or subtract `offset` from their nodes.
@@ -357,6 +365,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
+| 2026-09-28 | §13 renderer-parity rules (linear globals, wb_output, wb_darken_alpha, sky priorities), SkyRig (WP1.3) | Orchestrator merge review |
 | 2026-09-28 | §4 VehiclePhysics API, road-relative yaw_rate, gearbox owned by physics, capability curve (WP1.5) | Orchestrator merge review |
 | 2026-09-28 | BiomeDef: parallel `prop_scenes`/`prop_densities_per_km` replaced by typed `scatter_props`/`field_grid` (WP1.4) | Orchestrator merge review |
 | 2026-09-28 | §3 ProceduralRoadPath notes (WP1.1) | Orchestrator merge review |

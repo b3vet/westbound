@@ -31,6 +31,6 @@ void fragment() {
 	float r = pow(pow(p.x, boxiness) + pow(p.y, boxiness), 1.0 / boxiness);
 	float falloff = 1.0 - smoothstep(1.0 - softness, 1.0, r);
 	float fog = wb_fog_factor(length(v_world_pos - CAMERA_POSITION_WORLD));
-	ALBEDO = shadow_color;
-	ALPHA = v_strength * falloff * (1.0 - fog);
+	ALBEDO = wb_output(shadow_color);
+	ALPHA = wb_darken_alpha(v_strength * falloff * (1.0 - fog));
 }

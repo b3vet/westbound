@@ -6,6 +6,7 @@ The tools the orchestrator and every WP run at merge time (plan §3, §4 merge g
 | --- | --- | --- |
 | `tools/test.sh` | Do the headless tests pass? (see `CLAUDE.md`) | every WP |
 | `tools/lint` | Does the code respect the rendering budget and the sim working rules? | every WP |
+| `tools/parity.sh` | Do the Mobile and Compatibility renderers produce the same pixels for this scene? | visual WPs touching shaders, every gate |
 | `tools/snap.sh` | What does the scene look like on the Compatibility renderer, and on the Mobile renderer (`--renderer=mobile|both`, Mesa lavapipe)? | visual WPs, every gate |
 | `WBBench` (`tests/lib/bench.gd`) | Does a sim tick fit its CPU budget? | sim WPs (WP2.4 onward) |
 
@@ -19,7 +20,7 @@ tools/snap.sh src/run.tscn --cam=hood --speed_kmh=200 --seconds=2 --tag=hood
 tools/snap.sh src/road/road_preview.tscn --size=2400x1080 --out=/tmp/snaps
 ```
 
-Renders with the **Compatibility** renderer (`gl_compatibility` / `opengl3`), under `xvfb-run` when there is no `$DISPLAY` (Mesa llvmpipe in the container), with the dummy audio driver and `--fixed-fps 60`, so simulated time is exact whatever the machine speed. The Mobile/Vulkan renderer cannot be captured in the container; that one is checked on device. It prints the path of each PNG (relative to the repo when inside it), one per line.
+Renders with the **Compatibility** renderer (`gl_compatibility` / `opengl3`), under `xvfb-run` when there is no `$DISPLAY` (Mesa llvmpipe in the container), with the dummy audio driver and `--fixed-fps 60`, so simulated time is exact whatever the machine speed. `--renderer=mobile|both` also captures the **Mobile** renderer (Vulkan on Mesa lavapipe; install with `apt-get install -y mesa-vulkan-drivers`). Mobile images get a `mobile` tag. It prints the path of each PNG (relative to the repo when inside it), one per line.
 
 | Option | Default | Meaning |
 | --- | --- | --- |

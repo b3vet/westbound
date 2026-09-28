@@ -11,7 +11,8 @@ extends Node3D
 ##   C or tap the upper-right quarter  cycle camera (chase, far, hood, high)
 ##   Up/Down or tap the right edge     speed +/- (100 / 160 / 200 / 250 / 280 km/h)
 ##   Left/Right or tap the left edge   change lane
-##   backtick / three-finger tap       dev HUD (and the sky_t slider when present)
+##   backtick / three-finger tap       dev HUD
+##   bottom slider                     scrub sky_t live; play runs the whole timeline
 
 const CAMERAS: Array[StringName] = [&"chase", &"far", &"hood", &"high"]
 ## Camera rigs: [behind_m, height_m, look_ahead_m, look_height_m]. Dev values.
@@ -36,6 +37,7 @@ var _origin: FloatingOrigin
 var _director: BiomeDirector
 var _builder: RoadBuilder
 var _roadside: Roadside
+var _sky: SkyRig
 var _camera: Camera3D
 var _car: MeshInstance3D
 var _shadow: BlobShadow
@@ -78,6 +80,7 @@ func _ready() -> void:
 	_roadside.biome_director = _director
 	add_child(_roadside)
 
+	_sky = $Sky
 	_camera = $Camera3D
 	_car = _make_car()
 	add_child(_car)
@@ -95,6 +98,7 @@ func _ready() -> void:
 	_director.setup(_ctx, _road, _origin)
 	_builder.setup(_ctx, _road, _origin)
 	_roadside.setup(_ctx, _road, _origin)
+	_sky.setup(_ctx, _road, _origin)
 	_builder.build_all_now(_s)
 	Events.origin_shifted.connect(_on_origin_shifted)
 
@@ -131,6 +135,7 @@ func _process(_delta: float) -> void:
 	_director.update_view(_s)
 	_builder.update_view(_s)
 	_roadside.update_view(_s)
+	_sky.update_view(_s)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -160,8 +165,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cycle_camera()
 
 
-## Snap hook (tools/snap.sh): --s=, --cam=, --speed_kmh=, --lane=.
+## Snap hook (tools/snap.sh): --s=, --cam=, --lane=, --sky_t=.
 func snap_setup(args: Dictionary) -> void:
+	if args.has("sky_t"):
+		_sky.sky_t = float(args["sky_t"])
 	if args.has("cam"):
 		_cam_index = maxi(CAMERAS.find(StringName(str(args["cam"]))), 0)
 	if args.has("lane"):
@@ -175,6 +182,7 @@ func snap_setup(args: Dictionary) -> void:
 		_builder.build_all_now(_s)
 		_roadside.update_view(_s)
 		_director.update_view(_s)
+		_sky.update_view(_s)
 		_place_all()
 
 
