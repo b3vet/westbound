@@ -14,8 +14,8 @@ const FREE := -1
 var _ids := PackedInt64Array()
 
 
-func _init(capacity: int) -> void:
-	_ids.resize(capacity)
+func _init(slot_count: int) -> void:
+	_ids.resize(slot_count)
 	_ids.fill(FREE)
 
 

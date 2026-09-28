@@ -119,7 +119,7 @@ func test_three_finger_tap_with_ios_touch_ids() -> void:
 	var hud: CanvasLayer = (load("res://src/ui/dev_hud.tscn") as PackedScene).instantiate()
 	tree.root.add_child(hud)
 	var before: bool = hud.is_hud_visible()
-	for id in [1_893_457_201, 1_893_457_202, 1_893_457_203]:
+	for id: int in [1_893_457_201, 1_893_457_202, 1_893_457_203]:
 		var ev := InputEventScreenTouch.new()
 		ev.index = id
 		ev.pressed = true
