@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/camera/camera_rig.gd" id="1_rig"]
+
+[node name="CameraRig" type="Node3D"]
+top_level = true
+script = ExtResource("1_rig")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+current = true
+fov = 62.0
+near = 0.15
+far = 720.0
