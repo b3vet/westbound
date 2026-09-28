@@ -28,6 +28,7 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | D5 | M0 done needs an Android phone | Android is exported and CI-built, but device verification is **pending an Android device** | Only an iPhone is confirmed. See [§10](#10-open-items-for-the-owner). |
 | D6 | Braking 9 m/s² *and* 250→100 km/h in ~1.3 s (contradictory: 9 m/s² alone gives ~4.6 s) | **Owner decision:** 9 m/s² stands; the 1.3 s feel target becomes the model's measured time (≈ 3.5–3.8 s: drag, engine braking and rolling resistance add to the 9 m/s²) | Heavy, committed braking; rewards reading traffic early |
 | D7 | Density 16 vehicles/km/lane at leg 8+ **and** max 60 active vehicles | At 3+ lanes the active window (200 m behind to ~1.15 km ahead) needs ~65–87 vehicles; the director thins batches evenly when capped. **Measured (WP2.4, desktop):** 60 cars ≈ 190 µs per 120 Hz tick, 90 cars ≈ 280 µs, linear at ~3.2 µs per car. Leg-8 soaks hit the 60-car cap. **Open until M3:** read the on-device sim tick from the dev HUD, then either raise the cap (e.g. 90) or keep thinning | Spec numbers conflict mildly; decide with measured sim cost |
+| D8 | Night tailgating: "high beams flash when the player tailgates within 10 m for over 1 s" | **Owner decision:** removed as a traffic reaction; the line was a grammar slip. The player gets a manual high-beam control in Phase 5 (WP5.4) instead | Owner, 2026-09-28 |
 
 New deviations get a row here before they are built.
 
@@ -286,7 +287,7 @@ Updated by the orchestrator at every merge.
 | 0 | M0 Foundation | ✅ merged; owner device check folded into M1 | continue |
 | 1 | M1 Road & look (+ Track A) | ✅ web playtest passed (owner); native thermal soak still open (D4) | ⏸ pause |
 | 2 | M2 Car, controls, cameras (+ Track B) | 🟡 M2 build live; ⏸ awaiting owner playtest (docs/playtests/M2.md); WP2.4 traffic core still running | ⏸ pause |
-| 3 | M3 Traffic (+ Track C) | ⬜ | ⏸ pause |
+| 3 | M3 Traffic (+ Track C) | 🟡 Wave 3 running (WP3.1–3.5) | ⏸ pause |
 | 4 | M4 Scoring & lives | ⬜ | continue |
 | 5 | M5 Sun loop & legs | ⬜ | continue |
 | 6 | M6 Director, biomes, journey | ⬜ | continue |
