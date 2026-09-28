@@ -207,13 +207,14 @@ func plan_batch(ctx: SpawnSource.Context, s_from: float, s_to: float, out_spawns
 
 | kind | Written by | Adapter emits |
 | --- | --- | --- |
-| `Events.PASS`, `CLOSE_PASS`, `CUT`, `THREAD` | scoring (`slot` = car) | `scored(kind, points, multiplier, clearance_m)` |
+| `Events.PASS`, `CLOSE_PASS`, `CUT`, `THREAD` (written as `ScoreEvents.*`, the same values, because pure sims can't touch autoloads) | scoring (`slot` = car) | `scored(kind, points, multiplier, clearance_m)` |
 | `ScoringRuleSet.KIND_BANKED` (`tag` = `Events.REASON_*`, `value` = banked total) | scoring | `chain_banked(points, tag, int(value))` |
 | `KIND_CHAIN_LOST` (`tag` = reason) | scoring | `chain_lost(points, tag)` |
 | `KIND_HESITATED` | scoring | `hesitated()` |
 | `KIND_TOO_SLOW`, `KIND_SHOULDER`, `KIND_SLIPSTREAM` (`value` 1/0) | scoring | `too_slow_changed` / `shoulder_penalty_changed` / `slipstream_changed` |
 | `KIND_BONUS` (`tag` = bonus kind, `value` = banked total) | scoring | `bonus_awarded(tag, points, int(value))` |
 | `KIND_SUN_NUDGE` (`value` = fraction of the day span) | scoring | Not a signal: run.gd calls `SunClock.lift(value)` |
+| `Scoring.KIND_NEAR_MISS` (`slot` = car) | scoring (every physical close pass, even unscored ones; not during the ghost) | Not a signal: run.gd calls `TrafficSim.notify_close_pass(slot)` (the ~30% horn) |
 | `&"night_started"`, `&"dawn_started"` (`value` = duration), `&"morning_reached"`, `&"sun_lifted"` (`value` = fraction) | sun clock | The signal of the same name |
 | `&"hit"` (`tag` = `Events.HIT_*`, `value` = lives left) | collisions and lives | `hit(tag, int(value))` |
 
@@ -231,6 +232,7 @@ func notify_hit(out) / notify_checkpoint(out) / notify_run_end(out)
 func award_bonus(bonus_kind, base_points, out)                   # straight to banked; night factor applied
 func multiplier() -> float / chain() -> int / banked() -> int
 func take_boost_fill() -> float                                  # meter fraction earned since last call
+func set_player_body(length_m, width_m) / is_too_slow() -> bool  # v1 Scoring extras (feed is_too_slow into SunClock.advance)
 ```
 
 The rule set owns the multiplier, chain, banked total, cut cooldowns (keyed by `vehicle_id`), the thread window, and the shoulder and minimum-speed timers. `points = base × multiplier × speed_factor(v) × night_factor`. Rounding is WP3.4's choice, but it must be documented and deterministic.
@@ -365,6 +367,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
+| 2026-09-28 | §7 NEAR_MISS kind, ScoreEvents, Scoring extras; rules as implemented in docs/SCORING.md (WP3.4) | Orchestrator merge review |
 | 2026-09-28 | §13 renderer-parity rules (linear globals, wb_output, wb_darken_alpha, sky priorities), SkyRig (WP1.3) | Orchestrator merge review |
 | 2026-09-28 | §4 VehiclePhysics API, road-relative yaw_rate, gearbox owned by physics, capability curve (WP1.5) | Orchestrator merge review |
 | 2026-09-28 | BiomeDef: parallel `prop_scenes`/`prop_densities_per_km` replaced by typed `scatter_props`/`field_grid` (WP1.4) | Orchestrator merge review |
