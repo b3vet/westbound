@@ -127,6 +127,17 @@ extends Resource
 @export var tire_smoke_min_decel_mps2: float = 4.0
 @export var tire_smoke_min_speed_kmh: float = 150.0
 
+@export_group("Visual (car_visual.gd)")
+## Lateral acceleration that leans the body to the full body_roll_max_deg (the lean is
+## proportional below it and clamped above).
+@export var body_roll_full_accel_mps2: float = 10.0   # not in spec: ~1 g gives the full 4 deg
+## Longitudinal acceleration that pitches the body to the full body_pitch_max_deg.
+@export var body_pitch_full_accel_mps2: float = 9.0   # not in spec: full braking gives the full 2 deg
+## Brake input from which the brake lights come on.
+@export var brake_light_min_input_pct: float = 5.0   # not in spec
+## SteeringWheel rotation = front-wheel steer angle x this (interior models only).
+@export var steering_wheel_ratio_factor: float = 12.0   # not in spec: a typical steering ratio
+
 
 func physics_dt() -> float:
 	return Units.hz_to_dt(float(physics_tick_hz))

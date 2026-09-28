@@ -5,6 +5,7 @@
 [resource]
 script = ExtResource("1_script")
 id = &"falcon_gt"
+model_scene_path = "res://assets/cars/placeholder/falcon_gt.glb"
 display_name = "Falcon GT"
 top_speed_kmh = 270.0
 zero_to_200_s = 8.8

@@ -68,3 +68,7 @@ body_spring_hz = 2.5
 body_damping_ratio = 0.6
 tire_smoke_min_decel_mps2 = 4.0
 tire_smoke_min_speed_kmh = 150.0
+body_roll_full_accel_mps2 = 10.0
+body_pitch_full_accel_mps2 = 9.0
+brake_light_min_input_pct = 5.0
+steering_wheel_ratio_factor = 12.0
