@@ -1,0 +1,5 @@
+[gd_scene format=3]
+
+; Outside src/, assets/ and data/, the rendering rules do not apply.
+[node name="Probe" type="OmniLight3D"]
+shadow_enabled = true

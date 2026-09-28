@@ -1,0 +1,23 @@
+[gd_scene load_steps=4 format=3]
+
+; A comment mentioning OmniLight3D is fine.
+[sub_resource type="StandardMaterial3D" id="mat"] ; expect: WB002
+
+[sub_resource type="Environment" id="env"]
+background_mode = 1
+glow_enabled = true ; expect: WB004
+ssao_enabled = true ; expect: WB004
+ssr_enabled = false
+adjustment_enabled = true
+
+[sub_resource type="CameraAttributesPractical" id="cam"]
+dof_blur_far_enabled = true ; expect: WB004
+
+[node name="World" type="Node3D"]
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+shadow_enabled = true ; expect: WB003
+
+[node name="Lamp" type="OmniLight3D" parent="."] ; expect: WB001
+
+[node name="Spot" type="SpotLight3D" parent="."] ; expect: WB001
