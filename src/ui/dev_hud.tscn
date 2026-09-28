@@ -1,0 +1,49 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://src/ui/dev_hud.gd" id="1_devhud"]
+
+[sub_resource type="SystemFont" id="SystemFont_mono"]
+font_names = PackedStringArray("monospace", "DejaVu Sans Mono", "Menlo", "Consolas", "Roboto Mono", "Droid Sans Mono")
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+content_margin_left = 10.0
+content_margin_top = 6.0
+content_margin_right = 10.0
+content_margin_bottom = 6.0
+bg_color = Color(0.0431, 0.0627, 0.1255, 0.78)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.5412, 0.5765, 0.6784, 0.35)
+corner_radius_top_left = 7
+corner_radius_top_right = 7
+corner_radius_bottom_right = 7
+corner_radius_bottom_left = 7
+corner_detail = 1
+
+[sub_resource type="Theme" id="Theme_dev"]
+default_font = SubResource("SystemFont_mono")
+default_font_size = 13
+GridContainer/constants/h_separation = 12
+GridContainer/constants/v_separation = 0
+PanelContainer/styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="DevHud" type="CanvasLayer"]
+layer = 100
+script = ExtResource("1_devhud")
+
+[node name="Panel" type="PanelContainer" parent="."]
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_left = 8.0
+offset_right = 8.0
+grow_vertical = 2
+mouse_filter = 2
+theme = SubResource("Theme_dev")
+
+[node name="Grid" type="GridContainer" parent="Panel"]
+layout_mode = 2
+mouse_filter = 2
+columns = 2

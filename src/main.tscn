@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://src/main.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://src/ui/dev_hud.tscn" id="2_devhud"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -21,3 +22,5 @@ offset_top = 46.0
 offset_right = 600.0
 offset_bottom = 92.0
 text = "WESTBOUND"
+
+[node name="DevHud" parent="." instance=ExtResource("2_devhud")]
