@@ -38,6 +38,7 @@ func test_every_section_present_and_typed() -> void:
 	check(t.feel is FeelTuning)
 	check(t.hud is HudTuning)
 	check(t.progression is ProgressionTuning)
+	check(t.traffic_view is TrafficViewTuning)
 
 
 func test_sections_are_separate_files() -> void:

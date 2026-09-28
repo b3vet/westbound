@@ -1,6 +1,6 @@
 [gd_resource type="Resource" script_class="TrafficViewTuning" format=3]
 
-[ext_resource type="Script" path="res://src/traffic/view/traffic_view_tuning.gd" id="1_script"]
+[ext_resource type="Script" path="res://src/core/tuning/traffic_view_tuning.gd" id="1_script"]
 
 [resource]
 script = ExtResource("1_script")

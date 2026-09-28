@@ -46,7 +46,7 @@ const MAX_FRAME_TICKS := 8
 const BLINK_LEFT_FLAGS := TrafficState.FLAG_BLINKER_LEFT | TrafficState.FLAG_HAZARD
 const BLINK_RIGHT_FLAGS := TrafficState.FLAG_BLINKER_RIGHT | TrafficState.FLAG_HAZARD
 
-## Vehicle drawing numbers; defaults to assets/traffic/traffic_view_tuning.tres.
+## Vehicle drawing numbers; defaults to the run's `Tuning.traffic_view`.
 var tuning: TrafficViewTuning
 ## Vehicles further than this from the camera are skipped (set by setup(); the run may
 ## update it when the quality tier's view distance changes).
@@ -190,7 +190,7 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin, registry: Tr
 	_origin = origin
 	_registry = registry
 	if tuning == null:
-		tuning = TrafficViewTuning.load_default()
+		tuning = ctx.tuning.traffic_view if ctx.tuning.traffic_view != null else TrafficViewTuning.load_default()
 	_dt = ctx.tuning.traffic.near_dt()
 	_read_tuning()
 	_free_nodes()

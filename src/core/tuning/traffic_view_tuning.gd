@@ -3,14 +3,13 @@ extends Resource
 # lint: not-sim render-side tuning resource for the traffic view (no simulation)
 ## Traffic rendering numbers (WP3.1). Spec: Traffic → Visuals (lights, motion,
 ## rendering), Cameras → Glare rule, World → Night lighting. Saved as
-## assets/traffic/traffic_view_tuning.tres (the view's own data; the orchestrator may
-## hang it off the root Tuning as `traffic_view`). Visual only: nothing here feeds
-## back into the simulation.
+## data/tuning/traffic_view.tres, reachable as `Tuning.traffic_view`. Visual only:
+## nothing here feeds back into the simulation.
 ##
 ## Lamp brightness and glow looks live in the materials (assets/shaders/materials/
 ## traffic.tres, glow.tres); the numbers here drive the CPU side of the view.
 
-const PATH := "res://assets/traffic/traffic_view_tuning.tres"
+const PATH := "res://data/tuning/traffic_view.tres"
 
 @export_group("Blinkers")
 ## Blinker flash rate (cycles per second). Regulations allow 1-2 Hz (60-120 per minute).
