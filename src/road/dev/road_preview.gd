@@ -12,8 +12,10 @@ extends Node3D
 ## procedural; seed (procedural); s (focus, m); cam = near | high | driver | top; lanes;
 ## grade (straight, rise/run); radius (arcs, m); view (view distance, m);
 ## speed_kmh (drive along the road every frame, time-sliced building + origin shifts);
-## roadside=true (adds WP1.4's Roadside props, to check the combined look).
-## Ground colors come from a BiomeDirector (farmland). The label shows the road's own
+## roadside=true (adds WP1.4's Roadside props, to check the combined look);
+## sky_t (the real SkyRig's position on the color-script timeline, default 0.2).
+## Ground colors come from a BiomeDirector (farmland). The sky, fog and light are the
+## real SkyRig's (WP1.3), with its fog matched to the view distance. The label shows the road's own
 ## numbers and, a few frames in, the renderer's draw calls and primitives for the frame.
 
 const FIXTURES := ["straight", "arc_left", "arc_right", "taper", "procedural"]
@@ -41,6 +43,7 @@ const STATS_FRAME := 3
 @onready var _car_shadow: BlobShadow = $CarShadow
 @onready var _lone_shadow: BlobShadow = $LoneShadow
 @onready var _label: Label = $UI/Label
+@onready var _sky: SkyRig = $Sky
 
 var _tuning: Tuning
 var _road: RoadPath
@@ -112,6 +115,10 @@ func _configure(args: Dictionary) -> void:
 	_builder.biome_director = _director
 	_builder.setup(ctx, _road, _origin)
 	_builder.build_all_now(_s)
+	_sky.setup(ctx, _road, _origin)
+	_sky.view_distance_override_m = _builder.view_distance_m()
+	_sky.sky_t = float(args.get("sky_t", _sky.sky_t))
+	_sky.push_now()
 	_frames = 0
 	_camera.far = _builder.view_distance_m() + FAR_MARGIN_M
 	_place_view()
@@ -128,6 +135,7 @@ func _process(delta: float) -> void:
 		_origin.update_focus(_smp.pos_x, _smp.pos_y, _smp.pos_z)
 		_director.update_view(_s)
 		_builder.update_view(_s)
+		_sky.update_view(_s)
 		if _roadside != null:
 			_roadside.update_view(_s)
 		_place_view()
