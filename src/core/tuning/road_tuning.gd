@@ -123,10 +123,14 @@ extends Resource
 @export var mesh_max_step_m: float = 10.0   # not in spec: ~1 cm chord error at the minimum radius
 ## Chunks are kept from this far behind the focus to the quality view distance ahead.
 @export var chunk_keep_behind_m: float = 150.0   # not in spec: matches the behind-spawn distance
-## Chunk (re)builds allowed per frame, so a new chunk never costs more than one build.
+## Chunk builds completed per frame at most (a chunk is also time-sliced, below).
 @export var chunk_builds_per_frame_count: int = 1   # not in spec: one 200 m chunk per frame is ~100x the needed rate
-## Taper length used when lane_count(s) changes without a LANE_COUNT_CHANGE feature.
-@export var lane_taper_default_m: float = 150.0   # not in spec: fallback taper for bare lane-count steps
+## Mesh rows (row intervals) built per frame: a 200 m chunk (~35 rows) spreads over
+## ~3 frames, so no frame pays for a whole chunk.
+@export var chunk_build_rows_per_frame_count: int = 12   # not in spec: ~1 ms of GDScript mesh work per frame on desktop
+## Chunks are started this far beyond the view distance, so the time-sliced build
+## finishes before the chunk is needed.
+@export var chunk_prefetch_m: float = 50.0   # not in spec: ~15 frames of travel at 350 km/h and 30 fps
 
 
 func lane_center_d(lane: int) -> float:

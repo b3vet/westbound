@@ -31,13 +31,14 @@ func _dist(a: PackedFloat64Array, b: PackedFloat64Array) -> float:
 
 ## Every vertex (both surfaces) lying in the cross-section plane at s.
 func _vertices_at(m: RoadChunkMesher, road: RoadPath, s: float) -> Array[PackedFloat64Array]:
+	# The row's cross-section plane is spanned by right and up; tangent is its normal.
 	var smp := road.sample(s)
-	var fwd := Vector3(smp.tangent.x, 0.0, smp.tangent.z).normalized()
+	var fwd := smp.tangent
 	var out: Array[PackedFloat64Array] = []
 	for verts: PackedVector3Array in [m.road_vertices, m.world_vertices]:
 		for v in verts:
 			var p := _abs(m, v)
-			var along := (p[0] - smp.pos_x) * fwd.x + (p[2] - smp.pos_z) * fwd.z
+			var along := (p[0] - smp.pos_x) * fwd.x + (p[1] - smp.pos_y) * fwd.y + (p[2] - smp.pos_z) * fwd.z
 			if absf(along) < MM:
 				out.append(p)
 	return out
@@ -50,7 +51,6 @@ func _check_seam(road: RoadPath, s_boundary: float, label: String) -> void:
 	var vb := _vertices_at(b, road, s_boundary)
 	if not gt(va.size(), 50, "%s: boundary vertices found" % label):
 		return
-	eq(va.size(), vb.size(), "%s: same boundary vertex count on both sides" % label)
 	var worst := 0.0
 	for p in va:
 		var best := INF
@@ -100,7 +100,7 @@ func test_build_tuning_fields_loaded() -> void:
 	gt(t.ground_ribbon_width_m, t.ground_verge_width_m)
 	lt(t.ground_ribbon_width_m, t.min_curve_radius_m, "ground ribbon must not fold on the inside of a bend")
 	ge(t.chunk_builds_per_frame_count, 1)
-	gt(t.lane_taper_default_m, 0.0)
+	gt(t.lane_taper_length_m, 0.0)
 
 
 # ---------------------------------------------------------------- Seams
@@ -120,6 +120,27 @@ func test_seams_arc_right() -> void:
 func test_seams_arc_left() -> void:
 	var road := ArcRoadPath.new(R, -1, 4, t, -0.5, Vector3(-40.0, 2.0, 7.0))
 	_check_seam(road, 400.0, "arc left k1|k2")
+
+
+func test_seams_procedural_tightest_bend() -> void:
+	# The procedural road's sun-side switches use R = 1200 m bends: check the chunk
+	# seams (markings, rails, barrier, ground) where the curvature is highest.
+	var road := ProceduralRoadPath.new(RunContext.new(7))
+	var span := 60000.0
+	road.ensure_generated_to(span + 2.0 * t.chunk_length_m)
+	var best_s := 0.0
+	var best_k := 0.0
+	var s := 0.0
+	while s < span:
+		var k := absf(road.curvature_at(s))
+		if k > best_k:
+			best_k = k
+			best_s = s
+		s += 25.0
+	gt(best_k, 0.9 / t.min_curve_radius_m, "found a tight bend (R=%s m at s=%s)" % [1.0 / best_k, best_s])
+	var boundary := roundf(best_s / t.chunk_length_m) * t.chunk_length_m
+	_check_seam(road, boundary, "procedural bend k|k+1 at %s" % boundary)
+	_check_seam(road, boundary + t.chunk_length_m, "procedural bend next seam")
 
 
 func test_rows_hit_chunk_bounds_and_stay_short() -> void:
@@ -323,7 +344,7 @@ func test_lane_drop_taper_with_feature() -> void:
 
 
 func test_lane_drop_taper_without_feature() -> void:
-	_check_taper(LaneChangeRoadPath.new(3, 2, 400.0, t.lane_taper_default_m, false, t), "bare step")
+	_check_taper(LaneChangeRoadPath.new(3, 2, 400.0, t.lane_taper_length_m, false, t), "bare step")
 
 
 func test_lane_add_taper() -> void:

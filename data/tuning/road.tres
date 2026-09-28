@@ -70,4 +70,5 @@ ground_verge_width_m = 6.0
 mesh_max_step_m = 10.0
 chunk_keep_behind_m = 150.0
 chunk_builds_per_frame_count = 1
-lane_taper_default_m = 150.0
+chunk_build_rows_per_frame_count = 12
+chunk_prefetch_m = 50.0

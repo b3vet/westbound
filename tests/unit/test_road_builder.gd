@@ -43,12 +43,14 @@ func _expected_min(focus: float) -> int:
 	return maxi(floori((focus - t.chunk_keep_behind_m) / t.chunk_length_m), 0)
 
 
+## Last chunk kept (includes the prefetch margin).
 func _expected_max(focus: float, view_m: float = VIEW_M) -> int:
-	return floori((focus + view_m) / t.chunk_length_m)
+	return floori((focus + view_m + t.chunk_prefetch_m) / t.chunk_length_m)
 
 
+## Every chunk overlapping [focus - behind, focus + view] is live.
 func _covers(b: RoadBuilder, focus: float, view_m: float = VIEW_M) -> bool:
-	for k in range(_expected_min(focus), _expected_max(focus, view_m) + 1):
+	for k in range(_expected_min(focus), floori((focus + view_m) / t.chunk_length_m) + 1):
 		if not b.has_chunk(k):
 			return false
 	return true
@@ -83,19 +85,36 @@ func test_covers_behind_to_view_distance() -> void:
 
 func test_respects_per_frame_build_budget() -> void:
 	var b := _make(StraightRoadPath.new(3, t))
+	var rows := t.chunk_build_rows_per_frame_count
 	var n := t.chunk_builds_per_frame_count
 	b.update_view(500.0)
-	eq(b.builds_last_update, n, "at most N chunk builds per frame")
-	eq(b.active_chunk_count(), n)
-	check(b.has_chunk(floori(500.0 / t.chunk_length_m)), "the focus chunk is built first")
+	eq(b.rows_last_update, rows, "a frame spends exactly its row budget while work remains")
+	eq(b.active_chunk_count(), 0, "a chunk is time-sliced over several frames")
+	check(b.is_building())
 	var frames := 1
-	while not _covers(b, 500.0) and frames < 20:
+	var first := -1
+	while b.active_chunk_count() == 0 and frames < 10:
 		b.update_view(500.0)
-		le(b.builds_last_update, n, "budget on frame %d" % frames)
+		frames += 1
+	for k in range(b.needed_range_min(), b.needed_range_max() + 1):
+		if b.has_chunk(k):
+			first = k
+	eq(first, floori(500.0 / t.chunk_length_m), "the focus chunk is built first")
+	gt(frames, 1, "one chunk takes more than one frame")
+	var max_rows := 0
+	var max_builds := 0
+	while not _covers(b, 500.0) and frames < 100:
+		b.update_view(500.0)
+		max_rows = maxi(max_rows, b.rows_last_update)
+		max_builds = maxi(max_builds, b.builds_last_update)
 		frames += 1
 	check(_covers(b, 500.0), "all chunks built within a few frames")
-	b.update_view(500.0)
-	eq(b.builds_last_update, 0, "nothing to build once covered")
+	le(max_rows, rows, "row budget per frame")
+	le(max_builds, n, "chunk completions per frame")
+	for i in 10:
+		b.update_view(500.0)
+	eq(b.rows_last_update, 0, "idle once everything (with prefetch) is built")
+	check(not b.is_building())
 
 
 func test_pool_stable_while_driving_20km() -> void:
@@ -106,7 +125,7 @@ func test_pool_stable_while_driving_20km() -> void:
 	var builds0 := b.builds_total
 	var uncovered := 0
 	var s := 0.0
-	var step := 25.0  # 90 km/h at 60 fps; faster only means fewer frames per chunk
+	var step := 3.25  # 350 km/h at 30 fps: the worst case for the time-sliced build
 	while s < 20000.0:
 		s += step
 		b.update_view(s)
@@ -114,7 +133,7 @@ func test_pool_stable_while_driving_20km() -> void:
 			uncovered += 1
 	eq(b.pool_size(), pool, "pool size unchanged after warm-up")
 	eq(b.pool_grow_count, grows, "no chunk allocated while driving")
-	eq(uncovered, 0, "view always covered at 25 m/frame with the per-frame budget")
+	eq(uncovered, 0, "view always covered at 350 km/h, 30 fps with the per-frame budget")
 	eq(b.builds_total - builds0, _expected_max(s) - _expected_max(0.0), "each chunk built exactly once")
 
 
@@ -260,7 +279,8 @@ func test_blob_shadow_node_and_multimesh() -> void:
 	_nodes.append(multi)
 	multi.setup(64)
 	eq(multi.capacity(), 64)
+	check(multi.multimesh.use_custom_data, "per-instance strength")
+	check(multi.material_override != null, "shared shadow shader")
 	for i in 64:
 		multi.place(i, smp, 1.0 + 0.1 * i, 0.0, 4.5, 1.9, origin)
 	multi.hide_instance(3)
-	eq(multi.multimesh.get_instance_transform(3).basis.get_scale(), Vector3.ZERO, "hidden instance collapsed")

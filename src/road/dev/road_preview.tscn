@@ -1,0 +1,55 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://src/road/dev/road_preview.gd" id="1_preview"]
+[ext_resource type="Script" path="res://src/road/floating_origin.gd" id="2_origin"]
+[ext_resource type="Script" path="res://src/road/road_builder.gd" id="3_builder"]
+[ext_resource type="PackedScene" path="res://src/vehicle/blob_shadow.tscn" id="4_shadow"]
+[ext_resource type="Material" path="res://assets/shaders/materials/world.tres" id="5_world"]
+
+[sub_resource type="Environment" id="Environment_bg"]
+background_mode = 1
+background_color = Color(0.85, 0.72, 0.6, 1)
+ambient_light_source = 1
+
+[sub_resource type="BoxMesh" id="BoxMesh_car"]
+size = Vector3(1.9, 1.25, 4.6)
+
+[sub_resource type="LabelSettings" id="LabelSettings_hud"]
+font_size = 18
+outline_size = 4
+outline_color = Color(0, 0, 0, 1)
+
+[node name="RoadPreview" type="Node3D"]
+script = ExtResource("1_preview")
+
+[node name="FloatingOrigin" type="Node" parent="."]
+script = ExtResource("2_origin")
+
+[node name="RoadBuilder" type="Node3D" parent="."]
+script = ExtResource("3_builder")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+fov = 70.0
+near = 0.1
+far = 720.0
+current = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_bg")
+
+[node name="Car" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_car")
+surface_material_override/0 = ExtResource("5_world")
+
+[node name="CarShadow" parent="." instance=ExtResource("4_shadow")]
+
+[node name="LoneShadow" parent="." instance=ExtResource("4_shadow")]
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="UI"]
+offset_left = 16.0
+offset_top = 12.0
+offset_right = 1260.0
+offset_bottom = 40.0
+label_settings = SubResource("LabelSettings_hud")

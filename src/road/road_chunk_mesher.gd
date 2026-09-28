@@ -22,7 +22,7 @@ extends RefCounted
 ## surface itself (never overlaid), so there is no z-fighting at any distance.
 ##
 ## Lane-count changes: the right lane edge follows a smoothstep taper over each
-## LANE_COUNT_CHANGE feature (or `lane_taper_default_m` after a bare lane_count(s)
+## LANE_COUNT_CHANGE feature (or `lane_taper_length_m` after a bare lane_count(s)
 ## step). The strip layout per chunk is fixed (`lane_slots`); strips beyond the edge
 ## collapse onto it, so the surface has no gaps. A dashed line is drawn only while it
 ## lies fully inside the tapering edge line.
@@ -111,6 +111,8 @@ var _arrays: Array = []
 var _road: RoadPath
 
 var _road_quads: int = 0
+var _next_interval: int = 0
+var _units_done: int = 0
 var _world_quads: int = 0
 var _rv: int = 0
 var _ri: int = 0
@@ -129,8 +131,16 @@ func _init(road_tuning: RoadTuning = null, road_palette: RoadPalette = null) -> 
 
 # ---------------------------------------------------------------- API
 
-## Builds the chunk [s0, s1] of `road` into the output arrays (director rate).
+## Builds the chunk [s0, s1] of `road` into the output arrays in one go.
 func build(road: RoadPath, s0: float, s1: float) -> void:
+	begin(road, s0, s1)
+	while not step(row_count):
+		pass
+
+
+## Starts an incremental build of [s0, s1]: samples the rows, lays out the cross-
+## section and sizes the arrays. Then call step() until it returns true.
+func begin(road: RoadPath, s0: float, s1: float) -> void:
 	_road = road
 	chunk_s0 = s0
 	chunk_s1 = s1
@@ -142,7 +152,7 @@ func build(road: RoadPath, s0: float, s1: float) -> void:
 	_features.clear()
 	_tapers.clear()
 	# A feature starting exactly at s1 must count here too: the boundary row is shared.
-	road.features_in(s0 - tuning.lane_taper_default_m, s1 + ROW_EPS_M, _features)
+	road.features_in(s0 - tuning.lane_taper_length_m, s1 + ROW_EPS_M, _features)
 	for f in _features:
 		if f.kind == RoadFeature.Kind.LANE_COUNT_CHANGE and f.s_end > f.s_start:
 			_tapers.append(f)
@@ -158,20 +168,56 @@ func build(road: RoadPath, s0: float, s1: float) -> void:
 
 	var intervals := row_count - 1
 	road_quads_per_interval = 2 * (2 * lane_slots + 3)
-	var road_quads := intervals * road_quads_per_interval + reflector_count * REFLECTOR_QUADS
-	var world_quads := intervals * WORLD_QUADS_PER_INTERVAL
-	_road_quads = road_quads
-	_world_quads = world_quads
-	_size_road(road_quads)
-	_size_world(world_quads)
+	_road_quads = intervals * road_quads_per_interval + reflector_count * REFLECTOR_QUADS
+	_world_quads = intervals * WORLD_QUADS_PER_INTERVAL
+	_size_road(_road_quads)
+	_size_world(_world_quads)
 	_rv = 0
 	_ri = 0
 	_wv = 0
 	_wi = 0
-	for i in intervals:
-		_emit_road_interval(i)
-		_emit_world_interval(i)
-	_emit_reflectors()
+	_next_interval = 0
+	_units_done = 0
+
+
+## Emits up to `max_units` units of work (one unit = one row interval; the
+## reflectors are the last unit). Returns true when the build is complete.
+func step(max_units: int) -> bool:
+	if _road == null:
+		return true
+	var intervals := row_count - 1
+	var units := 0
+	while units < max_units and _next_interval < intervals:
+		_emit_road_interval(_next_interval)
+		_emit_world_interval(_next_interval)
+		_next_interval += 1
+		units += 1
+	_units_done += units
+	if units < max_units and _next_interval >= intervals:
+		_emit_reflectors()
+		_units_done += 1
+		_road = null
+		return true
+	return false
+
+
+## Work units emitted since begin().
+func units_done() -> int:
+	return _units_done
+
+
+## True between begin() and the step() that completes the build.
+func is_building() -> bool:
+	return _road != null
+
+
+## Work units a full build takes (row intervals + the reflector unit).
+func build_units() -> int:
+	return row_count
+
+
+## Drops an unfinished build (the arrays keep partial data until the next begin()).
+func cancel() -> void:
 	_road = null
 
 
@@ -229,10 +275,11 @@ func row_outer_d(r: int) -> float:
 
 ## Effective right lane edge at `s` (taper applied). Director rate: queries features.
 func lanes_right_edge_at(road: RoadPath, s: float) -> float:
+	assert(not is_building(), "lanes_right_edge_at during an incremental build")
 	_road = road
 	_features.clear()
 	_tapers.clear()
-	road.features_in(s - tuning.lane_taper_default_m, s + ROW_EPS_M, _features)
+	road.features_in(s - tuning.lane_taper_length_m, s + ROW_EPS_M, _features)
 	for f in _features:
 		if f.kind == RoadFeature.Kind.LANE_COUNT_CHANGE and f.s_end > f.s_start:
 			_tapers.append(f)
@@ -322,7 +369,7 @@ func _edge_d(s: float) -> float:
 			var n0 := float(_road.lane_count(f.s_start - TAPER_PROBE_M))
 			var t := smoothstep(f.s_start, f.s_end, s)
 			return left + lerpf(n0, f.value, t) * w
-	var taper := tuning.lane_taper_default_m
+	var taper := tuning.lane_taper_length_m
 	if taper > 0.0:
 		var n := _road.lane_count(s)
 		var s_prev := s - taper

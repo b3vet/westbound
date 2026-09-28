@@ -6,20 +6,27 @@ extends Node3D
 ## World-system node API from docs/CONTRACTS.md §13.
 ##
 ##   builder.setup(ctx, road, origin)   # once per run
-##   builder.build_all_now(s)           # optional warm-up (spawn, respawn): no pop-in
+##   builder.build_all_now(s)           # warm-up (spawn, respawn): everything at once
 ##   builder.update_view(player_s)      # once per frame
 ##
 ## Chunk k covers [k * chunk_length_m, (k + 1) * chunk_length_m]. Chunks are kept
 ## from `chunk_keep_behind_m` behind the focus to the quality view distance ahead
-## (Quality.view_distance_m, re-read on Events.quality_changed / governor_changed).
-## At most `chunk_builds_per_frame_count` chunks are (re)built per update_view,
-## nearest first (ahead before behind). Chunk nodes and meshes are pooled: the pool
-## grows only while warming up or when the view distance grows.
+## (Quality.view_distance_m, re-read on Events.quality_changed / governor_changed),
+## plus `chunk_prefetch_m` so a chunk is finished before it is needed.
+##
+## Frame budget: building is time-sliced. update_view emits at most
+## `chunk_build_rows_per_frame_count` mesh rows and completes at most
+## `chunk_builds_per_frame_count` chunks; one chunk is in flight at a time, picked
+## nearest first (ahead before behind), then dirty chunks (ground color changes).
+## A new chunk stays hidden until its mesh is committed; a dirty one keeps showing
+## its old mesh. Chunk nodes and meshes are pooled and pre-warmed to the most chunks
+## the view can need, so driving never allocates a chunk.
 ##
 ## Floating origin: chunk vertices are relative to the chunk's own anchor (64-bit
 ## math in RoadChunkMesher), and the node sits at origin.to_local(anchor). On
 ## Events.origin_shifted(offset) every live chunk node moves by -offset and resets
-## physics interpolation: no rebuild, no seam.
+## physics interpolation: no rebuild, no seam. An in-flight build is unaffected
+## (it is anchor-relative and placed on commit).
 ##
 ## Draw calls: two per visible chunk (road + world material).
 
@@ -28,13 +35,15 @@ const WORLD_MATERIAL: Material = preload("res://assets/shaders/materials/world.t
 const FREE := -1
 ## Lowest chunk index built (the run starts at s = 0).
 const FIRST_CHUNK := 0
+## Work budget meaning "no limit" (warm-up).
+const UNLIMITED := 1 << 30
 
 
 ## One pooled chunk.
 class Chunk extends RefCounted:
 	var node: MeshInstance3D
 	var mesh: ArrayMesh
-	## Chunk index k, or FREE.
+	## Chunk index k, or FREE. Set when the mesh is committed.
 	var index: int = FREE
 	var anchor_x: float = 0.0
 	var anchor_y: float = 0.0
@@ -55,18 +64,27 @@ var origin: FloatingOrigin
 
 ## Stats (dev HUD, tests).
 var builds_total: int = 0
+## Chunk builds completed by the last update_view / build_all_now.
 var builds_last_update: int = 0
-## Times the pool had to grow (warm-up, or a longer view distance).
+## Mesh rows emitted by the last update_view / build_all_now.
+var rows_last_update: int = 0
+## Times a chunk node was created (pre-warm, or a longer view distance).
 var pool_grow_count: int = 0
 var shifts_applied: int = 0
 
 var _pool: Array[Chunk] = []
 var _mesher: RoadChunkMesher
-var _focus_s: float = 0.0
 var _k_min: int = 0
 var _k_max: int = FREE
 var _view_m: float = 0.0
 var _events_connected: bool = false
+## The chunk being built (null when idle), the index it is built for, and whether
+## it is a rebuild of a live chunk.
+var _pending: Chunk
+var _pending_k: int = FREE
+var _pending_rebuild: bool = false
+## The palette changed while the in-flight chunk was being built.
+var _pending_stale: bool = false
 
 
 # ---------------------------------------------------------------- World-system API
@@ -77,20 +95,25 @@ func setup(ctx: RunContext, road_path: RoadPath, floating_origin: FloatingOrigin
 	road = road_path
 	origin = floating_origin
 	_mesher = RoadChunkMesher.new(tuning, palette)
-	_release_all()
+	_cancel_pending()
+	for c in _pool:
+		_free_chunk(c)
 	_refresh_view_distance()
-	_prewarm_pool()
 
 
-## Once per frame with the player's s: frees chunks out of range, then builds at
-## most `chunk_builds_per_frame_count` missing or dirty chunks, nearest first.
+## Once per frame with the player's s: frees chunks out of range, then advances the
+## time-sliced build within the per-frame budget.
 func update_view(focus_s: float) -> void:
-	builds_last_update = _update(focus_s, tuning.chunk_builds_per_frame_count)
+	if tuning == null:
+		return
+	_update(focus_s, tuning.chunk_build_rows_per_frame_count, tuning.chunk_builds_per_frame_count)
 
 
 ## Builds every chunk the view needs right now (spawn/respawn warm-up; not per frame).
 func build_all_now(focus_s: float) -> void:
-	builds_last_update = _update(focus_s, _pool.size() + _needed_count(focus_s) + 1)
+	if tuning == null:
+		return
+	_update(focus_s, UNLIMITED, UNLIMITED)
 
 
 ## Sets the ground ribbon colors (biome); live chunks rebuild within the frame budget.
@@ -100,6 +123,8 @@ func set_ground_colors(verge: Color, field: Color) -> void:
 	for c in _pool:
 		if c.index != FREE:
 			c.dirty = true
+	if _pending != null:
+		_pending_stale = true
 
 
 # ---------------------------------------------------------------- Queries
@@ -130,7 +155,12 @@ func get_chunk(k: int) -> Chunk:
 	return _find(k)
 
 
-## First and last chunk index the current view needs.
+## True while a chunk build is spread over frames.
+func is_building() -> bool:
+	return _pending != null
+
+
+## First and last chunk index kept for the current focus.
 func needed_range_min() -> int:
 	return _k_min
 
@@ -155,68 +185,73 @@ func draw_call_count() -> int:
 
 # ---------------------------------------------------------------- Internals
 
-func _update(focus_s: float, budget: int) -> int:
+func _update(focus_s: float, row_budget: int, build_budget: int) -> void:
+	builds_last_update = 0
+	rows_last_update = 0
 	if road == null:
-		return 0
-	_focus_s = focus_s
+		return
 	var length := tuning.chunk_length_m
 	_k_min = maxi(floori((focus_s - tuning.chunk_keep_behind_m) / length), FIRST_CHUNK)
-	_k_max = floori((focus_s + _view_m) / length)
+	_k_max = floori((focus_s + _view_m + tuning.chunk_prefetch_m) / length)
 	for c in _pool:
 		if c.index != FREE and (c.index < _k_min or c.index > _k_max):
 			_free_chunk(c)
+	if _pending != null and (_pending_k < _k_min or _pending_k > _k_max):
+		_cancel_pending()
 
-	var built := 0
 	var k_focus := clampi(floori(focus_s / length), _k_min, _k_max)
+	while rows_last_update < row_budget and builds_last_update < build_budget:
+		if _pending == null and not _start_next(k_focus):
+			return
+		var before := _mesher.units_done()
+		var done := _mesher.step(row_budget - rows_last_update)
+		rows_last_update += _mesher.units_done() - before
+		if done:
+			_commit_pending()
+			builds_last_update += 1
+
+
+## Picks the next chunk to build (missing ones nearest first, then dirty ones) and
+## begins it. False when there is nothing to do.
+func _start_next(k_focus: int) -> bool:
 	for k in range(k_focus, _k_max + 1):
-		if built >= budget:
-			return built
-		if _find(k) == null and _build_new(k):
-			built += 1
+		if _find(k) == null and _generated(k):
+			_begin(k, _acquire(), false)
+			return true
 	for k in range(k_focus - 1, _k_min - 1, -1):
-		if built >= budget:
-			return built
-		if _find(k) == null and _build_new(k):
-			built += 1
+		if _find(k) == null and _generated(k):
+			_begin(k, _acquire(), false)
+			return true
 	for c in _pool:
-		if built >= budget:
-			return built
 		if c.index != FREE and c.dirty:
-			_build_into(c, c.index)
-			built += 1
-	return built
+			c.dirty = false
+			_begin(c.index, c, true)
+			return true
+	return false
 
 
-func _needed_count(focus_s: float) -> int:
-	var length := tuning.chunk_length_m
-	var k0 := maxi(floori((focus_s - tuning.chunk_keep_behind_m) / length), FIRST_CHUNK)
-	var k1 := floori((focus_s + _view_m) / length)
-	return maxi(k1 - k0 + 1, 0)
-
-
-func _find(k: int) -> Chunk:
-	for c in _pool:
-		if c.index == k:
-			return c
-	return null
-
-
-func _build_new(k: int) -> bool:
+## True when chunk k's range is generated (asks the road to generate it first).
+func _generated(k: int) -> bool:
 	var s1 := float(k + 1) * tuning.chunk_length_m
 	if s1 > road.length_generated():
 		road.ensure_generated_to(s1)
-		if s1 > road.length_generated():
-			return false
-	_build_into(_acquire(), k)
-	return true
+	return s1 <= road.length_generated()
 
 
-func _build_into(c: Chunk, k: int) -> void:
+func _begin(k: int, c: Chunk, rebuild: bool) -> void:
 	var s0 := float(k) * tuning.chunk_length_m
-	_mesher.build(road, s0, s0 + tuning.chunk_length_m)
+	_mesher.begin(road, s0, s0 + tuning.chunk_length_m)
+	_pending = c
+	_pending_k = k
+	_pending_rebuild = rebuild
+	_pending_stale = false
+
+
+func _commit_pending() -> void:
+	var c := _pending
 	_mesher.commit(c.mesh, ROAD_MATERIAL, WORLD_MATERIAL)
-	c.index = k
-	c.dirty = false
+	c.index = _pending_k
+	c.dirty = _pending_stale
 	c.triangles = _mesher.triangle_count()
 	c.anchor_x = _mesher.anchor_x
 	c.anchor_y = _mesher.anchor_y
@@ -228,11 +263,34 @@ func _build_into(c: Chunk, k: int) -> void:
 	c.node.visible = true
 	c.node.reset_physics_interpolation()
 	builds_total += 1
+	_pending = null
+	_pending_k = FREE
+	_pending_rebuild = false
 
 
+func _cancel_pending() -> void:
+	if _pending == null:
+		return
+	if _mesher != null:
+		_mesher.cancel()
+	if _pending_rebuild and _pending.index != FREE:
+		_pending.dirty = true
+	_pending = null
+	_pending_k = FREE
+	_pending_rebuild = false
+
+
+func _find(k: int) -> Chunk:
+	for c in _pool:
+		if c.index == k:
+			return c
+	return null
+
+
+## A free chunk that is not the one in flight (the pool grows only if none is left).
 func _acquire() -> Chunk:
 	for c in _pool:
-		if c.index == FREE:
+		if c.index == FREE and c != _pending:
 			return c
 	return _new_chunk()
 
@@ -258,11 +316,6 @@ func _free_chunk(c: Chunk) -> void:
 	c.node.visible = false
 
 
-func _release_all() -> void:
-	for c in _pool:
-		_free_chunk(c)
-
-
 func _refresh_view_distance() -> void:
 	if view_distance_override_m >= 0.0:
 		_view_m = view_distance_override_m
@@ -275,12 +328,12 @@ func _refresh_view_distance() -> void:
 	_prewarm_pool()
 
 
-## Grows the pool to the most chunks the current view can ever need at once, so
-## driving never allocates a chunk.
+## Grows the pool to the most chunks the current view can ever need at once (plus
+## the one in flight), so driving never allocates a chunk.
 func _prewarm_pool() -> void:
 	if tuning == null or not is_inside_tree():
 		return
-	var span := tuning.chunk_keep_behind_m + _view_m
+	var span := tuning.chunk_keep_behind_m + _view_m + tuning.chunk_prefetch_m
 	var most := ceili(span / tuning.chunk_length_m) + 1
 	while _pool.size() < most:
 		_new_chunk()
