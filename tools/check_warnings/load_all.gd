@@ -12,7 +12,9 @@ func _initialize() -> void:
 		_collect(r, files)
 	var bad := 0
 	for f in files:
-		var s: Script = ResourceLoader.load(f, "", ResourceLoader.CACHE_MODE_IGNORE)
+		# Cached load: this process starts with the override in effect, and
+		# CACHE_MODE_IGNORE re-compiles scripts in a way that crashes Godot 4.7.
+		var s: Script = load(f)
 		if s == null or not s.can_instantiate():
 			bad += 1
 			print("WARN-AS-ERROR  %s" % f)
