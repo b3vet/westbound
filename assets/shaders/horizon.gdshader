@@ -81,8 +81,8 @@ float silhouette(float style, vec2 p, float seed) {
 		return r * r;
 	} else if (style == STYLE_SKYLINE) {
 		// Blocks: piecewise-constant towers in clusters.
-		vec2 cell = floor(p * 6.0);
-		float cluster = smoothstep(0.45, 0.65, value_noise(p * 0.5));
+		vec2 cell = floor(p * 12.0);
+		float cluster = smoothstep(0.3, 0.55, value_noise(p * 0.5));
 		float tower = hash12(cell + seed);
 		float gap = step(0.25, hash12(cell * 1.31 + 7.0));
 		return (0.12 + 0.88 * tower * tower) * gap * cluster + 0.04;

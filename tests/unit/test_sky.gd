@@ -163,3 +163,26 @@ func test_horizon_mesh_layout() -> void:
 	for v: Vector3 in verts:
 		near(v.length(), 1.0, 1e-5)
 		near(v.y, 0.0, 1e-6)
+
+
+func test_horizon_layer_api() -> void:
+	_sky.set_horizon_layer(0, SkyRig.HorizonStyle.SKYLINE, 150.0)
+	var mat := (_sky.get_node("Horizon") as MeshInstance3D).material_override as ShaderMaterial
+	var styles: Vector4 = mat.get_shader_parameter(&"layer_style")
+	eq(styles.x, float(SkyRig.HorizonStyle.SKYLINE))
+	var heights: Vector4 = mat.get_shader_parameter(&"layer_height_m")
+	near(heights.x, 150.0, 1e-4)
+	var shared := load("res://assets/shaders/materials/horizon.tres") as ShaderMaterial
+	check(shared != mat, "the rig owns its horizon material")
+
+
+func test_origin_shift_keeps_horizon_absolute() -> void:
+	var fo := FloatingOrigin.new()
+	fo.setup(2.0)
+	_sky.origin = fo
+	_sky.push_now()
+	fo.update_focus(0.0, 0.0, -2500.0)
+	_sky.push_now()
+	var mat := (_sky.get_node("Horizon") as MeshInstance3D).material_override as ShaderMaterial
+	eq(mat.get_shader_parameter(&"origin_xz"), Vector2(0.0, -2500.0), "horizon samples absolute positions")
+	fo.free()

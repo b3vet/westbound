@@ -83,8 +83,8 @@ func _compare(path_a: String, path_b: String, diff_dir: String) -> Dictionary:
 			# color spaces (Compatibility filters sRGB values, Mobile linear ones),
 			# so edge pixels blend the same colors with other weights. Count only
 			# how far a pixel lies outside the other image's local color range.
-			var px := (p / 3) % w
-			var py := (p / 3) / w
+			var px := posmod(floori(p / 3.0), w)
+			var py := floori(p / 3.0 / w)
 			m = maxi(_neighbour_min(da, db, p, px, py, w, h), _neighbour_min(db, da, p, px, py, w, h))
 		hist[m] += 1
 		if want_diff:
@@ -92,7 +92,7 @@ func _compare(path_a: String, path_b: String, diff_dir: String) -> Dictionary:
 			diff[p] = v
 			diff[p + 1] = v
 			diff[p + 2] = v
-	var pixels := da.size() / 3
+	var pixels := w * h
 	if want_diff:
 		var img := Image.create_from_data(a.get_width(), a.get_height(), false, Image.FORMAT_RGB8, diff)
 		img.save_png(diff_dir.path_join(path_a.get_file().get_basename() + "_diff.png"))

@@ -5,7 +5,7 @@ extends Resource
 ##
 ## `key` names the keyframe; its position on sky_t is NOT stored here: it comes
 ## from SunTuning.sky_t_<key> (the single source for the clock and the palette).
-## Colors are authored in sRGB, as picked in the inspector; Sky converts them to
+## Colors are authored in sRGB, as picked in the inspector; SkyRig converts them to
 ## linear once per frame when it pushes the shader globals.
 ##
 ## Defaults are "unset" markers (NAN floats, zero-alpha magenta colors) so a
@@ -66,5 +66,5 @@ const UNSET_COLOR := Color(1, 0, 1, 0)
 
 @export_group("UI")
 ## The design system's accent ("the sky's neon"). Not a shader global:
-## read it from Sky.get_accent() / Sky.accent_changed.
+## read it from SkyRig.get_accent() / SkyRig.accent_changed.
 @export var ui_accent: Color = UNSET_COLOR

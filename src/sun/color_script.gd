@@ -4,7 +4,7 @@ extends Resource
 ## Color script; Core loop → Sky timeline and sun clock. Saved as
 ## data/color_script.tres (editable in the inspector). docs/CONTRACTS.md §8, §13.
 ##
-## Pure: no nodes, no rendering. Sky (src/sun/sky.gd) samples it once per frame
+## Pure: no nodes, no rendering. SkyRig (src/sun/sky.gd) samples it once per frame
 ## and pushes the result as shader globals.
 ##
 ## Keyframe positions come from SunTuning.sky_t_<key> (bind()), never from this
@@ -136,7 +136,7 @@ func sample(sky_t: float) -> ColorKey:
 
 
 ## The UI accent at `sky_t` (allocates a ColorKey; per-frame users read
-## Sky.get_accent() instead).
+## SkyRig.get_accent() instead).
 func accent_at(sky_t: float) -> Color:
 	return sample(sky_t).ui_accent
 

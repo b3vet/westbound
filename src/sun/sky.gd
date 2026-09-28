@@ -19,7 +19,12 @@ extends Node3D
 ##     (sky_common.gdshaderinc), so they follow the camera and ignore the
 ##     floating origin. The horizon's parallax field is sampled at absolute
 ##     positions via `origin`.
+##   - Sky parts draw in the transparent pass without depth writes (alpha 1),
+##     ordered by material render_priority (dome -100 < stars -99 < horizon -98
+##     < clouds -97): see sky_common.gdshaderinc.
 ##   - Draw calls: dome, horizon (all layers), clouds = 3 by day; + stars at night.
+##   - The sun "glow sprite" is an analytic halo (wb_sun_halo) shared by the dome,
+##     horizon, clouds and fog: same look, no overdraw, and it lights the haze.
 ##
 ## The world-system API (§13): setup(ctx, road, origin) and update_view(focus_s).
 ## The sun clock (WP3.5) or the dev slider sets `sky_t`.
@@ -47,8 +52,10 @@ const GLOBALS: Array[StringName] = [
 const SUN_HEADING_RAD := 0.0
 ## Below this star visibility the star mesh is hidden (saves its draw call).
 const STARS_VISIBLE_MIN := 0.001  # lint: allow-number visibility epsilon, not tuning
-## Number of horizon layers in the mesh and the shader.
+## Number of horizon layers in the mesh and the shader (0 = nearest).
 const HORIZON_LAYERS := 4
+## Horizon silhouette styles (horizon.gdshader STYLE_*).
+enum HorizonStyle { NONE, HILLS, MESAS, MOUNTAINS, SKYLINE }
 ## Clouds and stars are laid out from this stream (visual only).
 const LAYOUT_STREAM := &"sky_layout"
 
@@ -57,6 +64,14 @@ const LAYOUT_STREAM := &"sky_layout"
 @export_range(0.0, 1.0, 0.001) var sky_t: float = 0.2
 ## > 0: use this view distance instead of the Quality autoload (previews, tests).
 @export var view_distance_override_m: float = 0.0
+
+@export_group("Horizon")
+## Per layer (x = nearest .. w = farthest): a HorizonStyle, and the silhouette
+## height in meters at the layer's virtual distance. Biomes change them through
+## set_horizon_layer().
+@export var horizon_layer_style: Vector4 = Vector4(HorizonStyle.HILLS, HorizonStyle.MESAS,
+		HorizonStyle.MOUNTAINS, HorizonStyle.MOUNTAINS)
+@export var horizon_layer_height_m: Vector4 = Vector4(90.0, 380.0, 1000.0, 3600.0)
 
 @export_group("Layout")
 @export var layout_seed: int = 7
@@ -113,6 +128,10 @@ func _ready() -> void:
 	if sun_tuning == null:
 		sun_tuning = Tuning.load_default().sun
 	color_script.bind(sun_tuning)
+	# Own copies: the horizon's per-rig parameters (origin, biome styles) must not
+	# leak into other rigs through the shared material resource.
+	_horizon.material_override = _horizon.material_override.duplicate()
+	_apply_horizon_layers()
 	_build_meshes()
 	push_now()
 
@@ -159,6 +178,22 @@ func set_player_light(pos: Vector3, dir: Vector3, gain: float) -> void:
 	_player_light_pos = pos
 	_player_light_dir = dir
 	_player_light_gain = gain
+
+
+## Silhouette style and height of horizon layer `layer` (0 = nearest .. 3), for
+## biomes (BiomeDef horizon cards). `height_m` is at the layer's virtual distance
+## (horizon.gdshader layer_distance_m); <= 0 keeps the current height.
+func set_horizon_layer(layer: int, style: HorizonStyle, height_m: float = 0.0) -> void:
+	horizon_layer_style[layer] = float(style)
+	if height_m > 0.0:
+		horizon_layer_height_m[layer] = height_m
+	_apply_horizon_layers()
+
+
+func _apply_horizon_layers() -> void:
+	var mat := _horizon.material_override as ShaderMaterial
+	mat.set_shader_parameter(&"layer_style", horizon_layer_style)
+	mat.set_shader_parameter(&"layer_height_m", horizon_layer_height_m)
 
 
 ## Unit vector toward the sun at `elevation_rad`, azimuth at world heading 0.

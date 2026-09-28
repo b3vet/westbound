@@ -10,7 +10,10 @@ extends Node3D
 ## snap_setup options: --sky_t=<0..1>, --cam=chase|far|hood|overhead|sky|side|back,
 ## --heading_deg=<road heading, default 20: the sun sits 20 deg left of the axis>,
 ## --ui=true (show the sky_t slider), --night_lights=<player fake-light gain>,
-## --hide=Clouds,Horizon,GenProps,GenGround,GenRoad (debugging).
+## --hide=Dome,Clouds,Horizon,GenProps,GenGround,GenRoad (debugging),
+## --horizon=<4 styles near..far, e.g. 4133 = skyline, hills, mountains, mountains>,
+## --horizon_h=<heights in m near..far, e.g. 250,380,1000,3600>.
+## Each capture prints its draw calls ("snap: ..." lines).
 ## Everything here is preview geometry (not the WP1.2 road or WP1.4 props).
 
 const WORLD_MAT := preload("res://assets/shaders/materials/world.tres")
@@ -77,7 +80,18 @@ func snap_setup(args: Dictionary) -> void:
 			node = _sky.get_node_or_null(NodePath(n))
 		if node is Node3D:
 			(node as Node3D).visible = false
+	var styles := str(args.get("horizon", ""))
+	var heights := str(args.get("horizon_h", "")).split_floats(",", false)
+	for i in mini(styles.length(), SkyRig.HORIZON_LAYERS):
+		var h := heights[i] if i < heights.size() else 0.0
+		_sky.set_horizon_layer(i, int(styles[i]) as SkyRig.HorizonStyle, h)
 	_sky.push_now()
+	for i in 2:
+		await get_tree().process_frame
+	print("snap: look_preview sky_t=%.3f cam=%s draw calls %d, primitives %d" % [
+		_sky.sky_t, args.get("cam", "chase"),
+		Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME),
+		Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)])
 
 
 # ---------------------------------------------------------------- Camera
