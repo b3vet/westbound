@@ -11,3 +11,6 @@ build/
 export_credentials.cfg
 .DS_Store
 tests/out/
+
+# Agent worktrees (orchestration scratch, never committed)
+.claude/worktrees/
