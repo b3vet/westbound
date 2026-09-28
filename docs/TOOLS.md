@@ -6,13 +6,14 @@ The tools the orchestrator and every WP run at merge time (plan §3, §4 merge g
 | --- | --- | --- |
 | `tools/test.sh` | Do the headless tests pass? (see `CLAUDE.md`) | every WP |
 | `tools/lint` | Does the code respect the rendering budget and the sim working rules? | every WP |
-| `tools/snap.sh` | What does the scene look like on the Compatibility renderer? | visual WPs, every gate |
+| `tools/snap.sh` | What does the scene look like on the Compatibility renderer, and on the Mobile renderer (`--renderer=mobile|both`, Mesa lavapipe)? | visual WPs, every gate |
 | `WBBench` (`tests/lib/bench.gd`) | Does a sim tick fit its CPU budget? | sim WPs (WP2.4 onward) |
 
 ## tools/snap.sh — screenshots
 
 ```
 tools/snap.sh src/main.tscn                                  # -> tests/out/snaps/main.png
+tools/snap.sh src/main.tscn --renderer=both                  # + main_mobile.png (needs: apt-get install -y mesa-vulkan-drivers)
 tools/snap.sh src/sun/sky_preview.tscn --sweep=sky_t:0,0.17,0.33,0.5,0.67,0.83,1
 tools/snap.sh src/run.tscn --cam=hood --speed_kmh=200 --seconds=2 --tag=hood
 tools/snap.sh src/road/road_preview.tscn --size=2400x1080 --out=/tmp/snaps

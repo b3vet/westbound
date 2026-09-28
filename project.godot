@@ -14,6 +14,125 @@ config/icon="res://icon.svg"
 boot_splash/bg_color=Color(0.043, 0.063, 0.125, 1)
 boot_splash/show_image=false
 
+[shader_globals]
+
+wb_sky_zenith={
+"type": "color",
+"value": Color(0.24, 0.45, 0.78, 1)
+}
+wb_sky_horizon={
+"type": "color",
+"value": Color(0.93, 0.72, 0.52, 1)
+}
+wb_sun_dir={
+"type": "vec3",
+"value": Vector3(0, 0.34, -0.94)
+}
+wb_sun_disc_color={
+"type": "color",
+"value": Color(1, 0.86, 0.6, 1)
+}
+wb_sun_disc_size={
+"type": "float",
+"value": 0.03
+}
+wb_sun_glow={
+"type": "float",
+"value": 0.5
+}
+wb_stars={
+"type": "float",
+"value": 0.0
+}
+wb_cloud_lit={
+"type": "color",
+"value": Color(1, 0.9, 0.8, 1)
+}
+wb_cloud_shadow={
+"type": "color",
+"value": Color(0.6, 0.55, 0.65, 1)
+}
+wb_fog_color={
+"type": "color",
+"value": Color(0.85, 0.72, 0.6, 1)
+}
+wb_fog_start={
+"type": "float",
+"value": 150.0
+}
+wb_fog_end={
+"type": "float",
+"value": 700.0
+}
+wb_horizon_tint_0={
+"type": "color",
+"value": Color(0.55, 0.45, 0.45, 1)
+}
+wb_horizon_tint_1={
+"type": "color",
+"value": Color(0.65, 0.52, 0.5, 1)
+}
+wb_horizon_tint_2={
+"type": "color",
+"value": Color(0.75, 0.6, 0.55, 1)
+}
+wb_horizon_tint_3={
+"type": "color",
+"value": Color(0.82, 0.68, 0.58, 1)
+}
+wb_ambient={
+"type": "color",
+"value": Color(0.35, 0.35, 0.42, 1)
+}
+wb_sun_light_color={
+"type": "color",
+"value": Color(1, 0.9, 0.78, 1)
+}
+wb_sun_light_energy={
+"type": "float",
+"value": 1.0
+}
+wb_shadow_tint={
+"type": "color",
+"value": Color(0.42, 0.4, 0.55, 1)
+}
+wb_road_tone={
+"type": "color",
+"value": Color(0.22, 0.22, 0.25, 1)
+}
+wb_lane_line_tint={
+"type": "color",
+"value": Color(0.95, 0.93, 0.85, 1)
+}
+wb_emissive_headlight={
+"type": "float",
+"value": 1.0
+}
+wb_emissive_streetlamp={
+"type": "float",
+"value": 0.0
+}
+wb_emissive_reflector={
+"type": "float",
+"value": 0.0
+}
+wb_player_light_pos={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+wb_player_light_dir={
+"type": "vec3",
+"value": Vector3(0, 0, -1)
+}
+wb_player_light_strength={
+"type": "float",
+"value": 0.0
+}
+wb_biome_tint_offset={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+
 [autoload]
 
 Events="*res://src/core/events.gd"

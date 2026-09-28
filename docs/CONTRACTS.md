@@ -306,8 +306,42 @@ Global traffic rules apply on top of every profile: the 6 m/s² clamp, the 0.5 s
 - **Director rate** (per batch, per re-roll, per chunk) may allocate: `RoadPath.sample()`, `features_in`, `ensure_generated_to`, `SpawnSource.plan_batch`, `RoadFeature.make`. Keep it off the tick path.
 - **Packed arrays:** never assign one Packed array to another field (`a = b` shares the buffer, and the next write copies it). Copy element-wise, as `TrafficState.copy_from` does.
 
+## 13. Look and world rendering
+
+Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `project.godot`, which stays with the orchestrator.
+
+- **Global shader uniforms** are declared in `project.godot` under `[shader_globals]`, all prefixed `wb_`:
+    - sky: `wb_sky_zenith`, `wb_sky_horizon`, `wb_sun_dir` (world direction *to* the sun), `wb_sun_disc_color`, `wb_sun_disc_size`, `wb_sun_glow`, `wb_stars`
+    - clouds: `wb_cloud_lit`, `wb_cloud_shadow`
+    - fog: `wb_fog_color`, `wb_fog_start`, `wb_fog_end`
+    - horizon layers: `wb_horizon_tint_0..3`
+    - lighting: `wb_ambient`, `wb_sun_light_color`, `wb_sun_light_energy`, `wb_shadow_tint`
+    - surfaces: `wb_road_tone`, `wb_lane_line_tint`
+    - emissive: `wb_emissive_headlight`, `wb_emissive_streetlamp`, `wb_emissive_reflector`
+    - player fake light: `wb_player_light_pos`, `wb_player_light_dir`, `wb_player_light_strength`
+    - biome: `wb_biome_tint_offset`
+
+    The color-script system (WP1.3) is the only writer. It calls `RenderingServer.global_shader_parameter_set` once per frame, and only for values that changed. New globals are requested from the orchestrator.
+- **Shared include:** `assets/shaders/world_common.gdshaderinc` declares the globals and provides `wb_albedo`, `wb_light` (single sun, vertex-lit), `wb_emissive`, `wb_player_light` and `wb_apply_fog`. Every world shader includes it.
+- **Vertex conventions for world meshes:**
+    - `COLOR.rgb` is the albedo, authored in sRGB.
+    - `UV2.x` is the emissive class: 0 none, 1 reflector, 2 street lamp, 3 vehicle light.
+    - `UV2.y` is the tint class: 0 none, 1 road surface (× `wb_road_tone`), 2 lane line (× `wb_lane_line_tint`).
+    - Normals are required. Flat shading means duplicated vertices per face.
+- **Materials:** these are the paths code references:
+    - `assets/shaders/materials/world.tres`: props, landmarks, barriers
+    - `assets/shaders/materials/road.tres`: road surface and markings, as geometry
+    - Later: `vehicle.tres`, `sky.tres`, `glow.tres`, `decal.tres`
+- **Renderer parity:** the engine clear color differs between renderers, so the sky dome must always cover the frame. Shaders must produce the same pixels on Mobile and Compatibility (`tools/snap.sh --renderer=both`). *Known issue for WP1.3:* the Phase-0 starter shaders give different results on the two renderers (color-space handling of vertex colors and/or `source_color` globals).
+- **Floating origin:** `FloatingOrigin` (`src/road/floating_origin.gd`, a Node) holds the 64-bit `origin_x/y/z` and a `shift_distance_m` taken from `road.floating_origin_shift_km`.
+    - The run calls `update_focus(x, y, z)` with the focus's absolute position. When the horizontal distance exceeds the shift distance, the origin moves to the focus and `Events.origin_shifted(offset)` fires once.
+    - World systems either rebuild with `to_local(x, y, z)` / `RoadSample.local_point(...)`, or subtract `offset` from their nodes.
+    - Moved nodes call `reset_physics_interpolation()`.
+- **World system nodes** (road builder, roadside, sky, and so on) expose `setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void` and `update_view(focus_s: float) -> void`. The run calls `update_view` once per frame with the player's `s`.
+
 ## Change log
 
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
+| 2026-09-28 | §13 look contract: shader globals, world include, material paths, FloatingOrigin, world-system node API | Orchestrator, pre-Phase 1 |
