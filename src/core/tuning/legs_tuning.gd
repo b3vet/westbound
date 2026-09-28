@@ -39,3 +39,7 @@ func leg_length_m() -> float:
 
 func pace_target_mps() -> float:
 	return Units.kmh_to_mps(pace_target_kmh)
+
+
+func pace_full_lift_margin_mps() -> float:
+	return Units.kmh_to_mps(pace_full_lift_margin_kmh)
