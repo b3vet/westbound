@@ -77,6 +77,16 @@ func add_label(corner: int, row: int, min_width: float) -> Label:
 	return l
 
 
+## Shows or hides every row of `corner` from `min_row` inward (hidden rows take no
+## space and cost no draw calls).
+func set_rows_visible(corner: int, min_row: int, on: bool) -> void:
+	for key: int in _rows:
+		if (key >> 4) == corner and (key & 15) >= min_row:   # key = corner * 16 + row
+			(_rows[key] as HBoxContainer).visible = on
+	if is_inside_tree():
+		_layout.call_deferred()
+
+
 ## Set a button's or label's text only when it changed (HUD update rule).
 static func set_text(control: Control, text: String) -> void:
 	if control is Button and (control as Button).text != text:
@@ -122,6 +132,8 @@ func _layout() -> void:
 	keys.sort()
 	for key: int in keys:
 		var box: HBoxContainer = _rows[key]
+		if not box.visible:
+			continue
 		box.reset_size()
 		var sz := box.get_combined_minimum_size()
 		var corner: int = box.get_meta(&"corner")

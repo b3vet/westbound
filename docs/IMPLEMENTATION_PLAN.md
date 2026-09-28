@@ -290,7 +290,7 @@ Updated by the orchestrator at every merge.
 | 0 | M0 Foundation | ✅ merged; owner device check folded into M1 | continue |
 | 1 | M1 Road & look (+ Track A) | ✅ web playtest passed (owner); native thermal soak still open (D4) | ⏸ pause |
 | 2 | M2 Car, controls, cameras (+ Track B) | 🟡 M2 build live; ⏸ awaiting owner playtest (docs/playtests/M2.md); WP2.4 traffic core still running | ⏸ pause |
-| 3 | M3 Traffic (+ Track C) | 🟡 Wave 3 running (WP3.1–3.5) | ⏸ pause |
+| 3 | M3 Traffic (+ Track C) | 🟡 M3 build live (traffic, sandbox); WP3.3 soak running; ⏸ awaiting owner review (docs/playtests/M3.md) | ⏸ pause |
 | 4 | M4 Scoring & lives | ⬜ | continue |
 | 5 | M5 Sun loop & legs | ⬜ | continue |
 | 6 | M6 Director, biomes, journey | ⬜ | continue |

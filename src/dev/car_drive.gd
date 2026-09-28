@@ -62,6 +62,8 @@ var _frustum_smp := RoadSample.new()
 var _leg: int = START_LEG
 var _night: bool = false
 var _leg_button: Button
+var _dev_button: Button
+var _dev_open: bool = false
 var _params_cache: Dictionary = {}
 var _next_forget_s: float = 0.0
 var _resets: int = 0
@@ -127,6 +129,7 @@ func _ready() -> void:
 	_spawn_car(0, 0.0)
 	_build_controls()
 	_build_traffic_controls()
+	_apply_dev_rows()
 
 	if Game.can_change_to(Game.COUNTDOWN):
 		Game.change_state(Game.COUNTDOWN)
@@ -321,6 +324,7 @@ func _build_controls() -> void:
 	var top_right := DriveControls.Corner.TOP_RIGHT
 	_cam_button = _controls.add_button(top_right, 0, "CAM", CAM_BUTTON, _hub.request_camera_cycle)
 	_controls.add_button(top_right, 0, "HUD", DriveControls.WIDE, Callable($DevHud, &"toggle"))
+	_dev_button = _controls.add_button(top_right, 0, "DEV +", DriveControls.WIDE, _toggle_dev)
 	_steer_button = _controls.add_button(top_right, 1, "STEER", LAYOUT_BUTTON, _toggle_steering, true)
 	_throttle_button = _controls.add_button(top_right, 1, "THR", LAYOUT_BUTTON, _toggle_throttle, true)
 	_mirror_button = _controls.add_button(top_right, 1, "MIRROR", LAYOUT_BUTTON, _toggle_mirror, true)
@@ -333,6 +337,19 @@ func _build_controls() -> void:
 	_speed_label = _controls.add_label(DriveControls.Corner.TOP_LEFT, 0, 200.0)
 	add_child(_controls)
 	_refresh_buttons()
+
+
+## The dev rows (layout, car, gyro, visuals, sandbox, leg) fold behind DEV: fewer
+## draw calls and less clutter while playing. CAM, HUD and the speed stay.
+func _toggle_dev() -> void:
+	_dev_open = not _dev_open
+	_apply_dev_rows()
+
+
+func _apply_dev_rows() -> void:
+	_controls.set_rows_visible(DriveControls.Corner.TOP_RIGHT, 1, _dev_open)
+	_controls.set_rows_visible(DriveControls.Corner.TOP_LEFT, 1, _dev_open)
+	DriveControls.set_text(_dev_button, "DEV -" if _dev_open else "DEV +")
 
 
 func _open_sandbox() -> void:
