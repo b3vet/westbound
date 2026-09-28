@@ -1,0 +1,31 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://src/sun/sky.gd" id="1_sky"]
+[ext_resource type="Resource" path="res://data/color_script.tres" id="2_cs"]
+[ext_resource type="Material" path="res://assets/shaders/materials/sky.tres" id="3_dome"]
+[ext_resource type="Material" path="res://assets/shaders/materials/sky_stars.tres" id="4_stars"]
+[ext_resource type="Material" path="res://assets/shaders/materials/horizon.tres" id="5_horizon"]
+[ext_resource type="Material" path="res://assets/shaders/materials/clouds.tres" id="6_clouds"]
+
+[sub_resource type="SphereMesh" id="dome_mesh"]
+radius = 1.0
+height = 2.0
+radial_segments = 32
+rings = 16
+
+[node name="Sky" type="Node3D"]
+script = ExtResource("1_sky")
+color_script = ExtResource("2_cs")
+
+[node name="Dome" type="MeshInstance3D" parent="."]
+mesh = SubResource("dome_mesh")
+material_override = ExtResource("3_dome")
+
+[node name="Stars" type="MeshInstance3D" parent="."]
+material_override = ExtResource("4_stars")
+
+[node name="Horizon" type="MeshInstance3D" parent="."]
+material_override = ExtResource("5_horizon")
+
+[node name="Clouds" type="MeshInstance3D" parent="."]
+material_override = ExtResource("6_clouds")
