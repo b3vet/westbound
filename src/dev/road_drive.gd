@@ -143,6 +143,13 @@ func _physics_process(delta: float) -> void:
 
 
 func _process(_delta: float) -> void:
+	DevStats.report(&"seed", run_seed)
+	DevStats.report(&"s_m", int(_s))
+	DevStats.report(&"speed_kmh", int(SPEEDS_KMH[_speed_index]))
+	DevStats.report(&"lane", _lane)
+	DevStats.report(&"camera", CAMERAS[_cam_index])
+	DevStats.report(&"sky_t", snappedf(_sky.sky_t, 0.001))
+	DevStats.report(&"origin_shifts", _origin.shift_count)
 	_director.update_view(_s)
 	_builder.update_view(_s)
 	_roadside.update_view(_s)

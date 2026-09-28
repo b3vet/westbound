@@ -100,3 +100,16 @@ func test_refresh_shows_reported_values() -> void:
 	eq(_hud.get_row_text(_hud.Row.SIM), "0.25 ms  max 0.25")
 	eq(_hud.get_row_text(_hud.Row.THERMAL), "nominal")
 	eq(_hud.get_row_text(_hud.Row.QUALITY), "medium  gov 2")
+
+
+func test_report_contains_rows_and_build() -> void:
+	var hud: CanvasLayer = (load("res://src/ui/dev_hud.tscn") as PackedScene).instantiate()
+	tree.root.add_child(hud)
+	DevStats.report(&"speed_kmh", 212)
+	var text: String = hud.report_text()
+	hud.free()
+	DevStats.reset()
+	check(text.begins_with("Westbound dev report"), "header")
+	check(text.contains("build "), "build line")
+	check(text.contains("fps "), "hud rows")
+	check(text.contains("speed_kmh") and text.contains("212"), "DevStats values")

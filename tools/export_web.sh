@@ -30,6 +30,13 @@ mkdir -p "$out_dir"
 log="$(mktemp)"
 trap 'rm -f "$log" "$log.raw"' EXIT
 
+# Build stamp for the dev report (src/ui/dev_report.gd); gitignored, packed via include_filter.
+{
+  echo "[build]"
+  echo "commit=\"$(git rev-parse --short HEAD 2>/dev/null || echo unknown)$(git diff --quiet HEAD 2>/dev/null || echo +dirty)\""
+  echo "date=\"$(date -u +%Y-%m-%dT%H:%MZ)\""
+} > build_info.cfg
+
 echo "export_web.sh: importing project..." >&2
 if ! tools/godot.sh --headless --path . --import >"$log" 2>&1; then
   cat "$log"; echo "export_web.sh: import failed" >&2; exit 1

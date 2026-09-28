@@ -41,6 +41,11 @@ static func get_value(key: StringName, default: Variant = null) -> Variant:
 	return _values.get(key, default)
 
 
+## All reported keys (dev report; allocates, not for per-tick use).
+static func keys() -> Array:
+	return _values.keys()
+
+
 static func has_value(key: StringName) -> bool:
 	return _values.has(key)
 

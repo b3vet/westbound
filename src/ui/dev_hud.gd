@@ -10,6 +10,10 @@ extends CanvasLayer
 ##
 ## Sits on the left edge, vertically centred: the gameplay HUD owns all four
 ## corners and the top-centre, and the middle third stays clear for traffic.
+##
+## COPY (owner request, M2) puts a DevReport (build, device, renderer, scene,
+## these rows, all DevStats values) on the clipboard; on web it opens an HTML
+## panel with a native Copy button because iOS Safari blocks other paths.
 
 ## Refresh the readouts at most this often (4 Hz).
 const REFRESH_INTERVAL_USEC := 250_000
@@ -24,6 +28,9 @@ const MAX_TOUCHES := 10
 const EDGE_MARGIN := 8.0
 const USEC_PER_MSEC := 1000.0
 const PLACEHOLDER := "-"
+## Touch-sized COPY button (canvas px) and how long "COPIED" shows.
+const COPY_BUTTON_HEIGHT := 44.0
+const COPIED_FLASH_S := 1.5
 
 const COLOR_TEXT := Color("#f4f7ff")
 const COLOR_MUTED := Color("#8a93ad")
@@ -41,6 +48,7 @@ const ROW_NAMES: PackedStringArray = [
 @onready var _grid: GridContainer = $Panel/Grid
 
 var _value_labels: Array[Label] = []
+var _copy_button: Button
 var _hot: PackedByteArray = PackedByteArray()
 
 var _last_frame_usec: int = 0
@@ -60,6 +68,7 @@ func _ready() -> void:
 	_touch_down_msec.resize(MAX_TOUCHES)
 	_touch_down_msec.fill(-1)
 	_build_rows()
+	_build_copy_button()
 	get_viewport().size_changed.connect(_update_safe_area)
 	_update_safe_area()
 	set_hud_visible(OS.is_debug_build() and start_visible_in_debug)
@@ -193,6 +202,28 @@ func refresh() -> void:
 	_set_hot(Row.QUALITY, rung > 0)
 
 
+## The rows as [[name, value], ...], refreshed now (dev report, tests).
+func rows_snapshot() -> Array:
+	refresh()
+	var out: Array = []
+	for i in ROW_NAMES.size():
+		out.append([ROW_NAMES[i], _value_labels[i].text])
+	return out
+
+
+## Full plain-text report for playtest feedback.
+func report_text() -> String:
+	var scene := get_tree().current_scene
+	return DevReport.compose(rows_snapshot(), scene.scene_file_path if scene != null else "?")
+
+
+func copy_report() -> void:
+	var copied := DevReport.share(report_text())
+	if copied:
+		_copy_button.text = "COPIED"
+		get_tree().create_timer(COPIED_FLASH_S).timeout.connect(func() -> void: _copy_button.text = "COPY")
+
+
 ## Current text of a readout (tests).
 func get_row_text(row: Row) -> String:
 	return _value_labels[row].text
@@ -233,6 +264,20 @@ func _build_rows() -> void:
 		value.add_theme_color_override(&"font_color", COLOR_TEXT)
 		_grid.add_child(value)
 		_value_labels.append(value)
+
+
+func _build_copy_button() -> void:
+	var box := VBoxContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel.remove_child(_grid)
+	box.add_child(_grid)
+	_panel.add_child(box)
+	_copy_button = Button.new()
+	_copy_button.text = "COPY"
+	_copy_button.focus_mode = Control.FOCUS_NONE
+	_copy_button.custom_minimum_size = Vector2(0.0, COPY_BUTTON_HEIGHT)
+	_copy_button.pressed.connect(copy_report)
+	box.add_child(_copy_button)
 
 
 ## Keep the panel inside the display safe area (notch, rounded corners).

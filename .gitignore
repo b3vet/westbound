@@ -8,6 +8,7 @@ build/
 *.ipa
 *.pck
 # Local-only
+build_info.cfg
 export_credentials.cfg
 .DS_Store
 tests/out/
