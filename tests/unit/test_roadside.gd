@@ -437,3 +437,96 @@ func test_prop_meshes_follow_the_look_contract() -> void:
 	check(emissive[&"light_pole"].has(2), "lamp heads are emissive class 2 (street lamp)")
 	check(emissive[&"reflector_post"].has(1), "reflectors are emissive class 1")
 	check(emissive[&"sign_gantry"].has(1), "sign faces are retro-reflective (class 1)")
+
+
+# ---------------------------------------------------------------- Procedural road, frame cost
+
+func test_procedural_road_drive() -> void:
+	var ctx := RunContext.new(SEED, RunContext.MODE_JOURNEY, _t)
+	var road := ProceduralRoadPath.new(ctx)
+	var origin := _origin()
+	var rs := Roadside.new()
+	rs.view_distance_override_m = VIEW_M
+	tree.root.add_child(rs)
+	_nodes.append(rs)
+	rs.setup(ctx, road, origin)
+	var smp := RoadSample.new()
+	var s := 0.0
+	var min_instances := 1 << 30
+	while s <= 12_000.0:
+		road.ensure_generated_to(s + VIEW_M + _t.road.roadside_update_step_m * 2.0 + 1000.0)
+		road.forget_before(s - rs.reach_behind_m())
+		road.sample_into(s, smp)
+		origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+		rs.update_view(s)
+		if s > 1000.0:
+			min_instances = mini(min_instances, rs.instance_count())
+		s += 13.0
+	gt(min_instances, 300, "props all along the procedural road")
+	ge(origin.shift_count, 5)
+	# Light poles stay on the median (d = 0) through curves, grades and shifts.
+	var layer := rs.find_layer(&"light_pole")
+	var pool := layer.pools[0]
+	for i in pool.count:
+		var p := _abs_pos(layer, pool, i, origin, true)
+		var k := roundi(_nearest_pole_s(road, p, rs) / _t.road.light_pole_spacing_m)
+		road.sample_into(float(k) * _t.road.light_pole_spacing_m, smp)
+		near(p[0], smp.pos_x, POS_EPS * 2.0, "pole x on the reference line")
+		near(p[2], smp.pos_z, POS_EPS * 2.0, "pole z on the reference line")
+		near(p[1], smp.pos_y, POS_EPS * 2.0, "pole base at road elevation")
+
+
+## s of the pole multiple nearest to world point p (search the active window).
+func _nearest_pole_s(road: RoadPath, p: PackedFloat64Array, rs: Roadside) -> float:
+	var smp := RoadSample.new()
+	var best := 0.0
+	var best_d2 := INF
+	var sp := _t.road.light_pole_spacing_m
+	var k0 := int(floor(maxf(rs.window_s_lo, 0.0) / sp)) - 1
+	var k1 := int(ceil(rs.window_s_hi / sp)) + 1
+	for k in range(k0, k1):
+		road.sample_into(float(k) * sp, smp)
+		var dx := smp.pos_x - p[0]
+		var dz := smp.pos_z - p[2]
+		if dx * dx + dz * dz < best_d2:
+			best_d2 = dx * dx + dz * dz
+			best = float(k) * sp
+	return best
+
+
+func test_frame_cost() -> void:
+	var road := StraightRoadPath.new(3, _t.road)
+	var origin := _origin()
+	var rs := _roadside(road, origin)
+	var s := [0.0]
+	# Fastest car with boost, one gameplay frame per call.
+	var v := Units.kmh_to_mps(_t.vehicle.car_top_speed_max_kmh) * (1.0 + Units.pct_to_frac(_t.vehicle.boost_top_speed_bonus_pct))
+	var per_frame_m := v / float(_t.quality.gameplay_fps)
+	rs.update_view(0.0)
+	var frame := func() -> void:
+		s[0] += per_frame_m
+		rs.update_view(s[0])
+	var usec := WBBench.usec_per_call(frame, 600)
+	WBBench.report("roadside update_view per frame at top speed", usec, 400.0)
+	le(usec, WBBench.budget(400.0), "roadside usec per frame")
+
+
+## The worst single frame (a window step, or re-anchoring the biggest layer after
+## an origin shift) must stay a small slice of a 16.7 ms frame.
+func test_worst_frame_spike() -> void:
+	var road := StraightRoadPath.new(3, _t.road)
+	var origin := _origin()
+	var rs := _roadside(road, origin)
+	var smp := RoadSample.new()
+	rs.update_view(0.0)
+	var worst := 0
+	var s := 0.0
+	while s < 5000.0:
+		s += 1.5
+		road.sample_into(s, smp)
+		origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+		var t0 := Time.get_ticks_usec()
+		rs.update_view(s)
+		worst = maxi(worst, Time.get_ticks_usec() - t0)
+	WBBench.report("roadside worst frame (step or re-anchor)", float(worst), 3000.0)
+	le(float(worst), WBBench.budget(3000.0), "worst roadside frame usec")

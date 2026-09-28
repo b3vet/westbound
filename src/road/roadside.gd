@@ -18,7 +18,8 @@ extends Node3D
 ## are rewritten, and pools never grow after setup. Placement is by absolute s
 ## and the run's props stream (per layer, cell and side), so it is the same
 ## however the player drove. On `Events.origin_shifted` the pool nodes move;
-## each layer re-anchors on a later frame, one layer per frame.
+## each layer re-anchors on a later frame (one layer per frame) by translating
+## its instances, so nothing is re-placed.
 
 const LIGHT_POLE_MESH := "res://assets/props/common/light_pole.res"
 const REFLECTOR_POST_MESH := "res://assets/props/common/reflector_post.res"
@@ -140,6 +141,15 @@ func pool_count() -> int:
 	for layer in layers:
 		n += layer.pools.size()
 	return n
+
+
+## How far behind the focus layers may sample the road (window + one cell).
+## The run keeps the road generated from `focus_s - reach_behind_m()`.
+func reach_behind_m() -> float:
+	var m := 0.0
+	for layer in layers:
+		m = maxf(m, layer.cell_length_m)
+	return _tuning.roadside_behind_m + m
 
 
 func find_layer(layer_id: StringName) -> RoadsideLayer:

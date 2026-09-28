@@ -110,6 +110,18 @@ func flush() -> void:
 	mmi.visible = count > 0
 
 
+## Moves every live instance by (dx, dy, dz): re-anchoring after an origin shift
+## without re-placing anything. Each instance picks up at most half a float32 ulp
+## of its (few-km) local position per re-anchor, and lives through one or two.
+func translate(dx: float, dy: float, dz: float) -> void:
+	for i in count:
+		var k := i * FLOATS
+		buf[k + 3] = buf[k + 3] + dx
+		buf[k + 7] = buf[k + 7] + dy
+		buf[k + 11] = buf[k + 11] + dz
+	dirty = dirty or count > 0
+
+
 ## Instance `i` as a Transform3D, relative to the node (tests, tools).
 func get_transform(i: int) -> Transform3D:
 	var o := i * FLOATS

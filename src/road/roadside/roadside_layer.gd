@@ -11,7 +11,8 @@ extends RefCounted
 ##
 ## Positions are written relative to the layer's 64-bit anchor. The pools' nodes
 ## sit at (anchor - origin). On an origin shift the nodes move (instances are
-## untouched); `rebase` later re-anchors at the new origin, one layer per frame.
+## untouched); `rebase` later re-anchors at the new origin (one layer per frame)
+## by translating the instances, so local coordinates stay small forever.
 
 var id: StringName
 var cell_length_m: float
@@ -87,11 +88,15 @@ func update_window(s_lo: float, s_hi: float, s_gen: float) -> void:
 	c1 = n1
 
 
-## Re-anchor at the current origin and rewrite the active cells.
+## Re-anchor at the current origin: instances move by (old - new anchor), the
+## nodes back to (anchor - origin) = 0. No road sampling, no re-placement.
 func rebase(origin: FloatingOrigin) -> void:
+	var dx := anchor_x - origin.origin_x
+	var dy := anchor_y - origin.origin_y
+	var dz := anchor_z - origin.origin_z
+	for pool in pools:
+		pool.translate(dx, dy, dz)
 	set_anchor(origin.origin_x, origin.origin_y, origin.origin_z, origin)
-	for c in range(c0, c1):
-		_fill_cell(c)
 	needs_rebase = false
 
 

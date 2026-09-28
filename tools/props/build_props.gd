@@ -20,6 +20,14 @@ const FARMLAND := "res://assets/props/farmland/"
 const PALETTE_PNG := "res://assets/palette/palette.png"
 const SWATCH_PX := 32
 const SWATCH_COLS := 8
+## Sign panels hang on the approach side of the gantry truss.
+const SIGN_FACE_Z := 0.62
+const SIGN_PANEL_DEPTH := 0.14
+const SIGN_BORDER := 0.12
+## "Lettering" stands proud of the face so it never z-fights at range.
+const SIGN_TEXT_Z := 0.74
+## Billboard art stands this far proud of the board, per layer.
+const ART_RELIEF := 3.0
 
 var _pal: WBPalette
 var _b: PropMeshBuilder
@@ -79,8 +87,8 @@ func _light_pole() -> void:
 			Vector3(hx + 0.45, 10.24, 0.17), Vector3(hx - 0.45, 10.24, 0.17),
 			Vector3.DOWN, &"lamp_warm", PropMeshBuilder.EMISSIVE_STREETLAMP)
 		# A thin glowing rim on the head's road-facing sides reads at a distance.
-		_b.quad(Vector3(hx - 0.5, 10.25, 0.191), Vector3(hx + 0.5, 10.25, 0.191),
-			Vector3(hx + 0.5, 10.33, 0.191), Vector3(hx - 0.5, 10.33, 0.191),
+		_b.quad(Vector3(hx - 0.5, 10.25, 0.23), Vector3(hx + 0.5, 10.25, 0.23),
+			Vector3(hx + 0.5, 10.33, 0.23), Vector3(hx - 0.5, 10.33, 0.23),
 			Vector3.BACK, &"lamp_warm", PropMeshBuilder.EMISSIVE_STREETLAMP)
 	_save(COMMON + "light_pole.res")
 
@@ -89,8 +97,9 @@ func _light_pole() -> void:
 func _reflector_post() -> void:
 	_b.box(Vector3(0.0, 0.5, 0.0), Vector3(0.1, 1.0, 0.07), &"white")
 	_b.box(Vector3(0.0, 1.08, 0.0), Vector3(0.1, 0.16, 0.07), &"ink")
-	_b.quad(Vector3(-0.04, 0.84, 0.037), Vector3(0.04, 0.84, 0.037), Vector3(0.04, 0.98, 0.037),
-		Vector3(-0.04, 0.98, 0.037), Vector3.BACK, &"reflector_amber", PropMeshBuilder.EMISSIVE_REFLECTOR)
+	# The reflector stands proud of the post (no coplanar faces).
+	_b.box(Vector3(0.0, 0.91, 0.055), Vector3(0.08, 0.14, 0.04), &"reflector_amber", &"reflector_amber", true,
+		PropMeshBuilder.EMISSIVE_REFLECTOR)
 	_save(COMMON + "reflector_post.res")
 
 
@@ -126,27 +135,49 @@ func _sign_gantry(road: RoadTuning) -> void:
 		var x1: float = p[1]
 		var y0 := 5.9
 		var y1 := 8.5
-		_b.box(Vector3((x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.55), Vector3(x1 - x0, y1 - y0, 0.12),
-			&"steel_dark", &"steel_dark", true)
-		_b.quad(Vector3(x0, y0, 0.62), Vector3(x1, y0, 0.62), Vector3(x1, y1, 0.62), Vector3(x0, y1, 0.62),
-			Vector3.BACK, &"sign_green", PropMeshBuilder.EMISSIVE_REFLECTOR)
+		_sign_panel(x0, x1, y0, y1)
 		# "Text" and an arrow as raised white bars (no real text, no brands).
 		var w := x1 - x0
 		_bar(x0 + 0.5, x0 + w * 0.8, y1 - 0.75, 0.42)
 		_bar(x0 + 0.5, x0 + w * 0.55, y1 - 1.45, 0.34)
 		_bar(x0 + w * 0.5 - 0.12, x0 + w * 0.5 + 0.12, y0 + 0.25, 0.55)
-		_b.face(PackedVector3Array([Vector3(x0 + w * 0.5 - 0.4, y0 + 0.8, 0.7), Vector3(x0 + w * 0.5 + 0.4, y0 + 0.8, 0.7),
-			Vector3(x0 + w * 0.5, y0 + 0.25, 0.7)]), Vector3.BACK, &"white", PropMeshBuilder.EMISSIVE_REFLECTOR)
-		# White border frame, in the panel plane (no overlap, no z-fighting).
-		_b.quad(Vector3(x0, y1 - 0.1, 0.63), Vector3(x1, y1 - 0.1, 0.63), Vector3(x1, y1, 0.63), Vector3(x0, y1, 0.63),
-			Vector3.BACK, &"white", PropMeshBuilder.EMISSIVE_REFLECTOR)
-		_b.quad(Vector3(x0, y0, 0.63), Vector3(x1, y0, 0.63), Vector3(x1, y0 + 0.1, 0.63), Vector3(x0, y0 + 0.1, 0.63),
+		_b.face(PackedVector3Array([Vector3(x0 + w * 0.5 - 0.4, y0 + 0.8, SIGN_TEXT_Z),
+			Vector3(x0 + w * 0.5 + 0.4, y0 + 0.8, SIGN_TEXT_Z), Vector3(x0 + w * 0.5, y0 + 0.25, SIGN_TEXT_Z)]),
 			Vector3.BACK, &"white", PropMeshBuilder.EMISSIVE_REFLECTOR)
 	_save(COMMON + "sign_gantry.res", {"span_m": span})
 
 
+## A sign panel: steel back and edges, a green retro-reflective face with a white
+## border, all in one plane (no coplanar overlaps, so no z-fighting at range).
+func _sign_panel(x0: float, x1: float, y0: float, y1: float) -> void:
+	var zf := SIGN_FACE_Z
+	var zb := SIGN_FACE_Z - SIGN_PANEL_DEPTH
+	var e := SIGN_BORDER
+	_b.quad(Vector3(x0, y0, zb), Vector3(x1, y0, zb), Vector3(x1, y1, zb), Vector3(x0, y1, zb), Vector3.FORWARD,
+		&"steel_dark")
+	_b.quad(Vector3(x0, y1, zb), Vector3(x1, y1, zb), Vector3(x1, y1, zf), Vector3(x0, y1, zf), Vector3.UP, &"steel_dark")
+	_b.quad(Vector3(x0, y0, zb), Vector3(x1, y0, zb), Vector3(x1, y0, zf), Vector3(x0, y0, zf), Vector3.DOWN,
+		&"steel_dark")
+	_b.quad(Vector3(x0, y0, zb), Vector3(x0, y1, zb), Vector3(x0, y1, zf), Vector3(x0, y0, zf), Vector3.LEFT,
+		&"steel_dark")
+	_b.quad(Vector3(x1, y0, zb), Vector3(x1, y1, zb), Vector3(x1, y1, zf), Vector3(x1, y0, zf), Vector3.RIGHT,
+		&"steel_dark")
+	var refl := PropMeshBuilder.EMISSIVE_REFLECTOR
+	_b.quad(Vector3(x0 + e, y0 + e, zf), Vector3(x1 - e, y0 + e, zf), Vector3(x1 - e, y1 - e, zf),
+		Vector3(x0 + e, y1 - e, zf), Vector3.BACK, &"sign_green", refl)
+	_b.quad(Vector3(x0, y1 - e, zf), Vector3(x1, y1 - e, zf), Vector3(x1, y1, zf), Vector3(x0, y1, zf), Vector3.BACK,
+		&"white", refl)
+	_b.quad(Vector3(x0, y0, zf), Vector3(x1, y0, zf), Vector3(x1, y0 + e, zf), Vector3(x0, y0 + e, zf), Vector3.BACK,
+		&"white", refl)
+	_b.quad(Vector3(x0, y0 + e, zf), Vector3(x0 + e, y0 + e, zf), Vector3(x0 + e, y1 - e, zf), Vector3(x0, y1 - e, zf),
+		Vector3.BACK, &"white", refl)
+	_b.quad(Vector3(x1 - e, y0 + e, zf), Vector3(x1, y0 + e, zf), Vector3(x1, y1 - e, zf), Vector3(x1 - e, y1 - e, zf),
+		Vector3.BACK, &"white", refl)
+
+
 func _bar(x0: float, x1: float, y_top: float, h: float) -> void:
-	_b.quad(Vector3(x0, y_top - h, 0.7), Vector3(x1, y_top - h, 0.7), Vector3(x1, y_top, 0.7), Vector3(x0, y_top, 0.7),
+	var z := SIGN_TEXT_Z
+	_b.quad(Vector3(x0, y_top - h, z), Vector3(x1, y_top - h, z), Vector3(x1, y_top, z), Vector3(x0, y_top, z),
 		Vector3.BACK, &"white", PropMeshBuilder.EMISSIVE_REFLECTOR)
 
 
@@ -173,7 +204,7 @@ func _both_faces(fn: Callable) -> void:
 
 
 func _art_rect(side: float, x0: float, y0: float, x1: float, y1: float, color_name: StringName, relief: float) -> void:
-	var z := side * (0.15 + relief)
+	var z := side * (0.15 + relief * ART_RELIEF)
 	var ax0 := x0 * side
 	var ax1 := x1 * side
 	_b.quad(Vector3(ax0, y0, z), Vector3(ax1, y0, z), Vector3(ax1, y1, z), Vector3(ax0, y1, z),
@@ -181,11 +212,11 @@ func _art_rect(side: float, x0: float, y0: float, x1: float, y1: float, color_na
 
 
 func _art_disc(side: float, cx: float, cy: float, r: float, color_name: StringName, relief: float) -> void:
-	_b.disc(Vector3(cx * side, cy, side * (0.15 + relief)), Vector3(0.0, 0.0, side), r, 12, color_name)
+	_b.disc(Vector3(cx * side, cy, side * (0.15 + relief * ART_RELIEF)), Vector3(0.0, 0.0, side), r, 12, color_name)
 
 
 func _art_tri(side: float, a: Vector2, b: Vector2, c: Vector2, color_name: StringName, relief: float) -> void:
-	var z := side * (0.15 + relief)
+	var z := side * (0.15 + relief * ART_RELIEF)
 	_b.face(PackedVector3Array([Vector3(a.x * side, a.y, z), Vector3(b.x * side, b.y, z), Vector3(c.x * side, c.y, z)]),
 		Vector3(0.0, 0.0, side), color_name)
 
