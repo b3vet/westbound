@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="LivesTuning" format=3 uid="uid://bqj10g7drve2e"]
+
+[ext_resource type="Script" uid="uid://bjswdat8jq7qw" path="res://src/core/tuning/lives_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+lives = 2
+ghost_period_s = 2.0
+clean_leg_restore = true
+first_hit_speed_loss_pct = 20.0
+first_hit_wobble_s = 0.6
+first_hit_deflect_mps = 2.0
+first_hit_recovery_max_s = 1.0
+collision_inset_m = 0.08
+collision_test_max_speed_kmh = 350.0

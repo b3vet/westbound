@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="ProgressionTuning" format=3 uid="uid://dq87et61steb1"]
+
+[ext_resource type="Script" uid="uid://dlkow2gdofodh" path="res://src/core/tuning/progression_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+ghost_sample_hz = 20
+roster_size = 8
+cars_unlocked_at_start = 1
+unlock_leg_milestone = 4
+unlock_daily_streak_days = 7
+unlock_lifetime_threads = 100
+achievement_count = 25
+player_body_tris_lod0 = 15000
+player_body_tris_lod1 = 5000
+player_interior_tris = 5000
+traffic_tris_lod0 = 3000
+traffic_tris_lod1 = 1000
+rim_tris = 800
+palette_atlas_px = 256
+palette_color_count = 30
+traffic_model_count = 14

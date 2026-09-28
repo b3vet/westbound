@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="CameraTuning" format=3 uid="uid://b32uy2dtn3l08"]
+
+[ext_resource type="Script" uid="uid://bboq4mwkndmcx" path="res://src/core/tuning/camera_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+modes = PackedStringArray("chase", "far", "hood", "overhead")
+default_mode = "chase"
+fov_min_deg = 62.0
+fov_min_speed_kmh = 100.0
+fov_max_deg = 78.0
+distance_pullback_max_pct = 15.0
+look_ahead_max_m = 1.2
+roll_max_deg = 1.5
+finale_swing_s = 3.0

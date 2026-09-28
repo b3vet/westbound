@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="RoadTuning" format=3 uid="uid://dkoj7fvkflcyn"]
+
+[ext_resource type="Script" uid="uid://cipfeld3ris81" path="res://src/core/tuning/road_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+median_half_width_m = 0.5
+inner_shoulder_m = 1.2
+lane_width_m = 3.6
+shoulder_m = 3.0
+guardrail_offset_m = 0.5
+lanes_default = 3
+lanes_min = 2
+lanes_max = 4
+min_curve_radius_m = 1200.0
+max_grade_pct = 5.0
+chunk_length_m = 200.0
+floating_origin_shift_km = 2.0
+sun_offset_min_deg = 15.0
+sun_offset_max_deg = 30.0
+light_pole_spacing_m = 50.0
+reflector_post_spacing_m = 25.0
