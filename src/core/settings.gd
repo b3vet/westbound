@@ -12,6 +12,10 @@ const DEFAULTS := {
 	&"steer_sensitivity": 1.0,
 	&"steer_dead_zone": 1.0,
 	&"steer_curve": 1.0,
+	## Drag-steering visual: &"ring" (anchor ring + thumb dot) | &"wheel" (steering wheel that turns).
+	&"drag_visual": &"ring",
+	## On-screen control size multiplier (touch pedals, buttons, anchor visuals).
+	&"controls_scale": 1.0,
 	&"haptics": true,
 	&"units": &"kmh",               # &"kmh" | &"mph"
 	&"camera_mode": &"chase",
