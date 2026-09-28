@@ -13,3 +13,4 @@ blocks_sightlines = false
 is_motorbike = false
 mass_kg = 1500.0
 allowed_profiles = Array[StringName]([&"cruiser", &"commuter", &"hesitant"])
+model_scene_paths = PackedStringArray("res://assets/traffic/sedan_a.tscn", "res://assets/traffic/sedan_b.tscn", "res://assets/traffic/sedan_c.tscn")

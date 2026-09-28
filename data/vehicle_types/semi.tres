@@ -13,3 +13,4 @@ blocks_sightlines = true
 is_motorbike = false
 mass_kg = 15000.0
 allowed_profiles = Array[StringName]([&"truck"])
+model_scene_paths = PackedStringArray("res://assets/traffic/semi_box.tscn", "res://assets/traffic/semi_tank.tscn")

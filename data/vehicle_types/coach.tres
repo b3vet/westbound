@@ -13,3 +13,4 @@ blocks_sightlines = true
 is_motorbike = false
 mass_kg = 13000.0
 allowed_profiles = Array[StringName]([&"bus"])
+model_scene_paths = PackedStringArray("res://assets/traffic/coach_a.tscn")
