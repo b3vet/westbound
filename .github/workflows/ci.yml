@@ -20,5 +20,9 @@ jobs:
         with:
           path: ~/.cache/westbound
           key: godot-4.7-stable-linux
+      - name: Lint
+        run: |
+          tools/lint --self-test
+          tools/lint
       - name: Headless tests
         run: tools/test.sh --tier=${{ github.event.inputs.tier || 'fast' }}

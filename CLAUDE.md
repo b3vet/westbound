@@ -14,6 +14,8 @@ tools/test.sh                       # import + fast test tier (what CI runs)
 tools/test.sh --tier=soak           # long soaks, before gates
 tools/test.sh --filter=traffic      # substring of test path or method
 tools/godot.sh <args>               # the pinned Godot 4.7 binary (downloads on first use; GODOT=... overrides)
+tools/lint [--strict]               # budget + working-rule linter (rule table in docs/TOOLS.md)
+tools/snap.sh <scene.tscn> [--sweep=sky_t:0,0.5] [--key=value]   # screenshot(s) to tests/out/snaps/
 ```
 
 ## Working rules (from the spec, non-negotiable)
@@ -48,6 +50,6 @@ tools/godot.sh <args>               # the pinned Godot 4.7 binary (downloads on 
 ## Multi-agent workflow
 
 - Each work package (WP) owns a list of paths; only modify those. Orchestrator-owned shared files: `project.godot`, `src/core/events.gd`, root `data/tuning.tres`, `export_presets.cfg`, `.github/workflows/ci.yml`, `CLAUDE.md`, `docs/IMPLEMENTATION_PLAN.md`. Need a change there? Put it in your handoff note (e.g. "needs: signal X", "needs: autoload Y").
-- **Merge gate:** full fast tier green, `tools/lint` clean (once it exists), no allocations in sim ticks, determinism test for seeded systems, `tools/snap.sh` screenshots for visual work.
+- **Merge gate:** full fast tier green, `tools/lint` clean, no allocations in sim ticks, determinism test for seeded systems, `tools/snap.sh` screenshots for visual work.
 - **Handoff note** (end of every WP): what was built, files, tests added, deviations or open questions, and requested shared-file changes.
 - Third-party assets must be CC0 (or OFL for fonts) and logged in `assets/LICENSES.md` with source URL and license.
