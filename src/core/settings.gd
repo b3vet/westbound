@@ -8,6 +8,10 @@ const DEFAULTS := {
 	&"steering_mode": &"drag",      # &"drag" | &"gyro"
 	&"throttle_mode": &"auto",      # &"auto" | &"manual"
 	&"left_handed": false,
+	## Steering feel multipliers (1.0 = the spec's tuned values; clamped 0.5-2 by PlayerInput).
+	&"steer_sensitivity": 1.0,
+	&"steer_dead_zone": 1.0,
+	&"steer_curve": 1.0,
 	&"haptics": true,
 	&"units": &"kmh",               # &"kmh" | &"mph"
 	&"camera_mode": &"chase",
