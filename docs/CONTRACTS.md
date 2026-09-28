@@ -217,6 +217,8 @@ func plan_batch(ctx: SpawnSource.Context, s_from: float, s_to: float, out_spawns
 | `Scoring.KIND_NEAR_MISS` (`slot` = car) | scoring (every physical close pass, even unscored ones; not during the ghost) | Not a signal: run.gd calls `TrafficSim.notify_close_pass(slot)` (the ~30% horn) |
 | `&"night_started"`, `&"dawn_started"` (`value` = duration), `&"morning_reached"`, `&"sun_lifted"` (`value` = fraction) | sun clock | The signal of the same name |
 | `&"hit"` (`tag` = `Events.HIT_*`, `value` = lives left) | collisions and lives | `hit(tag, int(value))` |
+| `&"ghost_started"` (`value` = duration), `&"ghost_ended"`, `&"life_restored"` (`value` = lives) | lives | The signal of the same name |
+| `&"checkpoint_warning"` (`value` = metres), `&"checkpoint_crossed"` (`value` = leg index; summary in `LegTracker.crossing`), `&"leg_started"` (`value` = new leg), `&"coast_reached"` | leg tracker | The signal of the same name (the adapter builds `checkpoint_crossed`'s summary Dictionary from `LegTracker.crossing`) |
 
 `multiplier_changed` and `chain_changed` are emitted by the adapter when `ScoringRuleSet.multiplier()` or `chain()` changed since the last frame, not per tick.
 
@@ -367,6 +369,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
+| 2026-09-28 | §7 lives and leg-tracker kinds; SunClock, LegTracker, HitDetection, Lives per docs/CORE_LOOP.md (WP3.5) | Orchestrator merge review |
 | 2026-09-28 | §7 NEAR_MISS kind, ScoreEvents, Scoring extras; rules as implemented in docs/SCORING.md (WP3.4) | Orchestrator merge review |
 | 2026-09-28 | §13 renderer-parity rules (linear globals, wb_output, wb_darken_alpha, sky priorities), SkyRig (WP1.3) | Orchestrator merge review |
 | 2026-09-28 | §4 VehiclePhysics API, road-relative yaw_rate, gearbox owned by physics, capability curve (WP1.5) | Orchestrator merge review |
