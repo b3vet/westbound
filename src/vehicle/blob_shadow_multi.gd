@@ -4,7 +4,7 @@ extends MultiMeshInstance3D
 ## budget → Shadows and Draw calls. Same quad and shader as BlobShadow; per-instance
 ## strength goes in INSTANCE_CUSTOM.x (0 hides an instance).
 ##
-##   shadows.setup(capacity)
+##   shadows.setup(count)
 ##   shadows.place(i, sample, d, yaw, length_m, width_m, origin)   # per frame, per slot
 ##   shadows.hide_instance(i)                                      # free slot
 ##
@@ -20,13 +20,13 @@ var _material: ShaderMaterial
 var _hidden := Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO)
 
 
-## Allocates `capacity` instances, all hidden.
-func setup(capacity: int) -> void:
+## Allocates `count` instances, all hidden.
+func setup(count: int) -> void:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_custom_data = true
 	mm.mesh = BlobShadow.shared_mesh()
-	mm.instance_count = capacity
+	mm.instance_count = count
 	multimesh = mm
 	if _material == null:
 		_material = BlobShadow.shared_material().duplicate() as ShaderMaterial
@@ -34,7 +34,7 @@ func setup(capacity: int) -> void:
 	material_override = _material
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	for i in capacity:
+	for i in count:
 		hide_instance(i)
 
 

@@ -182,7 +182,7 @@ func test_dashes_continuous_across_chunks() -> void:
 
 
 func test_lines_at_lane_edges() -> void:
-	for lanes in [2, 3, 4]:
+	for lanes: int in [2, 3, 4]:
 		var road := StraightRoadPath.new(lanes, t)
 		var m := _build(road, 0.0, t.chunk_length_m)
 		var left := road.lanes_left_edge_d(0.0)
@@ -397,7 +397,7 @@ func test_precision_far_from_start() -> void:
 # ---------------------------------------------------------------- Budget
 
 func test_triangle_budget_and_build_cost() -> void:
-	for lanes in [3, 4]:
+	for lanes: int in [3, 4]:
 		var road := ArcRoadPath.new(R, 1, lanes, t)
 		var m := _build(road, 0.0, t.chunk_length_m)
 		print("    road chunk, %d lanes: %d road + %d world = %d triangles, %d rows, %d reflectors" % [
