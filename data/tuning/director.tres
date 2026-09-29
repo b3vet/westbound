@@ -28,4 +28,5 @@ density_topup_speed_margin_kmh = 10.0
 density_topup_max_per_batch = 16
 headway_scale_first = 1.0
 headway_scale_last = 0.8
+behind_spawn_view_margin_m = 25.0
 spawn_batch_length_m = 300.0

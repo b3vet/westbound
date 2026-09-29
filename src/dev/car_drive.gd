@@ -64,7 +64,6 @@ var _events: ScoreEventBuffer
 var _hits: HitDetection
 var _contact := HitDetection.Contact.new()
 var _lives: Lives
-var _frustum_smp := RoadSample.new()
 var _leg: int = START_LEG
 var _night: bool = false
 var _leg_button: Button
@@ -285,7 +284,6 @@ func _setup_traffic() -> void:
 	var car_def: CarDef = load(CAR_PATHS[_car_index])
 	_tdir = TrafficDirector.new(_ctx, _road, _sim, _registry.profiles, _registry.types,
 		car_def.length_m, car_def.width_m)
-	_tdir.frustum_check = _in_frustum
 	_tdir.set_fog_end(_builder.view_distance_m())
 	_hits = HitDetection.new(_tuning.lives, _tuning.traffic.max_active_vehicles)
 	_lives = Lives.new(_tuning.lives)
@@ -321,12 +319,6 @@ func _traffic_tick(dt: float) -> void:
 			_lives.reset()   # infinite lives until the Phase 4 crash hand-off
 	_lives.step(dt, st, _events)
 	_events.clear()
-
-
-func _in_frustum(s: float, d: float) -> bool:
-	_road.sample_into(s, _frustum_smp)
-	var p := _frustum_smp.local_point(d, _origin.origin_x, _origin.origin_y, _origin.origin_z)
-	return _rig.camera().is_position_in_frustum(p)
 
 
 func _build_traffic_controls() -> void:

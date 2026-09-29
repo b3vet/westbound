@@ -194,3 +194,40 @@ WP2.4's fixed-count bench for comparison (`soak_tick_cost_report`): 60 vehicles 
 4. **Realized density** is 73-92% of the leg's target at leg 8 (see D7). The director keeps density in the road frame at spawn time; traffic faster than the player drains out of the window ahead. If the spec's "8 to 16 vehicles per km per lane" is meant around the player, Phase 6 needs a re-fill for the ahead window (spawning at the fog end in lanes that thinned).
 5. **Director tick cost.** ~40-48 µs per tick at leg 8 (after the behind-spawn back-off, which removed ~40 µs). The rest is mostly `OppositeTraffic.step` (~26 µs for 25 vehicles, a road query per vehicle per tick) and the despawn scan (~13 µs). Worth trimming for phones (e.g. step the opposite side at 30 Hz); not in WP3.3's paths.
 6. **Metric noise.** One 28 km run's lane-change rate varies ~17% from seed to seed, so the ±15% regression runs on a 16-run reference (soak tier). A change that moves any 16-run metric by >15% is a real behavior change: update the baseline deliberately.
+
+## D11 soak (WP4.8: density)
+
+`tools/soak.sh --km=10000 --shards=4` with WP4.8's traffic: density 8 → 18 per km per lane, the band top-up and the density gain, IDM T × 0.8 at leg 8, cap 90, and the camera-independent behind-spawn view test. Same seed, bot and oracle as above. A later `--km=224 --compare-with` run on the final tree (WP4.5 merged, the camera-independent view test) gave identical traces for all 8 common runs, so these results hold for it.
+
+| | |
+| --- | --- |
+| Distance | **10,024 km** in 358 runs (5,040 km on 3 lanes, 2,492 km on 2 lanes, 2,492 km on 4 lanes), 83.7 simulated hours |
+| Wall time | 4,278 s (71 min) on 4 shards, 8,435 km per wall hour |
+| Active vehicles | Mean 48.5 (before: 40.8). By lane count: 34 / 49 / 64 on 2 / 3 / 4 lanes. Peak 90, at the cap in 0.44% of the 4-lane ticks (321 planned vehicles thinned). |
+| Traffic tick (4 processes in parallel) | 153 µs per `TrafficSim.step` on average (109 / 154 / 206 µs on 2 / 3 / 4 lanes). The director takes 28-41 µs. |
+
+| Counter | Total | Gate |
+| --- | --- | --- |
+| Traffic-to-traffic collisions | 0 | ✅ 0 |
+| Signal-time violations | 0 (of 180,171 lane moves, 191,795 signals, 8,128 cancels) | ✅ 0 |
+| Unsignaled lateral moves | 0 | ✅ 0 |
+| No-ambush violations | 0 (173,166 moves checked) | ✅ 0 |
+| Deceleration beyond 6 m/s² | 0 (min accel −6.00) | ✅ 0 |
+| Brake-light flag mismatches | 0 | ✅ 0 |
+| Rear-ends of a normally driving player | 0 (136 rear-end contacts, all after the bot's own move or hard braking) | ✅ 0 |
+| Impossible windows (traffic) | **2**: one on 3 lanes, one on 2 lanes (0 on 4 lanes). Details below. | ❌ 1 on 3 lanes |
+| Impossible windows (player-induced) | 100 | reported |
+| Unfinished runs / engine errors | 0 / 0 | ✅ |
+
+Director: 74,311 ahead spawns (top-ups included), 9,200 behind spawns and 61,300 despawns. Refused: 321 at the cap, 73 in the ghost zone and 8,779 by the commit re-check; no ahead or behind spawn was refused as visible. Sim cancels: 839 for the player, 626 Hesitant, 6,663 unsafe.
+
+Metrics by lane count (whole soak): gaps per km 11.9 / 11.1 / 10.8, density 13.2 / 12.4 / 12.2 per km per lane, lane changes per vehicle-minute 0.45 / 0.66 / 0.97, on 2 / 3 / 4 lanes.
+
+**The two traffic windows** (replayed from their run seeds):
+
+| Run | Lanes | Situation | Why no path |
+| --- | --- | --- | --- |
+| 325 (leg 4, t = 390 s) | 3 | The weaving bot, at 125 km/h, is **in the middle of its own lane change** from lane 0 to lane 1 (lateral speed 5.3 m/s, `player_moved_s_ago` = 0.008 s). A commuter at 101 km/h, 1.2 m ahead (centers), is already moving from lane 2 into lane 1: it has been moving since about 0.9 s before the bot started. Its lane change was legal: it started first, so no-ambush was satisfied. The bot's lane choice only looks at vehicles' current `d`, not at a car already merging into its target lane. | Both converge on lane 1 side by side. The lateral clearance is 0.68 m (above the 0.3 m clearance, so the oracle does not count it as the player's own cut-in), and every path touches a hull within 0.33 s |
+| 146 (leg 1) | 2 | The bot is at 101 km/h, 1.0 s after its own lane change, behind a cruiser at 87 km/h that is signaling into the other lane | The 2-lane "slow wall" of D12: the player may not drop below 100 km/h |
+
+Both follow the bot's own lateral move, like the three 2-lane windows of the WP3.3 soak. The 3-lane one is a cut-in into the path of a car that was already merging: the contact would be the player's doing ("the player caused it"). Under the oracle's pre-registered rule it still counts as a traffic window, because the player was not yet within 0.3 m of the car at t0. **This was not reclassified here** (it would redefine the gate after seeing the result). See *Findings* point 1 for the option already on the table: counting windows that start during or right after the player's own lateral move as player-induced. For this window, the narrower "the player's lateral move is in progress and the other car's lane change started first" would also apply. The orchestrator decides.

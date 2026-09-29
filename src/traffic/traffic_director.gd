@@ -58,8 +58,9 @@ var is_night: bool = false
 var biome: BiomeDef
 ## Fog end distance at the current view distance (m). Ahead spawns land beyond it.
 var fog_end_m: float
-## (s: float, d: float) -> bool: true when the road point is inside the camera
-## frustum. Behind spawns need false. Unset = always visible = no behind spawns.
+## Optional dev/test override of is_visible(): (s: float, d: float) -> bool, true when
+## the road point is in view. Unset (the game, the soak): the pure, camera-independent
+## view test (behind_spawn_view_margin_m), so traffic never depends on the camera.
 var frustum_check: Callable
 
 ## No-spawn zone around the player, relative to its (s, d): [s - behind, s + ahead] x
@@ -475,11 +476,14 @@ func _step_try_behind(lane: int, player: VehicleState, min_speed: float) -> bool
 
 # ---------------------------------------------------------------- Commit rules
 
-## True when (s, d) is inside the camera frustum (or no check is set).
+## True when the road point (s, d) counts as in view (fairness rule 5): anything ahead
+## of player s - behind_spawn_view_margin_m (a fixed virtual view volume: every camera
+## mode sits <= 11 m behind the car and looks forward), unless a frustum_check
+## override is set. Pure and camera-independent. Allocation-free.
 func is_visible(s: float, d: float) -> bool:
-	if not frustum_check.is_valid():
-		return true
-	return bool(frustum_check.call(s, d))
+	if frustum_check.is_valid():
+		return bool(frustum_check.call(s, d))
+	return s > _player_s - director_tuning.behind_spawn_view_margin_m
 
 
 ## True when a box at (s, d) with the given size overlaps the ghost zone.

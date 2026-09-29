@@ -364,7 +364,6 @@ func reseed(seed_value: int) -> void:
 	sim.set_player_body(car.car.length_m, car.car.width_m)
 	director = TrafficDirector.new(traffic_ctx, road, sim, registry.profiles, registry.types,
 		car.car.length_m, car.car.width_m)
-	director.frustum_check = _rig_sees
 	director.set_fog_end(_builder.view_distance_m())
 	director.set_leg(leg, car.state.s)
 	director.set_biome(_biome.current())
@@ -556,12 +555,6 @@ func _spawn_car() -> void:
 	car.place_at(0.0, road.lane_center_d(START_LANE, 0.0), Units.kmh_to_mps(START_SPEED_KMH))
 	rig.set_target(car, car.state, car.params.top_speed_mps)
 	rig.snap_to_target()
-
-
-## Director frustum check: the gameplay (follow) camera, as in a run.
-func _rig_sees(s: float, d: float) -> bool:
-	road.sample_into(s, _smp)
-	return rig.camera().is_position_in_frustum(_smp.local_point(d, origin.origin_x, origin.origin_y, origin.origin_z))
 
 
 func _view_ahead(s: float) -> float:

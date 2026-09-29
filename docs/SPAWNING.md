@@ -29,13 +29,13 @@ Each lane is planned as a renewal process at `DirectorTuning.density_per_km_lane
     - A batch is committed nearest-first.
     - Near the cap, the batch is thinned evenly. Dropping vehicles only widens gaps.
 - **Behind.** For each lane from the median (`spawn_behind_lane_count`, and never the slow lane), a lane builds up an arrival debt of `density × (v_lane − v_player)` while the player is slower than that lane by more than `spawn_behind_speed_margin_kmh`.
-    - When one arrival is owed, the director spawns a vehicle `spawn_behind_m` (150 m) behind the player. The spawn needs the point to be outside the frustum (the `frustum_check(s, d) -> bool` Callable; if it is unset, the point counts as visible and nothing spawns behind).
+    - When one arrival is owed, the director spawns a vehicle `spawn_behind_m` (150 m) behind the player. The spawn point must be out of view. The view test is `TrafficDirector.is_visible(s, d)`, a fixed virtual view volume: anything ahead of `player s − behind_spawn_view_margin_m` (25 m, `DirectorTuning`) is in view. Every camera mode sits ≤ 11 m behind the car and looks forward, so a spawn 150 m behind is never visible, and camera mode and screen aspect never change traffic (leaderboards, Daily Drive; orchestrator decision in WP4.8). The `frustum_check(s, d) -> bool` Callable is only an optional dev/test override. The run, the drive scene, the sandbox and the soak no longer set it.
     - The vehicle's IDM gaps must also fit, and the player counts as the leader.
 - **Despawn.** A vehicle despawns when it is more than 200 m behind the player, or ahead of the player's `s` by more than the ahead distance + one batch + `spawn_despawn_ahead_margin_m`.
 - **Every spawn** goes through `_commit` in this order:
     1. the cap (`max_active_vehicles`)
     2. the ghost zone (the player's box plus `spawn_ghost_margin_long_m` / `_lat_m`; the run may widen it with `set_ghost_zone`)
-    3. no pop-in (ahead beyond the fog, or behind and out of the frustum)
+    3. no pop-in (ahead beyond the fog, or behind and out of view: `is_visible`)
     4. `sim.spawn(rec)`
 - **Start of run.** `reset(player)` fills the road from the player to the ahead distance before anything is drawn. It still keeps out of the ghost zone and places nothing behind the player.
 - **Per tick.** `step(dt, player)` runs after `traffic_sim.step`. The despawn scan, the behind bookkeeping and the opposite side allocate nothing. Only batch planning allocates, at director rate.

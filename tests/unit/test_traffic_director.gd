@@ -127,7 +127,7 @@ func test_ahead_spawns_land_beyond_the_fog_end() -> void:
 		ge(min_rel, tuning.traffic.spawn_ahead_m - player.v * DT, "around 750 m ahead")
 		le(min_rel, dir.ahead_distance() + tuning.director.spawn_batch_length_m, "within one batch of the ahead line")
 		ge(dir.ahead_distance(), dir.fog_end_m + tuning.traffic.spawn_fog_margin_m)
-		eq(behind_rel.size(), 0, "no frustum check set: nothing behind")
+		eq(behind_rel.size(), 0, "player faster than every lane: nothing behind")
 		eq(ghost_violations, 0)
 
 
@@ -179,6 +179,22 @@ func test_behind_spawns_only_when_player_slower_and_out_of_frustum() -> void:
 	_reset()
 	_drive(40.0)
 	eq(behind_rel.size(), 0, "never behind a faster player")
+
+
+func test_default_view_test_is_camera_independent() -> void:
+	# Orchestrator (D11): no camera in the loop. In view = ahead of player s - margin.
+	_setup(SEED, LANES, null, -1, 2, 60.0)
+	_reset()
+	var margin := tuning.director.behind_spawn_view_margin_m
+	check(not dir.frustum_check.is_valid(), "no camera callable by default")
+	check(dir.is_visible(player.s + 40.0, player.d), "ahead: in view")
+	check(dir.is_visible(player.s - margin + 1.0, player.d), "just inside the margin: in view")
+	check(not dir.is_visible(player.s - margin - 1.0, player.d), "beyond the margin: out of view")
+	check(not dir.is_visible(player.s - tuning.traffic.spawn_behind_m, player.d), "a behind spawn: out of view")
+	gt(tuning.traffic.spawn_behind_m, margin + 1.0, "behind spawns land outside the view volume")
+	_drive(40.0)
+	gt(behind_rel.size(), 3, "the default view test lets faster traffic arrive from behind")
+	eq(ghost_violations, 0)
 
 
 func test_behind_rate_follows_speed_difference() -> void:

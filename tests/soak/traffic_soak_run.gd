@@ -33,8 +33,6 @@ const WINDOW_REPORT_BEHIND_M := 10.0
 const MAX_WINDOW_EXAMPLES := 6
 ## Lane-change state tags in window reports (index = TrafficState.LaneChange).
 const LC_TAGS: Array[String] = ["", "/signaling", "/moving"]
-## Behind the camera (the chase camera sits a few meters behind the car).
-const FRUSTUM_BEHIND_M := 10.0
 ## A run that has not finished after this many times its distance at the minimum
 ## bot speed stops (a stuck bot would otherwise hang the soak).
 const TIMEOUT_FACTOR := 3.0
@@ -77,7 +75,6 @@ var impossible_player_induced := 0
 var window_examples: Array[Dictionary] = []
 
 var _bot_rng: Rng
-var _camera: BehindCamera
 var _next_hash := 0.0
 var _next_window := 0.0
 var _in_window := false
@@ -122,8 +119,6 @@ func _init(run_index: int, base_seed: int, run_legs: int = -1, leg_m: float = -1
 	sim = TrafficSim.new(ctx, road, registry)
 	sim.set_player_body(car.length_m, car.width_m)
 	director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types, car.length_m, car.width_m)
-	_camera = BehindCamera.new(bot.state)
-	director.frustum_check = _camera.is_visible
 	checker = TrafficRuleChecker.new(tuning, registry, road, car.length_m, car.width_m)
 	windows = ImpossibleWindowChecker.new(tuning, registry, car)
 	metrics = TrafficMetrics.new(tuning)
@@ -318,16 +313,3 @@ static func _car(run_index: int) -> CarDef:
 			names.append(f)
 	names.sort()
 	return load(CAR_DIR + names[run_index % names.size()]) as CarDef
-
-
-## The director's frustum check: everything more than FRUSTUM_BEHIND_M behind the
-## player is behind the chase camera (a method Callable, so no reference cycle).
-class BehindCamera:
-	extends RefCounted
-	var player: VehicleState
-
-	func _init(p: VehicleState) -> void:
-		player = p
-
-	func is_visible(s: float, _d: float) -> bool:
-		return s > player.s - FRUSTUM_BEHIND_M

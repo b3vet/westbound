@@ -53,6 +53,14 @@ extends Resource
 @export var headway_scale_first: float = 1.0   # not in spec
 @export var headway_scale_last: float = 0.8   # not in spec
 
+@export_group("Behind spawns: the view test (orchestrator, D11; not in spec)")
+## Fairness rule 5 ("behind the camera frustum") as a fixed virtual view volume, not the
+## live camera: a road point more than this far behind the player is out of view, any
+## other is in view. Every camera mode sits <= 11 m behind the car and looks forward,
+## so a behind spawn (spawn_behind_m, ~150 m) is never visible, and camera mode and
+## screen aspect never change traffic (leaderboards, Daily Drive on every device).
+@export var behind_spawn_view_margin_m: float = 25.0   # not in spec
+
 @export_group("Batches")
 @export var spawn_batch_length_m: float = 300.0
 
