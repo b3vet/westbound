@@ -722,6 +722,7 @@ func _show_results() -> void:
 	last_results[&"personal_best"] = maxi(best, score)
 	last_results[&"new_best"] = new_best
 	last_results[&"previous_best"] = best
+	last_results[&"car"] = String(car.car.id) if car != null and car.car != null else ""   # N7.2 run submission
 	Events.run_over.emit(last_results)   # the results screen opens on it
 
 

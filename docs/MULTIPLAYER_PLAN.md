@@ -127,7 +127,7 @@ Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p9
 | N4 Networked traffic | ⬜ |
 | N5 Rooms & players | ⬜ |
 | N6 Multiplayer scoring | ⬜ |
-| N7 Leaderboards | 🟡 N7.1 server merged (5 boards, periods, views, runs API with plausibility checks, legacy upload); N7.2 client UI + submission next |
+| N7 Leaderboards | ✅ server (N7.1) + client (N7.2): Journey/Daily runs submitted after each run (offline queue, idempotent, legacy PB upload), placements on the results screen, leaderboards screen (5 boards, periods, global/around me/friends, report/block). Loop boards fill from N6. Replays come with N8 |
 | N8 Replay verification | ⬜ |
 | N9 Social & public play | 🟡 N9.1 server merged (friends, blocks, presence push, crews, reports, admin CLI); client UI (N9.2) and room-dependent parts (parties, public rooms, Quick Join, browser, quick chat, invites) after N5 |
 | N10 Hardening | ⬜ |
