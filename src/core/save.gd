@@ -2,10 +2,13 @@ extends Node
 ## Local versioned save in user:// (autoload `Save`). Spec: Save data.
 ##
 ## M0 skeleton: versioned JSON document with a migration hook.
-## Unlocks, stats, bests and ghosts are added in WP8.1.
+## Unlocks, stats, bests and ghosts are added in WP8.1. WP4.1 adds the personal best
+## score per mode (Run end: "compares against personal bests"), under "bests".
 
 const PATH := "user://save.json"
 const VERSION := 1
+## data["bests"][mode] = best score (int). Mode ids as in RunContext.MODE_*.
+const KEY_BESTS := "bests"
 
 var data := {}
 
@@ -34,6 +37,27 @@ func save_to_disk() -> void:
 		push_error("Save: cannot write %s (%s)" % [PATH, FileAccess.get_open_error()])
 		return
 	f.store_string(JSON.stringify(data))
+
+
+## Personal best score in `run_mode` (0 when none yet).
+func best_score(run_mode: StringName) -> int:
+	var bests: Variant = data.get(KEY_BESTS, {})
+	if not (bests is Dictionary):
+		return 0
+	return int((bests as Dictionary).get(String(run_mode), 0))
+
+
+## Records `score` as the best in `run_mode` if it beats the stored one, and writes the
+## save to disk. Returns true for a new best.
+func submit_best_score(run_mode: StringName, score: int) -> bool:
+	if score <= best_score(run_mode):
+		return false
+	var bests: Variant = data.get(KEY_BESTS, {})
+	var d: Dictionary = bests if bests is Dictionary else {}
+	d[String(run_mode)] = score
+	data[KEY_BESTS] = d
+	save_to_disk()
+	return true
 
 
 ## Upgrade an older save document to VERSION, one step at a time.
