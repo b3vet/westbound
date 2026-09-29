@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO crew_members (account_id, crew_id, role, joined_at)\n         VALUES (?, ?, 'owner', ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "9b43eb0929123c7d145ec1be515007725c84566b8bba554fd9411beb9548c663"
+}

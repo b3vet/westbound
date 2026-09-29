@@ -1,6 +1,7 @@
-//! Admin commands behind `westbound-server admin ...`: ban, unban, force-rename, and
-//! (N7.1) remove a run or a leaderboard entry. Each one is recorded in `admin_log` (actor
-//! `cli`). Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Moderation" (admin CLI: ban or unban
+//! Admin commands behind `westbound-server admin ...`: ban, unban, force-rename, (N7.1)
+//! remove a run or a leaderboard entry, and (N9.1) list and handle reports, rename or
+//! disband a crew. Each change is recorded in `admin_log` (actor `cli`). Spec:
+//! WESTBOUND_MULTIPLAYER_HANDOFF.md → "Moderation" (admin CLI: list reports, ban or unban
 //! with duration, force-rename, and remove a run or leaderboard entry).
 
 use anyhow::{bail, Context};
@@ -11,6 +12,7 @@ use crate::config::LeaderboardsConfig;
 use crate::leaderboards::{self, Board};
 use crate::names;
 use crate::profanity::ProfanityFilter;
+use crate::social;
 
 const ACTOR: &str = "cli";
 
@@ -140,6 +142,101 @@ pub async fn remove_entry(
     let target = format!("{board}/{period}/{subject_id}");
     crate::db::admin_log(pool, ACTOR, "remove_entry", &target, "").await?;
     Ok(format!("entry {target} removed"))
+}
+
+/// Lists reports, newest first: one line each (`--unhandled`: only those not handled
+/// yet), at most `limit`. A deleted reporter or target shows as `deleted`.
+pub async fn reports(
+    pool: &SqlitePool,
+    unhandled_only: bool,
+    limit: i64,
+) -> anyhow::Result<String> {
+    let rows = social::reports::list(pool, unhandled_only, limit.max(1)).await?;
+    if rows.is_empty() {
+        return Ok(if unhandled_only {
+            "no unhandled reports".to_string()
+        } else {
+            "no reports".to_string()
+        });
+    }
+    let side = |id: Option<i64>| id.map_or("deleted".to_string(), |i| i.to_string());
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|r| {
+            format!(
+                "#{} {} reporter={} target={} reason={} {} context={}",
+                r.id,
+                r.created_at,
+                side(r.reporter_id),
+                side(r.target_id),
+                r.reason,
+                match r.handled_at {
+                    Some(t) if r.handled => format!("handled={t}"),
+                    _ => "unhandled".to_string(),
+                },
+                r.context
+            )
+        })
+        .collect();
+    Ok(lines.join("\n"))
+}
+
+/// Marks a report handled.
+pub async fn report_handle(pool: &SqlitePool, id: i64, now: i64) -> anyhow::Result<String> {
+    match social::reports::mark_handled(pool, id, now).await? {
+        None => bail!("no report {id}"),
+        Some(false) => Ok(format!("report {id} was already handled")),
+        Some(true) => {
+            crate::db::admin_log(pool, ACTOR, "report_handle", &id.to_string(), "").await?;
+            Ok(format!("report {id} marked handled"))
+        }
+    }
+}
+
+/// Force-renames a crew and/or changes its tag (name and tag rules, the filter and
+/// uniqueness apply).
+pub async fn crew_rename(
+    pool: &SqlitePool,
+    crew_id: i64,
+    name: Option<&str>,
+    tag: Option<&str>,
+) -> anyhow::Result<String> {
+    if name.is_none() && tag.is_none() {
+        bail!("give a new name, --tag, or both");
+    }
+    let before = sqlx::query!("SELECT name, tag FROM crews WHERE id = ?", crew_id)
+        .fetch_optional(pool)
+        .await?
+        .with_context(|| format!("no crew {crew_id}"))?;
+    let (name, tag) = social::crews::admin_rename(pool, crew_id, name, tag)
+        .await
+        .map_err(|e| anyhow::anyhow!("{} ({})", e.message, e.code))?;
+    let detail = format!("from={} [{}] to={name} [{tag}]", before.name, before.tag);
+    crate::db::admin_log(pool, ACTOR, "crew_rename", &crew_id.to_string(), &detail).await?;
+    Ok(format!("crew {crew_id} renamed to {name} [{tag}]"))
+}
+
+/// Disbands a crew: its memberships and Loop crew entries go. A running server's cached
+/// board tops catch up within `leaderboards.cache_ttl_secs`.
+pub async fn crew_disband(pool: &SqlitePool, crew_id: i64) -> anyhow::Result<String> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let members = social::crews::member_ids(&mut tx, crew_id).await?;
+    if !social::crews::disband_rows(&mut tx, crew_id).await? {
+        bail!("no crew {crew_id}");
+    }
+    crate::db::admin_log(
+        &mut *tx,
+        ACTOR,
+        "crew_disband",
+        &crew_id.to_string(),
+        &format!("members={}", members.len()),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(format!(
+        "crew {crew_id} disbanded ({} members released)",
+        members.len()
+    ))
 }
 
 #[cfg(test)]

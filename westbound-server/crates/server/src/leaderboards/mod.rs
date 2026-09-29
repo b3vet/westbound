@@ -367,7 +367,7 @@ pub async fn apply(
 }
 
 /// Rebuilds one account's entry from its best remaining eligible run (after a run was
-/// removed or rejected). The crew board is a sum, not a run: N9 recomputes it.
+/// removed or rejected). The crew board is a sum, not a run: see [`recompute_crew`].
 pub async fn recompute(
     conn: &mut SqliteConnection,
     board: Board,
@@ -442,7 +442,45 @@ pub async fn recompute(
     .await
 }
 
-/// A crew as the room knows it when a multiplayer run ends (N9 provides crews).
+/// Rewrites a crew's Loop crew score for `season` from its **current** members' entries
+/// on the Loop board for that season: the sum of the best `cfg.crew_top_members`. A sum of
+/// 0 (nobody scored) removes the entry. N9.1 calls it inside the transaction of every
+/// membership change (create, join, leave, kick, account deletion) for the current season;
+/// earlier seasons stay as they were. Returns whether the board changed; the caller drops
+/// the cached top (`Leaderboards::invalidate(Board::LoopCrew, &season.key)`) after commit.
+pub async fn recompute_crew(
+    conn: &mut SqliteConnection,
+    cfg: &LeaderboardsConfig,
+    crew_id: i64,
+    season: &Period,
+    now: i64,
+) -> sqlx::Result<bool> {
+    let members = crate::social::crews::member_ids(&mut *conn, crew_id).await?;
+    let json = serde_json::to_string(&members).unwrap_or_else(|_| "[]".into());
+    let top = i64::from(cfg.crew_top_members);
+    let sum = store::crew_sum(&mut *conn, Board::Loop.id(), &season.key, &json, top).await?;
+    if sum <= 0 {
+        return store::delete(conn, Board::LoopCrew.id(), &season.key, crew_id).await;
+    }
+    let date = period::date_key(now.div_euclid(crate::clock::SECS_PER_DAY));
+    store::put_if_changed(
+        conn,
+        &NewEntry {
+            board: Board::LoopCrew.id(),
+            period_key: &season.key,
+            subject_id: crew_id,
+            account_id: None,
+            run_id: None,
+            score: sum,
+            achieved_at: now,
+            verification: Verification::Verified.as_str(),
+            run_date: &date,
+        },
+    )
+    .await
+}
+
+/// A crew as the room knows it when a multiplayer run ends (`social::crew_snapshot`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrewSnapshot {
     pub crew_id: i64,
@@ -493,7 +531,7 @@ pub struct MultiplayerRun {
     pub client_build: u32,
     /// Unix seconds at the run's end: its date and season.
     pub ended_at: i64,
-    /// The player's crew, when they have one (N9).
+    /// The player's crew, when they have one (`social::crew_snapshot`).
     pub crew: Option<CrewSnapshot>,
 }
 
@@ -559,7 +597,7 @@ pub struct BoardView {
     pub entries: Vec<BoardEntry>,
     /// The caller's own entry (authenticated reads), `null` if they have none.
     pub me: Option<BoardEntry>,
-    /// False until friends exist (N9): the friends view is then empty.
+    /// True on the friends view (the caller and their accepted friends, N9.1).
     pub friends_available: bool,
     pub generated_at: i64,
 }
@@ -579,8 +617,11 @@ pub struct BoardEntry {
     pub tag: Option<u16>,
     /// `display_name#0042`.
     pub full_name: Option<String>,
-    /// The player's crew tag (`null` until crews, N9).
+    /// The player's crew tag (`null` without a crew); on the crew board, the crew's.
     pub crew_tag: Option<String>,
+    /// On the crew board: the crew's name (`null` elsewhere, or for a crew since disbanded
+    /// by an admin in another process).
+    pub crew_name: Option<String>,
     /// Points, or whole metres on `distance`.
     pub score: i64,
     /// `pending`, `verified`, `unverified` or `legacy`.
@@ -612,6 +653,7 @@ impl BoardEntry {
             tag,
             full_name,
             crew_tag: None,
+            crew_name: None,
             score: r.score,
             verification: r.verification.clone(),
             verifying: r.verification == Verification::Pending.as_str(),
@@ -648,6 +690,40 @@ impl View {
             View::Friends => "friends",
         }
     }
+}
+
+/// Fills the crew fields of board entries (one query, not cached, so crew changes show at
+/// once): each player's crew tag, or on the crew board the crew's name and tag.
+async fn decorate<'a>(
+    conn: &mut SqliteConnection,
+    board: Board,
+    entries: impl Iterator<Item = &'a mut BoardEntry>,
+) -> sqlx::Result<()> {
+    let mut entries: Vec<&mut BoardEntry> = entries.collect();
+    let id_of = |e: &BoardEntry| -> Option<i64> {
+        let id = if board.is_crew() {
+            e.crew_id.as_deref()
+        } else {
+            e.account_id.as_deref()
+        };
+        id.and_then(|s| s.parse().ok())
+    };
+    let ids: Vec<i64> = entries.iter().filter_map(|e| id_of(e)).collect();
+    if board.is_crew() {
+        let crews = crate::social::crew_names(conn, &ids).await?;
+        for e in entries.iter_mut() {
+            if let Some((name, tag)) = id_of(e).and_then(|id| crews.get(&id)) {
+                e.crew_name = Some(name.clone());
+                e.crew_tag = Some(tag.clone());
+            }
+        }
+    } else {
+        let tags = crate::social::crew_tags_of(conn, &ids).await?;
+        for e in entries.iter_mut() {
+            e.crew_tag = id_of(e).and_then(|id| tags.get(&id)).cloned();
+        }
+    }
+    Ok(())
 }
 
 impl Leaderboards {
@@ -788,6 +864,9 @@ impl Leaderboards {
                 }
             }
         };
+        let mut entries = entries;
+        let mut me = me_row.map(|r| BoardEntry::from_row(board, me_rank.unwrap_or(0), &r));
+        decorate(&mut conn, board, entries.iter_mut().chain(me.as_mut())).await?;
         let (period_start, period_end) = period.date_range().unzip();
         Ok(BoardView {
             board: b.to_string(),
@@ -798,7 +877,7 @@ impl Leaderboards {
             view: view.as_str().to_string(),
             total: top.total,
             entries,
-            me: me_row.map(|r| BoardEntry::from_row(board, me_rank.unwrap_or(0), &r)),
+            me,
             friends_available,
             generated_at: now,
         })

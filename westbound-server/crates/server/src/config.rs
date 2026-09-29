@@ -62,6 +62,7 @@ pub struct Config {
     pub ws_rate_limits: WsRateLimitsConfig,
     pub leaderboards: LeaderboardsConfig,
     pub runs: RunsConfig,
+    pub social: SocialConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,6 +180,10 @@ pub struct RateLimitsConfig {
     /// the account limit: this many per hour, `runs_burst` at once.
     pub runs_per_hour: u32,
     pub runs_burst: u32,
+    /// Social writes (friend requests, blocks, crew create / join, reports) per account, on
+    /// top of the account limit: this many per hour, `social_burst` at once (N9.1).
+    pub social_per_hour: u32,
+    pub social_burst: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -293,6 +298,30 @@ pub struct LeaderboardsConfig {
     pub legacy_max_distance_m: f64,
 }
 
+/// Friends, blocks, crews and reports (N9.1; docs/SERVER.md → "Social API"). Spec:
+/// "Rooms, parties and matchmaking" (friends, crews of up to 16), "Moderation" (reports
+/// rate-limited per account).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SocialConfig {
+    /// Accepted friends per account.
+    pub max_friends: u32,
+    /// Friend requests an account may have waiting on others at once.
+    pub max_outgoing_requests: u32,
+    /// Friend requests an account may have waiting on it at once (more are refused).
+    pub max_incoming_requests: u32,
+    /// Accounts one account may block.
+    pub max_blocks: u32,
+    /// Members per crew, the owner included (spec: 16).
+    pub crew_max_members: u32,
+    /// Characters in a crew invite code (from the protocol's code alphabet).
+    pub crew_invite_code_len: u32,
+    /// Reports one account may file per rolling 24 hours.
+    pub reports_per_day: u32,
+    /// Largest `context` of a report, as compact JSON.
+    pub report_context_max_bytes: u32,
+}
+
 /// Plausibility checks on single-player submissions (`POST /api/v1/runs`). Spec:
 /// "Leaderboards" → single-player runs. The scoring numbers mirror the game's
 /// `data/tuning/scoring.tres`, `legs.tres`, `lives.tres` and `vehicle.tres`; keep them
@@ -374,6 +403,13 @@ const MIN_MESSAGE_BYTES: usize = 1024;
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_WORKER_THREADS: usize = 64;
 const LOG_FORMATS: &[&str] = &["text", "json"];
+/// Crew invite codes: long enough not to be guessed under the rate limits, short enough to
+/// type.
+const MIN_INVITE_CODE_LEN: u32 = 6;
+const MAX_INVITE_CODE_LEN: u32 = 16;
+/// A report's `context` must fit in a request body.
+const MIN_REPORT_CONTEXT_BYTES: u32 = 2;
+const MAX_REPORT_CONTEXT_BYTES: u32 = 4_096;
 
 impl Default for ServerConfig {
     fn default() -> Self {
@@ -486,6 +522,8 @@ impl Default for RateLimitsConfig {
             account_burst: 30,
             runs_per_hour: 30,
             runs_burst: 10,
+            social_per_hour: 60,
+            social_burst: 20,
         }
     }
 }
@@ -548,6 +586,21 @@ impl Default for LeaderboardsConfig {
             crew_top_members: 4,
             legacy_max_journey_score: 50_000_000,
             legacy_max_distance_m: 2_000_000.0,
+        }
+    }
+}
+
+impl Default for SocialConfig {
+    fn default() -> Self {
+        Self {
+            max_friends: 100,
+            max_outgoing_requests: 50,
+            max_incoming_requests: 100,
+            max_blocks: 500,
+            crew_max_members: 16,
+            crew_invite_code_len: 8,
+            reports_per_day: 10,
+            report_context_max_bytes: 1_024,
         }
     }
 }
@@ -884,6 +937,8 @@ impl Config {
                 r.account_burst,
                 r.runs_per_hour,
                 r.runs_burst,
+                r.social_per_hour,
+                r.social_burst,
             ]
             .contains(&0)
         {
@@ -909,6 +964,7 @@ impl Config {
             }
         }
         self.validate_leaderboards(&mut errs);
+        self.validate_social(&mut errs);
         if errs.is_empty() {
             Ok(())
         } else {
@@ -960,6 +1016,34 @@ impl Config {
                     "runs.supported_builds entry `{build}` must be a build number (0..=4294967295)"
                 ));
             }
+        }
+    }
+
+    fn validate_social(&self, errs: &mut Vec<String>) {
+        let s = &self.social;
+        for (name, v) in [
+            ("max_friends", s.max_friends),
+            ("max_outgoing_requests", s.max_outgoing_requests),
+            ("max_incoming_requests", s.max_incoming_requests),
+            ("max_blocks", s.max_blocks),
+            ("crew_max_members", s.crew_max_members),
+            ("reports_per_day", s.reports_per_day),
+        ] {
+            if v == 0 {
+                errs.push(format!("social.{name} must be at least 1"));
+            }
+        }
+        if !(MIN_INVITE_CODE_LEN..=MAX_INVITE_CODE_LEN).contains(&s.crew_invite_code_len) {
+            errs.push(format!(
+                "social.crew_invite_code_len must be {MIN_INVITE_CODE_LEN}..={MAX_INVITE_CODE_LEN}"
+            ));
+        }
+        if !(MIN_REPORT_CONTEXT_BYTES..=MAX_REPORT_CONTEXT_BYTES)
+            .contains(&s.report_context_max_bytes)
+        {
+            errs.push(format!(
+                "social.report_context_max_bytes must be {MIN_REPORT_CONTEXT_BYTES}..={MAX_REPORT_CONTEXT_BYTES}"
+            ));
         }
     }
 

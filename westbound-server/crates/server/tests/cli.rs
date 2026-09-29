@@ -325,3 +325,103 @@ async fn admin_remove_run_and_entry() {
     assert_eq!(log, vec!["remove_run", "remove_entry"]);
     db::close(&pool).await;
 }
+
+#[tokio::test]
+async fn admin_reports_and_crews() {
+    use westbound_server::{accounts, db};
+    let dir = tempfile::tempdir().unwrap();
+    assert!(run(dir.path(), &["migrate"]).0);
+    let cfg = westbound_server::config::DbConfig {
+        path: dir.path().join("wb.db"),
+        ..Default::default()
+    };
+    let pool = db::connect(&cfg).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let (a, _) = accounts::insert_device_account(&mut conn, "LoneWolf", &[0u8; 32], 1_000)
+        .await
+        .unwrap();
+    let (b, _) = accounts::insert_device_account(&mut conn, "DustyRider", &[0u8; 32], 1_000)
+        .await
+        .unwrap();
+    drop(conn);
+    for (reporter, target, reason, handled) in [(a, b, "cheating", 0), (b, a, "griefing", 1)] {
+        sqlx::query(
+            "INSERT INTO reports (reporter_id, target_id, reason, context, created_at, handled)
+             VALUES (?, ?, ?, '{\"source\":\"room\"}', 2000, ?)",
+        )
+        .bind(reporter)
+        .bind(target)
+        .bind(reason)
+        .bind(handled)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO crews (id, name, tag, owner_id, invite_code, created_at)
+         VALUES (5, 'Night Riders', 'NR', ?, 'ABCDEFGH', 0)",
+    )
+    .bind(a)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO crew_members (account_id, crew_id, role, joined_at) VALUES (?, 5, 'owner', 0)",
+    )
+    .bind(a)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (ok, out, err) = run(dir.path(), &["admin", "reports"]);
+    assert!(ok, "{err}");
+    assert_eq!(out.lines().count(), 2, "{out}");
+    let (ok, out, _) = run(dir.path(), &["admin", "reports", "--unhandled"]);
+    assert!(ok);
+    assert_eq!(out.lines().count(), 1, "{out}");
+    assert!(
+        out.starts_with(&format!(
+            "#1 2000 reporter={a} target={b} reason=cheating unhandled"
+        )),
+        "{out}"
+    );
+    let (ok, out, err) = run(dir.path(), &["admin", "report-handle", "1"]);
+    assert!(ok && out.contains("marked handled"), "{out}{err}");
+    let (ok, out, _) = run(dir.path(), &["admin", "reports", "--unhandled"]);
+    assert!(ok && out.contains("no unhandled reports"), "{out}");
+    assert!(!run(dir.path(), &["admin", "report-handle", "9"]).0);
+
+    let (ok, out, err) = run(dir.path(), &["admin", "crew-rename", "5", "Day Riders"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("renamed to Day Riders [NR]"), "{out}");
+    let (ok, out, err) = run(dir.path(), &["admin", "crew-rename", "5", "--tag", "dr"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("[DR]"), "{out}");
+    let (ok, _, err) = run(dir.path(), &["admin", "crew-rename", "5", "Sh1t Crew"]);
+    assert!(!ok);
+    assert!(err.contains("not allowed"), "{err}");
+    assert!(!run(dir.path(), &["admin", "crew-rename", "9", "Nope Crew"]).0);
+    let (ok, out, err) = run(dir.path(), &["admin", "crew-disband", "5"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("crew 5 disbanded"), "{out}");
+    assert!(!run(dir.path(), &["admin", "crew-disband", "5"]).0);
+    let members: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM crew_members")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(members, 0);
+    let log: Vec<String> = sqlx::query_scalar("SELECT action FROM admin_log ORDER BY id")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        log,
+        vec![
+            "report_handle",
+            "crew_rename",
+            "crew_rename",
+            "crew_disband"
+        ]
+    );
+    db::close(&pool).await;
+}

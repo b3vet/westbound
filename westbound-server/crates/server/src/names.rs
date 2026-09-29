@@ -58,9 +58,19 @@ fn is_separator(c: char) -> bool {
 
 /// Checks a requested name and returns it trimmed.
 pub fn validate(raw: &str, filter: &ProfanityFilter) -> Result<String, NameError> {
+    validate_len(raw, filter, MIN_NAME_CHARS, MAX_NAME_CHARS)
+}
+
+/// The name rules with another length range (crew names, N9.1).
+pub fn validate_len(
+    raw: &str,
+    filter: &ProfanityFilter,
+    min_chars: usize,
+    max_chars: usize,
+) -> Result<String, NameError> {
     let name = raw.trim();
     let len = name.chars().count();
-    if !(MIN_NAME_CHARS..=MAX_NAME_CHARS).contains(&len) {
+    if !(min_chars..=max_chars).contains(&len) {
         return Err(NameError::Length);
     }
     if !name

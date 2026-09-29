@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE crews SET name = ?, tag = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "5dc440687055c7c3b2617ad6de07ca136acc8d6b20c616c67d72f936a1c6a3de"
+}

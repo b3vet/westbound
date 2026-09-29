@@ -41,6 +41,16 @@ N7.1 adds the leaderboards:
 
 See "Leaderboards & runs API".
 
+N9.1 adds the account-level social layer:
+
+- friends with `name#1234` requests, a friends cap and blocking;
+- presence over HTTP and the WebSocket (`presence_subscribe`), from the session registry, with the room seam for N5;
+- persistent crews (tag, roles, invite codes, caps) with crew tags on the boards and Loop crew sums kept current;
+- reports with a daily per-account limit, and the admin commands for reports and crews;
+- the friends leaderboard view, and the social part of account deletion.
+
+See "Social API".
+
 | Path | What |
 | --- | --- |
 | `westbound-server/crates/server/` | The binary (`westbound-server`) and its library, with integration tests in `tests/` |
@@ -65,6 +75,7 @@ See "Leaderboards & runs API".
 | `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files, read from `deeplinks.dir`, with built-in empty placeholders |
 | `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API" |
 | `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
+| `/api/v1/friends*`, `/api/v1/blocks*`, `/api/v1/presence`, `/api/v1/crews*`, `/api/v1/reports` | public | Friends, blocks, presence, crews, reports: see "Social API" |
 | `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info` |
 
 ## Local development
@@ -95,6 +106,10 @@ Subcommands:
 | `admin rename <id> <name>` | Force-renames an account |
 | `admin remove-run <run_id>` | Deletes a run and its replay; the entries it held fall back to the player's next best run |
 | `admin remove-entry <board> <period> <account_id>` | Deletes one leaderboard entry (crew id on `loop_crew`) |
+| `admin reports [--unhandled] [--limit N]` | Lists player reports, newest first (see "Social API → Admin commands") |
+| `admin report-handle <id>` | Marks a report handled |
+| `admin crew-rename <crew_id> [<name>] [--tag <tag>]` | Force-renames a crew and/or changes its tag |
+| `admin crew-disband <crew_id>` | Disbands a crew |
 
 Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` environment variables.
 
@@ -107,7 +122,8 @@ Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` 
   - Migration `0001` creates `accounts`, `refresh_tokens` and `admin_log`.
   - `0002` adds `accounts.token_version` and rebuilds `refresh_tokens` with its rotation state (`family`, `rotated_from`, `used_at`, `revoked_at`).
   - `0003` (N7.1) creates `runs`, `leaderboard_entries` and `replays` (see "Leaderboards & runs API → Tables").
-  - The other data-model tables come with their milestones.
+  - `0004` (N9.1) creates `friends`, `blocks`, `crews`, `crew_members` and `reports` (see "Social API → Tables").
+  - The other data-model tables (`shadow_contacts`) come with their milestones.
 
 Queries written with `sqlx::query!` are checked at compile time against `westbound-server/.sqlx/`, and CI builds with `SQLX_OFFLINE=true`. After you add or change a `query!`, or change the schema, regenerate that data:
 
@@ -171,7 +187,8 @@ WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban 
 4. **Welcome.** `protocol_version`, `server_build` (the first 8 hex digits of the build sha; 0 for `dev` builds), `account_id`, `tick_rate_hz` (`gateway.tick_rate_hz`, 20), `ping_interval_ms` and `timeout_ms` (`limits.ping_interval_ms` 2000 / `limits.dead_after_ms` 8000), `max_frame_bytes` (16384). Then the session is registered (below). A `Hello` and a `Ping` in one frame get `Welcome` and `Pong` in one frame.
 5. **Messages** (after `Welcome`). Each message passes its type's token bucket, then is routed:
    - `ping` → `pong` (below).
-   - `lobby_command` → non-fatal `not_allowed` ("The lobby is not available yet") until N9.
+   - `lobby_command.presence_subscribe` → friends presence (N9.1; see "Social API → Presence").
+   - Other `lobby_command`s → non-fatal `not_allowed` ("The lobby is not available yet") until N5 / N9's room work.
    - `room_host_command` → non-fatal `not_in_room` until N5.
    - `player_state`, `score_claim`, `hit_report`, `run_event`, `quick_chat` → dropped quietly until N5 (no room).
    - A second `Hello`, or an undecodable frame → fatal `malformed`.
@@ -200,7 +217,7 @@ WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban 
 
 ### Sessions and the duplicate-login policy
 
-`Sessions` (`sessions.rs`, in `AppState.sessions`) maps account id → `SessionHandle`: session id, account, token version, the connection's **bounded** outbound queue, and a kick signal. The lobby (N5/N9) finds a player's connection there.
+`Sessions` (`sessions.rs`, in `AppState.sessions`) maps account id → `SessionHandle`: session id, account, token version, the connection's **bounded** outbound queue, and a kick signal. The lobby (N5/N9) finds a player's connection there, and presence (N9.1) reads who is online from it.
 
 - **One session per account; the newest wins.** A second `Welcome` for the same account registers the new connection and kicks the older one with a fatal `not_allowed` ("This account signed in on another device."). The newest device wins, so a player whose old connection is half-dead (a phone that switched networks) is never locked out by it. A replaced connection's cleanup never removes its successor, because removal checks the session id.
 - **Concurrency.** Each connection task owns its socket, handshake, buckets and keepalive; nothing else touches them. The only shared structure is the registry map, behind one `std::sync::Mutex`. It is held for a single insert, remove, lookup or snapshot, never across an `.await`, and only at session start and end, lobby lookups and the ban sweep, never per message. Room tasks and the lobby keep cloned handles:
@@ -404,7 +421,9 @@ Every error is JSON:
 
 - Response `204`.
 - In one transaction, deletes the account, its refresh tokens, its runs, its leaderboard entries and its runs' replays (the replay files go after commit).
-- `accounts::delete` lists the tables later milestones add to that transaction: friends, blocks, crew memberships (and the Loop crew sums that counted the player), reports, and Apple token revocation.
+- N9.1, in the same transaction: friendships and requests, blocks both ways, and the crew membership (see "Social API → Account deletion"). Reports are kept with the account's side nulled.
+- Friends watching the account's presence see it go offline at once, and its open WebSocket session is closed (`auth_failed`) without waiting for the ban sweep.
+- Still to come in `accounts::delete`: Apple token revocation (MP-D2).
 - Logs `account_delete` to `admin_log` with the account id and row counts only.
 
 **`POST /api/v1/auth/link/{apple,google}`, `POST /api/v1/auth/signin/{apple,google}`**
@@ -440,8 +459,9 @@ Rate limits use `tower_governor`. Each bucket refills evenly over its window, wi
 | --- | --- | --- |
 | `POST /auth/device` | client IP | 5 per hour, burst 5 |
 | other `/auth/*` | client IP | 30 per minute, burst 10 |
-| `/me`, `/account`, `/boards/*`, `/runs*` (and later authenticated routes) | account | 120 per minute, burst 30 |
+| `/me`, `/account`, `/boards/*`, `/runs*`, the social routes (and later authenticated routes) | account | 120 per minute, burst 30 |
 | `POST /runs`, `POST /runs/legacy` (also) | account | 30 per hour, burst 10 |
+| `POST /friends/requests`, `POST /blocks`, `POST /crews`, `POST /crews/join`, `POST /reports` (also) | account | 60 per hour, burst 20 |
 
 - **Keys:**
   - IPv6 clients are keyed by their /64.
@@ -516,8 +536,8 @@ WP N7.1, in `crates/server/src/`: `leaderboards/` (`mod.rs`: boards, targets, pl
 - **`period`:** a key the board keeps, or left out / `current` for the board's current default period.
 - **`view`:**
   - `global` (default): the top `limit` (default and max `leaderboards.global_limit_*`: 100).
-  - `around_me`: `limit` ranks on each side of the caller (default 10, max 50), `2 × limit + 1` entries. At the top or bottom the window shifts so it still holds that many where the board has them. Without an entry: `entries: []`, `me: null`. On `loop_crew` the subject is the caller's crew (none until N9).
-  - `friends`: the caller and their friends, ranked among themselves. Until friends exist (N9): `entries: []` and `friends_available: false`.
+  - `around_me`: `limit` ranks on each side of the caller (default 10, max 50), `2 × limit + 1` entries. At the top or bottom the window shifts so it still holds that many where the board has them. Without an entry: `entries: []`, `me: null`. On `loop_crew` the subject is the caller's crew.
+  - `friends`: the caller and their accepted friends (N9.1), ranked among themselves (`rank` is the rank in that list; `me` keeps the global rank), `friends_available: true`. On `loop_crew` the friends view is empty (`friends_available: false`): crews, not players, rank there.
 - **Errors:** 404 `unknown_board`; 400 `invalid_period` (not a key this board keeps), `invalid_view`, `invalid_limit`, `invalid_query` (an unknown or repeated parameter).
 
 ```json
@@ -527,7 +547,7 @@ WP N7.1, in `crates/server/src/`: `leaderboards/` (`mod.rs`: boards, targets, pl
   "view": "global", "total": 1234, "friends_available": false, "generated_at": 1790600000,
   "entries": [
     {"rank": 1, "account_id": "42", "crew_id": null, "display_name": "Şahin 34", "tag": 42,
-     "full_name": "Şahin 34#0042", "crew_tag": null, "score": 183200,
+     "full_name": "Şahin 34#0042", "crew_tag": "NR", "crew_name": null, "score": 183200,
      "verification": "pending", "verifying": true, "legacy": false,
      "run_id": "917", "run_date": "2026-09-29", "achieved_at": 1790640000}
   ],
@@ -537,7 +557,7 @@ WP N7.1, in `crates/server/src/`: `leaderboards/` (`mod.rs`: boards, targets, pl
 
 - `period_start` / `period_end`: the period's first and last UTC date (`null` for `all`).
 - `verification`: `pending` (awaiting its replay: show "verifying"), `verified`, `unverified` (plausible, needed no replay) or `legacy` (an uploaded local best: show the legacy marker, never used for rewards).
-- `crew_tag` is `null` until crews (N9). On `loop_crew`, `crew_id` is set and the account fields are `null` (N9 adds the crew's name and tag).
+- `crew_tag`: the player's crew tag, `null` without a crew. On `loop_crew`, `crew_id`, `crew_name` and `crew_tag` are the crew's and the account fields are `null`. Crew fields are read with each request (one query, not cached), so crew changes show at once.
 - `score` is points, or whole metres on `distance`.
 
 **Cost and caching.** Every query walks the `leaderboard_rank` index `(board, period_key, score DESC, achieved_at, subject_id)`:
@@ -638,7 +658,7 @@ Response 200:
 
 - **N6, multiplayer runs:** `state.boards.record_multiplayer_run(&MultiplayerRun { account_id, map_id, room: Public | PrivateDefault | PrivateCustom, score, duration_s, distance_m, stats, car, client_build, ended_at, crew })`. It stores the run as `verified`. For a ranked room it writes Loop (the season of `ended_at`, and all-time), and with `crew: Some(CrewSnapshot { crew_id, member_ids })` the crew's Loop crew score: the sum of the best `crew_top_members` members' season entries, rewritten when it changes. It returns the run id, `ranked`, the placements and the new crew score.
 - **N8, replay verdicts:** `state.boards.set_run_verification(run_id, Accepted | Rejected)`. Accepted marks the run and its entries `verified` (and writes them if `show_pending` kept them off). Rejected marks the run `rejected` (`reject_reason = replay`) and rebuilds each entry it held from the player's next best eligible run. The `replays` table is ready (`run_id`, `file_path`, `status`, `result`, `created_at`); N8 adds the upload route, the queue and the files under `data/replays/`.
-- **N9, friends and crews:** `social::friend_ids` and `social::crew_of` answer "not available" today. N9 replaces their bodies with one query each (see the doc comments): the friends view (`store::of_subjects`) and the crew "me" already take their results. N9 also fills `crew_tag`, names the crew entries and recomputes crew sums when members join, leave or delete their account.
+- **N9, friends and crews (done in N9.1):** `social::friend_ids` feeds the friends view (`store::of_subjects`), `social::crew_of` the crew "me". Board reads fill `crew_tag` and the crew entries' name and tag. `leaderboards::recompute_crew` rewrites a crew's current-season sum when members join, leave, are kicked or delete their account. For N6: `social::crew_snapshot(conn, account_id)` builds the `CrewSnapshot` that `record_multiplayer_run` takes.
 
 ### Tables
 
@@ -682,6 +702,170 @@ Response 200:
 | `leg_bonus_max_points`, `journey_bonus_points` | `18500.0`, `50000.0` | Bonus bound per leg; the coast's bonus (`legs.tres`) |
 | `score_slack_pct` | `1.0` | Headroom on the score bound |
 | `date_early_secs` / `date_late_secs` | `3600` / `21600` | The submission window around a run's date |
+
+## Social API
+
+WP N9.1, in `crates/server/src/`: `social/` (`mod.rs`: the shared reads `friend_ids`, `crew_of`, `crew_snapshot`, `is_blocked`, player summaries and the account-deletion hook; `friends.rs`: requests, the friends list, blocks, presence reads; `crews.rs`: crews, roles, invite codes; `reports.rs`), `presence.rs` (the presence registry), and the gateway's `presence_subscribe` handling. Spec: multiplayer handoff → "Rooms, parties and matchmaking → Friends and presence", "Crews (persistent)", "Moderation", "Leaderboards → Loop crew", "Data model (SQLite)", "Accounts → Account deletion". Tests: `tests/social.rs` (every route and error, blocking, caps, crews, boards, deletion, reports, admin), `tests/presence.rs` (real WebSockets), `tests/cli.rs` (the admin binary).
+
+Parties, public rooms, Quick Join, the room browser, invites and quick chat need rooms (N5) and come with N9's room work. Its hooks are here: `social::is_blocked` and `presence.set_room`.
+
+All routes are under `/api/v1`, need `Authorization: Bearer`, and use the error format of "Accounts API → Errors". Ids are decimal strings. Every route is under the account rate limit. Social writes (`POST /friends/requests`, `/blocks`, `/crews`, `/crews/join`, `/reports`) also pass the social limit (`rate_limits.social_per_hour` 60, burst 20). A malformed id in a path answers that resource's 404.
+
+### Friends
+
+- **Friend codes** are `name#1234` (the `full_name` of `GET /me`). The name matches case-insensitively (ASCII), like the unique index.
+- **One row per pair.** A request is pending until the other side accepts it. Asking someone who already asked you accepts their request (200).
+- **Caps** (`[social]`): `max_friends` (100) accepted friends, checked on both sides when a request is sent and when it is accepted; `max_outgoing_requests` (50); `max_incoming_requests` (100).
+- **Blocking is not revealed.** A block in either direction answers a request exactly like an unknown name (`404 player_not_found`, same message).
+
+| Route | Answer | Errors |
+| --- | --- | --- |
+| `POST /friends/requests` `{"full_name": "name#1234"}` | `201 {"request_id", "status": "pending", "player"}`; `200` with `"status": "accepted"` when they had asked you | 400 `invalid_full_name`, `cannot_friend_self`, `invalid_body`; 404 `player_not_found` (unknown or blocked either way); 409 `already_friends`, `request_exists`, `friends_limit` (yours), `target_friends_limit`, `requests_limit` (your pending), `target_requests_limit` |
+| `GET /friends` | `{"friends": [...], "incoming": [...], "outgoing": [...], "max_friends": 100}` | |
+| `POST /friends/requests/{id}/accept` | `200 {"request_id", "status": "accepted", "player"}` | 404 `request_not_found` (unknown, not pending, or not addressed to you); 409 `friends_limit`, `target_friends_limit` |
+| `POST /friends/requests/{id}/decline` | `204`. The recipient declines; the requester cancels | 404 `request_not_found` |
+| `DELETE /friends/{account_id}` | `204`. Removes a friend, or a pending request either way | 404 `friend_not_found` |
+
+`player` and each list entry carry the player: `account_id`, `display_name`, `tag`, `full_name`, `crew_tag` (or `null`). List entries add `request_id`, `created_at`, `since` (accepted at; friends only) and the presence fields `status` (`offline`, `online`, `in_room`), `room_id` (`null` outside a room) and `joinable`. Friends come in a room first, then online, then offline, by name within each. Requests come newest first.
+
+### Blocks
+
+| Route | Answer | Errors |
+| --- | --- | --- |
+| `POST /blocks` `{"account_id": "42"}` | `201` the entry (`200` if already blocked). Deletes the pair's friendship or pending request, and each side's presence shows the other offline | 400 `cannot_block_self`, `invalid_body`; 404 `player_not_found`; 409 `blocks_limit` (`max_blocks` 500) |
+| `DELETE /blocks/{account_id}` | `204` | 404 `block_not_found` (only your own blocks) |
+| `GET /blocks` | `{"blocks": [{player fields, "blocked_at"}], "max_blocks": 500}`, newest first | |
+
+`social::is_blocked(conn, a, b)` is true when either account blocked the other; `social::has_blocked(conn, blocker, target)` is one direction. For N9's rooms: Quick Join must not match a blocked player into your room, and a blocked player cannot invite you (check `is_blocked` on `party_invite` / invites).
+
+### Presence
+
+**Source of truth.** A friend is `online` when the gateway's session registry (`Sessions`) holds a live session for them. They are `in_room` (with `room_id` and `joinable`: the room has space) when a room task has said so through the **N5 seam** `state.presence.set_room(account, Some(RoomPresence { room_id, joinable }))`, and `set_room(account, None)` on leave. Until N5 nobody calls it, so friends are `online` or `offline`. A friend holding a room seat while disconnected shows `offline`.
+
+**`GET /presence`** → `{"friends": [{"account_id", "status", "room_id", "joinable"}]}`, one entry per accepted friend, by id. This is for polling clients.
+
+**WebSocket** (docs/PROTOCOL.md §4, unchanged):
+
+1. `lobby_command.presence_subscribe {enabled: true}`: the gateway reads the account's friends from the database (no lock held), sends this frame's earlier replies, then subscribes. Subscribing queues the snapshot: `lobby_event.presence` with every friend, split into messages of at most 128 friends, as its own frame. An account without friends gets one empty `presence`. Subscribing again replaces the subscription with a fresh snapshot.
+2. **Updates** are single-entry `presence` events. Later entries replace earlier ones, as in the protocol. They are sent when:
+   - a friend's first session starts (`online`), not when a second login replaces a session;
+   - a friend's last session ends (`offline`);
+   - a friend's room changes (`in_room` / `online`);
+   - a request is accepted (the new friend's presence goes to both sides, if subscribed);
+   - a friend is removed or blocked, or deletes their account (`offline`, and they are no longer watched).
+3. `presence_subscribe {enabled: false}` ends it, as does the session's end. A friend added while the gateway reads the list may be missed until the next subscribe.
+4. A database error while subscribing answers a non-fatal `internal` ("Friends presence is unavailable. Try again."). The other lobby commands still answer `not_allowed` until N5.
+
+**Concurrency** (the registry's design). `PresenceHub` is one `std::sync::Mutex` over subscriber → (session handle, friend set), friend → watchers, and account → room. It is held for map updates, a change's lookups and non-blocking `try_send`s into the watchers' bounded 64-frame queues. It is never held across an `.await`, and never taken per game message.
+- A full queue kicks that client (slow client) instead of blocking.
+- Lock order: the hub, then the registry. The registry never takes the hub's lock.
+- Sending under the lock keeps each subscriber's view in the order the changes happened.
+- A change costs one lock, the entry's registry lookup, and one encoded frame shared by up to `max_friends` watchers.
+- The gateway's `lobby_command` rate limit (5/s, burst 10) bounds resubscribes. Each one is one indexed query.
+
+### Crews
+
+- **Name:** the display-name character rules (letters including Turkish, digits, single separators, starts and ends with a letter or digit) with 3–24 characters. It passes the profanity filter and is unique case-insensitively.
+- **Tag:** 2–4 characters `A–Z 0–9`. Any case is accepted and stored upper case. It passes the filter (`A55` is caught) and is unique. It shows on board entries (`crew_tag`), and on nametags once rooms carry it (`Member.crew_tag`).
+- **Membership:** one crew per account; at most `social.crew_max_members` (16) members, owner included. You join with the crew's invite code: `social.crew_invite_code_len` (8) characters from the room-code alphabet (no 0/O, 1/I/L), case-insensitive. Every member sees the code; others get `null`.
+- **Roles:**
+
+  | Action | Owner | Officer | Member |
+  | --- | --- | --- | --- |
+  | Kick a member | yes | yes | no |
+  | Kick an officer | yes | no | no |
+  | Promote or demote | yes | no | no |
+  | Transfer ownership | yes (the old owner becomes an officer) | no | no |
+  | Rotate the invite code | yes | yes | no |
+  | Disband | yes | no | no |
+
+  Nobody kicks themselves or changes their own role.
+- **Succession:** when the owner leaves or deletes their account, the crew passes to the longest-standing officer, else the longest-standing member (ties: the lower account id). It is disbanded when nobody is left.
+- **Loop crew board:** every membership change (create, join, leave, kick, account deletion) recomputes the crew's score for the **current** season in the same transaction: the sum of the best `leaderboards.crew_top_members` (4) current members' season-best Loop entries. A sum of 0 removes the entry. Earlier seasons stay as they were. Disbanding deletes the crew's Loop crew entries for every season. Crew ids are never reused (`AUTOINCREMENT`).
+
+| Route | Answer | Errors |
+| --- | --- | --- |
+| `POST /crews` `{"name", "tag"}` | `201` the crew; you are its owner | 400 `invalid_crew_name`, `crew_name_not_allowed`, `invalid_crew_tag`, `crew_tag_not_allowed`, `invalid_body`; 409 `crew_name_taken`, `crew_tag_taken`, `already_in_crew` |
+| `GET /crews/mine` | the crew | 404 `not_in_crew` |
+| `GET /crews/{id}` | the crew | 404 `crew_not_found` |
+| `POST /crews/join` `{"invite_code"}` | the crew | 404 `invalid_invite_code`; 409 `already_in_crew`, `crew_full` |
+| `POST /crews/{id}/leave` | `{"disbanded": false, "new_owner_id": "57"}` (`new_owner_id` only when the owner left) | 404 `not_in_crew` |
+| `POST /crews/{id}/kick` `{"account_id"}` | the crew | 400 `cannot_kick_self`; 403 `not_permitted`; 404 `not_in_crew` (you), `member_not_found` (them) |
+| `POST /crews/{id}/promote`, `/demote` `{"account_id"}` | the crew (officer / member) | 400 `cannot_change_own_role`; 403 `not_permitted`; 404 `not_in_crew`, `member_not_found` |
+| `POST /crews/{id}/transfer` `{"account_id"}` | the crew | 400 `cannot_transfer_to_self`; 403 `not_permitted`; 404 as above |
+| `POST /crews/{id}/invite-code` | the crew with a new code (the old one stops working) | 403 `not_permitted`; 404 `not_in_crew` |
+| `DELETE /crews/{id}` | `204` | 403 `not_permitted`; 404 `not_in_crew` |
+
+```json
+{"crew_id": "5", "name": "Night Riders", "tag": "NR", "owner_id": "42", "created_at": 1790000000,
+ "member_count": 2, "max_members": 16, "invite_code": "K7QX2M9P", "your_role": "owner",
+ "members": [
+   {"account_id": "42", "display_name": "Şahin 34", "tag": 42, "full_name": "Şahin 34#0042",
+    "role": "owner", "joined_at": 1790000000},
+   {"account_id": "57", "display_name": "LoneWolf", "tag": 7, "full_name": "LoneWolf#0007",
+    "role": "member", "joined_at": 1790000300}]}
+```
+
+Members are listed owner first, then officers, then members, each by join time. `invite_code` and `your_role` are `null` for non-members.
+
+### Reports
+
+**`POST /reports`** `{"target_account_id": "42", "reason": "cheating", "context": {"source": "leaderboard", "board": "loop", "run_id": "917"}}` → `201 {"report_id": "9"}`.
+
+- `reason`: `cheating`, `offensive_name`, `offensive_crew`, `harassment`, `griefing` or `other`.
+- `context` is optional: a JSON object saying where the report came from (a room, a board entry, a run). It is stored as compact JSON of at most `social.report_context_max_bytes` (1024).
+- **Limit:** `social.reports_per_day` (10) per account in any rolling 24 hours, counted in the database, so restarts and other devices don't reset it. Past it: `429 rate_limited` with `retry_after_secs` (until the oldest report leaves the window). Refused reports don't count.
+- **Errors:** 400 `invalid_reason`, `invalid_context`, `cannot_report_self`, `invalid_body`; 404 `player_not_found`; 429 `rate_limited`.
+
+### Account deletion
+
+`accounts::delete` calls `social::on_account_delete` inside its transaction, after the account's leaderboard entries are gone:
+
+- It deletes `friends` rows on either side (friendships and pending requests) and `blocks` both ways.
+- It deletes the `crew_members` row. A crew the account owned passes on as in "Succession", or is disbanded when empty. The crew's current-season Loop crew score is recomputed without the account.
+- **Reports are kept.** Their deleted side (`reporter_id` or `target_id`) is set to NULL (the foreign keys also say `ON DELETE SET NULL`). The moderation record (reason, context, time, handled) stays useful, for example to spot a pattern of reports about a player who deletes and recreates accounts, while nothing points at the deleted account. `admin reports` shows the side as `deleted`.
+- `admin_log`'s `account_delete` detail adds `friends=`, `blocks=`, `crew_memberships=`, `crew_transferred=`, `crew_disbanded=` and `reports_kept=` (counts only).
+
+### Admin commands
+
+```sh
+westbound-server admin reports --unhandled          # newest first, one line each; --limit N (50)
+# #12 1790000000 reporter=42 target=57 reason=cheating unhandled context={"source":"room"}
+westbound-server admin report-handle 12
+westbound-server admin crew-rename 5 "Day Riders"   # name rules, filter, uniqueness
+westbound-server admin crew-rename 5 --tag DR       # or both at once
+westbound-server admin crew-disband 5               # members released, Loop crew entries removed
+```
+
+- `report-handle`, `crew-rename` and `crew-disband` are logged to `admin_log` (`report_handle`, `crew_rename` with from/to, `crew_disband` with the member count). `reports` only reads.
+- Bans, renames and board removals are the Accounts and Leaderboards commands.
+- A running server shows a crew rename at once (board reads look crews up). A disbanded crew's cached board top catches up within `leaderboards.cache_ttl_secs`.
+
+### Tables
+
+Migration `0004_social.sql`:
+
+- `friends`: `id` (the request id), `account_a` < `account_b` (UNIQUE pair), `requester_id`, `status` (`pending` / `accepted`), `created_at`, `accepted_at`. Indexed by each side and status. Rows cascade with either account.
+- `blocks`: (`account_id`, `blocked_id`) primary key, `created_at`. Indexed by `blocked_id`. Cascades.
+- `crews`: `id` (AUTOINCREMENT), `name` (NOCASE, UNIQUE), `tag` (NOCASE, UNIQUE), `owner_id`, `invite_code` (UNIQUE), `created_at`. No cascade on the owner: deletion hands the crew on first.
+- `crew_members`: `account_id` (primary key: one crew per account), `crew_id` (cascades with the crew), `role` (`owner` / `officer` / `member`), `joined_at`. Indexed by (`crew_id`, `joined_at`).
+- `reports`: `id`, `reporter_id` and `target_id` (`ON DELETE SET NULL`), `reason` (checked enum), `context` (JSON), `created_at`, `handled`, `handled_at`. Indexed by (`reporter_id`, `created_at`) for the limit, (`handled`, `created_at`) for the admin list, and `target_id`.
+
+### Configuration
+
+`[social]`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_friends` | `100` | Accepted friends per account |
+| `max_outgoing_requests` / `max_incoming_requests` | `50` / `100` | Pending requests an account may have sent / waiting on it |
+| `max_blocks` | `500` | Accounts one account may block |
+| `crew_max_members` | `16` | Members per crew, owner included (spec) |
+| `crew_invite_code_len` | `8` | Invite code length (6–16) |
+| `reports_per_day` | `10` | Reports per account per rolling 24 h |
+| `report_context_max_bytes` | `1024` | Largest report `context` (compact JSON; 2–4096) |
+
+`[rate_limits]`: `social_per_hour` / `social_burst` (`60` / `20`), the social writes per account.
 
 ## Configuration reference
 
@@ -739,6 +923,8 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `ws_rate_limits.notice_interval_ms` | `WB_WS_RATE_LIMITS__NOTICE_INTERVAL_MS` | `1000` | At most one non-fatal `rate_limited` notice per interval |
 | `deeplinks.dir` | `WB_DEEPLINKS__DIR` | empty (image: `/data/well-known`) | Directory with `apple-app-site-association` and `assetlinks.json` |
 | `leaderboards.*`, `runs.*` | `WB_LEADERBOARDS__…`, `WB_RUNS__…` | see "Leaderboards & runs API → Configuration" | Views, cache, replay trigger, legacy caps; plausibility thresholds |
+| `rate_limits.social_per_hour` / `_burst` | `WB_RATE_LIMITS__SOCIAL_PER_HOUR` / `__SOCIAL_BURST` | `60` / `20` | Social writes per account, on top of the account limit (see "Social API") |
+| `social.*` | `WB_SOCIAL__…` | see "Social API → Configuration" | Friend, request and block caps; crew size and invite codes; the report limit |
 
 The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLINKS__DIR` to the values above. It needs no config file.
 

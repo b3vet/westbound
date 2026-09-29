@@ -558,7 +558,15 @@ async fn live_admin_ban_drops_the_socket() {
 async fn deleted_account_is_dropped_by_the_sweep() {
     let s = start_with(|c| c.gateway.ban_recheck_ms = 100).await;
     let (mut ws, _, id, _) = login(&s).await;
-    accounts::delete(&s.state.db, id, "test").await.unwrap();
+    accounts::delete(
+        &s.state.db,
+        s.state.boards.config(),
+        id,
+        "test",
+        clock::unix_now_secs(),
+    )
+    .await
+    .unwrap();
     let detail = expect_fatal(&mut ws, ErrorCode::AuthFailed).await;
     assert_eq!(detail, westbound_server::gateway::DETAIL_REVOKED);
     assert_eq!(s.metrics().kicks("revoked"), 1);

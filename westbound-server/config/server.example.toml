@@ -96,6 +96,10 @@ account_burst = 30
 # account limit.
 runs_per_hour = 30
 runs_burst = 10
+# Social writes per account (friend requests, blocks, crew create / join, reports), on top of
+# the account limit.
+social_per_hour = 60
+social_burst = 20
 
 [deeplinks]
 # Directory with apple-app-site-association and assetlinks.json. Empty, or a
@@ -219,3 +223,19 @@ score_slack_pct = 1.0
 # date_late_secs after it ends.
 date_early_secs = 3600
 date_late_secs = 21600
+
+[social]
+# Friends, blocks, crews and reports (docs/SERVER.md → "Social API").
+# Accepted friends per account, and friend requests waiting on others / on the account.
+max_friends = 100
+max_outgoing_requests = 50
+max_incoming_requests = 100
+# Accounts one account may block.
+max_blocks = 500
+# Members per crew, the owner included (spec: 16).
+crew_max_members = 16
+# Characters in a crew invite code (6-16, from the room-code alphabet: no 0/O, 1/I/L).
+crew_invite_code_len = 8
+# Reports per account per rolling 24 hours, and the largest report context (compact JSON).
+reports_per_day = 10
+report_context_max_bytes = 1024

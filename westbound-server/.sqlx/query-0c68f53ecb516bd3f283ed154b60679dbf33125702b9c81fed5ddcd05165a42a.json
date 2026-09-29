@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE crew_members SET role = 'officer' WHERE account_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "0c68f53ecb516bd3f283ed154b60679dbf33125702b9c81fed5ddcd05165a42a"
+}

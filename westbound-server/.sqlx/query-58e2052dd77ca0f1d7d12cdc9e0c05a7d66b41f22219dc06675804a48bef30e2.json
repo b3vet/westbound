@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM friends WHERE id = ?1 AND status = 'pending'\n           AND (account_a = ?2 OR account_b = ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "58e2052dd77ca0f1d7d12cdc9e0c05a7d66b41f22219dc06675804a48bef30e2"
+}

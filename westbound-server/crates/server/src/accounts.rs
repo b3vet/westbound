@@ -267,25 +267,35 @@ pub struct DeleteReport {
     pub runs: u64,
     pub leaderboard_entries: u64,
     pub replays: u64,
+    /// N9.1: friendships, blocks, the crew membership (and what happened to the crew),
+    /// reports kept with the account's side nulled.
+    pub social: crate::social::SocialDeleteReport,
 }
 
 /// Deletes an account and everything that belongs to it, in one transaction, and
 /// records it in `admin_log` (account id and row counts only: no name, no PII).
 ///
-/// **Hook for later milestones.** Each table that references an account adds its
-/// delete here, inside the same transaction, when its WP lands:
-/// - `friends` (N9): rows where `account_a` or `account_b` is the account;
-/// - `blocks` (N9): rows where `account_id` or `blocked_id` is the account;
-/// - `crew_members` (N9): the membership; a crew it owns passes to the oldest member
-///   or is disbanded when empty (`crews`);
-/// - `leaderboard_entries`, `runs` and `replays` (N7.1): done below; the replay files
-///   are deleted after commit. The Loop crew board's sums that counted the account are
-///   recomputed by N9 when it removes the crew membership;
-/// - `reports` (N9): keep the report for moderation but null out the reporter;
-/// - Apple token revocation (MP-D2): call Apple's revoke endpoint before deleting
-///   when `apple_sub` is set.
-pub async fn delete(db: &SqlitePool, id: i64, actor: &str) -> anyhow::Result<DeleteReport> {
-    let mut tx = db.begin().await?;
+/// What goes, in order:
+/// - `refresh_tokens`;
+/// - `replays`, `leaderboard_entries` and `runs` (N7.1); the replay files are deleted
+///   after commit;
+/// - N9.1 (`social::on_account_delete`): `friends` rows on either side, `blocks` both
+///   ways, the `crew_members` row (a crew the account owned passes to its longest-standing
+///   officer, else member, or is disbanded when empty; the crew's current-season Loop crew
+///   score is recomputed without the account). `reports` are kept for moderation with the
+///   account's side (reporter or target) set to NULL;
+/// - the `accounts` row.
+///
+/// Still to come: Apple token revocation (MP-D2): call Apple's revoke endpoint before
+/// deleting when `apple_sub` is set.
+pub async fn delete(
+    db: &SqlitePool,
+    boards: &crate::config::LeaderboardsConfig,
+    id: i64,
+    actor: &str,
+    now: i64,
+) -> anyhow::Result<DeleteReport> {
+    let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
     let refresh_tokens = sqlx::query!("DELETE FROM refresh_tokens WHERE account_id = ?", id)
         .execute(&mut *tx)
         .await?
@@ -312,7 +322,7 @@ pub async fn delete(db: &SqlitePool, id: i64, actor: &str) -> anyhow::Result<Del
         .execute(&mut *tx)
         .await?
         .rows_affected();
-    // (future tables: see the list above)
+    let social = crate::social::on_account_delete(&mut tx, id, boards, now).await?;
     let accounts = sqlx::query!("DELETE FROM accounts WHERE id = ?", id)
         .execute(&mut *tx)
         .await?
@@ -323,6 +333,7 @@ pub async fn delete(db: &SqlitePool, id: i64, actor: &str) -> anyhow::Result<Del
         runs,
         leaderboard_entries,
         replays,
+        social,
     };
     if accounts == 1 {
         crate::db::admin_log(
@@ -332,7 +343,15 @@ pub async fn delete(db: &SqlitePool, id: i64, actor: &str) -> anyhow::Result<Del
             &id.to_string(),
             &format!(
                 "refresh_tokens={refresh_tokens} runs={runs} \
-                 leaderboard_entries={leaderboard_entries} replays={replays}"
+                 leaderboard_entries={leaderboard_entries} replays={replays} \
+                 friends={} blocks={} crew_memberships={} crew_transferred={} \
+                 crew_disbanded={} reports_kept={}",
+                social.friends,
+                social.blocks,
+                social.crew_memberships,
+                social.crew_transferred,
+                social.crew_disbanded,
+                social.reports_kept
             ),
         )
         .await?;

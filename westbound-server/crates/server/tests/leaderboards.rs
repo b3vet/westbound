@@ -121,10 +121,10 @@ async fn every_board_period_and_view() {
     let body = app.board_ok(Some(&tb), "distance?view=around_me").await;
     assert_eq!(ranks(&body), vec![1, 2]);
     assert_eq!(body["view"], "around_me");
-    // Friends: not available until N9.
+    // Friends (N9.1): without friends, just the caller (tests/social.rs covers friends).
     let body = app.board_ok(Some(&ta), "journey?view=friends").await;
-    assert_eq!(body["friends_available"], false);
-    assert!(body["entries"].as_array().unwrap().is_empty());
+    assert_eq!(body["friends_available"], true);
+    assert_eq!(ranking(&body), vec![(sa.clone(), 30_000)]);
     assert_eq!(body["me"]["rank"], 1);
     // The crew board: no crew for the caller yet.
     let body = app.board_ok(Some(&ta), "loop_crew?view=around_me").await;

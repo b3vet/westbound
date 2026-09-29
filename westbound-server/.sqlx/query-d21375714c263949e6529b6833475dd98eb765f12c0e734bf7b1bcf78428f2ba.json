@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE crew_members SET role = 'owner' WHERE account_id = ? AND crew_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "d21375714c263949e6529b6833475dd98eb765f12c0e734bf7b1bcf78428f2ba"
+}

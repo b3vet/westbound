@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account_a, account_b, requester_id FROM friends\n           WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [
+      {
+        "name": "account_a",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "account_a"
+          }
+        }
+      },
+      {
+        "name": "account_b",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "account_b"
+          }
+        }
+      },
+      {
+        "name": "requester_id",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "requester_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "068dfe848d0430184115b957ef3a6242e9e01c1ae062736875613f0fab97c4ee"
+}

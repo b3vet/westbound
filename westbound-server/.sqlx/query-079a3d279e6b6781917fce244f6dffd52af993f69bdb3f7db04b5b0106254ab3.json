@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!: i64\", account_a, account_b, requester_id, status, created_at,\n                  accepted_at\n           FROM friends WHERE account_a = ?1 OR account_b = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "account_a",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "account_a"
+          }
+        }
+      },
+      {
+        "name": "account_b",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "account_b"
+          }
+        }
+      },
+      {
+        "name": "requester_id",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "requester_id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "accepted_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "accepted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "079a3d279e6b6781917fce244f6dffd52af993f69bdb3f7db04b5b0106254ab3"
+}
