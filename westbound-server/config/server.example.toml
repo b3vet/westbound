@@ -5,6 +5,9 @@
 # Lists from the environment are comma-separated. Reference: docs/SERVER.md.
 
 [server]
+# "production" or "dev". Outside dev, auth.jwt_secret and auth.device_secret_pepper
+# are required; dev falls back to public development values when they are empty.
+env = "production"
 # Public listener: HTTP API, /ws, /.well-known/*. The TLS proxy forwards here.
 bind = "0.0.0.0:8080"
 # Public https origin clients reach through the TLS proxy (invite links from N9).
@@ -53,14 +56,42 @@ time_utc = "03:17"
 retention_days = 7
 
 [auth]
-# Access-token signing secret (used from N1). Set it from the environment
-# (WB_AUTH__JWT_SECRET), never in a committed file. At least 32 bytes when set.
+# Access-token (JWT HS256) signing secret. Required outside dev, at least 32 bytes.
+# Set it from the environment (WB_AUTH__JWT_SECRET), never in a committed file.
 jwt_secret = ""
+# Pepper for device-secret hashes (HMAC-SHA256 key). Required outside dev, at least
+# 32 bytes, different from jwt_secret. Environment only (WB_AUTH__DEVICE_SECRET_PEPPER).
+# Never change it once accounts exist: their device secrets would stop verifying.
+device_secret_pepper = ""
+# Spec: access tokens 1 hour, refresh tokens 30 days, one rename per 30 days.
+access_token_ttl_secs = 3600
+refresh_token_ttl_secs = 2592000
+rename_cooldown_secs = 2592000
 
 [http]
 # CORS allow-list for /api/*: the production domain and the GitHub Pages web
 # build. "*" = any origin (local dev; auth is bearer tokens, no cookies).
 cors_allowed_origins = ["https://westbound.sipsakrandevu.com", "https://b3vet.github.io"]
+# Largest JSON request body accepted on /api/* (413 above it).
+max_body_bytes = 4096
+# Reverse proxies whose X-Forwarded-For is believed, as CIDRs. Coolify's proxy
+# reaches the container over a Docker network (private ranges), so the defaults
+# cover it; a peer outside these is the client and its X-Forwarded-For is ignored.
+trusted_proxies = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+
+[rate_limits]
+# 429 + Retry-After when exceeded. Each limit refills evenly over its window, with
+# its burst available at once. IPv6 clients are keyed by their /64.
+enabled = true
+# POST /api/v1/auth/device, per client IP.
+device_create_per_hour = 5
+device_create_burst = 5
+# Other /api/v1/auth/* routes (sign-in, refresh, logout, providers), per client IP.
+auth_per_minute = 30
+auth_burst = 10
+# Authenticated routes (/me, /account, ...), per account.
+account_per_minute = 120
+account_burst = 30
 
 [deeplinks]
 # Directory with apple-app-site-association and assetlinks.json. Empty, or a

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT tag FROM accounts WHERE display_name = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "tag",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "tag"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1451abb9d6f4a218f862518c26c91439274274901fcdb07b322aad6e61f838a3"
+}

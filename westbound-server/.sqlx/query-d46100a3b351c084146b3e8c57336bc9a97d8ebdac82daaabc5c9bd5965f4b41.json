@@ -1,0 +1,124 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id AS \"id!\", display_name, tag, created_at, last_seen, banned_until,\n                  name_changed_at, token_version,\n                  apple_sub IS NOT NULL AS \"apple_linked!: bool\",\n                  google_sub IS NOT NULL AS \"google_linked!: bool\"\n           FROM accounts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "display_name",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "name": "tag",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "tag"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "last_seen",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "last_seen"
+          }
+        }
+      },
+      {
+        "name": "banned_until",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "banned_until"
+          }
+        }
+      },
+      {
+        "name": "name_changed_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "name_changed_at"
+          }
+        }
+      },
+      {
+        "name": "token_version",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "token_version"
+          }
+        }
+      },
+      {
+        "name": "apple_linked!: bool",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "google_linked!: bool",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d46100a3b351c084146b3e8c57336bc9a97d8ebdac82daaabc5c9bd5965f4b41"
+}

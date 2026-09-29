@@ -2,6 +2,8 @@
 # westbound-server/. Everything else keeps the defaults (config/server.example.toml).
 
 [server]
+# dev: empty auth secrets fall back to public development values (never in production).
+env = "dev"
 bind = "127.0.0.1:8080"
 public_origin = "https://localhost:8443"
 
@@ -16,3 +18,8 @@ dir = "dev-data/backups"
 
 [http]
 cors_allowed_origins = ["*"]
+
+[rate_limits]
+# Local clients create many accounts while testing.
+device_create_per_hour = 1000
+device_create_burst = 100

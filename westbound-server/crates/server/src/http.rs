@@ -117,10 +117,7 @@ pub async fn echo_check() -> Response {
         .into_response()
 }
 
+/// 404 in the API error format.
 pub async fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({ "error": "not_found" })),
-    )
-        .into_response()
+    crate::error::ApiError::not_found().into_response()
 }

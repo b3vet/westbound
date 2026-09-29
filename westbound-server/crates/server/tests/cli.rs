@@ -14,7 +14,15 @@ fn cmd(dir: &Path, port: u16) -> Command {
         .env("WB_DB__PATH", dir.join("wb.db"))
         .env("WB_BACKUP__DIR", dir.join("backups"))
         .env("WB_METRICS__ENABLED", "false")
-        .env("WB_SERVER__SHUTDOWN_GRACE_MS", "1000");
+        .env("WB_SERVER__SHUTDOWN_GRACE_MS", "1000")
+        .env(
+            "WB_AUTH__JWT_SECRET",
+            "cli-test-jwt-secret-0123456789abcdef",
+        )
+        .env(
+            "WB_AUTH__DEVICE_SECRET_PEPPER",
+            "cli-test-device-pepper-0123456789abcdef",
+        );
     c
 }
 
@@ -30,6 +38,7 @@ fn free_port() -> u16 {
 fn check_config_prints_redacted_and_rejects_bad_values() {
     let dir = tempfile::tempdir().unwrap();
     let secret = "0123456789abcdef0123456789abcdef-secret";
+    let pepper = "cli-test-device-pepper-0123456789abcdef";
     let out = cmd(dir.path(), 8080)
         .env("WB_AUTH__JWT_SECRET", secret)
         .arg("check-config")
@@ -39,6 +48,27 @@ fn check_config_prints_redacted_and_rejects_bad_values() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("bind = \"127.0.0.1:8080\""), "{stdout}");
     assert!(!stdout.contains(secret));
+    assert!(!stdout.contains(pepper));
+
+    // Production refuses to start without the auth secrets; dev does not need them.
+    let missing = cmd(dir.path(), 8080)
+        .env_remove("WB_AUTH__JWT_SECRET")
+        .env_remove("WB_AUTH__DEVICE_SECRET_PEPPER")
+        .arg("check-config")
+        .output()
+        .unwrap();
+    assert_eq!(missing.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&missing.stderr);
+    assert!(err.contains("WB_AUTH__JWT_SECRET"), "{err}");
+    assert!(err.contains("WB_AUTH__DEVICE_SECRET_PEPPER"), "{err}");
+    let dev = cmd(dir.path(), 8080)
+        .env_remove("WB_AUTH__JWT_SECRET")
+        .env_remove("WB_AUTH__DEVICE_SECRET_PEPPER")
+        .env("WB_SERVER__ENV", "dev")
+        .arg("check-config")
+        .output()
+        .unwrap();
+    assert!(dev.status.success());
 
     let bad = cmd(dir.path(), 8080)
         .env("WB_LIMITS__MAX_CONNECTIONS", "0")
@@ -122,4 +152,96 @@ fn serve_is_healthy_then_stops_on_sigterm() {
     assert!(status.success(), "{log}");
     assert!(log.contains("SIGTERM received"), "{log}");
     assert!(log.contains("database closed"), "{log}");
+}
+
+fn run(dir: &Path, args: &[&str]) -> (bool, String, String) {
+    let out = cmd(dir, 8080).args(args).output().unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[tokio::test]
+async fn admin_ban_unban_rename() {
+    use westbound_server::{accounts, db};
+    let dir = tempfile::tempdir().unwrap();
+    assert!(run(dir.path(), &["migrate"]).0);
+    let cfg = westbound_server::config::DbConfig {
+        path: dir.path().join("wb.db"),
+        ..Default::default()
+    };
+    let pool = db::connect(&cfg).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let (id, _) = accounts::insert_device_account(&mut conn, "LoneWolf", &[0u8; 32], 1_000)
+        .await
+        .unwrap();
+    drop(conn);
+    let ids = id.to_string();
+
+    let before = westbound_server::clock::unix_now_secs();
+    let (ok, out, err) = run(dir.path(), &["admin", "ban", &ids, "7d"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("banned until"), "{out}");
+    let acc = accounts::get(&pool, id).await.unwrap().unwrap();
+    let until = acc.banned_until.unwrap();
+    assert!((before + 7 * 86_400..=before + 7 * 86_400 + 60).contains(&until));
+
+    let (ok, out, _) = run(dir.path(), &["admin", "ban", &ids, "perm"]);
+    assert!(ok && out.contains("permanently"), "{out}");
+    assert_eq!(
+        accounts::get(&pool, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .banned_until,
+        Some(accounts::PERMANENT_BAN_UNTIL)
+    );
+
+    let (ok, out, _) = run(dir.path(), &["admin", "unban", &ids]);
+    assert!(ok && out.contains("unbanned"), "{out}");
+    assert_eq!(
+        accounts::get(&pool, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .banned_until,
+        None
+    );
+
+    let (ok, out, err) = run(dir.path(), &["admin", "rename", &ids, "Road Runner"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("renamed to Road Runner#"), "{out}");
+    let acc = accounts::get(&pool, id).await.unwrap().unwrap();
+    assert_eq!(acc.display_name, "Road Runner");
+    assert!(acc.name_changed_at.is_some());
+
+    // Refusals: bad duration, unknown account, a name the filter rejects.
+    assert!(!run(dir.path(), &["admin", "ban", &ids, "7y"]).0);
+    assert!(!run(dir.path(), &["admin", "ban", "999", "1d"]).0);
+    assert!(!run(dir.path(), &["admin", "unban", "999"]).0);
+    let (ok, _, err) = run(dir.path(), &["admin", "rename", &ids, "Sh1t"]);
+    assert!(!ok);
+    assert!(err.contains("not allowed"), "{err}");
+
+    let log: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT actor, action, target FROM admin_log ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    let expected = [
+        ("cli", "ban"),
+        ("cli", "ban"),
+        ("cli", "unban"),
+        ("cli", "rename"),
+    ];
+    assert_eq!(log.len(), expected.len(), "{log:?}");
+    for ((actor, action, target), (ea, eb)) in log.iter().zip(expected) {
+        assert_eq!(
+            (actor.as_str(), action.as_str(), target.as_str()),
+            (ea, eb, ids.as_str())
+        );
+    }
+    db::close(&pool).await;
 }
