@@ -54,6 +54,9 @@ const _MESSAGES := {
 	"map_mismatch": "Your map data is out of date. Please update Westbound to play online.",
 	"auth_failed": "Sign-in failed. Please try again.",
 	"banned": "This account can't play online.",
+	## Fatal only: the gateway keeps the newest session per account (docs/SERVER.md →
+	## Sessions). A non-fatal `not_allowed` (a refused command) reaches server_error only.
+	"not_allowed": "This account signed in on another device.",
 	"server_full": "The server is full right now. Please try again soon.",
 	"rate_limited": "Too many requests. Please wait a moment and try again.",
 	"connect_failed": "Can't reach the Westbound server. Check your connection and try again.",
