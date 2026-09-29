@@ -7,7 +7,7 @@ config_version=5
 
 config/name="Westbound"
 config/description="Chase the sun. Cut through traffic."
-run/main_scene="res://src/dev/car_drive.tscn"
+run/main_scene="res://src/run/run.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 run/max_fps=60
 config/icon="res://icon.svg"
