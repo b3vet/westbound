@@ -24,7 +24,7 @@ var display: Font
 var label: Font
 var body: Font
 
-## Font sizes at the current text size.
+## Font sizes at the current text size (size_speed: the D14 cluster's speed number).
 var size_label: int
 var size_small: int
 var size_score: int
@@ -67,7 +67,9 @@ func setup(th: Theme, hud: HudTuning, text_scale: float) -> void:
 	size_score = _sz(th.get_font_size(UiTheme.S_SCORE, t))
 	size_readout = _sz(th.get_font_size(UiTheme.S_READOUT, t))
 	size_event = _sz(th.get_font_size(UiTheme.S_EVENT, t))
-	size_speed = _sz(th.get_font_size(UiTheme.S_SPEED, t))
+	# Plan D14: the bottom-centre cluster's number, a share of the theme's speed size.
+	size_speed = maxi(1, roundi(float(th.get_font_size(UiTheme.S_SPEED, t))
+			* Units.pct_to_frac(hud.cluster_speed_font_pct) * ts))
 	size_button = _sz(th.get_font_size(UiTheme.S_BUTTON, t))
 	outline_px = maxi(1, roundi(hud.text_outline_px * ts))
 	HudDraw.shadow_em = Units.pct_to_frac(hud.text_shadow_em_pct)

@@ -1,6 +1,6 @@
 class_name HudMinSpeed
 extends HudWidget
-## The minimum-speed strip above the speedometer. Spec: Scoring → Multiplier
+## The minimum-speed strip above the bottom-centre cluster (plan D14). Spec: Scoring → Multiplier
 ## ("Minimum speed (100 km/h). Below it, the HUD shows TOO SLOW with a speed bar");
 ## UI → HUD elements ("The minimum-speed bar appears only when speed nears or drops
 ## below 100 km/h"). Words, not color alone: TOO SLOW is spelled out.

@@ -25,6 +25,8 @@ extends CanvasLayer
 ## Layout: HudLayout, from the canvas, the display safe area and the touch controls'
 ## rects (the PlayerInput hub's ControlsLayout when there is one, else one built from
 ## Settings), rebuilt when the controls layout, the viewport or a setting changes.
+## Plan D14: speed, the minimum-speed strip and boost sit in a bottom-centre cluster
+## under the car, and no readout goes into the thumb zones (the lower outer corners).
 
 signal pause_pressed()
 signal camera_pressed()

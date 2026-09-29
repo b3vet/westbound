@@ -211,6 +211,32 @@ func test_hud_text_fits_every_setting() -> void:
 	gt(n, 0, "texts were recorded")
 
 
+## Plan D14: the compact bottom-centre cluster in each of its states (three-digit
+## speed with the gear, READY, BOOSTING, a percentage, TOO SLOW), in every setting.
+func test_cluster_text_fits_every_state() -> void:
+	var fills: Array[float] = [1.0, 1.0, 0.88, 0.35]
+	var words: Array[String] = [HudBoost.LABEL_READY, HudBoost.LABEL_BOOSTING, "88%", "35%"]
+	var n := 0
+	for c in _configs():
+		var hud := _hud(c)
+		var f := _busy_feed()
+		hud.bind(f)
+		Events.gear_shifted.emit(6)
+		for st in fills.size():
+			f.too_slow = st == 3
+			f.speed_mps = Units.kmh_to_mps(60.0 if f.too_slow else 888.0)
+			f.boost_fill = fills[st]
+			f.boosting = st == 1
+			hud.advance(DT)
+			await _capture(hud)
+			var what := "%s cluster state %d" % [c[5], st]
+			n += _check_hud(hud, what)
+			check(_drawn(hud, words[st]), "%s: %s shows" % [what, words[st]])
+			check(_drawn(hud, hud.speed_text()), "%s: the speed shows" % what)
+		_free_nodes()
+	gt(n, 0, "texts were recorded")
+
+
 ## Every objective label (both units) in every state, in every setting: the chip grows
 ## to fit its text and progress, and the text stays at full size.
 func test_objective_chip_fits_every_label() -> void:

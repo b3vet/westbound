@@ -2,15 +2,20 @@ class_name HudLayout
 extends RefCounted
 ## Where each HUD element sits. Spec: UI, HUD and design system (the ASCII layout:
 ## score top-left, sun bar / chain / event stack top-centre, lives and buttons
-## top-right, speed bottom-left, boost bottom-right; the middle third stays clear;
-## safe areas); plan D9 (the manual pedals sit in the bottom corners). CONTRACTS §14:
-## the HUD stays clear of the controls overlay's pedal columns. docs/HUD.md → Layout.
+## top-right; the middle third stays clear; safe areas); plan D9 (the manual pedals sit
+## in the bottom corners); plan D14 (speed, the minimum-speed strip and boost move to a
+## compact bottom-centre cluster under the car, and no readout goes into the thumb
+## zones). CONTRACTS §14: the HUD stays clear of the controls overlay's pedal columns.
+## docs/HUD.md → Layout.
 ##
-## Pure: canvas rects in, canvas rects out. The speedometer and the boost meter start
-## in their bottom corners; when the touch controls (ControlsLayout: gas column,
-## brake, in either handedness, at any controls_scale) are there, the panel moves
-## inward beside them if it still fits in its half of the screen, else it rises above
-## them. Sizes scale with the text size, margins do not.
+## Pure: canvas rects in, canvas rects out. Thumb zones (hud.thumb_zone_size_cm, in
+## physical cm via the controls' px_per_cm) are the canvas's lower outer corners, where
+## the thumbs rest and drag in every control layout; with the manual pedals (the
+## ControlsLayout's gas column and brake, either hand, any controls_scale) they are
+## the thumb areas no readout may touch. The cluster sits on the bottom edge centred
+## under the car (speed, then boost, in a row; the TOO SLOW strip above), slid
+## sideways into the free span between the thumb areas; stacked (boost under speed)
+## when the row does not fit. Sizes scale with the text size, margins do not.
 
 var full: Rect2 = Rect2()
 var safe: Rect2 = Rect2()
@@ -26,10 +31,19 @@ var camera: Rect2 = Rect2()
 ## WP5.5: the high-beam button, under [CAM] (its slot is kept while it is hidden by day,
 ## so nothing moves when it appears).
 var high_beam: Rect2 = Rect2()
-## The speedometer panel, and the minimum-speed strip directly above it.
+## Plan D14, the bottom-centre cluster: the speedometer and the boost meter beside it
+## (or under it when stacked), and the minimum-speed strip above them (its slot is
+## reserved while it is hidden).
 var speedo: Rect2 = Rect2()
 var min_speed: Rect2 = Rect2()
 var boost: Rect2 = Rect2()
+## The cluster's bounds (the three rects above).
+var cluster: Rect2 = Rect2()
+## The row did not fit between the thumb areas: boost sits under the speedometer.
+var cluster_stacked: bool = false
+## Not even the stacked cluster fit (extreme control scales only): it keeps clear of
+## the pedals but may reach into a thumb zone.
+var cluster_squeezed: bool = false
 ## WP5.2: the leg objective chip, under the score panel (left-anchored like it); under
 ## the lives and buttons instead when a raised bottom-left panel needs that space.
 ## WP5.6: this is the slot for the widest chip (objective_chip_max_width_px); the chip
@@ -41,12 +55,13 @@ var objective_anchor: float = 0.0
 ## shows): the stack's width, and as tall as leg_toast_size_px (never into the middle
 ## third). It overlaps the stack by design, so it is not in rects().
 var toast: Rect2 = Rect2()
-## The panel rose above the touch controls (no room beside them).
-var speedo_raised: bool = false
-var boost_raised: bool = false
 
 ## The touch controls this layout avoids (canvas rects, not grown).
 var pedals: Array[Rect2] = []
+## Plan D14: the thumb zones, left then right (canvas rects, not grown).
+var thumb_zones: Array[Rect2] = []
+## Canvas px per physical cm the zones were sized with.
+var px_per_cm: float = 1.0
 
 var _hud: HudTuning
 
@@ -61,6 +76,8 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	safe = safe_rect
 	ts = text_scale
 	pedals = pedal_rects(controls)
+	px_per_cm = controls.px_per_cm if controls != null else fallback_px_per_cm(full)
+	thumb_zones = thumb_zone_rects(hud, full, px_per_cm)
 	var m := hud.edge_margin_px
 	var gap := hud.spacing_grid_px
 	var cx := safe.get_center().x
@@ -89,14 +106,7 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 			Vector2(row.x, hud.event_line_height_px * ts * float(hud.event_stack_lines)))
 	toast = Rect2(stack.position, Vector2(stack.size.x, hud.leg_toast_size_px.y * ts))
 
-	var sp := hud.speedo_size_px * ts
-	var strip := hud.min_speed_row_px * ts
-	var block := _place_bottom(Vector2(sp.x, sp.y + gap + strip), true)
-	speedo_raised = _raised
-	min_speed = Rect2(block.position, Vector2(sp.x, strip))
-	speedo = Rect2(Vector2(block.position.x, block.end.y - sp.y), sp)
-	boost = _place_bottom(hud.boost_size_px * ts, false)
-	boost_raised = _raised
+	_place_cluster()
 	objective = _place_objective(chip)
 	_widen_chain(sun_size.x)
 
@@ -117,6 +127,32 @@ func rects() -> Array[Rect2]:
 static func names() -> PackedStringArray:
 	return PackedStringArray(["score", "sun", "chain", "stack", "lives", "pause", "camera",
 			"min_speed", "speedo", "boost", "objective", "high_beam"])
+
+
+## The thumb areas no readout may touch: the thumb zones and the pedals.
+func thumb_areas() -> Array[Rect2]:
+	var out: Array[Rect2] = []
+	out.append_array(thumb_zones)
+	out.append_array(pedals)
+	return out
+
+
+## Plan D14: the thumb zones, the canvas's lower-left and lower-right corners, where
+## the thumbs rest and drag. They start at the canvas edge, not the safe area's: the
+## thumbs hold the phone's physical edges (a notch inset does not move them).
+static func thumb_zone_rects(hud: HudTuning, full_rect: Rect2, pixels_per_cm: float) -> Array[Rect2]:
+	var z := hud.thumb_zone_size_cm * pixels_per_cm
+	z = Vector2(minf(z.x, full_rect.size.x * 0.5), minf(z.y, full_rect.size.y))
+	var y := full_rect.end.y - z.y
+	var out: Array[Rect2] = [Rect2(Vector2(full_rect.position.x, y), z),
+			Rect2(Vector2(full_rect.end.x - z.x, y), z)]
+	return out
+
+
+## Canvas px per cm without a controls layout: the same fallback PlayerInput uses where
+## the DPI is unknown (the canvas height is a phone's landscape height).
+static func fallback_px_per_cm(full_rect: Rect2) -> float:
+	return PlayerInput.canvas_px_per_cm(Tuning.load_default().controls, full_rect.size, Vector2i.ZERO)
 
 
 ## The touch controls' rects: the joined gas column (pedal + boost cap) and the brake.
@@ -152,37 +188,76 @@ static func canvas_safe_rect(full_rect: Rect2) -> Rect2:
 			full_rect.size - Vector2(left + right, top + bottom))
 
 
-var _raised: bool = false
 var _objective_left: Rect2 = Rect2()
 
 
-## A bottom-corner panel of `size`, first that fits of: the corner; beside the
-## controls on that side (inward, not into the middle column); above them (below the
-## top readouts). With none free (huge controls), beside them anyway.
-func _place_bottom(size: Vector2, left: bool) -> Rect2:
-	_raised = false
-	var m := _hud.edge_margin_px
+## Plan D14: the cluster on the bottom edge (cluster_bottom_margin_px above the safe
+## area's bottom), centred under the car (the canvas centre) and slid sideways into
+## the free span between the thumb areas. First that fits of: speed and boost in a
+## row (bottom-aligned); stacked, boost under speed (as wide as the widest of them and
+## the strip's minimum); stacked, clear of the pedals only (extreme control scales).
+## The minimum-speed strip spans the cluster's width above it.
+func _place_cluster() -> void:
+	var gap := _hud.spacing_grid_px
+	var sp := _hud.speedo_size_px * ts
+	var bo := _hud.boost_size_px * ts
+	var strip := _hud.min_speed_row_px * ts
+	var bottom := safe.end.y - _hud.cluster_bottom_margin_px
+	cluster_stacked = false
+	cluster_squeezed = false
+	var row := Vector2(sp.x + gap + bo.x, maxf(sp.y, bo.y) + gap + strip)
+	var span := _free_span(bottom - row.y, bottom, true)
+	if span.y - span.x >= row.x:
+		var x := _centred_x(row.x, span)
+		speedo = Rect2(Vector2(x, bottom - sp.y), sp)
+		boost = Rect2(Vector2(speedo.end.x + gap, bottom - bo.y), bo)
+		min_speed = Rect2(Vector2(x, bottom - row.y), Vector2(row.x, strip))
+		cluster = min_speed.merge(speedo).merge(boost)
+		return
+	cluster_stacked = true
+	var w := maxf(maxf(sp.x, bo.x), _hud.min_speed_row_min_width_px * ts)
+	var h := sp.y + gap + bo.y + gap + strip
+	span = _free_span(bottom - h, bottom, true)
+	if span.y - span.x < w:
+		cluster_squeezed = true
+		span = _free_span(bottom - h, bottom, false)
+	var sx := _centred_x(w, span)
+	boost = Rect2(Vector2(sx, bottom - bo.y), Vector2(w, bo.y))
+	speedo = Rect2(Vector2(sx, boost.position.y - gap - sp.y), Vector2(w, sp.y))
+	min_speed = Rect2(Vector2(sx, speedo.position.y - gap - strip), Vector2(w, strip))
+	cluster = min_speed.merge(speedo).merge(boost)
+
+
+## Left edge of a `width` block centred on the canvas centre, kept in `span` (x..y).
+func _centred_x(width: float, span: Vector2) -> float:
+	var x := full.get_center().x - width * 0.5
+	return clampf(x, span.x, maxf(span.x, span.y - width))
+
+
+## The free horizontal span (x = left, y = right) between the thumb areas (zones too
+## when `zones`, else the pedals only), each grown by the pedal clearance, that reach
+## into the band top..bottom; inside the safe area's side margins.
+func _free_span(top: float, bottom: float, zones: bool) -> Vector2:
 	var clear := _hud.pedal_clearance_px
-	var corner_x := safe.position.x + m if left else safe.end.x - m - size.x
-	var bottom_y := safe.end.y - m - size.y
-	var r := Rect2(Vector2(corner_x, bottom_y), size)
-	if not _hits(r, clear):
-		return r
-	var side := _side_block(left)
-	var x := side.end.x + clear if left else side.position.x - clear - size.x
-	var beside := Rect2(Vector2(x, bottom_y), size)
-	if not beside.intersects(middle_column()) and not _hits(beside, clear):
-		return beside
-	var above := Rect2(Vector2(corner_x, side.position.y - clear - size.y), size)
-	if _clear_of_top(above.grow(_hud.spacing_grid_px)):
-		_raised = true
-		return above
-	return beside
+	var lo := safe.position.x + _hud.edge_margin_px
+	var hi := safe.end.x - _hud.edge_margin_px
+	var cx := full.get_center().x
+	var areas := thumb_areas() if zones else pedals
+	for a in areas:
+		var g := a.grow(clear)
+		if g.end.y <= top or g.position.y >= bottom:
+			continue
+		if a.get_center().x < cx:
+			lo = maxf(lo, g.end.x)
+		else:
+			hi = minf(hi, g.position.x)
+	return Vector2(lo, hi)
 
 
-## The objective chip: under the score, else under the lives and buttons (a raised
-## bottom panel took the space), else (both corners raised: extreme control scales
-## only) centred under the toast's slot, else under the score anyway.
+## The objective chip: under the score, else under the lives and buttons, else
+## centred under the toast's slot, else under the score anyway. (Since D14 the
+## fallbacks only matter on canvases so short that a thumb zone or the cluster reaches
+## the chip.)
 func _place_objective(size: Vector2) -> Rect2:
 	var gap := _hud.spacing_grid_px
 	var left := Rect2(_objective_left.position, size)
@@ -200,8 +275,8 @@ func _place_objective(size: Vector2) -> Rect2:
 	return left
 
 
-## WP5.6: the chain row spans the sun bar above it (when that is wider) unless a raised
-## bottom panel or the objective chip needs the room beside it, so a six-digit chain
+## WP5.6: the chain row spans the sun bar above it (when that is wider) unless another
+## panel or the objective chip needs the room beside it, so a six-digit chain
 ## and its CHAIN label fit its half. The stack and the toast keep the tuned row width.
 func _widen_chain(width: float) -> void:
 	if width <= chain.size.x:
@@ -226,37 +301,20 @@ func _clear_of_bottom(r: Rect2) -> bool:
 	return not _hits(r, _hud.pedal_clearance_px)
 
 
-## The middle third of the safe width: the bottom panels stay out of it (the
-## top-centre readouts live at its top).
+## The middle third of the safe width, where traffic is read: the top-centre readouts
+## live at its top and the D14 cluster on its bottom edge, under the car.
 func middle_column() -> Rect2:
 	var w := safe.size.x / 3.0
 	return Rect2(Vector2(safe.position.x + w, safe.position.y), Vector2(w, safe.size.y))
 
 
-func _clear_of_top(r: Rect2) -> bool:
-	if not safe.encloses(r):
-		return false
-	for top: Rect2 in [score, sun, chain, stack, lives, pause, camera, high_beam, toast]:
-		if r.intersects(top):
-			return false
-	return true
-
-
+## Whether `r` comes within `clear` of a thumb zone or a pedal.
 func _hits(r: Rect2, clear: float) -> bool:
 	for p in pedals:
 		if p.grow(clear).intersects(r):
 			return true
+	for z in thumb_zones:
+		if z.grow(clear).intersects(r):
+			return true
 	return false
 
-
-## The union of the controls on one side of the screen (by centre).
-func _side_block(left: bool) -> Rect2:
-	var cx := safe.get_center().x
-	var out := Rect2()
-	var any := false
-	for p in pedals:
-		if (p.get_center().x < cx) != left:
-			continue
-		out = p if not any else out.merge(p)
-		any = true
-	return out

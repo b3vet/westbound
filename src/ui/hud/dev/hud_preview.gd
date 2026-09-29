@@ -19,10 +19,15 @@ extends Control
 ## --high_beam=true (the high-beam button lit; it shows at dusk, night and dawn),
 ## --objective=<id> (WP5.6: the chip's objective, and the toast's next one; e.g.
 ## slipstream, the longest label), --chain=<n> (the chain shown, e.g. 186400),
-## --world=true (the 3D look preview behind instead of the flat background).
+## --world=true (the 3D look preview behind instead of the flat background),
+## --zones=true (plan D14: the thumb zones, pedal clearances, traffic area and cluster
+## drawn over the HUD, thumb_zone_overlay.gd).
 ## Prints the frame's draw calls and the HUD's visible canvas items ("snap: ...").
 
 const LOOK_PREVIEW := "res://src/sun/dev/look_preview.tscn"
+const ZoneOverlay := preload("res://src/ui/hud/dev/thumb_zone_overlay.gd")
+## Above the HUD (layer 5) and the controls overlay (layer 10).
+const ZONES_LAYER := 20
 const SKY_T_DAY := 0.3
 const SKY_T_NIGHT := 0.74
 const SKY_T_DAWN := 0.86
@@ -94,6 +99,8 @@ func snap_setup(args: Dictionary) -> void:
 	_set_sky(float(args.get("sky_t", default_sky)))
 	if bool(args.get("world", false)):
 		_add_world()
+	if bool(args.get("zones", false)):
+		add_zone_overlay(self, hud)
 	Events.run_started.emit(&"journey", 1)
 	hub.set_high_beam(bool(args.get("high_beam", false)))
 	await get_tree().process_frame
@@ -113,6 +120,16 @@ func snap_setup(args: Dictionary) -> void:
 	hud.visible = true
 	print("snap: state=%s hud_items=%d draw_calls=%d without_hud=%d hud=%d" % [state,
 			hud.visible_item_count(), with_hud, without, with_hud - without])
+
+
+## Plan D14 review: the thumb-zone overlay over `for_hud`, on its own canvas layer.
+static func add_zone_overlay(parent: Node, for_hud: Hud) -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = ZONES_LAYER
+	var overlay := ZoneOverlay.new()
+	overlay.hud = for_hud
+	layer.add_child(overlay)
+	parent.add_child(layer)
 
 
 func _frames(n: int) -> void:

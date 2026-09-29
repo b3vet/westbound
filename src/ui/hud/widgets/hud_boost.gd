@@ -1,12 +1,13 @@
 class_name HudBoost
 extends HudWidget
-## The boost meter, bottom-right. Spec: Scoring → Boost ("The boost meter fills from
-## slipstream, close passes and threads. Full meter = 3 seconds of extra thrust");
-## UI → HUD elements ("Bottom-right: boost meter").
+## The boost meter, beside the speedometer in the bottom-centre cluster (plan D14; the
+## spec's "Bottom-right: boost meter" moved off the gas thumb). Spec: Scoring → Boost
+## ("The boost meter fills from slipstream, close passes and threads. Full meter = 3
+## seconds of extra thrust"); UI → HUD elements.
 ##
 ## Slanted segments fill with the meter; READY in the accent when full; while boost
-## burns the segments turn gold and pulse, and BOOSTING shows. Redraws only when the
-## lit segment count, the percentage or the state changes, or while boosting.
+## burns the segments turn gold and pulse, and the label reads BOOSTING. Redraws only
+## when the lit segment count, the percentage or the state changes, or while boosting.
 
 const LABEL_BOOST := "BOOST"
 const LABEL_READY := "READY"
@@ -70,7 +71,7 @@ func _paint_plate(m: HudMesh) -> void:
 			t.accent_tab_size_px), s.accent)
 	var pad := s.px(t.panel_padding_px)
 	var bh := s.px(t.boost_bar_height_px)
-	var bar := Rect2(Vector2(pad, size.y - pad - bh), Vector2(size.x - pad * 2.0, bh))
+	var bar := Rect2(Vector2(pad, size.y - s.px(t.spacing_grid_px) - bh), Vector2(size.x - pad * 2.0, bh))
 	var lit := Color(s.gold, pulse) if _boosting else s.accent
 	var n := maxi(1, t.boost_bar_segments)
 	m.segments(bar, n, s.px(t.segment_gap_px), 1.0, Units.pct_to_frac(t.segment_lean_pct), _lit,
@@ -83,25 +84,24 @@ func _pulse() -> float:
 	return lerpf(PULSE_MIN, 1.0, 0.5 + 0.5 * cos(TAU * style.tuning.boost_pulse_hz * _clock))
 
 
+## The label on the left (BOOST, or BOOSTING in gold); the percentage or READY on the
+## right (nothing while boosting: the compact plate has room for one long word).
 func _paint() -> void:
 	var s := style
 	var t := s.tuning
 	var pad := s.px(t.panel_padding_px)
-	var base := pad + HudDraw.cap_height(s.size_small)
-	HudDraw.text(self, s.label, Vector2(pad, base), LABEL_BOOST, s.size_small,
-			s.gold if _boosting else s.text)
-	var right := LABEL_READY
-	var right_color := s.accent
+	var base := s.px(t.spacing_grid_px) + HudDraw.cap_height(s.size_small)
 	if _boosting:
-		right = LABEL_BOOSTING
-		right_color = s.gold
-	elif not _full:
+		HudDraw.text(self, s.label, Vector2(pad, base), LABEL_BOOSTING, s.size_small, s.gold)
+		return
+	HudDraw.text(self, s.label, Vector2(pad, base), LABEL_BOOST, s.size_small, s.text)
+	if not _full:
 		var cell := s.digit_cell(s.body, s.size_small)
 		var w := HudDraw.number_width(s.body, _pct_text, s.size_small, cell)
 		HudDraw.number(self, s.body, Vector2(size.x - pad - w, base), _pct_text, s.size_small, cell, s.muted)
 		return
-	var rw := HudDraw.text_width(s.label, right, s.size_label)
-	HudDraw.text(self, s.label, Vector2(size.x - pad - rw, base), right, s.size_label, right_color)
+	var rw := HudDraw.text_width(s.label, LABEL_READY, s.size_label)
+	HudDraw.text(self, s.label, Vector2(size.x - pad - rw, base), LABEL_READY, s.size_label, s.accent)
 
 
 const PULSE_MIN := 0.55   # lint: allow-number pulse floor
