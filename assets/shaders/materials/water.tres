@@ -1,0 +1,13 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://assets/shaders/water.gdshader" id="1"]
+
+[resource]
+shader = ExtResource("1")
+shader_parameter/time_s = 0.0
+shader_parameter/wave_height_m = 0.3
+shader_parameter/wave_ramp_m = 14.0
+shader_parameter/wave_period_s = 3.5
+shader_parameter/sky_reflect = 0.7
+shader_parameter/sun_path_gain = 2.2
+shader_parameter/depth_pull_frac = 0.004

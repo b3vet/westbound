@@ -1,0 +1,195 @@
+[gd_resource type="Resource" script_class="BiomeDef" load_steps=14 format=3]
+
+[ext_resource type="Script" path="res://src/road/biome_def.gd" id="1_biome"]
+[ext_resource type="Script" path="res://src/road/roadside/field_grid_def.gd" id="2_grid"]
+[ext_resource type="Script" path="res://src/road/roadside/roadside_prop.gd" id="3_prop"]
+[ext_resource type="Script" path="res://src/world/ocean/water_def.gd" id="4_water"]
+[ext_resource type="Script" path="res://src/world/fog_cards/fog_cards_def.gd" id="5_fog"]
+[ext_resource type="Script" path="res://src/world/horizon_sets/horizon_set_def.gd" id="6_horizon"]
+
+[sub_resource type="Resource" id="FieldGrid_meadows"]
+script = ExtResource("2_grid")
+cell_length_m = 110.0
+band_depth_m = 60.0
+band_count = 1
+gap_m = 6.0
+setback_m = 4.0
+crop_mesh_paths = PackedStringArray("res://assets/props/valley/meadow_green.res", "res://assets/props/valley/meadow_flowers.res", "res://assets/props/valley/meadow_hay.res")
+crop_weights = PackedFloat64Array(0.5, 0.35, 0.15)
+bare_chance_frac = 0.35
+yard_chance_frac = 0.16
+yard_band_count = 1
+yard_mesh_paths = PackedStringArray("res://assets/props/valley/valley_farm.res", "res://assets/props/valley/valley_barn.res")
+yard_weights = PackedFloat64Array(0.55, 0.45)
+tree_row_chance_frac = 0.0
+tree_mesh_paths = PackedStringArray("res://assets/props/valley/conifer.res", "res://assets/props/valley/broadleaf.res")
+tree_weights = PackedFloat64Array(0.5, 0.5)
+tree_spacing_m = 8.0
+tree_scale_min_factor = 0.85
+tree_scale_max_factor = 1.25
+
+[sub_resource type="Resource" id="Prop_forest_near"]
+script = ExtResource("3_prop")
+id = &"forest_near"
+mesh_paths = PackedStringArray("res://assets/props/valley/conifer_clump.res", "res://assets/props/valley/mixed_clump.res")
+variant_weights = PackedFloat64Array(0.6, 0.4)
+pattern = 0
+sides = 0
+density_per_km = 60.0
+cell_length_m = 250.0
+setback_min_m = 14.0
+setback_max_m = 85.0
+facing = 1
+scale_min_factor = 0.85
+scale_max_factor = 1.35
+
+[sub_resource type="Resource" id="Prop_forest_mid"]
+script = ExtResource("3_prop")
+id = &"forest_mid"
+mesh_paths = PackedStringArray("res://assets/props/valley/conifer_clump.res")
+pattern = 0
+sides = 2
+density_per_km = 40.0
+cell_length_m = 250.0
+setback_min_m = 100.0
+setback_max_m = 230.0
+facing = 1
+scale_min_factor = 0.9
+scale_max_factor = 1.45
+
+[sub_resource type="Resource" id="Prop_forest_far"]
+script = ExtResource("3_prop")
+id = &"forest_far"
+mesh_paths = PackedStringArray("res://assets/props/valley/conifer_clump.res")
+pattern = 0
+sides = 0
+density_per_km = 50.0
+cell_length_m = 250.0
+setback_min_m = 230.0
+setback_max_m = 430.0
+facing = 1
+scale_min_factor = 1.0
+scale_max_factor = 1.6
+
+[sub_resource type="Resource" id="Prop_roadside_trees"]
+script = ExtResource("3_prop")
+id = &"roadside_trees"
+mesh_paths = PackedStringArray("res://assets/props/valley/conifer.res", "res://assets/props/valley/broadleaf.res")
+variant_weights = PackedFloat64Array(0.6, 0.4)
+pattern = 0
+sides = 0
+density_per_km = 10.0
+cell_length_m = 250.0
+setback_min_m = 1.0
+setback_max_m = 8.0
+facing = 1
+scale_min_factor = 0.8
+scale_max_factor = 1.2
+
+[sub_resource type="Resource" id="Water_river"]
+script = ExtResource("4_water")
+side = 1
+shore_offset_m = 150.0
+shore_width_m = 8.0
+width_m = 34.0
+far_bank_width_m = 10.0
+surf_width_m = 2.0
+near_column_m = 8.0
+column_growth_factor = 1.5
+row_step_m = 14.0
+lift_m = 0.3
+shore_color = Color(0.56, 0.52, 0.4, 1)
+far_bank_color = Color(0.5, 0.52, 0.38, 1)
+foam_color = Color(0.72, 0.78, 0.76, 1)
+shallow_color = Color(0.3, 0.46, 0.44, 1)
+deep_color = Color(0.16, 0.3, 0.33, 1)
+deep_distance_m = 16.0
+wave_height_m = 0.12
+wave_ramp_m = 6.0
+wave_period_s = 2.6
+sky_reflect_factor = 0.85
+sun_path_gain = 1.6
+depth_pull_frac = 0.004
+span_cell_m = 1100.0
+span_chance_frac = 0.6
+arrive_m = 280.0
+arrive_offset_m = 320.0
+meander_amplitude_m = 28.0
+meander_length_m = 850.0
+build_units_per_frame = 3
+rebuild_step_m = 60.0
+
+[sub_resource type="Resource" id="Fog_valley"]
+script = ExtResource("5_fog")
+cell_length_m = 320.0
+chance_frac = 0.75
+length_factor_min = 1.1
+length_factor_max = 1.8
+setback_min_m = 18.0
+setback_max_m = 90.0
+depth_min_m = 180.0
+depth_max_m = 480.0
+layer_count = 3
+base_height_m = 0.5
+layer_spacing_m = 1.1
+alpha = 0.34
+edge_softness_frac = 0.3
+brightness_factor = 1.06
+noise_scale_m = 70.0
+noise_depth_frac = 0.55
+near_clear_m = 25.0
+near_fade_m = 70.0
+valley_probe_m = 600.0
+valley_depth_m = 6.0
+ridge_factor = 0.45
+row_step_m = 40.0
+build_units_per_frame = 2
+rebuild_step_m = 100.0
+curtain_count = 1
+curtain_height_m = 9.0
+curtain_alpha = 0.4
+midday_factor = 0.5
+midday_sun_y = 0.5
+
+[sub_resource type="Resource" id="Horizon_valley"]
+script = ExtResource("6_horizon")
+id = &"valley_ridges"
+layer_style = Vector4(1, 1, 3, 3)
+layer_distance_m = Vector4(2200, 5200, 13000, 38000)
+layer_height_m = Vector4(150, 420, 1300, 3800)
+layer_feature_m = Vector4(750, 1600, 4200, 12000)
+layer_glow = Vector4(0.3, 0.4, 0.5, 0.6)
+layer_seed = Vector4(29, 53, 79, 113)
+base_haze = 0.95
+layer_land = Vector4(0, 0, 0, 0)
+layer_mist = Vector4(0.55, 0.5, 0.4, 0.25)
+layer_windows = Vector4(0, 0, 0, 0)
+sea_softness = 0.18
+
+[resource]
+script = ExtResource("1_biome")
+id = &"valley_fog"
+display_name = "Valley Fog"
+order = 6
+lane_count = 3
+curve_frequency_scale = 1.15
+crest_frequency_scale = 1.3
+tunnel_frequency_scale = 0.3
+scatter_props = Array[ExtResource("3_prop")]([SubResource("Prop_forest_near"), SubResource("Prop_forest_mid"), SubResource("Prop_forest_far"), SubResource("Prop_roadside_trees")])
+field_grid = SubResource("FieldGrid_meadows")
+fence_mesh_path = "res://assets/props/valley/fence_rail.res"
+fence_setback_m = 1.5
+world_tint_offset = Color(-0.004, 0.006, 0.006, 0)
+fog_tint_offset = Color(0.01, 0.01, 0.02, 0)
+horizon_cards = PackedStringArray()
+horizon_set = &"valley_ridges"
+ground_color = Color(0.4, 0.53, 0.3, 1)
+verge_color = Color(0.43, 0.56, 0.3, 1)
+traffic_palette = PackedColorArray(0.2, 0.34, 0.25, 1, 0.95, 0.89, 0.74, 1, 0.45, 0.32, 0.22, 1, 0.5, 0.14, 0.16, 1, 0.6, 0.63, 0.66, 1, 0.94, 0.93, 0.89, 1, 0.13, 0.17, 0.35, 1, 0.8, 0.62, 0.2, 1, 0.11, 0.11, 0.13, 1, 0.36, 0.5, 0.6, 1)
+set_piece_ids = Array[StringName]([&"slalom", &"merge_zone", &"road_works", &"convoy", &"truck_wall"])
+set_piece_weights = PackedFloat64Array(0.8, 0.8, 1, 1, 0.7)
+landmark_style = &"tunnel_portal"
+landmark_styles = Array[StringName]([&"tunnel_portal", &"sign_gantry", &"suspension_bridge"])
+water = SubResource("Water_river")
+fog_cards = SubResource("Fog_valley")
+horizon_def = SubResource("Horizon_valley")

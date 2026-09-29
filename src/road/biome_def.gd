@@ -70,3 +70,22 @@ func checkpoint_style(leg_index: int, style_seed: int) -> StringName:
 		return landmark_style
 	var start := posmod(TraceHash.mix_int(style_seed, Rng.fnv1a32(String(id))), n)
 	return landmark_styles[posmod(start + leg_index - 1, n)]
+
+
+# ---------------------------------------------------------------- WP6.4b (biomes 4-6)
+# Additive world features of the coast, city and valley biomes. Each is optional
+# (null = the biome has no such feature) and is drawn by its own world-system node
+# under src/world/ (docs/BIOMES_4_6.md). Kept in one block so parallel biome work
+# on the fields above does not conflict.
+
+@export_group("WP6.4b")
+## Water beside the road (coast: the ocean; valley: river glimpses). WaterRibbon.
+@export var water: WaterDef
+## Elevated highway stretches (city): piers, deck edges, the ground dropped below.
+## ElevatedSections.
+@export var elevated: ElevatedDef
+## Low fog layers (valley): translucent cards beside the road. FogCards.
+@export var fog_cards: FogCardsDef
+## The horizon silhouettes of this biome (resolves `horizon_set`): per-layer styles,
+## heights, mist, sea-side masks and skyline windows. HorizonSetDef.apply().
+@export var horizon_def: HorizonSetDef
