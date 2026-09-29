@@ -27,6 +27,10 @@ extends Resource
 @export var draw_call_budget: int = 100
 @export var triangle_budget: int = 150000
 @export var far_plane_margin_m: float = 20.0   # not in spec: "far plane just past the fog end"
+## Dev HUD quality row (WP4.6): render scale and MSAA steps it cycles through, live,
+## for the session (Quality.set_dev_override). Ascending.
+@export var dev_render_scale_steps: PackedFloat64Array = [0.6, 0.75, 0.85, 1.0]   # not in spec: dev tool
+@export var dev_msaa_steps: PackedInt32Array = [0, 2, 4]   # not in spec: dev tool
 
 
 ## Index of `tier` in tier_names, or -1.
