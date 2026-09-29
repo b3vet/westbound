@@ -9,6 +9,7 @@ The tools the orchestrator and every WP run at merge time (plan §3, §4 merge g
 | `tools/parity.sh` | Do the Mobile and Compatibility renderers produce the same pixels for this scene? | visual WPs touching shaders, every gate |
 | `tools/snap.sh` | What does the scene look like on the Compatibility renderer, and on the Mobile renderer (`--renderer=mobile|both`, Mesa lavapipe)? | visual WPs, every gate |
 | `WBBench` (`tests/lib/bench.gd`) | Does a sim tick fit its CPU budget? | sim WPs (WP2.4 onward) |
+| `tools/drawcalls.sh` | How many draw calls, objects and primitives does a scene cost, split into 3D, each overlay and each top-level 3D node? | rendering WPs, perf gates (WP4.6) |
 
 ## tools/snap.sh — screenshots
 
@@ -45,6 +46,44 @@ func snap_setup(args: Dictionary) -> void:
 **Exit status:** 0 on success, 1 when the scene fails to load or instance, or the capture or write fails, 2 for bad arguments. Godot `ERROR`/`WARNING`/`SCRIPT ERROR` lines are always echoed to stderr, and the full Godot log is printed on failure. A script error inside the scene does not fail the snap, so read stderr. The Xvfb "Could not set V-Sync mode" warning is filtered out as noise.
 
 **Review convention:** visual WPs attach snaps across the seven color-script keyframes (`--sweep=sky_t:…`) and read them before handing off. Agents look at the PNGs with their image-reading tool.
+
+## tools/drawcalls.sh — draw-call measurement
+
+```
+tools/drawcalls.sh src/dev/car_drive.tscn --cam=hood --set=_leg:8 --s=3000     # traffic-heavy leg 8
+tools/drawcalls.sh src/dev/car_drive.tscn --cam=chase --sky_t=0.7 --no-breakdown
+tools/drawcalls.sh src/vehicle/dev/car_preview.tscn --cam=chase3q --renderer=mobile
+```
+
+Renders the scene like `tools/snap.sh`: Compatibility renderer (the web build's) under `xvfb-run` on Mesa llvmpipe, `--fixed-fps 60`, dummy audio. The default size is 1361x720, the owner's iPhone canvas. It then:
+
+1. Calls the scene's `snap_setup(args)` with the unreserved `--key=value` pairs, and waits `--frames` frames.
+2. Samples the monitors for `--sample` frames while the scene runs.
+3. Pauses the tree and measures the frozen frame. From here on every number is exact and repeats run to run:
+    - the total
+    - each visible CanvasLayer's share
+    - the 3D-only count, with every CanvasLayer hidden
+    - each top-level 3D child's share (the child is hidden in turn; the camera's branch is skipped)
+
+Each row prints three numbers:
+
+- *draws*: `Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME`, which counts 3D and canvas.
+- *3d*: the root viewport's own draws (`get_render_info`). This is the gameplay cost; the Dev HUD shows it as `3d N`.
+- *objects* and *prims*.
+
+It also prints the scene's DevStats counts (vehicles, opposite, leg, camera, sky_t) when they are reported. Before/after numbers live in `docs/PERF.md`.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--renderer=compat\|mobile` | `compat` | Mobile uses Vulkan on Mesa lavapipe (draw counting differs slightly between renderers) |
+| `--size=WxH` | `1361x720` | window size |
+| `--frames=N` | `180` | warm-up frames after `snap_setup` |
+| `--sample=N` | `60` | frames averaged for the moving sample |
+| `--set=prop:value` | none | set a property on the scene root before `snap_setup` (repeatable), e.g. `--set=_leg:8` in `car_drive` |
+| `--no-breakdown` | off | only the totals |
+| `--key=value` | | goes to the scene's `snap_setup` (e.g. `--cam=hood --s=3000 --sky_t=0.7`) |
+
+**Output:** one line per measurement on stdout. Godot errors and warnings go to stderr, minus the exit-time leak noise. **Exit status:** 0 on success, 1 when the scene fails to load or nothing was measured, 2 for bad arguments.
 
 ## tools/lint — budget and working-rule linter
 

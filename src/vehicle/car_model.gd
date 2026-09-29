@@ -29,6 +29,21 @@ extends RefCounted
 ##   model.apply_paint(car.default_paint)
 ##
 ## Everything here runs at load time (it may allocate); nothing runs per tick.
+##
+## Draw calls (WP4.6; spec Performance budget → draw calls): merge_draw_surfaces()
+## (CarVisual.bind calls it) folds the per-part meshes into as few draws as the
+## materials allow, without changing a pixel:
+##   Lights/MergedLamps   headlight_L/R + taillight_L/R (one lamp surface, always on)
+##   Lights/MergedBrakes  brake_L + brake_R (one signal surface; CarVisual switches it)
+##   MergedWheels<k>      one MultiMesh per distinct tire + rim pair: every wheel in one
+##                        draw; CarVisual writes the instances (spin, steer) per tick
+## The convention nodes stay (positions, markers, tests, the crash hand-off) but the
+## merged ones are hidden: after the merge, switch the brake lights through
+## `brakes_mesh` and hide all lamps through `lamps_mesh`; for a single-lamp effect
+## (e.g. WP4.1's flickering headlight) `split_light(&"headlight_L")` takes that lamp
+## back out as its own node (one more draw). Blinkers and reverse stay
+## separate, hidden until used. Body keeps one surface per material (paint, trim,
+## glass): the vehicle shader's slot is a uniform, so those cannot share a draw.
 
 const VEHICLE_SHADER := preload("res://assets/shaders/vehicle.gdshader")
 const MAT_PAINT := "res://assets/shaders/materials/vehicle_paint.tres"
@@ -112,6 +127,48 @@ const COLOR_SPOKE := Color(0.2, 0.2, 0.21)
 const COLOR_TRIM := Color(0.12, 0.12, 0.13)
 const COLOR_GLASS := Color(0.08, 0.1, 0.13)
 
+## Most draw calls a merged car may take with its switched lights off (body paint,
+## trim and glass, the merged lamps, the wheels). Spec: Performance budget → draw
+## calls; checked for every car by tests/unit/test_car_visual.gd.
+const MERGED_DRAW_SURFACES_MAX := 5
+const MERGED_LAMPS := &"MergedLamps"
+const MERGED_BRAKES := &"MergedBrakes"
+const MERGED_WHEELS_PREFIX := "MergedWheels"
+## Lights folded into MergedLamps / MergedBrakes.
+const LAMP_NAMES: Array[StringName] = [&"headlight_L", &"headlight_R", &"taillight_L", &"taillight_R"]
+const BRAKE_NAMES: Array[StringName] = [&"brake_L", &"brake_R"]
+## Wheels share a MultiMesh only when their rim sits on the tire the same way (m).
+const WHEEL_MATCH_EPS := 1e-4  # lint: allow-number geometric tolerance, not a tuning value
+
+
+## One MultiMesh drawing every wheel that has the same tire and rim meshes (one draw).
+## Instance k is wheel `wheel[k]`; its transform in root space is
+## parent_xf[k] * pivot * spin * tire_rest[k] (CarVisual writes it per tick).
+class WheelDraw extends RefCounted:
+	var node: MultiMeshInstance3D
+	var mm: MultiMesh
+	var wheel: PackedInt32Array = PackedInt32Array()
+	## Root-space transform of the wheel pivot's parent (identity for a root child).
+	var parent_xf: Array[Transform3D] = []
+	## The Tire node's rest transform in its pivot's space.
+	var tire_rest: Array[Transform3D] = []
+	## The transform last written to each instance (a CPU copy: the renderer keeps the
+	## real buffer, which headless runs cannot read back).
+	var written: Array[Transform3D] = []
+
+
+## One merged surface being assembled (merge_meshes).
+class _MergeGroup extends RefCounted:
+	var material: Material
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	var uvs := PackedVector2Array()
+	var uv2s := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var has_uv := false
+	var has_uv2 := false
+
 var root: Node3D
 var body: MeshInstance3D
 var lights: Node3D
@@ -133,6 +190,11 @@ var body_aabb: AABB
 var collision_box: AABB
 ## Convention paths that conform() had to create for this instance.
 var stubbed: PackedStringArray = []
+## Set by merge_draw_surfaces(); the merged draws (null / empty when a part was missing).
+var merged: bool = false
+var lamps_mesh: MeshInstance3D
+var brakes_mesh: MeshInstance3D
+var wheel_draws: Array[WheelDraw] = []
 
 
 ## Loads a model scene, conforms it to the convention and resolves its nodes. An empty
@@ -308,6 +370,254 @@ static func build_stub_root(car: CarDef) -> Node3D:
 	b.mesh = mesh
 	n.add_child(b)
 	return n
+
+
+# ---------------------------------------------------------------- Draw-call merge
+
+## Folds the lamps, the brake lights and the wheels into merged draws (see the header).
+## Idempotent; load time (allocates). Leaves a group alone when one of its parts is
+## missing or has no mesh.
+func merge_draw_surfaces() -> void:
+	if merged or root == null:
+		return
+	merged = true
+	lamps_mesh = _merge_lights(LAMP_NAMES, MERGED_LAMPS)
+	brakes_mesh = _merge_lights(BRAKE_NAMES, MERGED_BRAKES)
+	_merge_wheels()
+
+
+## Takes one merged head/tail lamp back out of `lamps_mesh` and returns its own
+## (visible) node, for a per-lamp effect such as a flicker. Costs one draw while
+## split. Load/event time (rebuilds the merged mesh); null if it is not a merged lamp.
+func split_light(light_name: StringName) -> MeshInstance3D:
+	if lamps_mesh == null or not LAMP_NAMES.has(light_name):
+		return null
+	var mi := light.get(light_name) as MeshInstance3D
+	if mi == null or mi.visible:
+		return mi
+	var parts: Array[MeshInstance3D] = []
+	var xforms: Array[Transform3D] = []
+	for n in LAMP_NAMES:
+		var other := light.get(n) as MeshInstance3D
+		if other != null and n != light_name and not other.visible:
+			parts.append(other)
+			xforms.append(_xform_to(lights, other))
+	lamps_mesh.mesh = merge_meshes(parts, xforms) if not parts.is_empty() else null
+	mi.visible = true
+	return mi
+
+
+## Draw calls this model issues as it stands: the surfaces of every visible mesh (a
+## MultiMesh counts once), before frustum culling. Load time and tests.
+func draw_surface_count() -> int:
+	return _count_draws(root) if root != null else 0
+
+
+## Merges the surfaces of `parts` (each placed by the matching `xforms` entry into the
+## result's space) into one ArrayMesh with one surface per distinct active material,
+## in first-seen order. Keeps positions, normals (turned like the vehicle shader turns
+## them: basis, then normalized), colors (white where missing) and UVs; drops
+## tangents and LODs. Triangle surfaces only. Load time (allocates).
+static func merge_meshes(parts: Array[MeshInstance3D], xforms: Array[Transform3D]) -> ArrayMesh:
+	var groups: Array[_MergeGroup] = []
+	for p in parts.size():
+		var mi := parts[p]
+		var xf := xforms[p]
+		for s in mi.mesh.get_surface_count():
+			if mi.mesh.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
+				push_warning("CarModel.merge_meshes: %s surface %d is not triangles; skipped" % [mi.name, s])
+				continue
+			var mat := mi.get_active_material(s)
+			var g: _MergeGroup = null
+			for cand in groups:
+				if cand.material == mat:
+					g = cand
+			if g == null:
+				g = _MergeGroup.new()
+				g.material = mat
+				groups.append(g)
+			_append_surface(g, mi.mesh.surface_get_arrays(s), xf)
+	var mesh := ArrayMesh.new()
+	for g in groups:
+		var arrays: Array = []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = g.verts
+		arrays[Mesh.ARRAY_NORMAL] = g.normals
+		arrays[Mesh.ARRAY_COLOR] = g.colors
+		if g.has_uv:
+			arrays[Mesh.ARRAY_TEX_UV] = g.uvs
+		if g.has_uv2:
+			arrays[Mesh.ARRAY_TEX_UV2] = g.uv2s
+		arrays[Mesh.ARRAY_INDEX] = g.indices
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+		mesh.surface_set_material(mesh.get_surface_count() - 1, g.material)
+	return mesh
+
+
+static func _append_surface(g: _MergeGroup, arrays: Array, xf: Transform3D) -> void:
+	var base := g.verts.size()
+	var verts := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+	var n := verts.size()
+	for v in verts:
+		g.verts.append(xf * v)
+	var normals: Variant = arrays[Mesh.ARRAY_NORMAL]
+	if normals != null:
+		for nv: Vector3 in normals as PackedVector3Array:
+			g.normals.append((xf.basis * nv).normalized())
+	else:
+		for i in n:
+			g.normals.append(Vector3.UP)
+	var colors: Variant = arrays[Mesh.ARRAY_COLOR]
+	if colors != null:
+		g.colors.append_array(colors as PackedColorArray)
+	else:
+		for i in n:
+			g.colors.append(Color.WHITE)
+	_append_uv(g.uvs, arrays[Mesh.ARRAY_TEX_UV], n)
+	g.has_uv = g.has_uv or arrays[Mesh.ARRAY_TEX_UV] != null
+	_append_uv(g.uv2s, arrays[Mesh.ARRAY_TEX_UV2], n)
+	g.has_uv2 = g.has_uv2 or arrays[Mesh.ARRAY_TEX_UV2] != null
+	var idx: Variant = arrays[Mesh.ARRAY_INDEX]
+	if idx != null:
+		for i: int in idx as PackedInt32Array:
+			g.indices.append(base + i)
+	else:
+		for i in n:
+			g.indices.append(base + i)
+
+
+static func _append_uv(out: PackedVector2Array, uv: Variant, n: int) -> void:
+	if uv != null:
+		out.append_array(uv as PackedVector2Array)
+	else:
+		for i in n:
+			out.append(Vector2.ZERO)
+
+
+## Merges the named lights into one mesh under Lights and hides the originals.
+func _merge_lights(names: Array[StringName], node_name: StringName) -> MeshInstance3D:
+	if lights == null:
+		return null
+	var parts: Array[MeshInstance3D] = []
+	var xforms: Array[Transform3D] = []
+	var on := false
+	for n in names:
+		var mi := light.get(n) as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			return null
+		parts.append(mi)
+		xforms.append(_xform_to(lights, mi))
+		on = on or mi.visible
+	var out := MeshInstance3D.new()
+	out.name = node_name
+	out.mesh = merge_meshes(parts, xforms)
+	out.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	out.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	out.visible = on
+	lights.add_child(out)
+	for mi in parts:
+		mi.visible = false
+	return out
+
+
+## Groups the wheels by tire mesh, rim mesh, materials and rim placement; each group
+## becomes one MultiMesh (one draw) under root, and its Tire/Rim nodes are hidden.
+func _merge_wheels() -> void:
+	wheel_draws.clear()
+	var keys: Array[Array] = []
+	for i in WHEEL_NAMES.size():
+		var w := wheels[i]
+		var t := tires[i] as MeshInstance3D
+		var r := rims[i] as MeshInstance3D
+		# Only a Tire (and Rim) spun straight under its pivot can be drawn by instance.
+		if w == null or t == null or t.mesh == null or t.get_parent() != w:
+			continue
+		if r != null and (r.mesh == null or r.get_parent() != w):
+			continue
+		var rim_rel := t.transform.affine_inverse() * r.transform if r != null else Transform3D.IDENTITY
+		var wd: WheelDraw = null
+		for k in keys.size():
+			if _same_wheel(keys[k], t, r, rim_rel):
+				wd = wheel_draws[k]
+		if wd == null:
+			wd = WheelDraw.new()
+			var parts: Array[MeshInstance3D] = [t]
+			var xforms: Array[Transform3D] = [Transform3D.IDENTITY]
+			if r != null:
+				parts.append(r)
+				xforms.append(rim_rel)
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			# Compatibility multiplies vertex COLOR by the instance color, which reads
+			# zero without colors (CONTRACTS §13 quirks): carry white.
+			mm.use_colors = true
+			# Spin can reach ~2 rad per tick: interpolate by slerp, not a basis lerp.
+			mm.physics_interpolation_quality = MultiMesh.INTERP_QUALITY_HIGH
+			mm.mesh = merge_meshes(parts, xforms)
+			wd.mm = mm
+			wheel_draws.append(wd)
+			keys.append([t, r, rim_rel])
+		wd.wheel.append(i)
+		wd.parent_xf.append(_xform_to(root, w.get_parent() as Node3D))
+		wd.tire_rest.append(t.transform)
+	for k in wheel_draws.size():
+		var wd := wheel_draws[k]
+		wd.mm.instance_count = wd.wheel.size()
+		for j in wd.wheel.size():
+			wd.mm.set_instance_color(j, Color.WHITE)
+			wd.written.append(wd.parent_xf[j] * wheels[wd.wheel[j]].transform * wd.tire_rest[j])
+			wd.mm.set_instance_transform(j, wd.written[j])
+		var mmi := MultiMeshInstance3D.new()
+		mmi.name = "%s%d" % [MERGED_WHEELS_PREFIX, k]
+		mmi.multimesh = wd.mm
+		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+		root.add_child(mmi)
+		wd.node = mmi
+		for i in wd.wheel:
+			tires[i].visible = false
+			if rims[i] != null:
+				rims[i].visible = false
+
+
+## True when tire `t` / rim `r` (rim placed at rim_rel on the tire) draw exactly like
+## the wheel recorded in `key` ([tire, rim, rim_rel]).
+static func _same_wheel(key: Array, t: MeshInstance3D, r: MeshInstance3D, rim_rel: Transform3D) -> bool:
+	var kt := key[0] as MeshInstance3D
+	var kr := key[1] as MeshInstance3D
+	var krel: Transform3D = key[2]
+	if kt.mesh != t.mesh or (kr == null) != (r == null) or not _same_materials(kt, t):
+		return false
+	if r != null and (kr.mesh != r.mesh or not _same_materials(kr, r)):
+		return false
+	return (krel.origin - rim_rel.origin).length() <= WHEEL_MATCH_EPS \
+		and (krel.basis.x - rim_rel.basis.x).length() <= WHEEL_MATCH_EPS \
+		and (krel.basis.y - rim_rel.basis.y).length() <= WHEEL_MATCH_EPS \
+		and (krel.basis.z - rim_rel.basis.z).length() <= WHEEL_MATCH_EPS
+
+
+static func _same_materials(a: MeshInstance3D, b: MeshInstance3D) -> bool:
+	for s in a.mesh.get_surface_count():
+		if a.get_active_material(s) != b.get_active_material(s):
+			return false
+	return true
+
+
+static func _count_draws(n: Node) -> int:
+	var n3 := n as Node3D
+	if n3 != null and not n3.visible:
+		return 0
+	var c := 0
+	var mi := n as MeshInstance3D
+	if mi != null and mi.mesh != null:
+		c += mi.mesh.get_surface_count()
+	var mmi := n as MultiMeshInstance3D
+	if mmi != null and mmi.multimesh != null and mmi.multimesh.mesh != null \
+			and mmi.multimesh.instance_count > 0:
+		c += mmi.multimesh.mesh.get_surface_count()
+	for ch in n.get_children():
+		c += _count_draws(ch)
+	return c
 
 
 # ---------------------------------------------------------------- Resolve

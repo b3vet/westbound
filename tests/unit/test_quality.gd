@@ -339,3 +339,90 @@ func test_applier_without_tuning_is_inert() -> void:
 	Engine.max_fps = 77
 	tree.root.add_child(_node)
 	eq(Engine.max_fps, 77, "no tuning -> nothing applied")
+
+
+# ---------------------------------------------------------------- Dev override (WP4.6)
+
+func test_compute_dev_override_replaces_scale_and_msaa() -> void:
+	var e := QualityScript.compute(_tuning, &"medium", 0, false, false, true, 1.0, 4)
+	near(e.render_scale, 1.0, 1e-9)
+	eq(e.msaa_samples, 4)
+	check(e.dev_override, "flagged")
+	near(e.view_distance_m, 700.0, 1e-9, "the rest of the tier is untouched")
+	# MSAA override also on web (the dev wants to see it there); only the set part changes.
+	var w := QualityScript.compute(_tuning, &"medium", 0, true, false, true, QualityScript.NO_OVERRIDE, 2)
+	eq(w.msaa_samples, 2, "web MSAA rule bypassed by the dev override")
+	near(w.render_scale, 0.75, 1e-9, "scale from the tier")
+	# Over the governor too: the override is what you get.
+	var g := QualityScript.compute(_tuning, &"medium", QualityScript.RUNG_RENDER_SCALE, false, false, true, 0.85)
+	near(g.render_scale, 0.85, 1e-9)
+	check(not _eff(&"medium").dev_override, "no override by default")
+
+
+func test_dev_steps_cycle_and_wrap() -> void:
+	var scales: Array[float] = [0.6, 0.75, 0.85, 1.0]
+	near(QualityScript.next_step_f(scales, 0.75), 0.85, 1e-9)
+	near(QualityScript.next_step_f(scales, 0.8), 0.85, 1e-9, "from between steps")
+	near(QualityScript.next_step_f(scales, 1.0), 0.6, 1e-9, "wraps")
+	near(QualityScript.next_step_f(scales, 0.5), 0.6, 1e-9, "governor floor goes to the first step")
+	var msaa: Array[int] = [0, 2, 4]
+	eq(QualityScript.next_step_i(msaa, 0), 2)
+	eq(QualityScript.next_step_i(msaa, 2), 4)
+	eq(QualityScript.next_step_i(msaa, 4), 0)
+	eq(QualityScript.internal_3d_size(Vector2i(2496, 1320), 0.75), Vector2i(1872, 990))
+	eq(QualityScript.msaa_label(0), "off")
+	eq(QualityScript.msaa_label(4), "4x")
+
+
+func test_dev_override_applies_live_and_survives_tier_changes() -> void:
+	var q := _make_applier()
+	Events.game_state_changed.emit(Game.MENU, Game.RUNNING)
+	near(tree.root.scaling_3d_scale, 0.75, 1e-6, "medium")
+	q.set_dev_override(0.85, 2)
+	near(tree.root.scaling_3d_scale, 0.85, 1e-6, "applied live")
+	eq(tree.root.msaa_3d, Viewport.MSAA_2X)
+	check(q.has_dev_override())
+	eq(DevStats.get_value(DevStats.QUALITY_DEV_OVERRIDE), true)
+	near(float(DevStats.get_value(DevStats.RENDER_SCALE)), 0.85, 1e-9)
+	eq(DevStats.get_value(DevStats.MSAA), "2x")
+	# Tier, governor and game state re-apply: the override stays on top.
+	Settings.set_value(&"quality_tier", &"low")
+	near(tree.root.scaling_3d_scale, 0.85, 1e-6, "kept over a tier change")
+	eq(tree.root.msaa_3d, Viewport.MSAA_2X)
+	near(q.view_distance_m, 500.0, 1e-9, "the tier's other values apply")
+	q.set_governor_rung(1)
+	near(tree.root.scaling_3d_scale, 0.85, 1e-6, "kept over the governor")
+	Events.game_state_changed.emit(Game.RUNNING, Game.PAUSED)
+	near(tree.root.scaling_3d_scale, 0.85, 1e-6, "kept over a state change")
+	eq(Settings.get_value(&"quality_tier"), &"low", "never written to settings")
+	q.set_governor_rung(0)
+	# Only MSAA: the scale follows the tier again.
+	q.set_dev_override(QualityScript.NO_OVERRIDE, 4)
+	near(tree.root.scaling_3d_scale, 0.6, 1e-6)
+	eq(tree.root.msaa_3d, Viewport.MSAA_4X)
+	q.clear_dev_override()
+	check(not q.has_dev_override())
+	near(tree.root.scaling_3d_scale, 0.6, 1e-6, "back to the tier")
+	eq(tree.root.msaa_3d, Viewport.MSAA_DISABLED)
+	eq(DevStats.get_value(DevStats.QUALITY_DEV_OVERRIDE), false)
+
+
+func test_dev_cycles_use_the_tuning_steps() -> void:
+	var q := _make_applier()
+	Events.game_state_changed.emit(Game.MENU, Game.RUNNING)
+	var real := load("res://data/tuning/quality.tres") as QualityTuning
+	eq(Array(real.dev_render_scale_steps), [0.6, 0.75, 0.85, 1.0], "tuned scale steps")
+	eq(Array(real.dev_msaa_steps), [0, 2, 4], "tuned MSAA steps")
+	q.cycle_dev_render_scale()
+	near(tree.root.scaling_3d_scale, 0.85, 1e-6, "0.75 -> 0.85")
+	q.cycle_dev_render_scale()
+	near(tree.root.scaling_3d_scale, 1.0, 1e-6)
+	q.cycle_dev_render_scale()
+	near(tree.root.scaling_3d_scale, 0.6, 1e-6, "wraps")
+	eq(tree.root.msaa_3d, Viewport.MSAA_DISABLED, "scale cycling keeps MSAA")
+	q.cycle_dev_msaa()
+	eq(tree.root.msaa_3d, Viewport.MSAA_2X)
+	near(tree.root.scaling_3d_scale, 0.6, 1e-6, "MSAA cycling keeps the scale")
+	q.cycle_dev_msaa()
+	q.cycle_dev_msaa()
+	eq(tree.root.msaa_3d, Viewport.MSAA_DISABLED, "off again")

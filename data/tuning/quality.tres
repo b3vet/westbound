@@ -26,3 +26,5 @@ governor_fps_floor = 30
 draw_call_budget = 100
 triangle_budget = 150000
 far_plane_margin_m = 20.0
+dev_render_scale_steps = PackedFloat64Array(0.6, 0.75, 0.85, 1)
+dev_msaa_steps = PackedInt32Array(0, 2, 4)

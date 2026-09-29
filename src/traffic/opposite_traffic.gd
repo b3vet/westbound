@@ -12,6 +12,13 @@ extends RefCounted
 ## that passes behind the camera is recycled to beyond the fog end ahead (placed past
 ## its lane's front-most vehicle), so the count stays stable and nothing pops in.
 ## step() allocates nothing.
+##
+## Tick cost (WP4.6): s moves every tick (the view interpolates between ticks), but
+## the lane-center d, the only road query per vehicle, is refreshed at the far-traffic
+## rate (TrafficTuning.far_tick_ratio(): 30 Hz), a quarter of the vehicles per tick,
+## like far traffic in TrafficSim. A lane's center only moves where the road's cross-
+## section changes, so this is invisible. The top-up search runs only when the count
+## is off target.
 
 var state: TrafficState
 ## Distance ahead of the player where recycled vehicles appear (the director's ahead
@@ -30,6 +37,9 @@ var _density_per_km_lane: float = 0.0   ## opposite side (already scaled by the 
 var _target_count: int = 0
 var _night: bool = false
 var _front := PackedFloat64Array()   ## scratch: front-most s per lane
+## Lane-center refresh: slot i refreshes d on ticks where i % _d_ratio == _d_phase.
+var _d_ratio: int = 1
+var _d_phase: int = 0
 
 
 ## `mix_ctx` is read for the driver/vehicle mix (leg, aggressive share, hesitant, biome
@@ -44,6 +54,7 @@ func _init(traffic_tuning: TrafficTuning, road: RoadPath, flow: SpawnSources.Flo
 	ahead_m = ahead_distance_m
 	state = TrafficState.new(_tt.opposite_max_vehicles)
 	_front.resize(_tt.lane_flow_speeds_from_right_kmh.size())
+	_d_ratio = _tt.far_tick_ratio()
 
 
 ## Clears and fills the whole window [player_s - recycle_behind, player_s + ahead_m]
@@ -92,15 +103,23 @@ func density_per_km_lane() -> float:
 ## keep the count at the target. Allocation-free.
 func step(dt: float, player_s: float) -> void:
 	var back := player_s - _tt.opposite_recycle_behind_m
+	_d_phase = (_d_phase + 1) % _d_ratio
+	# Packed arrays are shared by reference: locals skip a property lookup per access.
+	var active := state.active
+	var ss := state.s
+	var vv := state.v
 	for i in state.capacity:
-		if state.active[i] == 0:
+		if active[i] == 0:
 			continue
-		state.s[i] -= state.v[i] * dt
-		if state.s[i] < back:
+		var s := ss[i] - vv[i] * dt
+		ss[i] = s
+		if s < back:
 			state.free_slot(i)
 			recycled += 1
-		else:
-			state.d[i] = _road.opposite_lane_center_d(state.lane[i], state.s[i])
+		elif i % _d_ratio == _d_phase:
+			state.d[i] = _road.opposite_lane_center_d(state.lane[i], s)
+	if state.count == _target_count:
+		return
 	while state.count > _target_count:
 		state.free_slot(_furthest())
 	while state.count < _target_count:

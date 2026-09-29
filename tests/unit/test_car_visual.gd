@@ -159,18 +159,21 @@ func test_brake_lights_follow_brake_input() -> void:
 	var v := _visual()
 	var st := VehicleState.new()
 	var inp := VehicleInput.new()
-	var brake_l: Node3D = v.model.light[&"brake_L"]
-	var brake_r: Node3D = v.model.light[&"brake_R"]
+	var brakes := v.model.brakes_mesh
+	check(brakes != null, "brake_L + brake_R merged into one draw")
 	v.tick(DT, st, inp)
-	check(not brake_l.visible and not brake_r.visible, "off without braking")
+	check(not brakes.visible, "off without braking")
 	inp.brake = 1.0
 	v.tick(DT, st, inp)
-	check(brake_l.visible and brake_r.visible, "on while braking")
+	check(brakes.visible, "on while braking")
 	check(v.brake_lights_on, "flag")
 	inp.brake = Units.pct_to_frac(_vt.brake_light_min_input_pct) * 0.5
 	v.tick(DT, st, inp)
-	check(not brake_l.visible, "off below the threshold")
-	check((v.model.light[&"headlight_L"] as Node3D).visible, "head lamps always drawn (night ramp in the shader)")
+	check(not brakes.visible, "off below the threshold")
+	check(v.model.lamps_mesh != null and v.model.lamps_mesh.visible,
+		"head and tail lamps always drawn (night ramp in the shader)")
+	for key: StringName in CarModel.BRAKE_NAMES + CarModel.LAMP_NAMES:
+		check(not (v.model.light[key] as Node3D).visible, "%s folded into a merged draw" % key)
 
 
 func test_tire_smoke_flag() -> void:
@@ -240,3 +243,113 @@ func test_tick_creates_no_objects() -> void:
 		inp.brake = 1.0 if i % 50 < 10 else 0.0
 		v.tick(DT, st, inp)
 	le(Performance.get_monitor(Performance.OBJECT_COUNT) - before, 0.0, "no objects per tick")
+
+
+# ---------------------------------------------------------------- Draw-call merge (WP4.6)
+
+## The player car and its merged draws, for a real placeholder model.
+func _real_visual(car: CarDef) -> CarVisual:
+	var model := CarModel.load_model(car.model_scene_path, car)
+	var v := CarVisual.new()
+	v.add_child(model.root)
+	_nodes.append(v)
+	model.apply_paint(car.default_paint)
+	v.bind(model, _vt)
+	return v
+
+
+func test_every_car_draws_within_the_merged_target() -> void:
+	for f in DirAccess.get_files_at("res://data/cars"):
+		if not f.ends_with(".tres"):
+			continue
+		var car := load("res://data/cars".path_join(f)) as CarDef
+		var loose := CarModel.load_model(car.model_scene_path, car)
+		var before := loose.draw_surface_count()
+		loose.root.free()
+		var v := _real_visual(car)
+		var after := v.model.draw_surface_count()
+		print("      %s: %d draw surfaces -> %d" % [car.id, before, after])
+		le(after, CarModel.MERGED_DRAW_SURFACES_MAX, "%s merged draws" % car.id)
+		eq(v.model.wheel_draws.size(), 1, "%s: the four wheels share one MultiMesh" % car.id)
+		eq(v.model.wheel_draws[0].mm.instance_count, 4, "%s: four wheel instances" % car.id)
+		var st := VehicleState.new()
+		var inp := VehicleInput.new()
+		inp.brake = 1.0
+		v.tick(DT, st, inp)
+		eq(v.model.draw_surface_count(), after + 1, "%s: braking adds one draw" % car.id)
+		eq(v.model.missing_nodes().size(), 0, "%s: convention nodes kept" % car.id)
+
+
+func test_merged_geometry_matches_the_parts() -> void:
+	var v := _real_visual(_car())
+	var m := v.model
+	# Lamps: the same triangles and material as the four lamp quads.
+	var tris := 0
+	for key: StringName in CarModel.LAMP_NAMES:
+		tris += CarModel.triangle_count((m.light[key] as MeshInstance3D).mesh)
+	eq(CarModel.triangle_count(m.lamps_mesh.mesh), tris, "lamp triangles")
+	eq(m.lamps_mesh.mesh.get_surface_count(), 1, "one lamp surface")
+	eq(m.lamps_mesh.get_active_material(0), CarModel.slot_material(CarModel.Slot.LAMP), "lamp material")
+	# A merged lamp vertex lands where the part's vertex was (Lights space).
+	var head := m.light[&"headlight_L"] as MeshInstance3D
+	var p := head.transform * (head.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array)[0]
+	var found := false
+	for q: Vector3 in m.lamps_mesh.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array:
+		found = found or q.distance_to(p) < 1e-5
+	check(found, "headlight vertex kept in place")
+	# Wheels: tire + rim triangles in one trim surface.
+	var wd := m.wheel_draws[0]
+	var wheel_tris := CarModel.triangle_count((m.tires[0] as MeshInstance3D).mesh) \
+		+ CarModel.triangle_count((m.rims[0] as MeshInstance3D).mesh)
+	eq(CarModel.triangle_count(wd.mm.mesh), wheel_tris, "wheel triangles")
+	eq(wd.mm.mesh.get_surface_count(), 1, "one wheel surface")
+	check(wd.mm.use_colors, "white instance colors (Compatibility quirk)")
+
+
+func test_wheel_instances_follow_the_nodes() -> void:
+	# Each instance must sit exactly where the (hidden) Tire node would draw, through
+	# spin and steer, so the merge changes no pixel.
+	var v := _real_visual(_car())
+	var m := v.model
+	var st := VehicleState.new()
+	var inp := VehicleInput.new()
+	st.v = 37.0
+	for step in 30:
+		st.steer_angle = 0.3 * sin(float(step) * 0.2)
+		v.tick(DT, st, inp)
+		var wd := m.wheel_draws[0]
+		for k in wd.wheel.size():
+			var tire := m.tires[wd.wheel[k]]
+			var want := m.wheels[wd.wheel[k]].transform * tire.transform
+			var got := wd.written[k]
+			if not near(got.origin.distance_to(want.origin), 0.0, 1e-5, "instance %d origin" % k):
+				return
+			for axis in 3:
+				if not near((got.basis[axis] - want.basis[axis]).length(), 0.0, 1e-5, "instance %d basis" % k):
+					return
+
+
+func test_merge_is_idempotent_and_keeps_paint() -> void:
+	var v := _real_visual(_car())
+	var m := v.model
+	var n := m.draw_surface_count()
+	m.merge_draw_surfaces()
+	v.bind(m, _vt)
+	eq(m.draw_surface_count(), n, "a second merge changes nothing")
+	var paint := m.body.get_active_material(0) as ShaderMaterial
+	var c := _car().default_paint
+	eq(paint.get_shader_parameter(&"paint_color"), Vector3(c.r, c.g, c.b), "paint kept on the body")
+
+
+func test_split_light_takes_one_lamp_back_out() -> void:
+	var v := _real_visual(_car())
+	var m := v.model
+	var n := m.draw_surface_count()
+	var tris := CarModel.triangle_count(m.lamps_mesh.mesh)
+	var head := m.split_light(&"headlight_L")
+	check(head != null and head.visible, "the lamp is its own visible node again")
+	eq(CarModel.triangle_count(m.lamps_mesh.mesh), tris - CarModel.triangle_count(head.mesh),
+		"and no longer in the merged lamps (no double draw)")
+	eq(m.draw_surface_count(), n + 1, "one more draw while split")
+	eq(m.split_light(&"headlight_L"), head, "splitting twice is harmless")
+	check(m.split_light(&"brake_L") == null, "only merged head/tail lamps split")

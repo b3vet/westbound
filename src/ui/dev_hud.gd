@@ -14,6 +14,15 @@ extends CanvasLayer
 ## COPY (owner request, M2) puts a DevReport (build, device, renderer, scene,
 ## these rows, all DevStats values) on the clipboard; on web it opens an HTML
 ## panel with a native Copy button because iOS Safari blocks other paths.
+##
+## Quality row (WP4.6, owner: "a bit too low res"): 3D <scale> cycles the render
+## scale and MSAA <n> the MSAA steps (QualityTuning.dev_render_scale_steps /
+## dev_msaa_steps), applied live through Quality.set_dev_override for the session;
+## the tier button shows the tier ("*" while overridden) and goes back to it. The
+## draws row adds the 3D share (the root viewport's draws, dev overlays excluded) and
+## the 3d scale row the internal 3D resolution.
+
+const QUALITY_SCRIPT := preload("res://src/platform/quality.gd")
 
 ## Refresh the readouts at most this often (4 Hz).
 const REFRESH_INTERVAL_USEC := 250_000
@@ -35,11 +44,15 @@ const COPIED_FLASH_S := 1.5
 const COLOR_TEXT := Color("#f4f7ff")
 const COLOR_MUTED := Color("#8a93ad")
 const COLOR_HOT := Color("#ff5a4d")
+## Quality-row button text (flat buttons: the color marks them as tappable).
+const COLOR_ACCENT := Color("#7fd4ff")
 
-enum Row { FPS, FRAME, DRAWS, TRIS, SCALE, VEHICLES, SIM, THERMAL, QUALITY }
+enum Row { FPS, FRAME, DRAWS, TRIS, SCALE, MSAA, VEHICLES, SIM, THERMAL, QUALITY }
 const ROW_NAMES: PackedStringArray = [
-	"fps", "frame", "draws", "tris", "3d scale", "vehicles", "sim tick", "thermal", "quality",
+	"fps", "frame", "draws", "tris", "3d scale", "msaa", "vehicles", "sim tick", "thermal", "quality",
 ]
+## Suffix on the tier button while a dev override is active.
+const OVERRIDE_MARK := "*"
 
 ## Start visible in debug builds (release builds always start hidden).
 @export var start_visible_in_debug: bool = true
@@ -49,6 +62,9 @@ const ROW_NAMES: PackedStringArray = [
 
 var _value_labels: Array[Label] = []
 var _copy_button: Button
+var _scale_button: Button
+var _msaa_button: Button
+var _tier_button: Button
 var _hot: PackedByteArray = PackedByteArray()
 
 var _last_frame_usec: int = 0
@@ -70,7 +86,7 @@ func _ready() -> void:
 	_touch_down_msec.resize(MAX_TOUCHES)
 	_touch_down_msec.fill(-1)
 	_build_rows()
-	_build_copy_button()
+	_build_buttons()
 	get_viewport().size_changed.connect(_update_safe_area)
 	_update_safe_area()
 	set_hud_visible(OS.is_debug_build() and start_visible_in_debug)
@@ -169,11 +185,13 @@ func refresh() -> void:
 		_set_row(Row.FRAME, PLACEHOLDER)
 
 	var draws := int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
+	var draws_3d := get_viewport().get_render_info(Viewport.RENDER_INFO_TYPE_VISIBLE,
+		Viewport.RENDER_INFO_DRAW_CALLS_IN_FRAME)
 	var draw_budget: int = DevStats.get_value(DevStats.DRAW_CALL_BUDGET, 0)
 	if draw_budget > 0:
-		_set_row(Row.DRAWS, "%d / %d" % [draws, draw_budget])
+		_set_row(Row.DRAWS, "%d / %d  3d %d" % [draws, draw_budget, draws_3d])
 	else:
-		_set_row(Row.DRAWS, "%d" % draws)
+		_set_row(Row.DRAWS, "%d  3d %d" % [draws, draws_3d])
 	_set_hot(Row.DRAWS, draw_budget > 0 and draws > draw_budget)
 
 	var tris := int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME))
@@ -184,7 +202,10 @@ func refresh() -> void:
 		_set_row(Row.TRIS, _count(tris))
 	_set_hot(Row.TRIS, tri_budget > 0 and tris > tri_budget)
 
-	_set_row(Row.SCALE, "%.2f" % get_viewport().scaling_3d_scale)
+	var scale_3d := get_viewport().scaling_3d_scale
+	var internal := QUALITY_SCRIPT.internal_3d_size(_window_size(), scale_3d)
+	_set_row(Row.SCALE, "%.2f  %dx%d" % [scale_3d, internal.x, internal.y])
+	_set_row(Row.MSAA, _msaa_label())
 
 	var vehicles: Variant = DevStats.get_value(DevStats.VEHICLES)
 	_set_row(Row.VEHICLES, PLACEHOLDER if vehicles == null else str(vehicles))
@@ -202,8 +223,11 @@ func refresh() -> void:
 
 	var tier: Variant = DevStats.get_value(DevStats.QUALITY_TIER)
 	var rung: int = DevStats.get_value(DevStats.GOVERNOR_RUNG, 0)
-	_set_row(Row.QUALITY, PLACEHOLDER if tier == null else "%s  gov %d" % [tier, rung])
+	var dev: bool = DevStats.get_value(DevStats.QUALITY_DEV_OVERRIDE, false)
+	_set_row(Row.QUALITY, PLACEHOLDER if tier == null else "%s%s  gov %d" % [
+		tier, OVERRIDE_MARK if dev else "", rung])
 	_set_hot(Row.QUALITY, rung > 0)
+	_refresh_quality_buttons(scale_3d, tier, dev)
 
 
 ## The rows as [[name, value], ...], refreshed now (dev report, tests).
@@ -226,6 +250,29 @@ func copy_report() -> void:
 	if copied:
 		_copy_button.text = "COPIED"
 		get_tree().create_timer(COPIED_FLASH_S).timeout.connect(func() -> void: _copy_button.text = "COPY")
+
+
+## Dev quality row: next render scale step (live, session only).
+func cycle_render_scale() -> void:
+	Quality.cycle_dev_render_scale()
+	refresh()
+
+
+## Dev quality row: next MSAA step (live, session only).
+func cycle_msaa() -> void:
+	Quality.cycle_dev_msaa()
+	refresh()
+
+
+## Dev quality row: back to the tier's render scale and MSAA.
+func reset_quality() -> void:
+	Quality.clear_dev_override()
+	refresh()
+
+
+## Button texts of the quality row (tests).
+func quality_button_texts() -> PackedStringArray:
+	return PackedStringArray([_scale_button.text, _msaa_button.text, _tier_button.text])
 
 
 ## Current text of a readout (tests).
@@ -270,18 +317,63 @@ func _build_rows() -> void:
 		_value_labels.append(value)
 
 
-func _build_copy_button() -> void:
+func _build_buttons() -> void:
 	var box := VBoxContainer.new()
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_panel.remove_child(_grid)
 	box.add_child(_grid)
 	_panel.add_child(box)
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(row)
+	_scale_button = _add_button(row, "3D", cycle_render_scale)
+	_msaa_button = _add_button(row, "MSAA", cycle_msaa)
+	_tier_button = _add_button(row, "TIER", reset_quality)
+	for b: Button in [_scale_button, _msaa_button, _tier_button]:
+		b.add_theme_color_override(&"font_color", COLOR_ACCENT)
 	_copy_button = Button.new()
 	_copy_button.text = "COPY"
 	_copy_button.focus_mode = Control.FOCUS_NONE
 	_copy_button.custom_minimum_size = Vector2(0.0, COPY_BUTTON_HEIGHT)
 	_copy_button.pressed.connect(copy_report)
 	box.add_child(_copy_button)
+
+
+func _add_button(parent: Control, text: String, action: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(0.0, COPY_BUTTON_HEIGHT)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Flat: text only, so the row batches with the readouts instead of adding a
+	# stylebox + text draw pair per button (the dev HUD costs draw calls too).
+	b.flat = true
+	b.pressed.connect(action)
+	parent.add_child(b)
+	return b
+
+
+func _refresh_quality_buttons(scale_3d: float, tier: Variant, dev: bool) -> void:
+	_set_text(_scale_button, "3D %.2f" % scale_3d)
+	_set_text(_msaa_button, "MSAA %s" % _msaa_label())
+	var tier_text := "TIER" if tier == null else String(tier).to_upper()
+	_set_text(_tier_button, tier_text + (OVERRIDE_MARK if dev else ""))
+
+
+static func _set_text(b: Button, text: String) -> void:
+	if b.text != text:
+		b.text = text
+
+
+## MSAA as applied to the viewport ("off", "2x", "4x").
+func _msaa_label() -> String:
+	return DevReport.viewport_msaa_label(get_viewport())
+
+
+## Window size in device pixels (what the 3D scale applies to).
+func _window_size() -> Vector2i:
+	var w := get_window()
+	return w.size if w != null else Vector2i(get_viewport().get_visible_rect().size)
 
 
 ## Keep the panel inside the display safe area (notch, rounded corners).

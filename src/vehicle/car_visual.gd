@@ -15,6 +15,10 @@ extends Node3D
 ##   - wheels spin at v / wheel radius; the front pivots show the steer angle.
 ##   - brake lights while brake input >= brake_light_min_input_pct.
 ##   - the Interior's SteeringWheel turns with the steer angle.
+## bind() first merges the model's draws (CarModel.merge_draw_surfaces, WP4.6): the
+## wheels are then drawn by MultiMesh instances written here each tick (the Wheel,
+## Rim and Tire nodes still get the same transforms), and the brake lights are the
+## merged MergedBrakes node.
 ## Reads VehicleState and VehicleInput only; never writes them. tick() is
 ## allocation-free.
 ##
@@ -60,6 +64,9 @@ var _spinner_rest: Array[Transform3D] = []
 var _brakes: Array[Node3D] = []
 var _steering_wheel: Node3D
 var _steering_rest := Transform3D.IDENTITY
+## Rest transforms of the four wheel pivots (WHEEL_NAMES order; identity if missing).
+var _wheel_rest: Array[Transform3D] = []
+var _wheel_draws: Array[CarModel.WheelDraw] = []
 
 # Exact spring step coefficients for the last dt: x' = a x + b v, v' = c x + e v.
 var _dt_cached: float = -1.0
@@ -77,6 +84,7 @@ const MAX_ZETA := 0.999   # lint: allow-number numerical bound, not a tuning val
 ## body-motion tuning. Load time; allocates.
 func bind(car_model: CarModel, tuning: VehicleTuning) -> void:
 	model = car_model
+	car_model.merge_draw_surfaces()
 	_roll_max = deg_to_rad(tuning.body_roll_max_deg)
 	_pitch_max = deg_to_rad(tuning.body_pitch_max_deg)
 	_roll_per_accel = _roll_max / tuning.body_roll_full_accel_mps2
@@ -110,11 +118,18 @@ func bind(car_model: CarModel, tuning: VehicleTuning) -> void:
 			if n != null:
 				_spinners.append(n)
 				_spinner_rest.append(n.transform)
+	_wheel_rest.clear()
+	for w in car_model.wheels:
+		_wheel_rest.append(w.transform if w != null else Transform3D.IDENTITY)
+	_wheel_draws = car_model.wheel_draws
 	_brakes.clear()
-	for key: StringName in [&"brake_L", &"brake_R"]:
-		var l: Node3D = car_model.light.get(key)
-		if l != null:
-			_brakes.append(l)
+	if car_model.brakes_mesh != null:
+		_brakes.append(car_model.brakes_mesh)
+	else:
+		for key: StringName in CarModel.BRAKE_NAMES:
+			var l: Node3D = car_model.light.get(key)
+			if l != null:
+				_brakes.append(l)
 	_steering_wheel = car_model.steering_wheel
 	if _steering_wheel != null:
 		_steering_rest = _steering_wheel.transform
@@ -132,6 +147,8 @@ func reset() -> void:
 	tire_smoke = false
 	_set_brake_lights(false)
 	_apply(0.0)
+	for wd in _wheel_draws:
+		wd.mm.reset_instances_physics_interpolation()
 
 
 ## One visual tick. Reads `state` and `input`; never writes them. Allocation-free.
@@ -168,7 +185,9 @@ func wheel_spin_rate(v: float) -> float:
 ## Damage hook (spec: Lives → Damage). Level 1 is the first-hit look: smoke from the
 ## smoke_hood marker and one flickering headlight on the placeholder models.
 ## TODO(Phase 4, WP4.1): smoke particles at model.marker(&"smoke_hood") and the
-## headlight_L flicker; real damage states swap the Damage meshes.
+## headlight_L flicker (the head/tail lamps are one merged draw since WP4.6:
+## model.split_light(&"headlight_L") returns it as its own node to flicker); real
+## damage states swap the Damage meshes.
 func set_damage_level(level: int) -> void:
 	damage_level = maxi(level, 0)
 
@@ -187,6 +206,15 @@ func _apply(steer_angle: float) -> void:
 	var spin := Transform3D(Basis(Vector3.RIGHT, -wheel_angle), Vector3.ZERO)
 	for i in _spinners.size():
 		_spinners[i].transform = spin * _spinner_rest[i]
+	# The merged wheels: the same pivot * spin * rest chain, per MultiMesh instance.
+	for wd in _wheel_draws:
+		for k in wd.wheel.size():
+			var w := wd.wheel[k]
+			var p := _wheel_rest[w]
+			if w < 2:
+				p = Transform3D(steer * p.basis, p.origin)
+			wd.written[k] = wd.parent_xf[k] * p * spin * wd.tire_rest[k]
+			wd.mm.set_instance_transform(k, wd.written[k])
 	if _steering_wheel != null:
 		# Seen from the driver (looking along -Z), turning right is clockwise.
 		_steering_wheel.transform = _steering_rest \
