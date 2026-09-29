@@ -1,4 +1,5 @@
-//! `/ws` gateway: echo, limits, keepalive, caps, shutdown.
+//! `/ws/echo` (the ops echo): echo, limits, keepalive, caps, shutdown. The protocol
+//! gateway on `/ws` is tested in `gateway.rs`.
 mod common;
 
 use std::time::Duration;
@@ -19,7 +20,7 @@ fn close_code(m: Option<Message>) -> Option<CloseCode> {
 #[tokio::test]
 async fn echoes_binary_and_text() {
     let s = common::start().await;
-    let mut ws = s.connect().await;
+    let mut ws = s.connect_echo().await;
     let payload: Vec<u8> = (0..=255u8).collect();
     ws.send(Message::Binary(payload.clone().into()))
         .await
@@ -54,7 +55,7 @@ async fn max_size_message_passes_oversize_is_closed_1009() {
     let s = common::start().await;
     let max = s.state.config.limits.max_message_bytes;
     assert_eq!(max, 16 * 1024, "spec: 16 KB inbound max");
-    let mut ws = s.connect().await;
+    let mut ws = s.connect_echo().await;
     ws.send(Message::Binary(vec![7u8; max].into()))
         .await
         .unwrap();
@@ -85,7 +86,7 @@ async fn slow_client_is_disconnected_when_queue_fills() {
         s.state.config.limits.outbound_queue_frames, 64,
         "spec: 64 frames"
     );
-    let ws = s.connect().await;
+    let ws = s.connect_echo().await;
     let (mut tx, rx) = ws.split();
     // Never read: the echoes fill the socket buffers, then the 64-frame queue.
     let m = s.metrics().clone();
@@ -123,7 +124,7 @@ async fn silent_client_times_out_responsive_client_stays() {
     let m = s.metrics().clone();
 
     // Responsive: its reader answers pings with pongs.
-    let alive = s.connect().await;
+    let alive = s.connect_echo().await;
     let (_alive_tx, mut alive_rx) = alive.split();
     let reader = tokio::spawn(async move {
         let mut pings = 0u32;
@@ -139,7 +140,7 @@ async fn silent_client_times_out_responsive_client_stays() {
     });
 
     // Silent: never polled, so it never answers a ping.
-    let _silent = s.connect().await;
+    let _silent = s.connect_echo().await;
     eventually("silent client timed out", || {
         Metrics::get(&m.ws_timeout_closed) == 1
     })
@@ -164,9 +165,9 @@ async fn silent_client_times_out_responsive_client_stays() {
 #[tokio::test]
 async fn connection_cap_refuses_extra_clients() {
     let s = common::start_with(|c| c.limits.max_connections = 2).await;
-    let _a = s.connect().await;
-    let _b = s.connect().await;
-    let url = format!("ws://{}/ws", s.addr);
+    let _a = s.connect_echo().await;
+    let _b = s.connect_echo().await;
+    let url = format!("ws://{}/ws/echo", s.addr);
     let err = tokio_tungstenite::connect_async(url).await.unwrap_err();
     match err {
         tokio_tungstenite::tungstenite::Error::Http(resp) => assert_eq!(resp.status(), 503),
@@ -179,12 +180,23 @@ async fn connection_cap_refuses_extra_clients() {
 #[tokio::test]
 async fn shutdown_sends_close_frame_and_stops() {
     let s = common::start().await;
-    let mut a = s.connect().await;
-    let mut b = s.connect().await;
+    let mut a = s.connect_echo().await;
+    let mut b = s.connect_echo().await;
     s.state.shutdown.cancel();
     assert_eq!(close_code(next_msg(&mut a).await), Some(CloseCode::Away));
     assert_eq!(close_code(next_msg(&mut b).await), Some(CloseCode::Away));
     let m = s.metrics().clone();
     s.stop().await;
     assert_eq!(Metrics::get(&m.ws_connections), 0);
+}
+
+#[tokio::test]
+async fn echo_route_can_be_disabled() {
+    let s = common::start_with(|c| c.gateway.echo_enabled = false).await;
+    let url = format!("ws://{}/ws/echo", s.addr);
+    match tokio_tungstenite::connect_async(url).await.unwrap_err() {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => assert_eq!(resp.status(), 404),
+        e => panic!("expected HTTP 404, got {e}"),
+    }
+    s.stop().await;
 }

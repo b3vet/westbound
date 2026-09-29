@@ -15,9 +15,10 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tower::ServiceExt;
 use westbound_server::auth::routes::DeviceCreated;
-use westbound_server::clock::ManualClock;
+use westbound_server::clock::{ManualClock, SystemClock};
 use westbound_server::config::Secret;
 use westbound_server::metrics::Metrics;
+use westbound_server::tick::TickClock;
 use westbound_server::{db, AppState, Config, Server};
 
 pub const JWT_SECRET: &str = "test-jwt-secret-0123456789abcdef0123456789";
@@ -50,6 +51,8 @@ pub fn test_config(dir: &TempDir) -> Config {
     c.metrics.bind = "127.0.0.1:0".into();
     c.db.path = dir.path().join("test.db");
     c.backup.enabled = false;
+    // The test client never closes on a fatal error; don't wait the production second.
+    c.gateway.fatal_close_delay_ms = 20;
     c.backup.dir = dir.path().join("backups");
     c.auth.jwt_secret = Secret::new(JWT_SECRET);
     c.auth.device_secret_pepper = Secret::new(PEPPER);
@@ -77,6 +80,26 @@ pub async fn start_with(tweak: impl FnOnce(&mut Config)) -> TestServer {
     let pool = db::connect(&cfg.db).await.unwrap();
     db::migrate(&pool).await.unwrap();
     let server = Server::bind(cfg, pool).await.unwrap();
+    serve(server, dir)
+}
+
+/// A server whose tick clock is a `ManualTickClock` (Pong tests).
+pub async fn start_with_tick_clock(
+    tweak: impl FnOnce(&mut Config),
+    tick: Arc<dyn TickClock>,
+) -> TestServer {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = test_config(&dir);
+    tweak(&mut cfg);
+    cfg.validate().expect("tweaked test config is valid");
+    let pool = db::connect(&cfg.db).await.unwrap();
+    db::migrate(&pool).await.unwrap();
+    let state = AppState::with_clocks(cfg, pool, Arc::new(SystemClock), tick).unwrap();
+    let server = Server::bind_state(state).await.unwrap();
+    serve(server, dir)
+}
+
+fn serve(server: Server, dir: TempDir) -> TestServer {
     let addr = server.local_addr();
     let metrics_addr = server.metrics_addr().unwrap();
     let state = server.state().clone();
@@ -95,8 +118,18 @@ impl TestServer {
         &self.state.metrics
     }
 
+    /// Connects to the protocol gateway (`/ws`).
     pub async fn connect(&self) -> Ws {
-        let url = format!("ws://{}/ws", self.addr);
+        self.connect_path("/ws").await
+    }
+
+    /// Connects to the ops echo (`/ws/echo`).
+    pub async fn connect_echo(&self) -> Ws {
+        self.connect_path("/ws/echo").await
+    }
+
+    pub async fn connect_path(&self, path: &str) -> Ws {
+        let url = format!("ws://{}{path}", self.addr);
         let (ws, resp) = tokio_tungstenite::connect_async(url).await.unwrap();
         assert_eq!(resp.status(), 101);
         ws

@@ -97,3 +97,52 @@ account_burst = 30
 # Directory with apple-app-site-association and assetlinks.json. Empty, or a
 # missing file, serves the built-in placeholder.
 dir = ""
+
+[gateway]
+# The realtime gateway on /ws (docs/SERVER.md → "Realtime gateway").
+# The first message must be Hello within this long, else a fatal handshake_required.
+hello_timeout_ms = 5000
+# Server tick rate announced in Welcome and used by Pong (spec: 20 Hz).
+tick_rate_hz = 20
+# Oldest Hello.client_build accepted; older clients get update_required.
+min_client_build = 0
+# Accepted Hello.map_hash values: 64 hex characters each, the SHA-256 of the loop's
+# road-space file (N3 provides loop_v1's). Empty: any hash when server.env = "dev",
+# none in production (every Hello gets map_mismatch). From the environment:
+# WB_GATEWAY__MAP_HASHES=<hash>,<hash>.
+map_hashes = []
+# How often live sessions are re-checked for bans, deleted accounts and revoked tokens
+# (the admin CLI is a separate process, so its bans reach open sockets this way).
+ban_recheck_ms = 30000
+# After a fatal Error, wait up to this long for the client to close before sending the
+# close frame (a client reading the error and the close in one read may drop the error).
+fatal_close_delay_ms = 1000
+# Serve the /ws/echo ops route (the /api/v1/echo-check page, tools/net_echo_check.gd).
+echo_enabled = true
+
+[ws_rate_limits]
+# Per-connection token buckets on every client message type on /ws: <type>_per_sec
+# refilled evenly, <type>_burst available at once. A message over its limit is dropped
+# (the client gets a non-fatal rate_limited at most every notice_interval_ms); every drop
+# also takes a token from the violation bucket, and a client that empties it is
+# disconnected with a fatal rate_limited.
+enabled = true
+ping_per_sec = 2.0
+ping_burst = 5
+lobby_command_per_sec = 5.0
+lobby_command_burst = 10
+player_state_per_sec = 25.0
+player_state_burst = 40
+score_claim_per_sec = 10.0
+score_claim_burst = 20
+hit_report_per_sec = 5.0
+hit_report_burst = 10
+run_event_per_sec = 2.0
+run_event_burst = 5
+quick_chat_per_sec = 1.0
+quick_chat_burst = 3
+room_host_command_per_sec = 2.0
+room_host_command_burst = 5
+violation_per_sec = 5.0
+violation_burst = 100
+notice_interval_ms = 1000

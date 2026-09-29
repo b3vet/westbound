@@ -58,6 +58,8 @@ pub struct Config {
     pub http: HttpConfig,
     pub rate_limits: RateLimitsConfig,
     pub deeplinks: DeepLinksConfig,
+    pub gateway: GatewayConfig,
+    pub ws_rate_limits: WsRateLimitsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -196,6 +198,61 @@ pub struct DeepLinksConfig {
     pub dir: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GatewayConfig {
+    /// The first message must be `Hello`, within this long after the upgrade
+    /// (else a fatal `handshake_required`).
+    pub hello_timeout_ms: u64,
+    /// Server tick rate announced in `Welcome` and used by `Pong` (spec: 20 Hz).
+    pub tick_rate_hz: u8,
+    /// Oldest `Hello.client_build` accepted (older → `update_required`).
+    pub min_client_build: u32,
+    /// Accepted `Hello.map_hash` values, 64 hex characters each (the SHA-256 of the loop's
+    /// road-space file; N3 provides `loop_v1`'s). Empty: any hash in `server.env = "dev"`,
+    /// none in production (every `Hello` gets `map_mismatch`).
+    pub map_hashes: Vec<String>,
+    /// How often live sessions are re-checked against the database for bans, deleted
+    /// accounts and revoked tokens (the admin CLI is a separate process).
+    pub ban_recheck_ms: u64,
+    /// After a fatal `Error`, wait up to this long for the client to close before sending
+    /// the close frame, so the error is not read together with the close (some clients,
+    /// Godot's `WebSocketPeer` among them, then drop the error).
+    pub fatal_close_delay_ms: u64,
+    /// Serve the `/ws/echo` ops route (the echo-check page and the echo tools).
+    pub echo_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WsRateLimitsConfig {
+    /// Per-connection limits on every client → server message type (`/ws`).
+    pub enabled: bool,
+    /// Each type: messages per second refilled evenly, and the burst available at once.
+    pub ping_per_sec: f64,
+    pub ping_burst: u32,
+    pub lobby_command_per_sec: f64,
+    pub lobby_command_burst: u32,
+    pub player_state_per_sec: f64,
+    pub player_state_burst: u32,
+    pub score_claim_per_sec: f64,
+    pub score_claim_burst: u32,
+    pub hit_report_per_sec: f64,
+    pub hit_report_burst: u32,
+    pub run_event_per_sec: f64,
+    pub run_event_burst: u32,
+    pub quick_chat_per_sec: f64,
+    pub quick_chat_burst: u32,
+    pub room_host_command_per_sec: f64,
+    pub room_host_command_burst: u32,
+    /// Every dropped message takes one token from this bucket; a client that empties it is
+    /// disconnected with a fatal `rate_limited`.
+    pub violation_per_sec: f64,
+    pub violation_burst: u32,
+    /// After a drop, a non-fatal `rate_limited` error goes out at most this often.
+    pub notice_interval_ms: u64,
+}
+
 /// Production domain (owner, 2026-09-29).
 pub const DEFAULT_PUBLIC_ORIGIN: &str = "https://westbound.sipsakrandevu.com";
 /// The web build on GitHub Pages, until it moves to the production domain.
@@ -326,6 +383,96 @@ impl Default for RateLimitsConfig {
     }
 }
 
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            hello_timeout_ms: 5_000,
+            tick_rate_hz: protocol::handshake::DEFAULT_TICK_RATE_HZ,
+            min_client_build: 0,
+            map_hashes: Vec::new(),
+            ban_recheck_ms: 30_000,
+            fatal_close_delay_ms: 1_000,
+            echo_enabled: true,
+        }
+    }
+}
+
+impl Default for WsRateLimitsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            // The client pings every 2 s.
+            ping_per_sec: 2.0,
+            ping_burst: 5,
+            lobby_command_per_sec: 5.0,
+            lobby_command_burst: 10,
+            // 20 Hz uploads plus jitter bunching.
+            player_state_per_sec: 25.0,
+            player_state_burst: 40,
+            // About two claims a second, more in trains.
+            score_claim_per_sec: 10.0,
+            score_claim_burst: 20,
+            hit_report_per_sec: 5.0,
+            hit_report_burst: 10,
+            run_event_per_sec: 2.0,
+            run_event_burst: 5,
+            quick_chat_per_sec: 1.0,
+            quick_chat_burst: 3,
+            room_host_command_per_sec: 2.0,
+            room_host_command_burst: 5,
+            violation_per_sec: 5.0,
+            violation_burst: 100,
+            notice_interval_ms: 1_000,
+        }
+    }
+}
+
+impl WsRateLimitsConfig {
+    /// `(name, per_sec, burst)` for every limited type and the violation bucket.
+    pub fn entries(&self) -> [(&'static str, f64, u32); 9] {
+        [
+            ("ping", self.ping_per_sec, self.ping_burst),
+            (
+                "lobby_command",
+                self.lobby_command_per_sec,
+                self.lobby_command_burst,
+            ),
+            (
+                "player_state",
+                self.player_state_per_sec,
+                self.player_state_burst,
+            ),
+            (
+                "score_claim",
+                self.score_claim_per_sec,
+                self.score_claim_burst,
+            ),
+            ("hit_report", self.hit_report_per_sec, self.hit_report_burst),
+            ("run_event", self.run_event_per_sec, self.run_event_burst),
+            ("quick_chat", self.quick_chat_per_sec, self.quick_chat_burst),
+            (
+                "room_host_command",
+                self.room_host_command_per_sec,
+                self.room_host_command_burst,
+            ),
+            ("violation", self.violation_per_sec, self.violation_burst),
+        ]
+    }
+}
+
+/// Parses a 64-hex-character map hash.
+pub fn parse_map_hash(s: &str) -> Option<protocol::MapHash> {
+    let s = s.trim();
+    if s.len() != 2 * protocol::types::MAP_HASH_LEN || !s.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; protocol::types::MAP_HASH_LEN];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(protocol::MapHash(out))
+}
+
 /// Validation failures, all of them at once.
 #[derive(Debug, thiserror::Error)]
 #[error("invalid config:\n  - {}", .0.join("\n  - "))]
@@ -429,6 +576,43 @@ impl Config {
         }
         if l.max_connections == 0 {
             errs.push("limits.max_connections must be at least 1".into());
+        }
+        // `Welcome` carries both as u16 milliseconds.
+        if l.ping_interval_ms > u64::from(u16::MAX) || l.dead_after_ms > u64::from(u16::MAX) {
+            errs.push(format!(
+                "limits.ping_interval_ms and limits.dead_after_ms must be at most {}",
+                u16::MAX
+            ));
+        }
+        let g = &self.gateway;
+        if g.hello_timeout_ms == 0 {
+            errs.push("gateway.hello_timeout_ms must be at least 1".into());
+        }
+        if g.tick_rate_hz == 0 || g.tick_rate_hz > protocol::messages::MAX_TICK_RATE_HZ {
+            errs.push(format!(
+                "gateway.tick_rate_hz must be 1..={}",
+                protocol::messages::MAX_TICK_RATE_HZ
+            ));
+        }
+        for h in &g.map_hashes {
+            if parse_map_hash(h).is_none() {
+                errs.push(format!(
+                    "gateway.map_hashes entry `{h}` must be 64 hex characters (a SHA-256)"
+                ));
+            }
+        }
+        if g.ban_recheck_ms == 0 {
+            errs.push("gateway.ban_recheck_ms must be at least 1".into());
+        }
+        let w = &self.ws_rate_limits;
+        if w.enabled {
+            for (name, per_sec, burst) in w.entries() {
+                if !(per_sec.is_finite() && per_sec > 0.0) || burst == 0 {
+                    errs.push(format!(
+                        "ws_rate_limits.{name}_per_sec must be above 0 and ws_rate_limits.{name}_burst at least 1"
+                    ));
+                }
+            }
         }
         if self.metrics.enabled {
             match self.metrics.bind.parse::<SocketAddr>() {
@@ -545,6 +729,10 @@ impl Config {
 
     pub fn dead_after(&self) -> Duration {
         Duration::from_millis(self.limits.dead_after_ms)
+    }
+
+    pub fn hello_timeout(&self) -> Duration {
+        Duration::from_millis(self.gateway.hello_timeout_ms)
     }
 
     pub fn shutdown_grace(&self) -> Duration {

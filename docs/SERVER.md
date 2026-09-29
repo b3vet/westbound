@@ -21,6 +21,16 @@ N1.1 adds device accounts (MP-D2: no Apple / Google yet):
 
 See "Accounts API".
 
+N2.3 puts the realtime protocol on `/ws` (the echo moves to `/ws/echo`):
+
+- the `Hello` → `Welcome` / `Error` handshake with the access token, versions, map hashes and bans;
+- one session per account (a second login replaces the first);
+- per-connection rate limits on every message type;
+- `Pong` with a server-wide 20 Hz tick clock;
+- live bans that drop open sockets.
+
+See "Realtime gateway".
+
 | Path | What |
 | --- | --- |
 | `westbound-server/crates/server/` | The binary (`westbound-server`) and its library, with integration tests in `tests/` |
@@ -30,18 +40,20 @@ See "Accounts API".
 | `westbound-server/data/profanity.txt` | The display-name word list (compiled into the binary; format in the file) |
 | `westbound-server/Dockerfile`, `docker-compose.yml`, `deploy/` | Image, compose file (Coolify and local), local TLS (`Caddyfile`, `local-tls.sh`) |
 | `.github/workflows/server.yml` | CI: fmt, clippy, tests, image build, GHCR push |
-| `tools/net_echo_check.gd`, `tools/web_smoke/ws_echo.mjs` | Echo checks from Godot and from Chromium |
+| `tools/net_echo_check.gd`, `tools/web_smoke/ws_echo.mjs` | Echo checks from Godot and from Chromium (point them at `/ws/echo`) |
+| `tests/net/live_ws_check.gd` | Godot's `NetClient` against a running server: account, `Hello` → `Welcome`, clock sync, keepalive (see "Realtime gateway → Live cross-side check") |
 
 ## Routes
 
 | Route | Listener | What |
 | --- | --- | --- |
 | `GET /api/v1/health` | public `:8080` | `{"status":"ok","version":"0.1.0","build":"<sha>","db":"ok"}`. Returns 503 with `"status":"degraded"` when the database does not answer |
-| `GET /ws` | public | WebSocket. N0 echoes text and binary frames. Limits: 16 KB max inbound message (close 1009), a 64-frame outbound queue (a slow client is dropped), a ping every 2 s, and a close after 8 s of silence. Past 400 connections, the upgrade gets HTTP 503 |
-| `GET /api/v1/echo-check` | public | A small HTML page that runs the WebSocket echo from any browser, used to check a phone (see "Verify a phone connects") |
+| `GET /ws` | public | The realtime gateway: binary protocol frames (docs/PROTOCOL.md), `Hello` first. See "Realtime gateway". Limits: 16 KB max inbound message (close 1009), a 64-frame outbound queue (a slow client is dropped), a ping every 2 s, and a close after 8 s of silence. Past 400 connections, the upgrade gets HTTP 503 |
+| `GET /ws/echo` | public | Ops echo of text and binary frames, same limits and connection cap. `gateway.echo_enabled = false` turns it off (404) |
+| `GET /api/v1/echo-check` | public | A small HTML page, used to check a phone (see "Verify a phone connects"): runs the echo on `/ws/echo`, then sends a token-less `Hello` to `/ws` and shows the gateway's `Error` (`map_mismatch` or `auth_failed`) |
 | `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files, read from `deeplinks.dir`, with built-in empty placeholders |
 | `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API" |
-| `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info` |
+| `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info` |
 
 ## Local development
 
@@ -109,15 +121,138 @@ Behind a TLS-intercepting proxy, the Docker build needs that proxy's CA. Pass it
 Then check the echo from Godot, and from a browser page served on another origin (the way the web build runs):
 
 ```sh
-tools/godot.sh --headless --script res://tools/net_echo_check.gd -- --url=wss://localhost:8443/ws --insecure
-# NET_ECHO ok wss://localhost:8443/ws bytes=1024 rtt_ms=3
+tools/godot.sh --headless --script res://tools/net_echo_check.gd -- --url=wss://localhost:8443/ws/echo --insecure
+# NET_ECHO ok wss://localhost:8443/ws/echo bytes=1024 rtt_ms=3
 
 (cd tools/web_smoke && npm ci)    # once
 node tools/web_smoke/ws_echo.mjs --server https://localhost:8443 --insecure
 # WS_ECHO ok wss://localhost:8443/ws from http://127.0.0.1:41234/ rtt_ms=2 server=0.1.0 (abc1234) db=ok
 ```
 
-`--insecure` accepts Caddy's self-signed certificate. It uses `TLSOptions.client_unsafe()` in Godot and `--ignore-certificate-errors` in Chromium, and exists in these dev tools only. Against the real domain, drop `--insecure`.
+Since N2.3 the echo lives on `/ws/echo`; `/ws` speaks the protocol. `ws_echo.mjs` still opens `<server>/ws` and `deploy/Caddyfile` only forwards the exact path `/ws`, so both need the one-line update noted in the N2.3 handoff before the Chromium echo works through local TLS again. `--insecure` accepts Caddy's self-signed certificate. It uses `TLSOptions.client_unsafe()` in Godot and `--ignore-certificate-errors` in Chromium, and exists in these dev tools only. Against the real domain, drop `--insecure`.
+
+## Realtime gateway (`/ws`)
+
+WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban sweep), `sessions.rs` (the registry), `msg_limits.rs` (token buckets), `tick.rs` (the tick clock), `ws.rs` (socket plumbing shared with `/ws/echo`). Spec: multiplayer handoff → Networking protocol → Connection and "Rules for the server code". The wire contract is [`PROTOCOL.md`](PROTOCOL.md) §1 and §5; the handshake itself is the protocol crate's pure `Handshake` state machine.
+
+### Connection lifecycle
+
+1. **Upgrade.** Connection cap (`limits.max_connections`, HTTP 503 past it), 16 KB inbound cap (close 1009), a 64-frame outbound queue. The client IP is logged only as a keyed hash (`client=<12 hex>`).
+2. **Frames.** Every binary message is decoded with the protocol crate: sizes, message counts, ranges, strings. Validation happens here, before anything reaches game logic. A frame that does not decode goes through `Handshake::on_undecodable`. Before the handshake, a `Hello` whose version prefix is readable (`peek_hello_version`) still gets `update_required` / `server_outdated`; anything else gets a fatal `malformed`. Text frames are not protocol frames (`malformed`).
+3. **Handshake.** The first message must be `Hello`, within `gateway.hello_timeout_ms` (5 s; else a fatal `handshake_required`, "No Hello received in time"). Any other first message gets `handshake_required`. The checks run in the frozen PROTOCOL.md §5 order, first failure wins, every failure fatal:
+
+   | # | Check | Error |
+   | --- | --- | --- |
+   | 1 | `protocol_version` below / above `1..=1` | `update_required` / `server_outdated` |
+   | 2 | `client_build` below `gateway.min_client_build` | `update_required` |
+   | 3 | `map_hash` not accepted (below) | `map_mismatch` |
+   | 4 | `access_token` (carried in `Hello`, u16-prefixed): empty, bad signature, wrong issuer/audience, expired, account gone, or token version revoked | `auth_failed` |
+   | 5 | Account banned | `banned` |
+
+   The token is verified only when checks 1–3 pass (one primary-key read). A database error answers a fatal `internal` (close 1011). Logs name the reason (`invalid token`, `token expired`, `token revoked`, `account banned until ...`), never the token.
+
+   > **Order note.** The N2.3 brief listed "version, auth, ban, map hash". The frozen protocol (PROTOCOL.md §5 and `handshake.rs`) checks the map hash **before** the token, so a stale client gets "please update" without a database read. The gateway follows the frozen order.
+
+4. **Welcome.** `protocol_version`, `server_build` (the first 8 hex digits of the build sha; 0 for `dev` builds), `account_id`, `tick_rate_hz` (`gateway.tick_rate_hz`, 20), `ping_interval_ms` and `timeout_ms` (`limits.ping_interval_ms` 2000 / `limits.dead_after_ms` 8000), `max_frame_bytes` (16384). Then the session is registered (below). A `Hello` and a `Ping` in one frame get `Welcome` and `Pong` in one frame.
+5. **Messages** (after `Welcome`). Each message passes its type's token bucket, then is routed:
+   - `ping` → `pong` (below).
+   - `lobby_command` → non-fatal `not_allowed` ("The lobby is not available yet") until N9.
+   - `room_host_command` → non-fatal `not_in_room` until N5.
+   - `player_state`, `score_claim`, `hit_report`, `run_event`, `quick_chat` → dropped quietly until N5 (no room).
+   - A second `Hello`, or an undecodable frame → fatal `malformed`.
+6. **Replies.** Everything one inbound frame causes goes out as one outbound frame.
+7. **Fatal errors.** The gateway sends the `Error`, then waits for the client to close, up to `gateway.fatal_close_delay_ms` (1 s), and then sends a close frame (1008 with the error code as the reason; 1011 for `internal`). Without the wait, a client that reads the error and the close in the same socket read can lose the error. Godot's `WebSocketPeer` does: it goes straight to `STATE_CLOSED` with no packet available, so the player would see "connection closed" instead of "please update". `NetClient` closes as soon as it reads a fatal error, so it never waits.
+8. **Keepalive.** The protocol crate's `Keepalive`: the server sends a WebSocket ping every `limits.ping_interval_ms` (keeps proxies and NATs open; clients answer on their own) and closes with 1001 after `limits.dead_after_ms` without receiving anything. Clients send protocol `Ping`s every 2 s (`Welcome.ping_interval_ms`).
+9. **Shutdown.** Every socket gets close 1001 and the session is removed.
+
+### Map hashes
+
+`gateway.map_hashes` lists the accepted `Hello.map_hash` values, 64 hex characters each (the SHA-256 of the loop's road-space file). The handshake compares against one hash, so the gateway hands it the client's own hash when that hash is accepted, and a different one when it is not.
+
+| `server.env` | `gateway.map_hashes` | Accepted |
+| --- | --- | --- |
+| `dev` | empty | any hash (`config/dev.toml`; the live check sends all zeros) |
+| `production` | empty | **none**: every `Hello` gets `map_mismatch`, and a warning is logged at start |
+| either | a list | exactly those |
+
+**N3** provides `loop_v1`'s hash. Add it with `WB_GATEWAY__MAP_HASHES=<hash>` in Coolify, or in `config/`. To keep an old client build working during a map update, list both hashes. Until N3, the owner can try the live check against production by setting `WB_GATEWAY__MAP_HASHES=0000000000000000000000000000000000000000000000000000000000000000` (the all-zero hash the tool sends by default) and removing it again afterwards.
+
+### Clock (`Pong`)
+
+`Pong` = `client_time_ms` (echoed), `server_tick`, `tick_fraction` (1/65536 tick): `server_now = server_tick + tick_fraction / 65536`. There are no rooms yet, so the clock is **server-wide**: `tick.rs`'s `MonotonicTickClock`, at `gateway.tick_rate_hz` (20 Hz) since process start. The tick wraps at 2^32 (6.8 years). Tests inject a `ManualTickClock` (`AppState::with_clocks`).
+
+**N5 seam:** `gateway::pong_clock(state, session)` is the one place that picks the clock. N5 returns the session's room clock while the session is in a room (PROTOCOL.md: the room tick). A client joining a room calls `NetClock.reset()` anyway.
+
+### Sessions and the duplicate-login policy
+
+`Sessions` (`sessions.rs`, in `AppState.sessions`) maps account id → `SessionHandle`: session id, account, token version, the connection's **bounded** outbound queue, and a kick signal. The lobby (N5/N9) finds a player's connection there.
+
+- **One session per account; the newest wins.** A second `Welcome` for the same account registers the new connection and kicks the older one with a fatal `not_allowed` ("This account signed in on another device."). The newest device wins, so a player whose old connection is half-dead (a phone that switched networks) is never locked out by it. A replaced connection's cleanup never removes its successor, because removal checks the session id.
+- **Concurrency.** Each connection task owns its socket, handshake, buckets and keepalive; nothing else touches them. The only shared structure is the registry map, behind one `std::sync::Mutex`. It is held for a single insert, remove, lookup or snapshot, never across an `.await`, and only at session start and end, lobby lookups and the ban sweep, never per message. Room tasks and the lobby keep cloned handles:
+  - `send_frame(bytes)` is a non-blocking `try_send` into the connection's queue. A full queue kicks that client (slow client) instead of blocking the room.
+  - `kick(reason)` sets a `watch` value. It never blocks or fails, and the first kick wins. The connection task then sends the fatal error, closes and unregisters itself.
+
+### Rate limits (per connection)
+
+Each client → server type has a token bucket (`ws_rate_limits.<type>_per_sec`, refilled evenly, and `_burst`, available at once). A message over its limit is dropped before routing, counted, and answered with a non-fatal `rate_limited` at most every `notice_interval_ms`. Every drop also takes a token from the **violation** bucket; a client that empties it is flooding and gets a fatal `rate_limited`. `Hello` is not limited (a second one is fatal anyway).
+
+| Type | Per second | Burst | Why |
+| --- | --- | --- | --- |
+| `ping` | 2 | 5 | the client pings every 2 s |
+| `lobby_command` | 5 | 10 | |
+| `player_state` | 25 | 40 | 20 Hz uploads plus jitter bunching |
+| `score_claim` | 10 | 20 | about 2 a second, more in trains |
+| `hit_report` | 5 | 10 | |
+| `run_event` | 2 | 5 | |
+| `quick_chat` | 1 | 3 | |
+| `room_host_command` | 2 | 5 | |
+| violation bucket | 5 | 100 | disconnect when empty |
+
+### Bans
+
+- **At `Hello`:** a banned account gets a fatal `banned`.
+- **Live:** the admin CLI is a separate process that only writes the database. So `gateway::ban_sweep` runs every `gateway.ban_recheck_ms` (30 s) and does one primary-key read per live session, about 13 reads a second at 400 sessions. It kicks:
+  - a banned account → fatal `banned`;
+  - a deleted account, or one whose token version moved on (logout everywhere) → fatal `auth_failed` ("You were signed out. Please sign in again.").
+- An access token that expires during a session does not end it. The sweep covers revocation.
+
+### Metrics
+
+On `/metrics` (localhost), next to the N0 connection counters:
+
+| Metric | What |
+| --- | --- |
+| `wb_ws_sessions` | Live handshaken sessions (gauge) |
+| `wb_ws_handshakes_total{result}` | `ok`, `update_required`, `server_outdated`, `map_mismatch`, `auth_failed`, `banned`, `handshake_required`, `malformed`, `hello_timeout`, `abandoned` (closed before an answer), `internal` |
+| `wb_ws_messages_in_total{type}` | Decoded client messages by type (dropped ones included) |
+| `wb_ws_rate_limited_total{type}` | Messages dropped by the rate limits |
+| `wb_ws_rate_limit_closed_total` | Connections closed for flooding |
+| `wb_ws_kicks_total{reason}` | `replaced`, `banned`, `revoked`, `slow_client`, `closed` |
+| `wb_ws_sessions_replaced_total` | Second logins |
+| `wb_ws_echo_connections_total` | `/ws/echo` connections |
+
+### Logs
+
+At INFO, per connection: `session established` (client hash, account, session id, client build, whether it replaced one), `handshake refused` (reason), `websocket sign-in refused` (the token failure reason), `session kicked` (reason), and `websocket closed` (route and close reason). IPs appear only as keyed hashes. Tokens never appear.
+
+### Live cross-side check
+
+Godot's `NetClient` (`src/net/`) against a locally running server in dev mode:
+
+```sh
+cd westbound-server
+cargo run -p server -- --config config/dev.toml          # dev: any map hash, public dev secrets, 127.0.0.1:8080
+# second terminal, repository root:
+tools/godot.sh --headless --path . --script res://tests/net/live_ws_check.gd -- ws://127.0.0.1:8080/ws --duration=20
+```
+
+The tool creates a device account with `POST /api/v1/auth/device`, runs `Hello` → `Welcome`, then pings for 20 s (past the 8 s dead window) and prints each clock sample. It ends with `LIVE_SESSION ok ...` and exit 0. docs/NET_CLIENT.md → "Live check" has the output and the other modes.
+
+More live checks:
+
+- **Error paths:** `--raw` sends one `Hello` without a token and prints the decoded `Error`; `--token=bogus` shows `NetClient` failing with `auth_failed`.
+- **Map mismatch and live bans:** run a production-mode server with `WB_SERVER__ENV=production`, the two auth secrets, `WB_GATEWAY__MAP_HASHES=$(printf 'ab%.0s' {1..32})` and `WB_GATEWAY__BAN_RECHECK_MS=2000`. The tool without `--map` fails with `map_mismatch`. With `--map=abab…ab` it gets a `Welcome`, and `westbound-server admin ban <id> 1h`, run from another shell with the same environment, drops it with `banned` within 2 s.
+- **Duplicate login:** two tools with the same `--token` (take it from `curl -s -X POST http://127.0.0.1:8080/api/v1/auth/device`). The first fails with `not_allowed` when the second gets its `Welcome`.
 
 ## Accounts API
 
@@ -329,7 +464,7 @@ westbound-server admin rename 42 "Road Runner"
   - restarts the player's 30-day cooldown.
 - **Bans:**
   - A ban applies from the next request: HTTP routes return `403 banned`, and the WebSocket `Hello` gets `banned`.
-  - Connections that are already open are not dropped yet (N5 / N10).
+  - Open WebSocket sessions are dropped within `gateway.ban_recheck_ms` (30 s): the gateway re-checks every live session against the database and sends a fatal `banned` (see "Realtime gateway → Bans").
 
 ### Local runs
 
@@ -378,6 +513,17 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `rate_limits.device_create_per_hour` / `_burst` | `WB_RATE_LIMITS__DEVICE_CREATE_PER_HOUR` / `__DEVICE_CREATE_BURST` | `5` / `5` | `POST /auth/device` per client IP |
 | `rate_limits.auth_per_minute` / `_burst` | `WB_RATE_LIMITS__AUTH_PER_MINUTE` / `__AUTH_BURST` | `30` / `10` | The other `/auth/*` routes per client IP |
 | `rate_limits.account_per_minute` / `_burst` | `WB_RATE_LIMITS__ACCOUNT_PER_MINUTE` / `__ACCOUNT_BURST` | `120` / `30` | Authenticated routes per account |
+| `gateway.hello_timeout_ms` | `WB_GATEWAY__HELLO_TIMEOUT_MS` | `5000` | `Hello` must arrive within this (else `handshake_required`) |
+| `gateway.tick_rate_hz` | `WB_GATEWAY__TICK_RATE_HZ` | `20` | Tick rate in `Welcome` and of the `Pong` clock (spec: 20 Hz) |
+| `gateway.min_client_build` | `WB_GATEWAY__MIN_CLIENT_BUILD` | `0` | Older `Hello.client_build` gets `update_required` |
+| `gateway.map_hashes` | `WB_GATEWAY__MAP_HASHES` | empty | Accepted map hashes (64 hex each, comma-separated in the env). Empty: any in dev, none in production. N3 adds `loop_v1`'s |
+| `gateway.ban_recheck_ms` | `WB_GATEWAY__BAN_RECHECK_MS` | `30000` | Live sessions re-checked for bans, deletion and revoked tokens |
+| `gateway.fatal_close_delay_ms` | `WB_GATEWAY__FATAL_CLOSE_DELAY_MS` | `1000` | After a fatal `Error`, wait up to this for the client's close before closing |
+| `gateway.echo_enabled` | `WB_GATEWAY__ECHO_ENABLED` | `true` | Serve `/ws/echo` |
+| `ws_rate_limits.enabled` | `WB_WS_RATE_LIMITS__ENABLED` | `true` | Per-connection message limits on `/ws` |
+| `ws_rate_limits.<type>_per_sec` / `_burst` | `WB_WS_RATE_LIMITS__PING_PER_SEC` ... | see "Realtime gateway → Rate limits" | One bucket per client message type (`ping`, `lobby_command`, `player_state`, `score_claim`, `hit_report`, `run_event`, `quick_chat`, `room_host_command`) |
+| `ws_rate_limits.violation_per_sec` / `_burst` | `WB_WS_RATE_LIMITS__VIOLATION_PER_SEC` / `__VIOLATION_BURST` | `5` / `100` | Drops allowed before a fatal `rate_limited` |
+| `ws_rate_limits.notice_interval_ms` | `WB_WS_RATE_LIMITS__NOTICE_INTERVAL_MS` | `1000` | At most one non-fatal `rate_limited` notice per interval |
 | `deeplinks.dir` | `WB_DEEPLINKS__DIR` | empty (image: `/data/well-known`) | Directory with `apple-app-site-association` and `assetlinks.json` |
 
 The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLINKS__DIR` to the values above. It needs no config file.
@@ -470,11 +616,11 @@ To restore:
 ## Verify a phone connects
 
 1. On the phone, open `https://westbound.sipsakrandevu.com/api/v1/health`. Expect `{"status":"ok",...,"db":"ok"}` over a valid certificate.
-2. On the phone, open `https://westbound.sipsakrandevu.com/api/v1/echo-check`. The page opens `wss://westbound.sipsakrandevu.com/ws`, sends 1024 bytes and shows **OK: echo over wss://... in N ms**. Try it on Wi-Fi and on cellular. This is the N0 "phone connects over wss://" check until the game has network code (N1/N2).
+2. On the phone, open `https://westbound.sipsakrandevu.com/api/v1/echo-check`. The page opens `wss://westbound.sipsakrandevu.com/ws/echo` and sends 1024 bytes. Then it sends a token-less `Hello` to `/ws` and shows **OK: echo over wss://.../ws/echo in N ms; gateway answered Error map_mismatch** (production has no map hash until N3; `auth_failed` once one is configured). Try it on Wi-Fi and on cellular.
 3. From a desktop, run the same echo with Godot's `WebSocketPeer` (no `--insecure` against the real certificate):
 
    ```sh
-   tools/godot.sh --headless --script res://tools/net_echo_check.gd -- --url=wss://westbound.sipsakrandevu.com/ws
+   tools/godot.sh --headless --script res://tools/net_echo_check.gd -- --url=wss://westbound.sipsakrandevu.com/ws/echo
    node tools/web_smoke/ws_echo.mjs --server https://westbound.sipsakrandevu.com
    ```
 
@@ -486,5 +632,7 @@ To restore:
 - **`invalid config:` at start.** The message lists every bad key. Run `check-config` with the same environment.
 - **502 or 404 from the proxy.** Check that the container is *healthy* (`docker ps`), that Ports Exposes is `8080`, and that the domain matches exactly.
 - **WebSocket closes with 1009.** A client sent more than 16 KB in one message.
+- **WebSocket closes with 1008.** The gateway sent a fatal protocol `Error` first; the close reason is its code (`map_mismatch`, `auth_failed`, `banned`, `not_allowed` for a replaced session, `rate_limited`, ...). `wb_ws_handshakes_total{result}` and `wb_ws_kicks_total{reason}` count them.
+- **Every `Hello` gets `map_mismatch` in production.** `gateway.map_hashes` is empty or does not list the client's map (see "Realtime gateway → Map hashes").
 - **Clients dropped under load.** Check `wb_ws_slow_client_closed_total` (outbound queue full) and `wb_ws_timeout_closed_total` (silence over 8 s).
 - **Reading `/metrics`.** The endpoint listens on the container's loopback only. Share the container's network namespace to read it: `docker run --rm --network container:<c> curlimages/curl -s localhost:9090/metrics`. For health, run `docker exec <c> westbound-server healthcheck`.

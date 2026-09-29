@@ -24,9 +24,12 @@ use crate::auth::{self, AuthKeys};
 use crate::clock::{Clock, SystemClock};
 use crate::config::Config;
 use crate::error::ApiError;
+use crate::gateway::GatewayPolicy;
 use crate::http::{self, DeepLinks};
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiters, CLEANUP_INTERVAL};
+use crate::sessions::Sessions;
+use crate::tick::{MonotonicTickClock, TickClock};
 use crate::{accounts, profile, ws};
 
 #[derive(Clone)]
@@ -44,6 +47,12 @@ pub struct AppState {
     /// JWT keys, device-secret pepper, token lifetimes.
     pub auth: Arc<AuthKeys>,
     pub rate_limiters: RateLimiters,
+    /// What `/ws` accepts (versions, map hashes) and announces in `Welcome`.
+    pub gateway: Arc<GatewayPolicy>,
+    /// Live sessions: account id → connection handle (the lobby's and rooms' way in).
+    pub sessions: Arc<Sessions>,
+    /// Tick clock for `Pong` (server-wide 20 Hz since start; N5 adds room clocks).
+    pub tick_clock: Arc<dyn TickClock>,
 }
 
 impl AppState {
@@ -56,6 +65,19 @@ impl AppState {
         db: SqlitePool,
         clock: Arc<dyn Clock>,
     ) -> anyhow::Result<Self> {
+        let tick_clock = Arc::new(MonotonicTickClock::new(u32::from(
+            config.gateway.tick_rate_hz,
+        )));
+        Self::with_clocks(config, db, clock, tick_clock)
+    }
+
+    /// With both clocks injected (tests).
+    pub fn with_clocks(
+        config: Config,
+        db: SqlitePool,
+        clock: Arc<dyn Clock>,
+        tick_clock: Arc<dyn TickClock>,
+    ) -> anyhow::Result<Self> {
         let deeplinks = DeepLinks::load(&config.deeplinks)?;
         if config.is_dev()
             && (config.auth.jwt_secret.is_empty() || config.auth.device_secret_pepper.is_empty())
@@ -65,6 +87,8 @@ impl AppState {
         let auth = Arc::new(AuthKeys::from_config(&config));
         let metrics = Arc::new(Metrics::default());
         let rate_limiters = RateLimiters::new(&config, auth.clone(), metrics.clone());
+        let gateway = crate::gateway::policy(&config);
+        let sessions = Arc::new(Sessions::new(metrics.clone()));
         Ok(Self {
             config: Arc::new(config),
             db,
@@ -75,6 +99,9 @@ impl AppState {
             clock,
             auth,
             rate_limiters,
+            gateway,
+            sessions,
+            tick_clock,
         })
     }
 }
@@ -142,6 +169,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(api)
         .route("/ws", get(ws::upgrade))
+        .route("/ws/echo", get(ws::upgrade_echo))
         .route(
             "/.well-known/apple-app-site-association",
             get(http::apple_app_site_association),
@@ -244,7 +272,11 @@ pub struct Server {
 
 impl Server {
     pub async fn bind(config: Config, db: SqlitePool) -> anyhow::Result<Self> {
-        let state = AppState::new(config, db)?;
+        Self::bind_state(AppState::new(config, db)?).await
+    }
+
+    /// Binds a server around a prepared state (tests inject clocks this way).
+    pub async fn bind_state(state: AppState) -> anyhow::Result<Self> {
         let bind = state.config.bind_addr();
         let listener = TcpListener::bind(bind)
             .await
@@ -298,6 +330,7 @@ impl Server {
         );
 
         let maintenance_task = tokio::spawn(maintenance(state.clone()));
+        let ban_sweep_task = tokio::spawn(crate::gateway::ban_sweep(state.clone()));
         let metrics_task = metrics_listener.map(|l| {
             let app = metrics_router(state.clone());
             let cancel = cancel.clone();
@@ -338,6 +371,7 @@ impl Server {
             t.abort();
         }
         maintenance_task.abort();
+        ban_sweep_task.abort();
         tracing::info!("server stopped");
         Ok(())
     }
