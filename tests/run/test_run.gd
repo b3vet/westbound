@@ -120,10 +120,11 @@ func _listen(sig: Signal, fn: Callable) -> void:
 	_conns.append([sig, fn])
 
 
-func _make(run_seed: int = SEED) -> Run:
+func _make(run_seed: int = SEED, crash_cinematic: bool = false) -> Run:
 	var r := RUN_SCENE.instantiate() as Run
 	r.run_seed = run_seed
 	r.manual_ticks = true
+	r.crash_cinematic = crash_cinematic
 	r.record_best = false
 	tree.root.add_child(r)
 	_runs.append(r)
@@ -236,6 +237,38 @@ func test_hud_is_optional() -> void:
 
 
 # ---------------------------------------------------------------- A whole run
+
+## The Jolt cinematic (CrashSequence) takes the car at the second hit, emits the crash
+## events once, ends into the results after its duration, and retry parks it again.
+func test_crash_cinematic_flow() -> void:
+	var r := _make(SEED, true)
+	var t := Tuning.load_default()
+	var cs := r.crash_sequence as CrashSequence
+	if not check(cs != null, "the cinematic is installed"):
+		return
+	r.go()
+	_run_ticks(r, _ticks_for(1.0))
+	r.lives.lives = 1
+	r.force_hit(HitDetection.HIT_BARRIER, -1, 1)
+	_run_ticks(r, TICKS_PER_FRAME)
+	eq(r.state, Game.CRASH)
+	check(cs.is_running(), "the sequence took the car")
+	eq(_count("crash_started"), 1, "crash_started once (from the sequence)")
+	eq(_last("slowmo"), ["slowmo", t.feel.slowmo_crash_scale, t.feel.slowmo_crash_s, &"crash"])
+	var s_crash := r.car.state.s
+	_run_ticks(r, 30)
+	eq(r.car.state.s, s_crash, "the run no longer ticks the car; the body carries it")
+	r.skip()
+	eq(r.state, Game.RESULTS, "tap skips to the results")
+	eq(_count("crash_finished"), 1, "crash_finished once")
+	eq(Engine.time_scale, 1.0)
+	r.retry()
+	check(not cs.is_running(), "retry parks the bodies")
+	eq(r.state, Game.COUNTDOWN)
+	r.go()
+	_run_ticks(r, _ticks_for(0.5))
+	gt(r.car.state.s, r.start_s_m(), "drivable again after retry")
+
 
 func test_score_hit_crash_results_retry() -> void:
 	var r := _make()

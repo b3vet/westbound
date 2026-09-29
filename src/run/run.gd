@@ -66,6 +66,8 @@ const CRASH_BRAKE_RADIUS_M := 80.0   # lint: allow-number pending tuning (lives)
 @export var auto_countdown: bool = true
 ## Store the personal best in Save at run end.
 @export var record_best: bool = true
+## The Jolt crash cinematic (CrashSequence, WP4.2); off = the fallback skid to a stop.
+@export var crash_cinematic: bool = true
 ## Tests: tick() and frame() are called by the test instead of the engine.
 @export var manual_ticks: bool = false
 
@@ -219,6 +221,13 @@ func _ready() -> void:
 	dev = RunDevPanel.new()
 	dev.name = "RunDev"
 	add_child(dev)
+	if crash_cinematic:
+		var cs := CrashSequence.new()
+		cs.name = "CrashSequence"
+		cs.tap_to_skip = false   # the run owns the tap (skip())
+		cs.auto_advance = false  # advanced from frame() with the real frame time
+		add_child(cs)
+		crash_sequence = cs
 
 	_start_run()
 	dev.setup(self)
@@ -350,7 +359,8 @@ func tick() -> void:
 			car.tick(dt)
 			_sim_tick(dt)
 		Game.CRASH:
-			car.tick(dt)
+			if not _crash_by_sequence:
+				car.tick(dt)   # the fallback skid; the cinematic's body carries the car
 			_crash_tick(dt)
 	tick_count += 1
 	var smp := car.road_sample()
@@ -518,7 +528,14 @@ func _begin_crash() -> void:
 ## then.) Returning false keeps the fallback: the car brakes to a stop, surrounding
 ## traffic brakes, and the results come after feel.slowmo_crash_s real seconds or a tap.
 func _start_crash_sequence() -> bool:
-	return false
+	var cs := crash_sequence as CrashSequence
+	if cs == null:
+		return false
+	cs.start(car, _contact, sim.state, traffic_view, road, origin, rig)
+	if not cs.is_running():
+		return false
+	cs.finished.connect(func(_skipped: bool) -> void: _end_crash(), CONNECT_ONE_SHOT)
+	return true
 
 
 ## Surrounding traffic brakes (TrafficSim.notify_hit: hard brake, hazards, a small
@@ -534,8 +551,9 @@ func _brake_surrounding_traffic() -> void:
 func _end_crash() -> void:
 	if state != Game.CRASH:
 		return
+	if not _crash_by_sequence:
+		Events.crash_finished.emit()   # CrashSequence emits its own
 	_crash_by_sequence = false
-	Events.crash_finished.emit()
 	time_scale.restore()
 	_show_results()
 
@@ -560,6 +578,8 @@ func _show_results() -> void:
 ## Once per rendered frame with the real (unscaled) frame time: drains the events,
 ## plays the frame-rate reactions, updates the views, the sky and the HUD feed.
 func frame(real_dt: float) -> void:
+	if state == Game.CRASH and _crash_by_sequence:
+		(crash_sequence as CrashSequence).advance(real_dt)
 	if state == Game.CRASH and not _crash_by_sequence:
 		_crash_left_s -= real_dt
 		if _crash_left_s <= 0.0:
@@ -572,8 +592,8 @@ func frame(real_dt: float) -> void:
 		Events.slowmo_requested.emit(feel.slowmo_first_hit_scale, feel.slowmo_first_hit_s, TimeScale.REASON_FIRST_HIT)
 	if _pending_crash_fx:
 		_pending_crash_fx = false
-		Events.crash_started.emit()
 		if not _crash_by_sequence:
+			Events.crash_started.emit()   # CrashSequence emits its own
 			Events.slowmo_requested.emit(feel.slowmo_crash_scale, feel.slowmo_crash_s, TimeScale.REASON_CRASH)
 		if state == Game.CRASH:
 			ui.show_hint("TAP TO SKIP")
@@ -655,6 +675,8 @@ func _start_run() -> void:
 	if biome != null and not biome.traffic_palette.is_empty():
 		traffic_view.set_palette(biome.traffic_palette)
 
+	if crash_sequence != null:
+		(crash_sequence as CrashSequence).setup(ctx, registry)
 	scoring.reset(ctx)
 	sun.reset()
 	legs.reset(start_s)

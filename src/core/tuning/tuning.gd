@@ -32,6 +32,8 @@ const DEFAULT_PATH := "res://data/tuning.tres"
 @export var progression: ProgressionTuning
 ## Traffic rendering (WP3.1; visual only).
 @export var traffic_view: TrafficViewTuning
+## Crash cinematic (WP4.2; visual only).
+@export var crash: CrashTuning
 
 static var _default: Tuning
 
@@ -57,5 +59,5 @@ func missing_sections() -> PackedStringArray:
 static func section_names() -> PackedStringArray:
 	return PackedStringArray([
 		"quality", "road", "vehicle", "controls", "camera", "traffic", "director",
-		"passability", "scoring", "lives", "sun", "legs", "feel", "hud", "progression", "traffic_view",
+		"passability", "scoring", "lives", "sun", "legs", "feel", "hud", "progression", "traffic_view", "crash",
 	])
