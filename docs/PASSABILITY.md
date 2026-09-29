@@ -101,12 +101,12 @@ Desktop container (Xeon @ 2.1 GHz, shared with other agents: numbers ±30%), `te
 
 | | 2 lanes | 3 lanes | 4 lanes |
 | --- | --- | --- | --- |
-| Player check (bot, soak average, 7-12 m of traffic per lane in reach) | 6.8-9.6 ms | 8.5-15 ms | 17-19 ms |
+| Player check (the bot, 10,000 km soak average) | 6.4 ms | 9.0 ms | 13.1 ms |
 | Player check at the cap (90 vehicles, bench) | | 6.7-6.9 ms | 8.0-9.8 ms |
 | Batch check at the cap, 3-4 probes (bench) | | 11-14 ms | 12 ms |
 | Batch check, typical batch (no vehicle slower than 95 km/h) | < 0.3 ms | < 0.3 ms | < 0.3 ms |
 | Largest slice (one tick of the director does ≤ 2) | | 4.3-7.4 ms | 2.0-3.7 ms |
-| Director per tick, averaged (checks included) | 68-80 µs | 58-111 µs | 107-111 µs |
+| Director per tick, averaged over the soak (checks included) | 57 µs | 62 µs | 80 µs |
 
 Where a player check goes (4 lanes, 40 vehicles copied, 18 obstacles): forward sim 45% (~1.2 µs per vehicle and step), backward search 35%, obstacle and relevance lists 20%.
 
@@ -136,7 +136,15 @@ Allocation-free per check after `_init` (`test_checks_allocate_nothing`); all st
 - `tests/unit/test_passability_sandbox.gd`: the sandbox director checks its batches; the PASS overlay gets the director's paths and the bot's own path.
 - The soak: docs/SOAK.md, *WP6.1*.
 
+## Soak
+
+docs/SOAK.md, *WP6.1*: 10,024 km, **0 impossible windows on 3 and 4 lanes** (the D11 3-lane window is gone), 0 contacts with the player, 0 rule violations; **4 windows on 2 lanes** (legs 6-8), all compressed lane-0 platoons below the minimum speed on a road whose other lane flows below it: a 2-lane traffic decision, below.
+
 ## Open / deviations
+
+- **2-lane roads (plan D12, still open).** On 2 lanes the right lane flows at 95 km/h, below the 100 km/h minimum, so lane 0 is the only lane at or above it, and at leg 6-8 densities its platoons dip to 92-98 km/h (braking waves, cut-ins from lane 1: every vehicle involved desires ≥ 105 km/h). The player then has to drop below the minimum speed: 4 windows in 2,492 km. Passability cannot fix what forms in view long after the batch check, and a MOBIL rule keeping slow-desired vehicles out of the only fast lane did not help (experiment, docs/SOAK.md). Options for the orchestrator: a lower density cap on 2-lane roads, a right-lane flow at or above the minimum speed there, or a lower minimum speed on 2-lane sections.
+- **CONTRACTS §5** says passability "works on its own `copy_from` copy". It copies the vehicles that matter into its own structure-of-arrays storage instead (a full `copy_from` plus stepping 90 slots would cost more and the step is its own); the published state is still only read.
+- **The batch check reads the spec's "the next ~300 m" as "the batch as a player arriving at it meets it"**, with probes behind the slow vehicles, and checks it after committing it beyond the fog (nothing failing is ever visible). For the plan's deviations table.
 
 - **run.gd** (not in WP6.1's paths) must call `director.set_player_params(car.params)` after creating the director, and `src/dev/car_drive.gd` likewise; until then the game runs without the check (the soak, the sandbox and the tests have it).
 - **New MOBIL decisions are not predicted** by the forward sim (above). The checks are repeated often enough (every batch; the bot every 0.5 s) for this not to matter in the soak.

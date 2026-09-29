@@ -246,3 +246,36 @@ Written before the WP6.1 soak was run; the results section below was added after
     - the vehicle behind in that lane was closing faster than it can brake away within the gap at the traffic's 6 m/s² clamp: closing² / (2 × 6) > gap.
 
 Justification: the spec's fairness rule "If the player cuts in front of a faster car with an impossible gap, the resulting contact counts as a hit, because the player caused it" puts the consequences of an impossible cut-in on the player. The second bullet is that rule, measured the way the traffic's own model would fail (IDM braking is clamped at 6 m/s²). The first bullet is its mirror image: entering behind a car closer than any traffic driver would follow it is also a gap no driver would accept. 2.0 s = the longest player lane change (~1.2 s) plus the shortest traffic headway (0.8 s): the window must follow directly from that entry. Windows under rule 2 are reported as `impossible_player_cut_in`, not gated. The raw count is reported too.
+
+### Trial runs (before the full soak)
+
+A first 252 km trial (4 shards) found 5 traffic and 4 player-induced windows on 2 lanes: the bot rode 0.3 m behind the car ahead (the search's relaxation allows any speed down to the minimum at once), and one leader braking left it without a path. The bot now keeps a 1.0 s headway in its path choice (`PassabilityBot.HEADWAY_S`, `Passability.extract_path(..., headway_s)`); the second 252 km trial had 0 windows and 0 contacts. The full soak below was run after that and not tuned on.
+
+### Results: the WP6.1 10,000 km soak
+
+`tools/soak.sh --km=10000 --shards=4`, the passability bot, the director checking every batch. The shards were killed twice by container restarts (after 274 and 336 runs); the missing runs were run again with `soak_main.gd --runs=...` into extra shard files and merged with `tools/soak.sh --merge`. 22 runs happened to be run twice, once before and once after merging the integration branch (WP6.4 biomes, road generation): **all 22 traces identical**, so the results hold for the merged tree.
+
+| | |
+| --- | --- |
+| Distance | **10,024 km** in 358 runs (5,040 km on 3 lanes, 2,492 km on 2 lanes, 2,492 km on 4 lanes), 78.3 simulated hours |
+| Throughput | ~9× real time per process (the container was shared with other agents: 1.6-2.4× slower than the D11 soak's 20.7×; the bot's checks add ~20%) |
+| Active vehicles | mean 48.4 (34 / 49 / 65 on 2 / 3 / 4 lanes), peak 90 |
+
+| Counter | Total | Gate |
+| --- | --- | --- |
+| Traffic-to-traffic collisions | 0 | ✅ 0 |
+| Signal-time violations / unsignaled moves / no-ambush violations | 0 / 0 / 0 (168,070 lane moves, 162,024 checked for ambush) | ✅ |
+| Deceleration beyond 6 m/s², brake-light mismatches | 0, 0 (min accel −6.00) | ✅ |
+| Rear-ends of a normally driving player | 0 | ✅ 0 |
+| Contacts with the player | **0** (D11 soak: 136 rear-end contacts, all after the weaving bot's own cut-ins) | reported |
+| Impossible windows (traffic) | **0 on 3 lanes, 0 on 4 lanes, 4 on 2 lanes** | ❌ 2 lanes |
+| Impossible windows (contact / pre-registered cut-in rule) | 0 / 0 | reported |
+| Impossible checks failed | 12 of 281,756 | reported |
+
+Bot: 597,637 passability checks (6.4 / 9.0 / 13.1 ms average on 2 / 3 / 4 lanes, in the shared container), 13 without a path (10 on 2 lanes); mean speed 116 / 129 / 140 km/h on 2 / 3 / 4 lanes. Director: 36,480 ranges checked (21,524 probes), 42 checks failed, 36 re-rolls, 2 removals, 4 ranges unresolved (all on 2 lanes: the failing probe lay before the range, behind vehicles already within min_ahead, so nothing could be removed); 0 spawns refused as visible; the longest check took 51 ticks (a re-roll storm), 9-10 otherwise. Metrics per lane count are within 1% of the D11 soak (gaps per km 12.0 / 11.2 / 11.1, density 13.3 / 12.5 / 12.4).
+
+**The D11 3-lane window** (the bot cutting into a lane a commuter was merging into) and the **D12 2-lane cut-ins** do not occur: the passability bot never enters a gap its prediction shows closing (moving and signaled lane changes occupy both lanes), and keeps a headway. The pre-registered cut-in rule classified nothing.
+
+**The four 2-lane windows** (runs 134, 158, 206, 338; legs 6-8) are all the same situation: the bot is at exactly 100 km/h in lane 0, behind lane-0 traffic at 92-98 km/h (commuters, aggressives, a hesitant: desired speeds 105-160 km/h), with lane 1 at 85-95 km/h; the oracle's path ends 7-8 s ahead (the bot closing at 1-3 km/h). On a 2-lane road the right lane flows at 95 km/h, below the minimum speed, so lane 0 is the only lane at or above it; at leg 6-8 densities (18 per km per lane, IDM headway × 0.8) lane 0's braking waves and cut-ins from lane 1 carry it below 100 km/h for a while. Replaying run 206: every lane-0 vehicle in the 800 m ahead has a desired speed ≥ 105 km/h (no slow vehicle had moved into lane 0); the platoon is simply compressed. This is not the player's doing, and neither the director nor the bot can prevent it: it forms in view, long after the batches were checked, and the bot is already at the minimum speed.
+
+A local experiment (not committed) forbidding vehicles with a desired speed below the minimum from entering the only lane at or above it (a traffic_sim MOBIL rule, the D12 suggestion) did not help: 2 windows in 1,428 km of 2-lane runs, the same compressed platoons. The fix is a 2-lane traffic decision for the orchestrator (not in WP6.1's paths), e.g. a lower density cap or a higher right-lane flow speed on 2-lane roads, or a lower minimum speed there. See docs/PASSABILITY.md, *Open*.
