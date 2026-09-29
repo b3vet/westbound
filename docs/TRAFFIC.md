@@ -217,7 +217,7 @@ Measured in the headless dev container: Godot 4.7, Intel Xeon @ 2.10 GHz, one th
 - **Frame cost:** at 120 Hz, two ticks per 60 fps frame cost about 0.4 ms (60 vehicles) or 0.6 ms (90 vehicles) of a 16.7 ms frame on this CPU.
 - **Phones:** a phone runs GDScript roughly 2–4× slower, which is about 0.8–1.6 ms (60) or 1.2–2.4 ms (90) per frame. This is sane, but it is not free; confirm it with the dev HUD on the iPhone 13-class device.
 - **Plan §8 risk:** the budget is met; no GDExtension is needed.
-- **D7 (cap 60 vs ~90):** 90 vehicles costs about 1.5× the 60-vehicle tick and fits the same budget on desktop.
+- **D7 (cap 60 vs ~90):** resolved at 90 (D11, WP4.8). 90 vehicles cost about 1.5× the 60-vehicle tick: ~0.21 ms on the phone at the cap (extrapolated from 0.10 ms at 45 cars). See docs/SPAWNING.md, "Density (D11)".
 - **Headroom, if phones need it** (no architecture change):
     1. integrate far vehicles only at their 30 Hz model tick and let the view extrapolate (step 1 is about a third of the tick);
     2. inline `Idm.accel` in step 2 (static calls are about 0.15 µs each);

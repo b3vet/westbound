@@ -143,7 +143,7 @@ After the ticks, the Node adapters drain the event buffers onto `Events` once pe
 
 ## 5. TrafficState
 
-`class_name TrafficState extends RefCounted` (`src/traffic/traffic_state.gd`) is a structure of arrays with fixed `capacity`: `traffic.max_active_vehicles` = 60 for the player's carriageway. The visual-only opposite carriageway uses its own instance (`traffic.opposite_max_vehicles`, `d < 0`, moving toward −s, `v` = speed). Every array is allocated once in `_init` and never resized.
+`class_name TrafficState extends RefCounted` (`src/traffic/traffic_state.gd`) is a structure of arrays with fixed `capacity`: `traffic.max_active_vehicles` = 90 (D7/D11) for the player's carriageway. The visual-only opposite carriageway uses its own instance (`traffic.opposite_max_vehicles`, `d < 0`, moving toward −s, `v` = speed). Every array is allocated once in `_init` and never resized.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -193,7 +193,7 @@ func plan_batch(ctx: SpawnSource.Context, s_from: float, s_to: float, out_spawns
 
 - **`Context`:** `run: RunContext`, `rng: Rng` (from `run.rng_traffic`), `road`, `traffic`, `player`, `leg` (1-based), `density_per_km_lane`, `aggressive_share`, `hesitant_allowed`, `intensity` (0 breather .. 1 peak), `set_pieces_allowed`, `is_night`, `biome`.
 - **`Record`:** `s`, `lane`, `d` (NAN = lane center), `v` (initial speed: the lane flow speed, IDM-consistent), `v0`, `type_id`, `profile_id`, `model_variant`, `color_index`, `flags` (initial `FLAG_*`), `set_piece` (SetPieceDef id or `&""`).
-- **Rules:** deterministic given `ctx` (all randomness from `ctx.rng`); never spawn overlapping the player or the ghost zone; ahead spawns go beyond the fog (~750 m); behind spawns (~150 m) only when the player is slower and the spawn is outside the frustum. The director owns passability and the commit.
+- **Rules:** deterministic given `ctx` (all randomness from `ctx.rng`); never spawn overlapping the player or the ghost zone; ahead spawns go beyond the fog (~750 m); behind spawns (~150 m) only when the player is slower and the spawn is out of view. "Out of view" is a fixed, camera-independent volume: more than `director.behind_spawn_view_margin_m` behind the player (WP4.8), so camera mode and screen aspect never change traffic (fairness, Daily Drive). The director owns passability and the commit.
 
 ## 7. Scoring and events
 
@@ -302,7 +302,7 @@ Global traffic rules apply on top of every profile: the 6 m/s² clamp, the 0.5 s
 | `vehicle` | `vehicle.tres` | `VehicleTuning` | Tick, lane-change targets, steering, braking, slip clamp, boost physics, test targets, gearbox, body motion | WP1.5 / WP2.1 |
 | `controls` | `controls.tres` | `ControlsTuning` | Drag, gyro, keyboard ramp, first-run warm-up | WP2.2 |
 | `camera` | `camera.tres` | `CameraTuning` | Modes, FOV 62→78, pull-back, look-ahead, roll, finale swing | WP2.3 |
-| `traffic` | `traffic.tres` | `TrafficTuning` | Cap 60, near/far ticks, IDM δ, decel clamp, brake lights, telegraphing, no-ambush, flow speeds, spawn distances, opposite side, reactions, soak and metrics | WP2.4 / WP2.5 / WP3.3 |
+| `traffic` | `traffic.tres` | `TrafficTuning` | Cap 90 (D11), near/far ticks, IDM δ, decel clamp, brake lights, telegraphing, no-ambush, flow speeds, spawn distances, opposite side, reactions, soak and metrics | WP2.4 / WP2.5 / WP3.3 |
 | `director` | `director.tres` | `DirectorTuning` | Waves, density and aggressive ramps by leg, Hesitant from leg 3, blind windows, set-piece warning, batch length | WP6.2 |
 | `passability` | `passability.tres` | `PassabilityTuning` | 10 Hz, 8 s, 0.25 s steps, half-lane grid, 0.3 m, 5 re-rolls | WP6.1 |
 | `scoring` | `scoring.tres` | `ScoringTuning` | Speed factor, multiplier decay, minimum speed, hesitation, grace, event points and gains, windows, shoulder, boost meter | WP3.4 |
@@ -386,6 +386,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-29 | §7 `objective_completed` kind (WP5.2); §13 `wb_player_light_dir` length = fake-light reach, `wb_retro_light()` in the world include (WP5.4) | WP4.5 docs refresh, recording merged behaviour |
+| 2026-09-29 | Cap 90; camera-independent behind-spawn view check (WP4.8, D11) | Orchestrator merge review |
 | 2026-09-29 | §14 Run, HudFeed, Hud, theme path, screens, CrashSequence (Phase 4) | Orchestrator, pre-Phase 4 |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
 | 2026-09-28 | §13 additive-effect parity rule, engine quirks, traffic model convention, Tuning.traffic_view (WP3.1) | Orchestrator merge review |
