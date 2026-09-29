@@ -19,6 +19,11 @@ extends Resource
 ## Test target: drivable and above minimum speed within this time.
 @export var first_hit_recovery_max_s: float = 1.0
 
+@export_group("Second hit")
+## "Surrounding traffic brakes": every car within this distance (along s) of the player
+## brakes hard with its hazards on (TrafficSim.notify_hit) when the run ends.
+@export var crash_brake_radius_m: float = 80.0   # not in spec
+
 @export_group("Collision")
 ## Collision boxes are inset from the visual body on each side.
 @export var collision_inset_m: float = 0.08

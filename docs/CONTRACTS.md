@@ -219,6 +219,7 @@ func plan_batch(ctx: SpawnSource.Context, s_from: float, s_to: float, out_spawns
 | `&"hit"` (`tag` = `Events.HIT_*`, `value` = lives left) | collisions and lives | `hit(tag, int(value))` |
 | `&"ghost_started"` (`value` = duration), `&"ghost_ended"`, `&"life_restored"` (`value` = lives) | lives | The signal of the same name |
 | `&"checkpoint_warning"` (`value` = metres), `&"checkpoint_crossed"` (`value` = leg index; summary in `LegTracker.crossing`), `&"leg_started"` (`value` = new leg), `&"coast_reached"` | leg tracker | The signal of the same name (the adapter builds `checkpoint_crossed`'s summary Dictionary from `LegTracker.crossing`) |
+| `LegObjectives.KIND_OBJECTIVE_COMPLETED` = `&"objective_completed"` (`tag` = objective id, `points` = the bonus actually paid, night factor included) | run.gd, once per completed leg objective (`LegObjectives`, WP5.2) | `objective_completed(tag, points)` |
 
 `multiplier_changed` and `chain_changed` are emitted by the adapter when `ScoringRuleSet.multiplier()` or `chain()` changed since the last frame, not per tick.
 
@@ -335,11 +336,11 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
     - lighting: `wb_ambient`, `wb_sun_light_color`, `wb_sun_light_energy`, `wb_shadow_tint`
     - surfaces: `wb_road_tone`, `wb_lane_line_tint`
     - emissive: `wb_emissive_headlight`, `wb_emissive_streetlamp`, `wb_emissive_reflector`
-    - player fake light: `wb_player_light_pos`, `wb_player_light_dir`, `wb_player_light_strength`
+    - player fake light: `wb_player_light_pos`, `wb_player_light_dir`, `wb_player_light_strength`. Since WP5.4 the **length** of `wb_player_light_dir` carries the fake light's reach (1 = low beams, `NightTuning.high_beam_reach` for high beams); shaders divide by it to get the beam axis ([NIGHT.md](NIGHT.md))
     - biome: `wb_biome_tint_offset`
 
     The color-script system (WP1.3) is the only writer. It calls `RenderingServer.global_shader_parameter_set` once per frame, and only for values that changed. New globals are requested from the orchestrator.
-- **Shared include:** `assets/shaders/world_common.gdshaderinc` declares the globals and provides `wb_albedo`, `wb_light` (single sun, vertex-lit), `wb_emissive`, `wb_player_light` and `wb_apply_fog`. Every world shader includes it.
+- **Shared include:** `assets/shaders/world_common.gdshaderinc` declares the globals and provides `wb_albedo`, `wb_light` (single sun, vertex-lit), `wb_emissive`, `wb_player_light`, `wb_retro_light` (WP5.4: retro-reflection of the player's fake light for emissive class 1 faces, reflector posts and sign faces) and `wb_apply_fog`. Every world shader includes it.
 - **Vertex conventions for world meshes:**
     - `COLOR.rgb` is the albedo, authored in sRGB.
     - `UV2.x` is the emissive class: 0 none, 1 reflector, 2 street lamp, 3 vehicle light.
@@ -384,6 +385,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 
 | Date | Change | Decision |
 | --- | --- | --- |
+| 2026-09-29 | §7 `objective_completed` kind (WP5.2); §13 `wb_player_light_dir` length = fake-light reach, `wb_retro_light()` in the world include (WP5.4) | WP4.5 docs refresh, recording merged behaviour |
 | 2026-09-29 | §14 Run, HudFeed, Hud, theme path, screens, CrashSequence (Phase 4) | Orchestrator, pre-Phase 4 |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
 | 2026-09-28 | §13 additive-effect parity rule, engine quirks, traffic model convention, Tuning.traffic_view (WP3.1) | Orchestrator merge review |
