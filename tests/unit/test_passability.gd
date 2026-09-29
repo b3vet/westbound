@@ -241,6 +241,25 @@ func test_a_cut_in_needs_a_gap_the_faster_car_behind_can_use() -> void:
 	check(moved, "the path leaves the blocked lane")
 
 
+
+func test_a_player_between_positions_is_followed_only_by_its_own_lane() -> void:
+	# An interrupted lane change: the player stopped between lane 1's center and the
+	# lane 1/2 half-lane, below the minimum speed, a fast car close behind in lane 2.
+	# Its start at the half-lane must not count that car as a follower braking for it
+	# (it has not been driving in front of it); the start in lane 1 does keep a path.
+	_setup()
+	_place_player(1, 0.0, 92.0)
+	player.d = road.lane_center_d(1, 0.0) + road.lane_width(0.0) * 0.37
+	_add(aggressive_p, sports_t, 2, -7.5, 117.0)
+	check(pas.check_player(traffic, player, params, road, res), "back into lane 1 is a path")
+	var half := pas.start_state(3)
+	var own := pas.start_state(2)
+	near(pas.state_d(half), road.lane_center_d(1, 0.0) + road.lane_width(0.0) * 0.5, 1e-6, "start 3 is the half-lane")
+	check(not pas.has_path_from(0, half, player.s), "the lane-2 car is not exempt at the half-lane start")
+	check(pas.has_path_from(0, own, player.s), "the lane-1 start has a path")
+	eq(pas.state_position(res.path_state[0]), 2, "the path starts in lane 1")
+
+
 # ---------------------------------------------------------------- The batch (arrival) check
 
 func test_batch_wall_fails_and_one_open_lane_passes() -> void:

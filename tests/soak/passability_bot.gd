@@ -17,8 +17,8 @@ extends TrafficBotPlayer
 ## set allows).
 ##
 ## Without a path (the prediction and the live traffic diverged, or it started in a
-## hopeless spot) it keeps its last path's lateral plan and follows the vehicle ahead
-## with IDM, and counts it (no_path_checks). It only reads the published TrafficState.
+## hopeless spot) it settles in the lane holding its center (aborting a lane change) and
+## follows the vehicle ahead with IDM, and counts it (no_path_checks). It only reads the published TrafficState.
 
 ## Replan every this many decision steps (0.5 s at step_s 0.25).
 const REPLAN_STEPS := 2
@@ -148,12 +148,22 @@ func _on_step_boundary(traffic: TrafficState) -> void:
 		_x = x1
 		_plan_k = k + 1
 	else:
-		# No path: hold the lateral position, follow with IDM.
+		# No path: follow with IDM and settle in the lane holding the body's center (an
+		# interrupted lane change is aborted, not frozen astride two lanes), a half lane
+		# per move time at most.
 		_fallback = true
 		_s0 = state.s
 		_s1 = state.s
 		_d0 = state.d
-		_d1 = state.d
+		var lanes := road.lane_count(state.s)
+		var lw := road.lane_width(state.s)
+		var home := clampi(floori((state.d - road.lanes_left_edge_d(state.s)) / lw), 0, lanes - 1)
+		var max_dd := lw * 0.5 / float(maxi(passability.move_steps(), 1))
+		_d1 = state.d + clampf(road.lane_center_d(home, state.s) - state.d, -max_dd, max_dd)
+		if home != lane:
+			lane = home
+			lane_changes += 1
+		_x = -1
 
 
 func _replan(traffic: TrafficState) -> void:

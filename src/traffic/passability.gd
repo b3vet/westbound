@@ -204,6 +204,7 @@ var _scripted_decel: float
 var _look: float
 var _gap_floor: float
 var _lat_m: float
+var _antic: float             ## TrafficSim: the player's leader interval stretched by v_lat x this
 var _hit_recover: float
 var _hit_decel: float
 var _hit_brake_s: float
@@ -245,6 +246,7 @@ var _s_to := 0.0
 var _p_s := 0.0              ## player at t0
 var _p_d := 0.0
 var _p_v := 0.0
+var _p_vl := 0.0             ## player's lateral velocity at t0 (its leader interval, as TrafficSim)
 
 # Vehicles (private copy): index q < _n_veh
 var _n_veh := 0
@@ -390,6 +392,7 @@ func _init(t: Tuning, reg: TrafficRegistry, road_path: RoadPath) -> void:
 	_look = tt.idm_lookahead_m
 	_gap_floor = tt.idm_gap_floor_m
 	_lat_m = tt.lateral_margin_m
+	_antic = tt.player_lateral_anticipation_s
 	_hit_recover = tt.hit_recover_s
 	_hit_decel = tt.hit_brake_decel_mps2
 	_hit_brake_s = tt.hit_brake_s
@@ -621,6 +624,7 @@ func begin_check(traffic: TrafficState, player: VehicleState, params: VehiclePar
 	_p_s = player.s
 	_p_d = player.d
 	_p_v = maxf(player.v, 0.0)
+	_p_vl = player.v_lat if mode == MODE_PLAYER else 0.0
 	_s_from = s_from
 	_s_to = s_to
 	_prepare(params)
@@ -1154,8 +1158,11 @@ func _predict(m_from: int, m_to: int) -> void:
 	var n := _n_veh
 	var pw := _player_width()
 	var plen := _player_length()
-	var p_lo := _p_d - pw * 0.5
-	var p_hi := _p_d + pw * 0.5
+	# The player as a leader: its body, stretched towards where its lateral velocity
+	# takes it (TrafficSim._read_player).
+	var ahead := _p_vl * _antic
+	var p_lo := _p_d - pw * 0.5 + minf(0.0, ahead)
+	var p_hi := _p_d + pw * 0.5 + maxf(0.0, ahead)
 	var look := _look
 	var floor_gap := _gap_floor
 	for m in range(m_from, m_to):
@@ -1409,7 +1416,9 @@ func _rel_bounds(key: int, k: int) -> void:
 
 
 ## The start positions' lists for a player starting at s0: position j's list minus
-## the vehicles following it there (fully behind it at t0 with lateral overlap).
+## the vehicles following it there (fully behind it at t0, overlapping position j and
+## the player's actual body: a player between grid positions, e.g. an interrupted
+## lane change, is not followed by the cars of the lane it has not entered).
 func _set_exempt(s0: float) -> void:
 	var k1 := _k_steps + 1
 	var hp := _player_length() * 0.5
@@ -1417,7 +1426,7 @@ func _set_exempt(s0: float) -> void:
 	for o in _n_obs:
 		var bits := 0
 		var q := _oq[o]
-		if _oc[o * k1] + _vlen[q] * 0.5 <= s0 - hp:
+		if _oc[o * k1] + _vlen[q] * 0.5 <= s0 - hp and _odh[o] > _p_d - hw and _odl[o] < _p_d + hw:
 			for j in _n_pos:
 				if _odh[o] > _pos_d[j] - hw and _odl[o] < _pos_d[j] + hw:
 					bits |= 1 << j
