@@ -5,7 +5,7 @@ extends SceneTree
 ##
 ##   godot --headless --path . --script res://tests/soak/soak_main.gd -- \
 ##       --shard=0 --shards=4 --km=10000 [--seed=N] [--legs=8] [--leg-km=3.5] \
-##       [--out=tests/out/soak/shard_0.json] [--no-windows]
+##       [--out=tests/out/soak/shard_0.json] [--no-windows] [--all-pieces] [--canyon]
 ##   godot ... -- --metrics=fast|reference --out=FILE     # a metrics reference run only
 ##   godot ... -- --density [--lanes=3,4] [--legs=1,...,8] [--profile=scripted|bot|soak] [--seeds=3]
 ##       [--run-legs=2] [--out=FILE]                   # the D11 density survey (DensitySurvey)
@@ -80,8 +80,10 @@ func _main() -> void:
 			mine.append(k)
 	print("soak shard %d/%d: runs %d of %d (%.1f km each), seed %d" % [shard, shards, mine.size(), n_runs, run_km,
 		base_seed])
+	# --canyon: every run on the canyon's road (curves, crests, tunnels and their lane drops).
+	var biome: BiomeDef = BiomePlan.load_biome(&"canyon") if args.has("canyon") else null
 	for r in mine:
-		var run := TrafficSoakRun.new(r, base_seed, legs, leg_m)
+		var run := TrafficSoakRun.new(r, base_seed, legs, leg_m, null, 0, biome, args.has("all-pieces"))
 		run.check_windows = windows
 		while not run.finished:
 			run.advance(60.0)

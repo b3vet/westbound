@@ -52,6 +52,8 @@ var unsignaled_moves := 0
 var ambush_violations := 0
 var collisions := 0            ## ticks with at least one traffic-traffic overlap
 var collision_pairs := 0
+## Where the last traffic-to-traffic collision was (s of its first vehicle; NAN: none yet).
+var last_collision_s := NAN
 var player_contacts := 0       ## ticks with a traffic-player overlap
 var rear_end_contacts := 0     ## ... where the car's center is behind the player's
 ## Contact episodes (a car touching the player, counted once per touch).
@@ -338,6 +340,7 @@ func _check_boxes(ts: TrafficState, player: VehicleState) -> void:
 			if _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], atan2(ts.v_lat[i], maxf(ts.v[i], 0.1)),
 					ts.s[j], ts.d[j], ts.length[j], ts.width[j], atan2(ts.v_lat[j], maxf(ts.v[j], 0.1))):
 				collision_pairs += 1
+				last_collision_s = ts.s[i]
 				hit_tick = true
 				_msg("collision slots %d/%d at s=%.1f d=%.2f/%.2f" % [i, j, ts.s[i], ts.d[i], ts.d[j]])
 	if hit_tick:

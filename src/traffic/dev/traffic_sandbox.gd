@@ -29,10 +29,13 @@ extends Node3D
 ##           (cap), SEL < / SEL > (ask the selected car to change lanes)
 ##   LAYERS  IDM, MOBIL, BLINK, OCC, PASS
 ##   HUD     dev HUD (COPY report)
-##   WALL / BLOCK / WAVES (top right, second row; SetPieceControls, WP6.2): force a set
-##           piece into the next ahead batch; show the intensity curve (IntensityPlot)
-##   FAST xK / RACER (top right, third row; FastTrafficControls, WP6.6): scale the fast
-##           shares (aggressive + racer); spawn a racer behind the player
+##   WALL / BLOCK / SLALOM / CONVOY / MERGE / WORKS / TUNNEL / TOLL / WAVES (top right,
+##           second row; SetPieceControls, WP6.2 + WP6.3): force a set piece (the next
+##           batch; a road-anchored one beyond the view, a feature-triggered one at its
+##           next tunnel / toll-gantry checkpoint); show the intensity curve (IntensityPlot).
+##           The pieces' props are drawn by SetPieceView (WP6.3).
+##   FAST xK / RACER (top right, below the set pieces; FastTrafficControls, WP6.6): scale
+##           the fast shares (aggressive + racer); spawn a racer behind the player
 ## Tap a vehicle to select it (all MOBIL terms in a side panel).
 ## Keys: Space pause, . step, N +1 s, [ ] time scale, V camera mode, B driver,
 ## X clear, 1-5 layers (IDM, MOBIL, BLINK, OCC, PASS), backtick dev HUD, C rig camera.
@@ -119,6 +122,8 @@ var events: ScoreEventBuffer
 var set_piece_controls: SetPieceControls
 ## The fast-traffic controls (plan D15, WP6.6).
 var fast_controls: FastTrafficControls
+## The set pieces' props (WP6.3).
+var set_piece_view: SetPieceView
 
 var _ctx: RunContext
 var _biome: BiomeDirector
@@ -195,6 +200,10 @@ func _ready() -> void:
 	_spawn_car()
 	_player_ctl = PlayerController.new(hub)
 	view = _make_traffic_view()
+	set_piece_view = SetPieceView.new()
+	set_piece_view.name = "SetPieceView"
+	add_child(set_piece_view)
+	set_piece_view.setup(_ctx, road, origin)
 	cam = SandboxCamera.new()
 	cam.name = "SandboxCamera"
 	add_child(cam)
@@ -359,6 +368,7 @@ func _process(delta: float) -> void:
 	_biome.update_view(st.s)
 	_builder.update_view(st.s)
 	_roadside.update_view(st.s)
+	set_piece_view.update_view(st.s)
 	sky.update_view(st.s)
 	view.call(&"update_view", st.s)
 	cam.view_distance_m = _builder.view_distance_m()
@@ -383,6 +393,7 @@ func reseed(seed_value: int) -> void:
 	director.set_fog_end(_builder.view_distance_m())
 	director.set_leg(leg, car.state.s)
 	director.set_biome(_biome.current())
+	director.checkpoint_style = _biome.checkpoint_style   # WP6.3: toll gantries
 	_night = sky.current().emissive_headlight > HEADLIGHTS_ON
 	sim.set_headlights(_night)
 	director.set_night(_night)
@@ -393,6 +404,7 @@ func reseed(seed_value: int) -> void:
 	probe.set_player(car.state)
 	view.call(&"setup", traffic_ctx, road, origin, registry, sim.state, director.opposite.state)
 	view.set(&"show_opposite", show_opposite)
+	set_piece_view.bind(director.set_pieces)
 	overlay.bind(sim, road, origin, probe)
 	if bot != null:
 		bot.traffic = sim.state
@@ -559,6 +571,19 @@ func reset_car() -> void:
 	if bot != null:
 		bot.on_attached(car.state)
 	rig.snap_to_target()
+
+
+## Moves the car to `s` (its lane and speed kept), refills traffic around it and builds
+## the road there at once (set-piece snaps, WP6.3).
+func teleport(s: float) -> void:
+	road.ensure_generated_to(s + _view_ahead(0.0))
+	car.state.s = s
+	reset_car()
+	var smp := road.sample(s)
+	origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+	director.reset(car.state)
+	_builder.build_all_now(s)
+	_next_forget_s = s
 
 
 func _spawn_car() -> void:

@@ -1,0 +1,39 @@
+[gd_resource type="Resource" script_class="SetPieceDef" format=3]
+
+[ext_resource type="Script" uid="uid://cc0n7yjgviyxv" path="res://src/traffic/set_piece_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"toll_gantry"
+kind = 7
+display_name = "Toll gantry"
+warning = 4
+warning_sign_distances_m = PackedFloat64Array(1000, 500)
+length_m = 240.0
+min_leg = 1
+weight = 1.0
+is_checkpoint_landmark = true
+min_lanes = 2
+profile_ids = Array[StringName]([&"commuter", &"cruiser", &"van"])
+profile_weights = PackedFloat64Array(3, 2, 1)
+speed_kmh = 105.0
+start_distance_m = 50.0
+end_margin_m = 40.0
+clear_behind_m = 40.0
+clear_ahead_m = 40.0
+anchored = true
+trigger = 2
+schedule_lead_min_m = 1300.0
+schedule_lead_max_m = 3200.0
+checkpoint_style = &"toll_gantry"
+zone_meet_m = 150.0
+warning_anchor_m = 180.0
+vehicles_min = 1
+vehicles_max = 3
+vehicle_extra_gap_m = 8.0
+booth_before_m = 180.0
+booth_after_m = 60.0
+booth_speed_kmh = 50.0
+left_booth_min_lanes = 3
+booth_keep_after_m = 400.0
+booth_exit_kmh = 110.0

@@ -47,6 +47,10 @@ extends RefCounted
 ## so LandmarkClearance's road-tunnel zones match it. Rows fall on every portal and
 ## hip end.
 ##
+## Rail gaps (WP6.3 set pieces): where a ProceduralRoadPath reports rail_gap_at(s),
+## the player-side guardrail panels collapse to nothing (the merge zone's ramp join
+## draws its own rail); rows fall on every gap end.
+##
 ## Cliffs (WP6.4a, canyon): where the biome at a row has a CliffDef (`biome_plan`),
 ## rock walls are built into the world surface on both sides beyond the scenery line,
 ## like the guardrails: per row a jittered cross-section profile in strata colours,
@@ -183,6 +187,9 @@ var _iv_lamp_lo := PackedInt32Array()
 var _iv_lamp_n := PackedInt32Array()
 ## Rows forced into the layout (portals, hip ends), sorted.
 var _breaks := PackedFloat64Array()
+## WP6.3 rail gaps: the road being built when it has them, and scratch for their ends.
+var _rail_gap_road: ProceduralRoadPath
+var _gap_ends := PackedFloat64Array()
 var _tunnels: Array[RoadFeature] = []
 ## Every tunnel the feature query found (cliffs frame them from further away).
 var _all_tunnels: Array[RoadFeature] = []
@@ -303,6 +310,13 @@ func begin(road: RoadPath, s0: float, s1: float) -> void:
 			for b: float in [f.s_start - hip, f.s_start, f.s_end, f.s_end + hip]:
 				if b > s0 + ROW_EPS_M and b < s1 - ROW_EPS_M:
 					_breaks.append(b)
+	_rail_gap_road = road as ProceduralRoadPath
+	if _rail_gap_road != null:
+		_gap_ends.clear()
+		_rail_gap_road.rail_gap_ends_in(s0, s1, _gap_ends)
+		for b in _gap_ends:
+			if b > s0 + ROW_EPS_M and b < s1 - ROW_EPS_M:
+				_breaks.append(b)
 	_breaks.sort()
 
 	_compute_rows(s0, s1)
@@ -823,6 +837,8 @@ func _emit_world_interval(i: int) -> void:
 	var vb := _shaded(_row_verge[b], shade)
 	var fa := _shaded(_row_field[a], shade)
 	var fb := _shaded(_row_field[b], shade)
+	# WP6.3: an open player-side rail (a set piece's rail gap) collapses to a line.
+	var gap := _rail_gap_road != null and _rail_gap_road.rail_gap_at(0.5 * (_row_s[a] + _row_s[b]))
 	for side in 2:
 		var sg := 1.0 if side == 0 else -1.0
 		# Rail face and back (d), and its height factor, per row.
@@ -839,6 +855,11 @@ func _emit_world_interval(i: int) -> void:
 			bkb = fcb - dep
 			rha = _row_hs[a] * (1.0 if _row_rail[a] > 0.0 else _row_ow[a])
 			rhb = _row_hs[b] * (1.0 if _row_rail[b] > 0.0 else _row_ow[b])
+		elif gap:
+			bka = fca
+			bkb = fcb
+			rha = 0.0
+			rhb = 0.0
 		_profile_panel(pa, ra, ua, pb, rb, ub, bka, bot * rha, bkb, bot * rhb,
 				fca, mid * rha, fcb, mid * rhb, sg, rail, uv)
 		_profile_panel(pa, ra, ua, pb, rb, ub, fca, mid * rha, fcb, mid * rhb,
