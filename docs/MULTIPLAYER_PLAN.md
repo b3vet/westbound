@@ -119,7 +119,7 @@ Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p9
 
 | Milestone | Status |
 | --- | --- |
-| N0 Server foundation | ✅ merged (image 3.6 MB, CI pushes `ghcr.io/b3vet/westbound-server:edge`); owner: deploy on Coolify per docs/SERVER.md and open `/api/v1/echo-check` on a phone |
+| N0 Server foundation | ✅ **gate met on the real VPS** (owner, 2026-09-29): deployed on Coolify at `westbound.sipsakrandevu.com`, reachable, wss echo works from a phone. Image 3.6 MB; CI pushes `ghcr.io/b3vet/westbound-server:edge` |
 | N1 Accounts (device) | 🟡 N1.1 server in progress |
 | N2 Protocol & clock | 🟡 N2.1 protocol crate merged (87 golden vectors, frozen contract docs/PROTOCOL.md); N2.2 client codec in progress |
 | N3 Loop map | ⬜ (after Phase 6) |
