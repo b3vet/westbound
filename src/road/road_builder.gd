@@ -28,9 +28,11 @@ extends Node3D
 ## physics interpolation: no rebuild, no seam. An in-flight build is unaffected
 ## (it is anchor-relative and placed on commit).
 ##
-## Ground colors: per chunk from `biome_director.biome_at(chunk start)` when a
-## director is set (BiomeDef.verge_color / ground_color), else set_ground_colors().
-## Chunks whose colors went stale rebuild within the frame budget.
+## Ground colors: with a biome director, the verge, field and rock colours at the
+## chunk's start and end (BiomeDirector.verge_color_at etc., blended across biome
+## boundaries), which the mesher blends per row; else set_ground_colors(). Chunks whose
+## colors went stale (the plan changed: BiomeDirector.plan_version) rebuild within the
+## frame budget. Road tunnels (TUNNEL features) are part of the chunk mesh.
 ##
 ## Draw calls: one per visible chunk. Road surface, markings, reflectors, barrier,
 ## rails and ground ribbon are one surface (RoadChunkMesher.commit_merged): the road
@@ -43,6 +45,10 @@ const FREE := -1
 const FIRST_CHUNK := 0
 ## Work budget meaning "no limit" (warm-up).
 const UNLIMITED := 1 << 30
+## Chunk colour record: verge, field, rock, rock shade at the start, then at the end.
+const COLOR_COUNT := 8
+## Props sub-stream seeding the cliff runs and facets.
+const CLIFF_STREAM := &"cliffs"
 
 
 ## One pooled chunk.
@@ -56,9 +62,14 @@ class Chunk extends RefCounted:
 	var anchor_z: float = 0.0
 	var dirty: bool = false
 	var triangles: int = 0
-	## Ground colors the mesh was built with.
+	## Ground colors the mesh was built with (at the chunk's start).
 	var verge: Color
 	var field: Color
+	## Every colour the mesh was built with (RoadBuilder.COLOR_*).
+	var colors := PackedColorArray()
+	## The biomes at its start and end when built (cliffs follow the biome).
+	var biome_a: BiomeDef
+	var biome_b: BiomeDef
 
 
 var tuning: RoadTuning
@@ -98,19 +109,22 @@ var _pending_k: int = FREE
 var _pending_rebuild: bool = false
 ## The palette changed while the in-flight chunk was being built.
 var _pending_stale: bool = false
-var _pending_verge: Color
-var _pending_field: Color
+var _pending_colors := PackedColorArray()
+var _pending_biome_a: BiomeDef
+var _pending_biome_b: BiomeDef
 ## Ground colors without a biome director (set_ground_colors), and the scratch
 ## result of _want_colors().
 var _manual_verge: Color
 var _manual_field: Color
-var _want_verge: Color
-var _want_field: Color
+var _want := PackedColorArray()
+var _plan_version: int = -1
 
 
 func _init() -> void:
 	_manual_verge = palette.ground_verge
 	_manual_field = palette.ground_field
+	_want.resize(COLOR_COUNT)
+	_pending_colors.resize(COLOR_COUNT)
 
 
 # ---------------------------------------------------------------- World-system API
@@ -120,8 +134,11 @@ func setup(ctx: RunContext, road_path: RoadPath, floating_origin: FloatingOrigin
 	tuning = t.road
 	road = road_path
 	origin = floating_origin
-	_mesher = RoadChunkMesher.new(tuning, palette)
+	var lt: Variant = t.get(&"landmarks")
+	_mesher = RoadChunkMesher.new(tuning, palette, lt as LandmarkTuning if lt is LandmarkTuning else null)
 	_mesher.merge_surfaces = true
+	_mesher.cliff_seed = ctx.rng_props.derive(CLIFF_STREAM).get_seed() if ctx != null else 0
+	_plan_version = biome_director.plan_version if biome_director != null else -1
 	_cancel_pending()
 	for c in _pool:
 		_free_chunk(c)
@@ -133,6 +150,9 @@ func setup(ctx: RunContext, road_path: RoadPath, floating_origin: FloatingOrigin
 func update_view(focus_s: float) -> void:
 	if tuning == null:
 		return
+	if biome_director != null and biome_director.plan_version != _plan_version:
+		_plan_version = biome_director.plan_version
+		_recheck_colors()
 	_update(focus_s, tuning.chunk_build_rows_per_frame_count, tuning.chunk_builds_per_frame_count)
 
 
@@ -270,10 +290,19 @@ func _generated(k: int) -> bool:
 func _begin(k: int, c: Chunk, rebuild: bool) -> void:
 	var s0 := float(k) * tuning.chunk_length_m
 	_want_colors(k)
-	_pending_verge = _want_verge
-	_pending_field = _want_field
-	palette.ground_verge = _want_verge
-	palette.ground_field = _want_field
+	for i in COLOR_COUNT:
+		_pending_colors[i] = _want[i]
+	palette.ground_verge = _want[0]
+	palette.ground_field = _want[1]
+	palette.rock = _want[2]
+	palette.rock_shade = _want[3]
+	palette.ground_verge_end = _want[4]
+	palette.ground_field_end = _want[5]
+	palette.rock_end = _want[6]
+	palette.rock_shade_end = _want[7]
+	_mesher.biome_plan = biome_director.plan if biome_director != null else null
+	_pending_biome_a = _biome_at(s0)
+	_pending_biome_b = _biome_at(s0 + tuning.chunk_length_m)
 	_mesher.begin(road, s0, s0 + tuning.chunk_length_m)
 	_pending = c
 	_pending_k = k
@@ -286,8 +315,11 @@ func _commit_pending() -> void:
 	_mesher.commit_merged(c.mesh, ROAD_MATERIAL)
 	c.index = _pending_k
 	c.dirty = _pending_stale
-	c.verge = _pending_verge
-	c.field = _pending_field
+	c.verge = _pending_colors[0]
+	c.field = _pending_colors[1]
+	c.colors = _pending_colors.duplicate()
+	c.biome_a = _pending_biome_a
+	c.biome_b = _pending_biome_b
 	c.triangles = _mesher.triangle_count()
 	c.anchor_x = _mesher.anchor_x
 	c.anchor_y = _mesher.anchor_y
@@ -316,19 +348,26 @@ func _cancel_pending() -> void:
 	_pending_rebuild = false
 
 
-## Ground colors chunk k should have, into _want_verge / _want_field.
+## Colors chunk k should have, into _want (COLOR_COUNT: start then end).
 func _want_colors(k: int) -> void:
 	if biome_director != null:
-		var b := biome_director.biome_at(float(k) * tuning.chunk_length_m)
-		if b != null:
-			_want_verge = b.verge_color
-			_want_field = b.ground_color
-			return
-	_want_verge = _manual_verge
-	_want_field = _manual_field
+		for e in 2:
+			var s := float(k + e) * tuning.chunk_length_m
+			var o := e * (COLOR_COUNT >> 1)
+			_want[o] = biome_director.verge_color_at(s)
+			_want[o + 1] = biome_director.ground_color_at(s)
+			_want[o + 2] = biome_director.rock_color_at(s)
+			_want[o + 3] = biome_director.rock_shade_color_at(s)
+		return
+	for e in 2:
+		var o := e * (COLOR_COUNT >> 1)
+		_want[o] = _manual_verge
+		_want[o + 1] = _manual_field
+		_want[o + 2] = palette.rock
+		_want[o + 3] = palette.rock_shade
 
 
-## Marks live chunks whose ground colors are out of date (and the one in flight).
+## Marks live chunks whose colors are out of date (and the one in flight).
 func _recheck_colors() -> void:
 	if tuning == null:
 		return
@@ -336,12 +375,19 @@ func _recheck_colors() -> void:
 		if c.index == FREE:
 			continue
 		_want_colors(c.index)
-		if c.verge != _want_verge or c.field != _want_field:
+		var s0 := float(c.index) * tuning.chunk_length_m
+		if c.colors != _want or c.biome_a != _biome_at(s0) or c.biome_b != _biome_at(s0 + tuning.chunk_length_m):
 			c.dirty = true
 	if _pending != null:
 		_want_colors(_pending_k)
-		if _pending_verge != _want_verge or _pending_field != _want_field:
+		var ps := float(_pending_k) * tuning.chunk_length_m
+		if _pending_colors != _want or _pending_biome_a != _biome_at(ps) \
+				or _pending_biome_b != _biome_at(ps + tuning.chunk_length_m):
 			_pending_stale = true
+
+
+func _biome_at(s: float) -> BiomeDef:
+	return biome_director.biome_at(s) if biome_director != null else null
 
 
 func _find(k: int) -> Chunk:

@@ -1,0 +1,103 @@
+[gd_resource type="Resource" script_class="BiomeDef" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/road/biome_def.gd" id="1_biome"]
+[ext_resource type="Script" path="res://src/road/roadside/roadside_prop.gd" id="3_prop"]
+
+[sub_resource type="Resource" id="Prop_mesas"]
+script = ExtResource("3_prop")
+id = &"mesas"
+mesh_paths = PackedStringArray("res://assets/props/desert/mesa.res", "res://assets/props/desert/butte.res")
+variant_weights = PackedFloat64Array(0.6, 0.4)
+pattern = 0
+sides = 0
+density_per_km = 1.4
+cell_length_m = 700.0
+setback_min_m = 60.0
+setback_max_m = 300.0
+facing = 1
+scale_min_factor = 0.7
+scale_max_factor = 1.25
+
+[sub_resource type="Resource" id="Prop_saguaro"]
+script = ExtResource("3_prop")
+id = &"saguaro"
+mesh_paths = PackedStringArray("res://assets/props/desert/saguaro.res")
+pattern = 0
+sides = 0
+density_per_km = 26.0
+cell_length_m = 100.0
+setback_min_m = 1.0
+setback_max_m = 70.0
+facing = 1
+scale_min_factor = 0.7
+scale_max_factor = 1.3
+
+[sub_resource type="Resource" id="Prop_cactus_small"]
+script = ExtResource("3_prop")
+id = &"cactus_small"
+mesh_paths = PackedStringArray("res://assets/props/desert/cactus_small.res")
+pattern = 0
+sides = 0
+density_per_km = 18.0
+cell_length_m = 100.0
+setback_min_m = 0.5
+setback_max_m = 30.0
+facing = 1
+scale_min_factor = 0.8
+scale_max_factor = 1.4
+
+[sub_resource type="Resource" id="Prop_scrub"]
+script = ExtResource("3_prop")
+id = &"scrub"
+mesh_paths = PackedStringArray("res://assets/props/desert/scrub.res")
+pattern = 0
+sides = 0
+density_per_km = 60.0
+cell_length_m = 100.0
+setback_min_m = 0.0
+setback_max_m = 90.0
+facing = 1
+scale_min_factor = 0.8
+scale_max_factor = 1.6
+
+[sub_resource type="Resource" id="Prop_rocks"]
+script = ExtResource("3_prop")
+id = &"rocks"
+mesh_paths = PackedStringArray("res://assets/props/desert/rocks.res")
+pattern = 0
+sides = 0
+density_per_km = 8.0
+cell_length_m = 250.0
+setback_min_m = 2.0
+setback_max_m = 60.0
+facing = 1
+scale_min_factor = 0.8
+scale_max_factor = 1.8
+
+[resource]
+script = ExtResource("1_biome")
+id = &"desert"
+display_name = "Desert Mesas"
+order = 2
+lane_count = 3
+curve_frequency_scale = 0.45
+crest_frequency_scale = 0.6
+tunnel_frequency_scale = 0.0
+scatter_props = Array[ExtResource("3_prop")]([SubResource("Prop_mesas"), SubResource("Prop_saguaro"), SubResource("Prop_cactus_small"), SubResource("Prop_scrub"), SubResource("Prop_rocks")])
+fence_mesh_path = "res://assets/props/desert/fence_desert.res"
+fence_setback_m = 3.0
+world_tint_offset = Color(0.012, 0.004, -0.006, 0)
+fog_tint_offset = Color(0.03, 0.01, -0.03, 0)
+horizon_set = &"desert_mesas"
+horizon_layer_style = Vector4(2, 2, 2, 3)
+horizon_layer_height_m = Vector4(70, 320, 800, 2800)
+heat_shimmer = 1.0
+ground_color = Color(0.8, 0.62, 0.42, 1)
+verge_color = Color(0.72, 0.56, 0.38, 1)
+rock_color = Color(0.7, 0.35, 0.22, 1)
+rock_shade_color = Color(0.5, 0.24, 0.16, 1)
+traffic_palette = PackedColorArray(0.94, 0.93, 0.89, 1, 0.6, 0.63, 0.66, 1, 0.11, 0.11, 0.13, 1, 0.64, 0.17, 0.13, 1, 0.1, 0.58, 0.6, 1, 0.95, 0.89, 0.74, 1, 0.96, 0.46, 0.13, 1, 0.12, 0.3, 0.58, 1, 0.3, 0.31, 0.35, 1, 0.76, 0.6, 0.38, 1)
+set_piece_ids = Array[StringName]([&"slalom", &"convoy", &"truck_wall", &"road_works", &"rolling_roadblock"])
+set_piece_weights = PackedFloat64Array(1, 1, 0.8, 0.6, 0.6)
+landmark_style = &"sign_gantry"
+landmark_styles = Array[StringName]([&"sign_gantry", &"toll_gantry"])

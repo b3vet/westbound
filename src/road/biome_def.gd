@@ -22,6 +22,10 @@ const LANDMARK_TUNNEL_PORTAL := &"tunnel_portal"
 @export var curve_frequency_scale: float = 1.0
 @export var crest_frequency_scale: float = 1.0
 @export var tunnel_frequency_scale: float = 0.0
+## Lateral clearance from the driving line to sight obstructions inside a bend for this
+## biome's BLIND_BEND rule (cliffs close to the road hide traffic; 0 = the road default,
+## RoadTuning.bend_sight_clearance_m).
+@export var bend_sight_clearance_m: float = 0.0
 
 @export_group("Props (roadside MultiMesh sets)")
 ## Typed prop sets placed by roadside.gd (WP1.4): scattered props and rows.
@@ -32,18 +36,33 @@ const LANDMARK_TUNNEL_PORTAL := &"tunnel_portal"
 @export var fence_mesh_path: String = ""
 ## Scenery line (guardrail face + prop clearance) to the fence line.
 @export var fence_setback_m: float = 0.0
+## Rock walls following the road (canyon), placed as roadside segments; null = none.
+@export var cliffs: CliffDef
 
 @export_group("Look")
 ## Additive tint offsets applied over the color script (desert warmer, coast cooler).
 @export var world_tint_offset: Color = Color(0, 0, 0, 0)
 @export var fog_tint_offset: Color = Color(0, 0, 0, 0)
-## Horizon silhouette cards, nearest first (3-4 layers).
+## Horizon silhouette cards, nearest first (3-4 layers). Unused: the horizon is
+## procedural (horizon_layer_style / horizon_layer_height_m below).
 @export var horizon_cards: PackedStringArray = []
-## Horizon silhouette set id (the sky WP maps it to its cards).
+## Horizon silhouette set id (a name for the set below; docs and tests).
 @export var horizon_set: StringName = &""
+## The set: per layer (x = nearest .. w = farthest) a SkyRig.HorizonStyle and the
+## silhouette height at the layer's virtual distance. The sky crossfades between the
+## sets of consecutive legs (BiomeDirector, docs/BIOMES.md).
+@export var horizon_layer_style: Vector4 = Vector4(1, 2, 3, 3)
+@export var horizon_layer_height_m: Vector4 = Vector4(90.0, 380.0, 1000.0, 3600.0)
+## Fake heat shimmer on the far horizon cards (0 = none, 1 = full; desert), faded by the
+## sun's height (horizon.gdshader). No screen-space effect.
+@export var heat_shimmer: float = 0.0
 ## Ground albedo (sRGB) for the ground ribbon beyond the verge, and the verge strip.
 @export var ground_color: Color = Color(0.5, 0.5, 0.5)
 @export var verge_color: Color = Color(0.5, 0.5, 0.5)
+## Rock (sRGB) of road-built rock masses: the hill over a road tunnel (face, then the
+## shaded slopes). Tunnel portals, walls and lamps keep the road palette.
+@export var rock_color: Color = Color(0.47, 0.56, 0.25)
+@export var rock_shade_color: Color = Color(0.66, 0.63, 0.35)
 ## Per-instance traffic colors ("colors come from the biome palette").
 @export var traffic_palette: PackedColorArray = []
 

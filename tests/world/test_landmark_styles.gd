@@ -35,6 +35,7 @@ func _origin() -> FloatingOrigin:
 
 func _director(seed_value: int, road: RoadPath, origin: FloatingOrigin) -> BiomeDirector:
 	var d := BiomeDirector.new()
+	d.journey = false   # farmland everywhere: its four styles
 	tree.root.add_child(d)
 	_nodes.append(d)
 	d.setup(RunContext.new(seed_value, RunContext.MODE_JOURNEY, _t), road, origin)
@@ -83,6 +84,26 @@ func test_single_style_biome_is_unchanged() -> void:
 
 ## The director tags the real road's checkpoint features with the style of the biome
 ## whose leg ends there: deterministic by seed, all four seen in four legs.
+## The journey plan (WP6.4a): each checkpoint takes the style of the biome whose leg
+## ends there, from that biome's own list.
+func test_journey_checkpoints_follow_each_legs_biome() -> void:
+	var ctx := RunContext.new(SEED, RunContext.MODE_JOURNEY, _t)
+	var road := ProceduralRoadPath.new(ctx)
+	var d := BiomeDirector.new()
+	tree.root.add_child(d)
+	_nodes.append(d)
+	d.setup(ctx, road, null)
+	var leg_m := _t.legs.leg_length_m()
+	for leg in range(1, _t.legs.legs_to_coast + 1):
+		var cp := float(leg) * leg_m
+		var b := d.plan.biome_for_leg(leg)
+		var style := d.checkpoint_style(leg, cp)
+		if b.landmark_styles.is_empty():
+			eq(style, b.landmark_style, "leg %d (%s)" % [leg, b.id])
+		else:
+			check(b.landmark_styles.has(style), "leg %d (%s): %s is one of its styles" % [leg, b.id, style])
+
+
 func test_director_fills_the_checkpoint_tag_deterministically() -> void:
 	var legs := 8
 	var tags: Array[PackedStringArray] = []

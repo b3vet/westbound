@@ -11,6 +11,15 @@
 // world directions. `origin_xz` (set by Sky from the FloatingOrigin) makes the
 // sample positions absolute, so an origin shift does not move the horizon.
 //
+// Biome crossfade (WP6.4a): per layer the silhouette height morphs from set a
+// (layer_style / layer_height_m) to set b (layer_style_b / layer_height_b_m) with
+// layer_mix, as BiomeDirector drives across a checkpoint.
+//
+// Heat shimmer (WP6.4a, desert): the top edge of the far layers wobbles by a tiny,
+// travelling elevation ripple, faded by the sun's height (none at night) and by
+// heat_shimmer (0..1). A vertex effect on cards that already exist: no extra pass,
+// no screen reads, identical on both renderers (TIME, no derivatives).
+//
 // Mesh (built by src/sun/sky.gd): per layer a ring strip, farthest layer first in
 // index order (no depth writes: later triangles draw over earlier ones);
 // VERTEX = horizontal unit direction, UV.x = layer index, UV.y = 0 bottom / 1 top.
@@ -29,6 +38,23 @@ const float STYLE_SKYLINE = 4.0;
 uniform vec4 layer_style = vec4(1.0, 2.0, 3.0, 3.0);
 uniform vec4 layer_distance_m = vec4(3000.0, 7000.0, 16000.0, 40000.0);
 uniform vec4 layer_height_m = vec4(90.0, 380.0, 1000.0, 3600.0);
+// Crossfade target set and progress (0 = only the set above).
+uniform vec4 layer_style_b = vec4(1.0, 2.0, 3.0, 3.0);
+uniform vec4 layer_height_b_m = vec4(90.0, 380.0, 1000.0, 3600.0);
+uniform float layer_mix = 0.0;
+// Heat shimmer: amount (0..1), per-layer weight (far layers shimmer most), peak
+// elevation ripple (radians), ripples around the horizon, travel speed (rad/s),
+// and the sun heights (dir.y) over which it fades in.
+uniform float heat_shimmer = 0.0;
+uniform vec4 shimmer_layer_weight = vec4(0.35, 1.0, 0.8, 0.6);
+uniform float shimmer_amplitude = 0.0016;
+uniform float shimmer_ripples = 180.0;
+// A second, slower ripple beats against the first (whole numbers: no seam behind).
+uniform float shimmer_ripples_b = 67.0;
+uniform float shimmer_speed = 7.0;
+uniform vec2 shimmer_sun_fade = vec2(0.03, 0.2);
+// The heat also lifts the base haze toward the sky's horizon colour (a mirage band).
+uniform float shimmer_mirage = 0.35;
 // Horizontal size of the features in each height field.
 uniform vec4 layer_feature_m = vec4(900.0, 2600.0, 5000.0, 14000.0);
 // How much of the sun halo washes over each layer.
@@ -100,18 +126,33 @@ vec3 layer_tint(int layer) {
 void vertex() {
 	int layer = int(UV.x + 0.5);
 	float style = layer_style[layer];
+	float style_b = layer_style_b[layer];
 	vec3 flat_dir = normalize(vec3(VERTEX.x - NODE_POSITION_WORLD.x, 0.0, VERTEX.z - NODE_POSITION_WORLD.z));
 	float elev = -base_depth;
-	if (UV.y > 0.5 && style != STYLE_NONE) {
+	float heat = heat_shimmer * smoothstep(shimmer_sun_fade.x, shimmer_sun_fade.y, wb_sun_dir.y);
+	if (UV.y > 0.5 && (style != STYLE_NONE || style_b != STYLE_NONE)) {
 		vec2 sample_xz = CAMERA_POSITION_WORLD.xz + origin_xz + flat_dir.xz * layer_distance_m[layer];
-		float h = silhouette(style, sample_xz / layer_feature_m[layer], layer_seed[layer]);
-		elev = h * layer_height_m[layer] / layer_distance_m[layer];
+		vec2 p = sample_xz / layer_feature_m[layer];
+		float h = silhouette(style, p, layer_seed[layer]) * layer_height_m[layer];
+		if (layer_mix > 0.0) {
+			float hb = silhouette(style_b, p, layer_seed[layer]) * layer_height_b_m[layer];
+			h = mix(h, hb, layer_mix);
+		}
+		elev = h / layer_distance_m[layer];
+		if (heat > 0.0) {
+			float az = atan(flat_dir.x, -flat_dir.z);
+			float ripple = sin(az * shimmer_ripples + TIME * shimmer_speed)
+					* sin(az * shimmer_ripples_b - TIME * shimmer_speed * 0.61);
+			elev += heat * shimmer_layer_weight[layer] * shimmer_amplitude * ripple;
+		}
 	}
 	vec3 dir = normalize(vec3(flat_dir.x, elev, flat_dir.z));
 	VERTEX = CAMERA_POSITION_WORLD + dir * wb_fog_end * WB_SKY_RADIUS_FRAC;
 	vec3 c = layer_tint(layer);
 	// Haze at the base melts the card into the fog and the dome below the horizon.
 	c = mix(c, wb_fog_color_dir(dir), UV.y > 0.5 ? 0.0 : base_haze);
+	// Mirage: the hot air near the ground shows the sky, lifting the haze at the base.
+	c = mix(c, wb_sky_horizon.rgb, UV.y > 0.5 ? 0.0 : heat * shimmer_mirage * shimmer_layer_weight[layer]);
 	v_color = c + wb_sun_disc_color.rgb * wb_sun_halo(dir) * layer_glow[layer];
 }
 

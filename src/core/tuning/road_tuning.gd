@@ -86,6 +86,42 @@ extends Resource
 ## Default taper length of a scheduled lane-count change.
 @export var lane_taper_length_m: float = 200.0   # not in spec
 
+@export_group("Biome lanes and road tunnels (WP6.4a, docs/BIOMES.md)")
+## A leg whose biome has another lane count changes it this far after the leg's
+## checkpoint (clear of the landmark's reach: the bridge's backstays end ~272 m after
+## the line), tapering over biome_lane_taper_m.
+@export var biome_lane_change_after_m: float = 320.0   # not in spec
+@export var biome_lane_taper_m: float = 250.0   # not in spec
+## Lanes inside a road tunnel ("tunnels and road works drop to 2").
+@export var tunnel_lanes: int = 2
+## Tunnel length (portal to exit).
+@export var tunnel_length_min_m: float = 300.0   # not in spec
+@export var tunnel_length_max_m: float = 800.0   # not in spec
+## Expected tunnels per leg at BiomeDef.tunnel_frequency_scale 1 (farmland 0).
+@export var tunnels_per_leg: float = 0.8   # not in spec
+@export var tunnel_max_per_leg_count: int = 2   # not in spec
+## Open road between two tunnels of one leg (they share one narrowed section).
+@export var tunnel_gap_min_m: float = 120.0   # not in spec
+@export var tunnel_gap_max_m: float = 360.0   # not in spec
+## The narrowed section: the lane drop's taper (lane_taper_length_m) ends this far
+## before the first portal, and the lane comes back this far after the last exit.
+@export var tunnel_lane_lead_m: float = 150.0   # not in spec: the merge is done before the portal
+@export var tunnel_lane_trail_m: float = 80.0   # not in spec
+## Tunnels (with their tapers) stay this far after a leg's checkpoint and this far
+## before the next checkpoint's first warning sign.
+@export var tunnel_leg_margin_after_m: float = 650.0   # not in spec: clear of the landmark and a biome lane change
+@export var tunnel_leg_margin_before_m: float = 150.0   # not in spec
+## A "lane ends" warning SIGN stands this far before a lane drop's taper.
+@export var lane_ends_sign_distance_m: float = 400.0   # not in spec: like road works (400 m)
+## Road tunnel look: interior albedo factor (road, barrier, rails, walls) and the
+## lamp strips' length along the wall (spacing and shell size: LandmarkTuning.tunnel_*).
+@export var tunnel_interior_shade_frac: float = 0.42   # not in spec: "the interior reads darker"
+@export var tunnel_lamp_length_m: float = 1.6   # not in spec
+## A rock ridge rises over a road tunnel's bore (above the landmark-sized hill), from
+## the portals inward over tunnel_ridge_ramp_m: the road dives into a mountain.
+@export var tunnel_ridge_height_m: float = 20.0   # not in spec
+@export var tunnel_ridge_ramp_m: float = 45.0   # not in spec
+
 @export_group("Roadside rhythm")
 @export var light_pole_spacing_m: float = 50.0
 @export var reflector_post_spacing_m: float = 25.0

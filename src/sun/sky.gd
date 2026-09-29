@@ -26,6 +26,11 @@ extends Node3D
 ##   - The sun "glow sprite" is an analytic halo (wb_sun_halo) shared by the dome,
 ##     horizon, clouds and fog: same look, no overdraw, and it lights the haze.
 ##
+## Biomes (WP6.4a, docs/BIOMES.md): BiomeDirector pushes the blended world tint offset
+## (wb_biome_tint_offset), a fog tint offset (added here to the fog colour and the
+## horizon tints), the horizon crossfade between two silhouette sets and the desert's
+## heat shimmer (horizon.gdshader).
+##
 ## The world-system API (§13): setup(ctx, road, origin) and update_view(focus_s).
 ## The sun clock (WP3.5) or the dev slider sets `sky_t`.
 
@@ -109,6 +114,14 @@ var _pushed: Dictionary = {}
 var _pushes: int = 0
 var _accent: Color = Color.BLACK
 var _biome_tint: Vector3 = Vector3.ZERO
+## Biome fog tint offset (sRGB, added to the fog and horizon tints before linearising).
+var _fog_tint: Color = Color(0, 0, 0, 0)
+## Horizon crossfade (WP6.4a): the "to" set per layer and how far the cards have faded
+## to it (0 = horizon_layer_style / _height_m only).
+var _horizon_style_b: Vector4
+var _horizon_height_b: Vector4
+var _horizon_mix: float = 0.0
+var _heat_shimmer: float = 0.0
 var _player_light_pos: Vector3 = Vector3.ZERO
 var _player_light_dir: Vector3 = Vector3.FORWARD
 var _player_light_gain: float = 0.0
@@ -172,6 +185,41 @@ func set_biome_tint_offset(offset: Vector3) -> void:
 	_biome_tint = offset
 
 
+## Biome fog tint offset (spec: "Biomes can add tint offsets"): added (sRGB) to the
+## colour script's fog colour and horizon tints, so the haze, the sky at the horizon and
+## the silhouettes shift together. BiomeDirector blends it.
+func set_fog_tint_offset(offset: Color) -> void:
+	_fog_tint = offset
+
+
+## Horizon crossfade between two silhouette sets (BiomeDef.horizon_layer_style /
+## _height_m): per layer, the silhouette height morphs from set a to set b as `t` goes
+## 0 -> 1 (horizon.gdshader). t = 0 shows only a.
+func set_horizon_blend(style_a: Vector4, height_a_m: Vector4, style_b: Vector4, height_b_m: Vector4,
+		t: float) -> void:
+	horizon_layer_style = style_a
+	horizon_layer_height_m = height_a_m
+	_horizon_style_b = style_b
+	_horizon_height_b = height_b_m
+	_horizon_mix = clampf(t, 0.0, 1.0)
+	_apply_horizon_layers()
+
+
+## Fake heat shimmer on the far horizon cards (0..1, desert), faded by the sun's height
+## in the shader. A vertex wobble of the silhouettes: no screen-space pass.
+func set_heat_shimmer(amount: float) -> void:
+	_heat_shimmer = maxf(amount, 0.0)
+	(_horizon.material_override as ShaderMaterial).set_shader_parameter(&"heat_shimmer", _heat_shimmer)
+
+
+func heat_shimmer() -> float:
+	return _heat_shimmer
+
+
+func horizon_mix() -> float:
+	return _horizon_mix
+
+
 ## Player "fake light" (spec: Night lighting). `gain` scales the color script's
 ## headlight ramp; 0 turns it off. Position and direction are render-space.
 func set_player_light(pos: Vector3, dir: Vector3, gain: float) -> void:
@@ -187,13 +235,21 @@ func set_horizon_layer(layer: int, style: HorizonStyle, height_m: float = 0.0) -
 	horizon_layer_style[layer] = float(style)
 	if height_m > 0.0:
 		horizon_layer_height_m[layer] = height_m
+	_horizon_style_b[layer] = horizon_layer_style[layer]
+	_horizon_height_b[layer] = horizon_layer_height_m[layer]
 	_apply_horizon_layers()
 
 
 func _apply_horizon_layers() -> void:
 	var mat := _horizon.material_override as ShaderMaterial
+	if _horizon_mix <= 0.0:
+		_horizon_style_b = horizon_layer_style
+		_horizon_height_b = horizon_layer_height_m
 	mat.set_shader_parameter(&"layer_style", horizon_layer_style)
 	mat.set_shader_parameter(&"layer_height_m", horizon_layer_height_m)
+	mat.set_shader_parameter(&"layer_style_b", _horizon_style_b)
+	mat.set_shader_parameter(&"layer_height_b_m", _horizon_height_b)
+	mat.set_shader_parameter(&"layer_mix", _horizon_mix)
 
 
 ## Unit vector toward the sun at `elevation_rad`, azimuth at world heading 0.
@@ -235,14 +291,14 @@ func push_now() -> int:
 	_put(&"wb_stars", _s.stars)
 	_put(&"wb_cloud_lit", _s.cloud_lit.srgb_to_linear())
 	_put(&"wb_cloud_shadow", _s.cloud_shadow.srgb_to_linear())
-	_put(&"wb_fog_color", _s.fog_color.srgb_to_linear())
+	_put(&"wb_fog_color", _tinted(_s.fog_color).srgb_to_linear())
 	var fog_end := clampf(_s.fog_end_frac, 0.0, 1.0) * view
 	_put(&"wb_fog_start", minf(_s.fog_start_frac * view, fog_end))
 	_put(&"wb_fog_end", fog_end)
-	_put(&"wb_horizon_tint_0", _s.horizon_tint_0.srgb_to_linear())
-	_put(&"wb_horizon_tint_1", _s.horizon_tint_1.srgb_to_linear())
-	_put(&"wb_horizon_tint_2", _s.horizon_tint_2.srgb_to_linear())
-	_put(&"wb_horizon_tint_3", _s.horizon_tint_3.srgb_to_linear())
+	_put(&"wb_horizon_tint_0", _tinted(_s.horizon_tint_0).srgb_to_linear())
+	_put(&"wb_horizon_tint_1", _tinted(_s.horizon_tint_1).srgb_to_linear())
+	_put(&"wb_horizon_tint_2", _tinted(_s.horizon_tint_2).srgb_to_linear())
+	_put(&"wb_horizon_tint_3", _tinted(_s.horizon_tint_3).srgb_to_linear())
 	_put(&"wb_ambient", _s.ambient.srgb_to_linear())
 	_put(&"wb_sun_light_color", _s.sun_light_color.srgb_to_linear())
 	_put(&"wb_sun_light_energy", _s.sun_light_energy)
@@ -264,6 +320,14 @@ func push_now() -> int:
 		_stars.visible = _s.stars > STARS_VISIBLE_MIN
 	_update_origin()
 	return _pushes
+
+
+## An sRGB colour with the biome fog tint added (clamped to 0..1).
+func _tinted(c: Color) -> Color:
+	if _fog_tint == Color(0, 0, 0, 0):
+		return c
+	return Color(clampf(c.r + _fog_tint.r, 0.0, 1.0), clampf(c.g + _fog_tint.g, 0.0, 1.0),
+		clampf(c.b + _fog_tint.b, 0.0, 1.0), c.a)
 
 
 func _put(global_name: StringName, value: Variant) -> void:

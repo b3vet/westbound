@@ -44,6 +44,8 @@ const EVENT_SOURCES := 5
 const HEADLIGHT_LUT_SIZE := 1024
 ## Road memory is trimmed at most this often (m).
 const FORGET_EVERY_M := 500.0
+## Where --leg=N snaps start inside the leg (clear of the checkpoint's landmark).
+const SNAP_LEG_S_M := 600.0   # lint: allow-number dev snap position, not tuning
 ## tools/snap.sh runs use this seed unless --seed is given.
 const SNAP_SEED := 20260929
 ## After the physics car (tick) and before the camera rig (100).
@@ -977,7 +979,8 @@ func open_drive_scene() -> void:
 
 
 ## Snap hook (tools/snap.sh): --state=countdown|running|results|paused, --sky_t=,
-## --s=, --speed_kmh=, --car=0..2, --cam=, --damaged, --ghost, --high_beam, --seed= (default SNAP_SEED).
+## --s=, --speed_kmh=, --car=0..2, --cam=, --damaged, --ghost, --high_beam, --seed= (default SNAP_SEED),
+## --leg=N (start --leg_s= metres into leg N, default 600: look at a biome; WP6.4a).
 func snap_setup(args: Dictionary) -> void:
 	# Reproducible snaps: a fixed seed unless --seed is given.
 	if args.has("car"):
@@ -987,6 +990,8 @@ func snap_setup(args: Dictionary) -> void:
 	run_count = 0
 	_start_run()
 	var s := float(args.get("s", 0.0))
+	if args.has("leg"):
+		s = float(maxi(int(args["leg"]), 1) - 1) * tuning.legs.leg_length_m() + float(args.get("leg_s", SNAP_LEG_S_M))
 	if s > 0.0 or args.has("speed_kmh"):
 		dev_teleport(s, Units.kmh_to_mps(float(args.get("speed_kmh", tuning.legs.start_speed_kmh))))
 	if args.has("sky_t"):
