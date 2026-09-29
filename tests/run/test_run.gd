@@ -371,6 +371,21 @@ func test_score_hit_crash_results_retry() -> void:
 	eq(r.state, Game.RUNNING, "and driving again after the countdown")
 
 
+## The damage smoke never covers the road in the hood and cockpit cameras (owner
+## playtest); it shows again in the outside cameras.
+func test_hood_smoke_hidden_in_hood_and_cockpit_cameras() -> void:
+	var r := _make()
+	r.go()
+	_run_ticks(r, 10)
+	r.fx.set_damaged(true)
+	for mode: StringName in [&"hood", &"cockpit"]:
+		Events.camera_mode_changed.emit(mode)
+		check(not r.fx.get_smoke().visible and not r.fx.get_smoke().emitting, "no smoke in %s" % mode)
+	Events.camera_mode_changed.emit(&"chase")
+	check(r.fx.get_smoke().visible and r.fx.get_smoke().emitting, "smoke in chase")
+	check(r.fx.get_lamp().visible, "the flickering headlight stays in every camera")
+
+
 ## The ghost flicker never shows a body the cockpit camera hid (and restores hidden).
 func test_ghost_flicker_respects_hidden_body() -> void:
 	var r := _make()

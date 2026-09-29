@@ -36,6 +36,9 @@ var feel: FeelTuning
 var damaged: bool = false
 var ghost: bool = false
 
+## The camera mode (from Settings, then Events.camera_mode_changed): the hood smoke
+## hides in FeelTuning.smoke_hidden_camera_modes (hood, cockpit).
+var camera_mode: StringName = &""
 var _smoke: CPUParticles3D
 var _lamp: MeshInstance3D
 var _lamp_mat: ShaderMaterial
@@ -46,10 +49,12 @@ var _lamp_level: float = -1.0
 
 
 func _enter_tree() -> void:
+	camera_mode = StringName(str(Settings.get_value(&"camera_mode")))
 	_connect(Events.hit, _on_hit)
 	_connect(Events.ghost_started, _on_ghost_started)
 	_connect(Events.ghost_ended, stop_ghost)
 	_connect(Events.run_started, _on_run_started)
+	_connect(Events.camera_mode_changed, _on_camera_mode_changed)
 
 
 func _exit_tree() -> void:
@@ -57,6 +62,7 @@ func _exit_tree() -> void:
 	_disconnect(Events.ghost_started, _on_ghost_started)
 	_disconnect(Events.ghost_ended, stop_ghost)
 	_disconnect(Events.run_started, _on_run_started)
+	_disconnect(Events.camera_mode_changed, _on_camera_mode_changed)
 
 
 ## Attaches the effect nodes to `player_car`'s model (call again after the model
@@ -149,8 +155,9 @@ func advance(delta: float) -> void:
 
 func _apply_damage() -> void:
 	if _smoke != null:
-		_smoke.visible = damaged
-		_smoke.emitting = damaged
+		var show := damaged and not _feel().smoke_hidden_camera_modes.has(camera_mode)
+		_smoke.visible = show
+		_smoke.emitting = show
 	if _lamp != null:
 		_lamp.visible = damaged
 
@@ -226,6 +233,11 @@ func _on_hit(_source: StringName, lives_left: int) -> void:
 
 func _on_ghost_started(duration_s: float) -> void:
 	start_ghost(duration_s)
+
+
+func _on_camera_mode_changed(mode: StringName) -> void:
+	camera_mode = mode
+	_apply_damage()
 
 
 func _on_run_started(_mode: StringName, _seed: int) -> void:
