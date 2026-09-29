@@ -18,6 +18,9 @@ const CAP_EM := 0.7   # lint: allow-number font metric
 
 ## Drop shadow of outlined text, per em (hud.text_shadow_em_pct; set by HudStyle).
 static var shadow_em: float = 0.0
+## Tests (WP5.6): records every string drawn through text() / number() / note(); null
+## (the default) records nothing.
+static var probe: HudTextProbe = null
 
 
 ## The 8 corners of `r` with every corner cut by `bevel`, clockwise from the top left.
@@ -52,7 +55,10 @@ static func number(ci: CanvasItem, font: Font, pos: Vector2, s: String, size: in
 	if outline_px > 0:
 		glyphs(rid, font, pos + shadow_offset(size), s, size, cell, outline_color, 0)
 		glyphs(rid, font, pos, s, size, cell, outline_color, outline_px)
-	return glyphs(rid, font, pos, s, size, cell, color, 0)
+	var w := glyphs(rid, font, pos, s, size, cell, color, 0)
+	if probe != null:
+		note(ci, pos, w, size, s)
+	return w
 
 
 ## Plain text (labels, words) with an optional outline under it.
@@ -62,6 +68,16 @@ static func text(ci: CanvasItem, font: Font, pos: Vector2, s: String, size: int,
 		ci.draw_string(font, pos + shadow_offset(size), s, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size, outline_color)
 		ci.draw_string_outline(font, pos, s, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size, outline_px, outline_color)
 	ci.draw_string(font, pos, s, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size, color)
+	if probe != null:
+		note(ci, pos, text_width(font, s, size), size, s)
+
+
+## Records a string drawn at baseline `pos`, `width` wide, in the probe (tests). Widgets
+## that draw text with the font directly call it too.
+static func note(ci: CanvasItem, pos: Vector2, width: float, size: int, s: String) -> void:
+	if probe != null and not s.is_empty():
+		var cap := cap_height(size)
+		probe.add(ci, Rect2(pos.x, pos.y - cap, width, cap), s)
 
 
 static func text_width(font: Font, s: String, size: int) -> float:

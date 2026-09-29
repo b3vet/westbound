@@ -326,3 +326,43 @@ func test_adapter_publishes_objective_completed() -> void:
 	eq(_log, [["objective_completed", LegObjectives.THREADS, 5000]])
 	eq(adapter.emitted_last, 1)
 	adapter.free()
+
+
+# ---------------------------------------------------------------- Leg toast (WP5.6)
+
+## Every leg's toast names its biome, in a real run across more legs than the journey
+## (the coast is leg 8; legs go on after it), at both text sizes and both units. The
+## toast used to drop the place name whenever the footer's objective was long, so most
+## legs read just "LEG 4".
+func test_every_leg_toast_names_its_biome() -> void:
+	var r := _make()
+	var hud := r.hud as Hud
+	check(hud != null, "the run has its HUD")
+	hud.set_screen(Rect2(0.0, 0.0, 1280.0, 720.0), Rect2(0.0, 0.0, 1280.0, 720.0))
+	r.infinite_lives = true
+	r.go()
+	_run_ticks(r, TICKS_PER_FRAME)
+	var legs := t.legs.legs_to_coast + 1
+	for leg in range(1, legs + 1):
+		var started_before := _entries("leg_started").size()
+		_cross(r)
+		var started := _entries("leg_started")
+		eq(started.size(), started_before + 1, "leg %d started once" % (leg + 1))
+		var e: Array = started[started.size() - 1]
+		eq(e[1], leg + 1)
+		var biome: StringName = e[2]
+		ne(biome, &"", "leg %d announces a biome" % (leg + 1))
+		eq(biome, r.biome_director.biome_at(r.legs.leg_start_s()).id, "the biome where leg %d starts" % (leg + 1))
+		var place := Hud.biome_name(biome)
+		ne(place, "", "the biome has a display name")
+		check(hud.toast_visible(), "leg %d: the toast shows" % leg)
+		var want := "LEG %d — %s" % [leg + 1, place]
+		check(hud.toast_lines().has(want), "leg %d: %s in %s" % [leg, want, hud.toast_lines()])
+		for ts in t.hud.text_scales:
+			for units: StringName in [&"kmh", &"mph"]:
+				Settings.set_value(&"text_scale", ts)
+				Settings.set_value(&"units", units)
+				eq(hud.toast_footer()[0], want, "leg %d at text %.2f %s: the drawn footer names the biome (objective %s)"
+						% [leg, ts, units, e[3]])
+		Settings.reset_to_defaults()
+	eq(r.legs.legs_completed, legs, "past the coast")

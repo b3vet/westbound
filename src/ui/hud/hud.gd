@@ -364,6 +364,15 @@ func objective_state() -> HudObjective.State:
 	return _objective.state()
 
 
+## The chip's rect now (canvas) and whether its text is at full size (WP5.6).
+func objective_rect() -> Rect2:
+	return Rect2(_objective.position, _objective.size)
+
+
+func objective_text_fits() -> bool:
+	return _objective.fits_text()
+
+
 ## The leg toast (WP5.2): showing, and its lines (title, banked, items, next leg).
 func toast_visible() -> bool:
 	return _toast.visible
@@ -375,6 +384,11 @@ func toast_lines() -> PackedStringArray:
 
 func toast_items_shown() -> int:
 	return _toast.items_shown()
+
+
+## The toast's footer as drawn: the next leg and its objective ("" if it did not fit).
+func toast_footer() -> PackedStringArray:
+	return _toast.footer() if _toast.visible else PackedStringArray()
 
 
 ## The rects the HUD occupies now (canvas), keyed like HudLayout.names().
@@ -424,6 +438,15 @@ func _read_objective(f: HudFeed) -> void:
 	if _objective.visible:
 		_objective.set_progress(f.objective_progress, f.objective_target)
 		_objective.set_state(f.objective_done, f.objective_failed)
+		_fit_objective()
+
+
+## The chip as wide as its content, inside its layout slot (WP5.6). Re-placed only when
+## the width changes (a new objective, the progress appearing, FAILED).
+func _fit_objective() -> void:
+	var r := layout.objective_fit(_objective.content_width())
+	if r.position != _objective.position or r.size != _objective.size:
+		_place(_objective, r)
 
 
 func _feed_banked(v: int) -> void:
@@ -626,7 +649,7 @@ func _on_leg_started(leg_index: int, biome: StringName, objective: StringName) -
 	if not _toast_collect:
 		return
 	var text := LegObjectives.label(objective, _legs, _miles) if objective != &"" else ""
-	_toast.set_next(leg_index, _biome_name(biome), text)
+	_toast.set_next(leg_index, biome_name(biome), text)
 
 
 ## The crossing's events are in: an objective paid before the line is listed too, then
@@ -654,7 +677,7 @@ func _distance_text(metres: float) -> String:
 
 
 ## The biome's display name ("FARMLAND PLAINS"), else its id in capitals.
-static func _biome_name(id: StringName) -> String:
+static func biome_name(id: StringName) -> String:
 	if id == &"":
 		return ""
 	var path := BIOME_PATH % id
@@ -771,7 +794,7 @@ func _relayout() -> void:
 	_place(_min_speed, layout.min_speed)
 	_place(_speedo, layout.speedo)
 	_place(_boost, layout.boost)
-	_place(_objective, layout.objective)
+	_fit_objective()
 	_place(_toast, layout.toast)
 	_flyer.size = Vector2(layout.chain.size.x * 0.5, layout.chain.size.y)
 	_place(_glitter, full)

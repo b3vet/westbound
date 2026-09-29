@@ -32,6 +32,11 @@ var _banked: String = ""
 var _next: String = ""
 var _next_short: String = ""
 var _next_objective: String = ""
+# The footer as it fits (_fit_footer): texts and font sizes.
+var _foot_next: String = ""
+var _foot_objective: String = ""
+var _foot_next_size: int = 0
+var _foot_objective_size: int = 0
 var _n: int = 0
 var _word := PackedStringArray()
 var _pts := PackedStringArray()
@@ -171,29 +176,55 @@ func _paint() -> void:
 		HudDraw.number(self, s.label, Vector2(right - wn, y_title), _banked, s.size_small, cell, s.gold)
 		HudDraw.text(self, s.label, Vector2(right - wn - gap * 0.5 - ww, y_title), WORD_BANKED, s.size_label, s.muted)
 	_flow(true)
-	# Next leg (footer): "LEG 3 — FARMLAND PLAINS" left, its objective right. When both
-	# don't fit, the leg drops to the label size, then the objective, then the place
-	# name goes (the objective chip shows the objective too).
+	_fit_footer()
 	var y_next := size.y - pad
-	var inner := right - pad
-	var next := _next
-	var sl := s.size_small
-	var so := s.size_small
-	var wl := HudDraw.text_width(s.label, next, sl)
-	var wo := HudDraw.text_width(s.label, _next_objective, so) if not _next_objective.is_empty() else 0.0
+	if not _foot_next.is_empty():
+		HudDraw.text(self, s.label, Vector2(pad, y_next), _foot_next, _foot_next_size, s.text)
+	if not _foot_objective.is_empty():
+		var wo := HudDraw.text_width(s.label, _foot_objective, _foot_objective_size)
+		HudDraw.text(self, s.label, Vector2(right - wo, y_next), _foot_objective, _foot_objective_size, s.accent)
+
+
+## The footer as drawn (tests): the next leg ("LEG 3 — FARMLAND PLAINS") and its
+## objective ("" when it did not fit).
+func footer() -> PackedStringArray:
+	if style == null:
+		return PackedStringArray([_next, _next_objective])
+	_fit_footer()
+	return PackedStringArray([_foot_next, _foot_objective])
+
+
+## Next leg (footer): "LEG 3 — FARMLAND PLAINS" left, its objective right. When both
+## don't fit, the leg drops to the label size, then the objective does, then the
+## objective goes (the objective chip shows it too). The place name stays (WP5.6: it
+## used to go first, so most legs read just "LEG 4"); only a name too long for the card
+## on its own falls back to "LEG 4".
+func _fit_footer() -> void:
+	var s := style
+	var pad := s.px(s.tuning.panel_padding_px)
+	var gap := s.px(s.tuning.spacing_grid_px)
+	var inner := size.x - pad * 2.0
+	_foot_next = _next
+	_foot_objective = _next_objective
+	_foot_next_size = s.size_small
+	_foot_objective_size = s.size_small
+	var wl := HudDraw.text_width(s.label, _foot_next, _foot_next_size)
+	var wo := HudDraw.text_width(s.label, _foot_objective, _foot_objective_size) if not _foot_objective.is_empty() else 0.0
 	if wo > 0.0 and wl + gap + wo > inner:
-		sl = s.size_label
-		wl = HudDraw.text_width(s.label, next, sl)
+		_foot_next_size = s.size_label
+		wl = HudDraw.text_width(s.label, _foot_next, _foot_next_size)
 	if wo > 0.0 and wl + gap + wo > inner:
-		so = s.size_label
-		wo = HudDraw.text_width(s.label, _next_objective, so)
+		_foot_objective_size = s.size_label
+		wo = HudDraw.text_width(s.label, _foot_objective, _foot_objective_size)
 	if wo > 0.0 and wl + gap + wo > inner:
-		next = _next_short
-		sl = s.size_small
-	if not next.is_empty():
-		HudDraw.text(self, s.label, Vector2(pad, y_next), next, sl, s.text)
-	if wo > 0.0:
-		HudDraw.text(self, s.label, Vector2(right - wo, y_next), _next_objective, so, s.accent)
+		_foot_objective = ""
+		_foot_next_size = s.size_small
+		wl = HudDraw.text_width(s.label, _foot_next, _foot_next_size)
+	if wl > inner:
+		_foot_next_size = s.size_label
+		wl = HudDraw.text_width(s.label, _foot_next, _foot_next_size)
+	if wl > inner:
+		_foot_next = _next_short
 
 
 ## Lays the items out left to right over leg_toast_item_rows rows (drawing them when
