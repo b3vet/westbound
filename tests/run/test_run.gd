@@ -376,6 +376,24 @@ func test_score_hit_crash_results_retry() -> void:
 	eq(r.state, Game.RUNNING, "and driving again after the countdown")
 
 
+## The ghost flicker never shows a body the cockpit camera hid (and restores hidden).
+func test_ghost_flicker_respects_hidden_body() -> void:
+	var r := _make()
+	r.go()
+	_run_ticks(r, 10)
+	r.car.set_body_visible(false)
+	r.fx.start_ghost(1.0)
+	for i in 30:
+		r.fx.advance(1.0 / 60.0)
+		if r.car.visual.visible:
+			fail("body shown by the flicker at step %d" % i)
+			break
+	r.fx.stop_ghost()
+	check(not r.car.visual.visible, "still hidden after the ghost")
+	r.car.set_body_visible(true)
+	check(r.car.visual.visible)
+
+
 func test_retry_seeds_are_deterministic() -> void:
 	var a := _make()
 	a.retry()

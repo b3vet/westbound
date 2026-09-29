@@ -127,7 +127,7 @@ func start_ghost(duration_s: float) -> void:
 
 func stop_ghost() -> void:
 	if ghost and car != null and is_instance_valid(car) and car.visual != null:
-		car.visual.visible = _visual_was_visible
+		car.visual.visible = _visual_was_visible and car.body_visible
 	ghost = false
 	_ghost_left_s = 0.0
 
@@ -152,7 +152,7 @@ func advance(delta: float) -> void:
 		if _ghost_left_s <= 0.0:
 			stop_ghost()
 		elif car != null and car.visual != null:
-			car.visual.visible = int(_t * GHOST_FLICKER_HZ * 2.0) % 2 == 0
+			car.visual.visible = car.body_visible and int(_t * GHOST_FLICKER_HZ * 2.0) % 2 == 0
 	if damaged and _lamp_mat != null:
 		var step := int(_t * LAMP_FLICKER_HZ)
 		var lit := float(((step * _HASH_MUL) >> _HASH_SHIFT) & _HASH_MASK) < LAMP_LIT_SHARE * float(_HASH_MASK)
