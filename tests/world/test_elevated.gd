@@ -102,19 +102,22 @@ func test_stretches_are_seeded_whole_and_smooth() -> void:
 func test_stretches_stay_inside_the_city() -> void:
 	var d := BiomeDirector.new()
 	d.default_biome = _farmland
+	d.journey = false
 	tree.root.add_child(d)
 	_nodes.append(d)
 	d.setup(RunContext.new(SEED, RunContext.MODE_JOURNEY, _t), null, null)
-	d.set_biome_from(5000.0, _city)
-	d.set_biome_from(16000.0, _farmland)
+	# City over legs 2-4.
+	var leg := _t.legs.leg_length_m()
+	d.set_biome_from_leg(2, _city)
+	d.set_biome_from_leg(5, _farmland)
 	var plan := ElevatedPlan.new(SEED, d.biome_at)
 	var s := 0.0
 	var elevated := 0.0
-	while s < 25000.0:
+	while s < leg * 6.0:
 		var dr := plan.drop_at(s)
 		if dr > 0.0:
 			elevated += 10.0
-			check(s > 5000.0 and s < 16000.0, "elevated only in the city (s = %s)" % s)
+			check(s > leg and s < leg * 4.0, "elevated only in the city (s = %s)" % s)
 		s += 10.0
 	gt(elevated, 1000.0, "the city has elevated road")
 

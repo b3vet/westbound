@@ -38,14 +38,16 @@ func _origin() -> FloatingOrigin:
 	return o
 
 
+## A director with `first` everywhere, then each [leg, biome] from that leg on.
 func _director(first: BiomeDef, spans: Array = []) -> BiomeDirector:
 	var d := BiomeDirector.new()
 	d.default_biome = first
+	d.journey = false
 	tree.root.add_child(d)
 	_nodes.append(d)
 	d.setup(RunContext.new(SEED, RunContext.MODE_JOURNEY, _t), null, null)
 	for sp: Array in spans:
-		d.set_biome_from(float(sp[0]), sp[1] as BiomeDef)
+		d.set_biome_from_leg(int(sp[0]), sp[1] as BiomeDef)
 	return d
 
 
@@ -91,23 +93,27 @@ func test_coast_ocean_is_continuous_below_the_road() -> void:
 
 
 func test_shoreline_sweeps_in_and_out_at_biome_edges() -> void:
-	var d := _director(_farmland, [[5000.0, _coast], [12000.0, _farmland]])
+	# Coast over legs 2-3.
+	var leg := _t.legs.leg_length_m()
+	var a := leg
+	var b := leg * 3.0
+	var d := _director(_farmland, [[2, _coast], [4, _farmland]])
 	var plan := WaterPlan.new(SEED, d.biome_at)
 	var def := _coast.water
-	eq(plan.shore_offset_at(4990.0), WaterPlan.NONE, "no water in farmland")
-	eq(plan.shore_offset_at(12010.0), WaterPlan.NONE, "no water after the coast")
-	near(plan.shore_offset_at(5000.0 + def.arrive_m + 1.0), def.shore_offset_m, 1e-6, "settled after the sweep")
-	near(plan.shore_offset_at(8000.0), def.shore_offset_m, 1e-6, "settled mid-span")
-	near(plan.shore_offset_at(5000.0), def.shore_offset_m + def.arrive_offset_m, 1.0, "starts far out at the edge")
+	eq(plan.shore_offset_at(a - 10.0), WaterPlan.NONE, "no water in farmland")
+	eq(plan.shore_offset_at(b + 10.0), WaterPlan.NONE, "no water after the coast")
+	near(plan.shore_offset_at(a + def.arrive_m + 1.0), def.shore_offset_m, 1e-6, "settled after the sweep")
+	near(plan.shore_offset_at((a + b) * 0.5), def.shore_offset_m, 1e-6, "settled mid-span")
+	near(plan.shore_offset_at(a), def.shore_offset_m + def.arrive_offset_m, 1.0, "starts far out at the edge")
 	var prev := INF
-	var s := 5000.0
-	while s <= 5000.0 + def.arrive_m:
+	var s := a
+	while s <= a + def.arrive_m:
 		var off := plan.shore_offset_at(s)
 		if not le(off, prev + 1e-6, "the shoreline only comes closer while arriving (s = %s)" % s):
 			return
 		prev = off
 		s += 10.0
-	gt(plan.shore_offset_at(11900.0), def.shore_offset_m + 1.0, "and leaves before the span ends")
+	gt(plan.shore_offset_at(b - 100.0), def.shore_offset_m + 1.0, "and leaves before the span ends")
 
 
 func test_river_cells_are_seeded_and_match_the_chance() -> void:

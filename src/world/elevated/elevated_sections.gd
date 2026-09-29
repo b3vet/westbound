@@ -15,7 +15,7 @@ extends BiomeFeature
 ##
 ## The road itself never moves (road space, traffic and scoring are untouched). The
 ## ground ribbon must follow `plan.drop_at(s)`: that is RoadChunkMesher's geometry
-## (GroundDropMesher is the hook; see docs/BIOMES_4_6.md).
+## (GroundDropMesher is the hook; see docs/BIOMES.md).
 
 const MATERIAL_PATH := "res://assets/shaders/materials/world.tres"
 ## Deck-edge strip lift over the road plane (above the dropped verge's old level).

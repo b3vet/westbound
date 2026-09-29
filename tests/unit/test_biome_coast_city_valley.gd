@@ -157,7 +157,7 @@ func test_city_data() -> void:
 			check(_emissive_classes(m).has(BiomePropBuilder.EMISSIVE_WINDOW), "%s has lit windows" % path)
 	var sky := b.horizon_def
 	gt(sky.layer_windows.x, 0.0, "the near skyline lights up at night")
-	eq(sky.layer_style.x, float(HorizonSetDef.STYLE_SKYLINE), "a skyline horizon")
+	eq(b.horizon_layer_style.x, float(HorizonSetDef.STYLE_SKYLINE), "a skyline horizon")
 
 
 func test_valley_data() -> void:
@@ -266,18 +266,27 @@ func test_horizon_sets_apply_to_the_sky() -> void:
 		ext_names[u["name"]] = true
 	for u: Dictionary in base_shader.get_shader_uniform_list():
 		check(ext_names.has(u["name"]), "horizon_biomes keeps horizon.gdshader's uniform %s" % u["name"])
+	var farm := load(BiomeDirector.DEFAULT_BIOME_PATH) as BiomeDef
 	for id in BIOMES:
-		var set_def := _biome(id).horizon_def
+		var b := _biome(id)
+		for k in 4:
+			ge(b.horizon_layer_style[k], float(HorizonSetDef.STYLE_NONE), "%s style" % id)
+			le(b.horizon_layer_style[k], float(HorizonSetDef.STYLE_HEADLANDS), "%s style" % id)
+			gt(b.horizon_layer_height_m[k], 0.0, "%s height" % id)
 		var mat := (load("res://assets/shaders/materials/horizon.tres") as ShaderMaterial).duplicate() as ShaderMaterial
-		set_def.apply(mat)
-		check(set_def.needs_extended_shader(), "%s uses the extensions" % id)
+		# Crossfading from farmland (no extensions) halfway into the biome.
+		HorizonSetDef.apply_blend(mat, farm.horizon_def, b.horizon_def, 0.5)
 		eq(mat.shader.resource_path, HorizonSetDef.SHADER_PATH, "%s switches the shader" % id)
 		eq(mat.render_priority, -98, "%s keeps the horizon's draw order" % id)
-		eq(mat.get_shader_parameter(&"layer_style"), set_def.layer_style, "%s styles" % id)
-		eq(mat.get_shader_parameter(&"layer_mist"), set_def.layer_mist, "%s mist" % id)
-	var coast := _biome("coast").horizon_def
-	eq(coast.layer_land.y, -1.0, "coast islands only over the sea")
-	eq(coast.layer_land.x, 1.0, "coast headlands only over the land")
+		eq(mat.get_shader_parameter(&"layer_mist"), b.horizon_def.layer_mist * 0.5, "%s mist fades in" % id)
+		eq(mat.get_shader_parameter(&"layer_windows"), b.horizon_def.layer_windows * 0.5, "%s windows fade in" % id)
+	var plain := (load("res://assets/shaders/materials/horizon.tres") as ShaderMaterial).duplicate() as ShaderMaterial
+	HorizonSetDef.apply_blend(plain, null, null, 0.0)
+	eq(plain.shader.resource_path, "res://assets/shaders/horizon.gdshader", "no set, no switch")
+	var coast := _biome("coast")
+	eq(coast.horizon_def.layer_land.y, -1.0, "coast islands only over the sea")
+	eq(coast.horizon_def.layer_land.x, 1.0, "coast headlands only over the land")
+	eq(coast.horizon_layer_style.y, float(HorizonSetDef.STYLE_ISLANDS))
 
 
 func test_palette_extension_is_additive() -> void:

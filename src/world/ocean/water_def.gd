@@ -29,7 +29,7 @@ extends Resource
 ## ocean is on the player's side (+1, next to their carriageway: a low chase camera
 ## sees the sea only there) and must be the sun's side, so the sun sinks into the sea:
 ## the road plan has to keep the sun right of the axis through coast legs
-## (docs/BIOMES_4_6.md).
+## (docs/BIOMES.md).
 @export var side: int = -1
 ## Scenery line to the start of the shore strip.
 @export var shore_offset_m: float = 6.0

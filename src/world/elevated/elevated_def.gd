@@ -6,7 +6,7 @@ extends Resource
 ## come from ElevatedPlan. The road keeps its level: the *ground* drops away beneath
 ## it (ElevatedPlan.drop_at) and piers, deck edges, parapets and the deck's underside
 ## appear. Lowering the ground ribbon is RoadChunkMesher's job (GroundDropMesher
-## shows the hook; docs/BIOMES_4_6.md).
+## shows the hook; docs/BIOMES.md).
 
 @export_group("Plan")
 ## Stretches are planned per cell of this length along absolute s: each cell holds at

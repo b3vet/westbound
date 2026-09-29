@@ -94,7 +94,7 @@ func checkpoint_style(leg_index: int, style_seed: int) -> StringName:
 # ---------------------------------------------------------------- WP6.4b (biomes 4-6)
 # Additive world features of the coast, city and valley biomes. Each is optional
 # (null = the biome has no such feature) and is drawn by its own world-system node
-# under src/world/ (docs/BIOMES_4_6.md). Kept in one block so parallel biome work
+# under src/world/ (docs/BIOMES.md). Kept in one block so parallel biome work
 # on the fields above does not conflict.
 
 @export_group("WP6.4b")
@@ -105,6 +105,7 @@ func checkpoint_style(leg_index: int, style_seed: int) -> StringName:
 @export var elevated: ElevatedDef
 ## Low fog layers (valley): translucent cards beside the road. FogCards.
 @export var fog_cards: FogCardsDef
-## The horizon silhouettes of this biome (resolves `horizon_set`): per-layer styles,
-## heights, mist, sea-side masks and skyline windows. HorizonSetDef.apply().
+## The horizon extensions of this biome's set (`horizon_set`, over horizon_layer_style
+## / _height_m): sea-side masks, mist and skyline windows (horizon_biomes.gdshader).
+## HorizonSetDef.apply_blend().
 @export var horizon_def: HorizonSetDef

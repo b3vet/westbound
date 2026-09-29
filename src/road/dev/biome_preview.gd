@@ -114,6 +114,7 @@ func _build() -> void:
 
 	_director = BiomeDirector.new()
 	_director.default_biome = _biome
+	_director.journey = false
 	add_child(_director)
 	_director.setup(_ctx, _road, null)
 
@@ -131,6 +132,10 @@ func _build() -> void:
 	_origin.origin_y = smp.pos_y
 	_origin.origin_z = smp.pos_z
 	# Features first: the elevated plan lowers the road builder's ground.
+	if _elevated != null:
+		var clearance := LandmarkClearance.new()
+		clearance.setup(_road, LandmarkTuning.load_default(), _director)
+		_elevated.clearance = clearance
 	for f: BiomeFeature in [_water, _elevated, _fog]:
 		if f != null:
 			f.view_distance_override_m = view_m
@@ -146,11 +151,12 @@ func _build() -> void:
 	if (_elevated != null or _water != null) and bool(_args.get("ground_drop", true)):
 		var mesher := GroundDropMesher.new(_tuning.road, _builder.palette)
 		mesher.merge_surfaces = true
+		mesher.cliff_seed = _ctx.rng_props.derive(RoadBuilder.CLIFF_STREAM).get_seed()
 		if _elevated != null:
 			mesher.drop_at = _elevated.plan.drop_at
 		if _water != null:
 			mesher.field_drop_at = _water.ground_drop_at
-		# Dev-only: the hook RoadBuilder would take (docs/BIOMES_4_6.md).
+		# Dev-only: the hook RoadBuilder would take (docs/BIOMES.md).
 		_builder.set(&"_mesher", mesher)
 	_builder.build_all_now(_focus_s)
 
@@ -175,11 +181,16 @@ func _build() -> void:
 	_sky.sky_t = float(_args.get("sky_t", _sky.sky_t))
 	add_child(_sky)
 	_sky.setup(_ctx, _road, _origin)
-	var tint := _biome.world_tint_offset
-	_sky.set_biome_tint_offset(Vector3(tint.r, tint.g, tint.b))
+	# The director pushes the biome's look (tints, horizon set) to the sky; the
+	# horizon extensions are what the run's director would add (docs/BIOMES.md).
+	_director.sky = _sky
+	_director.update_view(_focus_s)
 	var horizon_mat := (_sky.get_node(^"Horizon") as MeshInstance3D).material_override as ShaderMaterial
-	if _biome.horizon_def != null and bool(_args.get("horizon", true)):
-		_biome.horizon_def.apply(horizon_mat)
+	if bool(_args.get("horizon", true)):
+		HorizonSetDef.apply_blend(horizon_mat, _biome.horizon_def, _biome.horizon_def, 0.0)
+	else:
+		_sky.set_horizon_blend(Vector4(1, 2, 3, 3), _sky.horizon_layer_height_m, Vector4(1, 2, 3, 3),
+			_sky.horizon_layer_height_m, 0.0)
 	if _water != null:
 		_water.horizon_material = horizon_mat
 		_water.set_time(float(_args.get("time", 0.0)))
@@ -225,7 +236,7 @@ func _make_features() -> void:
 
 
 ## The first seed from `from` whose road has the sun on `side` (-1 left, +1 right of
-## travel) at s: the ocean's side, so the sun sinks into the sea (docs/BIOMES_4_6.md;
+## travel) at s: the ocean's side, so the sun sinks into the sea (docs/BIOMES.md;
 ## the run needs the road generator to keep the sun there through coast legs).
 func _seed_with_sun_on_side(from: int, s: float, side: int) -> int:
 	for k in SEED_SEARCH:
