@@ -1,0 +1,35 @@
+{
+  "protocol_version": 1,
+  "direction": "client_to_server",
+  "type": "run_event",
+  "type_id": 7,
+  "vectors": [
+    {
+      "name": "start",
+      "message": {
+        "kind": "start",
+        "tick": 100,
+        "type": "run_event"
+      },
+      "hex": "0705000064000000"
+    },
+    {
+      "name": "end",
+      "message": {
+        "kind": "end",
+        "tick": 9000,
+        "type": "run_event"
+      },
+      "hex": "0705000128230000"
+    },
+    {
+      "name": "rejoin",
+      "message": {
+        "kind": "rejoin",
+        "tick": 4294967295,
+        "type": "run_event"
+      },
+      "hex": "07050002ffffffff"
+    }
+  ]
+}

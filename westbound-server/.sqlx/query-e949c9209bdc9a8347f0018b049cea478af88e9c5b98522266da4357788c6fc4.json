@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account_id AS \"account_id!: i64\" FROM crew_members WHERE crew_id = ?\n           ORDER BY joined_at, account_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "account_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_members",
+            "name": "account_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e949c9209bdc9a8347f0018b049cea478af88e9c5b98522266da4357788c6fc4"
+}

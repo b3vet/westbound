@@ -40,14 +40,16 @@ const LINK_LIFT_M := 0.6
 const BOX_LIFT_M := 0.15
 const EVENT_SHOW_S := 1.5
 const SELECT_RADIUS_PX := 60.0
-const PANEL_TOP_PX := 150.0
+## Below the sandbox's five top-right button rows (tabs, two set-piece rows, fast
+## traffic, racer arrivals).
+const PANEL_TOP_PX := 308.0
 const PANEL_MARGIN_PX := 16.0
 const ACCEL_WARN_MPS2 := 1.0
 ## Show the raw IDM acceleration next to the applied one when they differ this much.
 const ACCEL_SHOW_RAW_MPS2 := 0.25
 const LABEL_PAD_PX := 2.0
 ## Short profile tags, in TrafficRegistry.PROFILE_IDS order.
-const PROFILE_TAGS: Array[String] = ["CRU", "COM", "AGG", "TRK", "BUS", "VAN", "MOTO", "HES"]
+const PROFILE_TAGS: Array[String] = ["CRU", "COM", "AGG", "TRK", "BUS", "VAN", "MOTO", "HES", "RACE"]
 
 const COL_TEXT := Color("#f4f7ff")
 const COL_MUTED := Color("#aab2c8")

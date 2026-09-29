@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account_id AS \"account_id!: i64\" FROM crew_members WHERE crew_id = ?\n               ORDER BY role = 'officer' DESC, joined_at ASC, account_id ASC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "account_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_members",
+            "name": "account_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f48e62a0e38b5c07c6adc94cb9f45a086bd3e9a0c0fd2aa750668c9581acfc4b"
+}

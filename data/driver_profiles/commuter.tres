@@ -6,8 +6,8 @@
 script = ExtResource("1_script")
 id = &"commuter"
 display_name = "Commuter"
-desired_speed_min_kmh = 100.0
-desired_speed_max_kmh = 130.0
+desired_speed_min_kmh = 95.0
+desired_speed_max_kmh = 145.0
 idm_a_max_mps2 = 1.5
 idm_b_comfort_mps2 = 2.0
 idm_headway_s = 1.3

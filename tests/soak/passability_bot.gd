@@ -104,7 +104,7 @@ func update(dt: float, traffic: TrafficState) -> void:
 	_clock += dt
 	if mode == Mode.WEAVE and _clock >= _next_weave:
 		_next_weave = _clock + _rng.float_range(weave_min_s, weave_max_s)
-		target_lane = _rng.int_range(0, _lanes_ahead() - 1)
+		target_lane = _rng.int_range(0, road.lane_count(state.s) - 1)
 	if _tick % _ticks_per_step == 0:
 		_on_step_boundary(traffic)
 	_tick += 1
@@ -177,8 +177,9 @@ func _replan(traffic: TrafficState) -> void:
 		if pos < 0:
 			pair = passability.state_pair(_x)
 			stage = passability.state_stage(_x)
+	passability.zones = closures
 	var ok := passability.check_player(traffic, state, params, road, result, pos, pair, stage)
-	var d_pref := road.lane_center_d(clampi(target_lane, 0, _lanes_ahead() - 1), state.s)
+	var d_pref := road.lane_center_d(_open_lane_near(target_lane), state.s)
 	if ok:
 		ok = passability.extract_path(result, result.path_state[0], state.s, v_target, d_pref, state.v, HEADWAY_S)
 	check_usec += Time.get_ticks_usec() - t0
@@ -217,7 +218,15 @@ func _follow(dt: float, traffic: TrafficState) -> void:
 	state.s += state.v * dt
 
 
-## Lanes here and DROP_LOOK_M ahead, the fewer (WP6.2 lane drops: an ending lane is
-## neither picked nor preferred; the check itself keeps the path out of it).
-func _lanes_ahead() -> int:
-	return mini(road.lane_count(state.s), road.lane_count(state.s + DROP_LOOK_M))
+## The lane nearest `t` (itself first, then left before right) that neither ends nor
+## closes within DROP_LOOK_M (TrafficBotPlayer._lane_ends_ahead: lane drops, WP6.3
+## closures and slow zones): the lane the path prefers. The check itself keeps the path
+## out of what is closed.
+func _open_lane_near(t: int) -> int:
+	var lanes := road.lane_count(state.s)
+	var c := clampi(t, 0, lanes - 1)
+	for k in lanes:
+		for x: int in [c - k, c + k]:
+			if x >= 0 and x < lanes and not _lane_ends_ahead(x):
+				return x
+	return c

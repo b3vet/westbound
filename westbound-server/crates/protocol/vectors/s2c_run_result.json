@@ -1,0 +1,54 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "run_result",
+  "type_id": 76,
+  "vectors": [
+    {
+      "name": "crashed",
+      "message": {
+        "close_passes": 64,
+        "cuts": 41,
+        "distance_m": 24800,
+        "duration_ms": 452000,
+        "end_reason": "crashed",
+        "flags": {
+          "leaderboard_eligible": true,
+          "verified": true
+        },
+        "max_multiplier_milli": 48250,
+        "passes": 310,
+        "player_id": 1,
+        "run_seq": 3,
+        "score": 1250000,
+        "threads": 12,
+        "trains": 7,
+        "type": "run_result"
+      },
+      "hex": "4c2000010003000003d0121300a0e50600e06000003601400029000c0007007abc0000"
+    },
+    {
+      "name": "max",
+      "message": {
+        "close_passes": 65535,
+        "cuts": 65535,
+        "distance_m": 4294967295,
+        "duration_ms": 4294967295,
+        "end_reason": "room_closed",
+        "flags": {
+          "leaderboard_eligible": false,
+          "verified": false
+        },
+        "max_multiplier_milli": 4294967295,
+        "passes": 65535,
+        "player_id": 65535,
+        "run_seq": 65535,
+        "score": 4294967295,
+        "threads": 65535,
+        "trains": 65535,
+        "type": "run_result"
+      },
+      "hex": "4c2000ffffffff0300ffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ]
+}

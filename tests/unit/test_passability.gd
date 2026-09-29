@@ -364,6 +364,72 @@ func test_the_only_open_lane_ending_is_impossible() -> void:
 		check(o >= 0 and res.blocker_src[o] >= 0, "a truck is the removable blocker")
 
 
+## A TrafficSim on the test road as the zone source (WP6.3 closures and speed zones).
+func _zone_sim() -> TrafficSim:
+	var sim := TrafficSim.new(RunContext.new(DROP_SEED, RunContext.MODE_JOURNEY, tuning), road, reg)
+	pas.zones = sim
+	return sim
+
+
+func test_a_lane_the_sim_closes_is_not_a_path() -> void:
+	# Road works close lane 2 from 60 m: with slow trucks side by side in lanes 0 and 1,
+	# lane 2 was the way past them. Open: passable; closed: impossible, the closure is
+	# credited and never offered for removal.
+	for closed: bool in [false, true]:
+		_setup()
+		var sim := _zone_sim()
+		if closed:
+			sim.add_lane_closure(2, 60.0, 600.0, 1)
+		_place_player(2, 0.0, 110.0)
+		_truck(0, 35.0, 80.0)
+		_truck(1, 35.0, 80.0)
+		var ok := pas.check_player(traffic, player, params, road, res)
+		if not closed:
+			check(ok, "lane 2 open: passable")
+			continue
+		check(not ok, "lane 2 closed ahead of the trucks: impossible")
+		var road_cut := 0.0
+		for o in res.obstacles:
+			if res.blocker_src[o] == Passability.SRC_ROAD:
+				road_cut += res.blocker_cut[o]
+		gt(road_cut, 0.0, "the closure is credited with the paths it cuts")
+
+
+func test_a_closure_blocks_its_lane_and_half_lanes_only() -> void:
+	# Lane 1 closed ahead, the player in lane 1: the path leaves it before the closure,
+	# and lanes 0 and 2 stay open (the path ends in one of them).
+	_setup()
+	var sim := _zone_sim()
+	sim.add_lane_closure(1, 80.0, 600.0, 1)
+	_place_player(1, 0.0, 110.0)
+	check(pas.check_player(traffic, player, params, road, res), "a closed lane with open neighbours is passable")
+	var c := road.lane_center_d(1, 0.0)
+	var half := road.lane_width(0.0) * 0.5
+	for k in res.path_n:
+		if res.path_s[k] + car.length_m * 0.5 + tuning.passability.clearance_m >= 80.0:
+			if not check(absf(res.path_d[k] - c) > half, "out of lane 1 and its half-lanes at s %.1f" % res.path_s[k]):
+				return
+
+
+func test_speed_zones_slow_the_predicted_traffic() -> void:
+	# A car ahead in lane 2 at 110 km/h is the way past slow trucks in lanes 0 and 1;
+	# a 60 km/h zone on lane 2 (a toll's booth lane) turns it into a wall.
+	for zone: bool in [false, true]:
+		_setup()
+		var sim := _zone_sim()
+		if zone:
+			sim.add_speed_zone(2, 90.0, 800.0, _kmh(60.0), 1)
+		_place_player(2, 0.0, 100.0)
+		_truck(0, 45.0, 80.0)
+		_truck(1, 45.0, 80.0)
+		_add(commuter_p, sedan_t, 2, 30.0, 110.0)
+		var ok := pas.check_player(traffic, player, params, road, res)
+		if zone:
+			check(not ok, "the car slows to 60 km/h in the zone: impossible")
+		else:
+			check(ok, "following the car past the trucks")
+
+
 # ---------------------------------------------------------------- Slicing, determinism, cost
 
 func _dense(lanes: int, n: int, seed_value: int) -> void:

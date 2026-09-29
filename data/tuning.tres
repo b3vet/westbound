@@ -20,6 +20,7 @@
 [ext_resource type="Resource" path="res://data/tuning/crash.tres" id="18_crash"]
 [ext_resource type="Resource" path="res://data/tuning/landmarks.tres" id="19_landmarks"]
 [ext_resource type="Resource" path="res://data/tuning/night.tres" id="20_night"]
+[ext_resource type="Resource" path="res://data/tuning/net.tres" id="21_net"]
 
 [resource]
 script = ExtResource("1_script")
@@ -42,3 +43,4 @@ traffic_view = ExtResource("17_traffic_view")
 crash = ExtResource("18_crash")
 landmarks = ExtResource("19_landmarks")
 night = ExtResource("20_night")
+net = ExtResource("21_net")

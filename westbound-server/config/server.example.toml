@@ -1,0 +1,241 @@
+# westbound-server configuration: every key with its default value.
+# Pass a file with `--config path` or `WB_CONFIG=path`; keys it leaves out keep
+# their defaults. Any key can be overridden from the environment as
+# WB_<SECTION>__<KEY> (double underscore), e.g. WB_LIMITS__MAX_CONNECTIONS=200.
+# Lists from the environment are comma-separated. Reference: docs/SERVER.md.
+
+[server]
+# "production" or "dev". Outside dev, auth.jwt_secret and auth.device_secret_pepper
+# are required; dev falls back to public development values when they are empty.
+env = "production"
+# Public listener: HTTP API, /ws, /.well-known/*. The TLS proxy forwards here.
+bind = "0.0.0.0:8080"
+# Public https origin clients reach through the TLS proxy (invite links from N9).
+public_origin = "https://westbound.sipsakrandevu.com"
+# tokio worker threads (spec: 2; design budget is 1 vCPU / 2 GB).
+worker_threads = 2
+# On SIGTERM, time for close frames and in-flight requests before exit.
+shutdown_grace_ms = 5000
+# N10: seconds of restart notice before shutting down. 0 = off.
+restart_notice_secs = 0
+
+[log]
+# tracing filter, e.g. "info" or "info,westbound_server=debug". RUST_LOG wins when set.
+level = "info"
+# "text" or "json".
+format = "text"
+
+[db]
+# SQLite file, WAL mode. Keep it on the persistent volume.
+path = "/data/westbound.db"
+max_connections = 4
+busy_timeout_ms = 5000
+migrate_on_start = true
+
+[limits]
+# Spec (Tuning reference): 16 KB inbound max, 64-frame outbound queue,
+# ping every 2 s, dead after 8 s of silence, caps 40 rooms / 400 connections.
+max_message_bytes = 16384
+outbound_queue_frames = 64
+ping_interval_ms = 2000
+dead_after_ms = 8000
+max_rooms = 40
+max_connections = 400
+
+[metrics]
+# Prometheus text at /metrics on its own listener. Loopback addresses only.
+enabled = true
+bind = "127.0.0.1:9090"
+
+[backup]
+# Nightly online backup (VACUUM INTO) to <dir>/westbound-YYYY-MM-DD.db.
+enabled = true
+dir = "/data/backups"
+# UTC, HH:MM.
+time_utc = "03:17"
+retention_days = 7
+
+[auth]
+# Access-token (JWT HS256) signing secret. Required outside dev, at least 32 bytes.
+# Set it from the environment (WB_AUTH__JWT_SECRET), never in a committed file.
+jwt_secret = ""
+# Pepper for device-secret hashes (HMAC-SHA256 key). Required outside dev, at least
+# 32 bytes, different from jwt_secret. Environment only (WB_AUTH__DEVICE_SECRET_PEPPER).
+# Never change it once accounts exist: their device secrets would stop verifying.
+device_secret_pepper = ""
+# Spec: access tokens 1 hour, refresh tokens 30 days, one rename per 30 days.
+access_token_ttl_secs = 3600
+refresh_token_ttl_secs = 2592000
+rename_cooldown_secs = 2592000
+
+[http]
+# CORS allow-list for /api/*: the production domain and the GitHub Pages web
+# build. "*" = any origin (local dev; auth is bearer tokens, no cookies).
+cors_allowed_origins = ["https://westbound.sipsakrandevu.com", "https://b3vet.github.io"]
+# Largest JSON request body accepted on /api/* (413 above it).
+max_body_bytes = 4096
+# Reverse proxies whose X-Forwarded-For is believed, as CIDRs. Coolify's proxy
+# reaches the container over a Docker network (private ranges), so the defaults
+# cover it; a peer outside these is the client and its X-Forwarded-For is ignored.
+trusted_proxies = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+
+[rate_limits]
+# 429 + Retry-After when exceeded. Each limit refills evenly over its window, with
+# its burst available at once. IPv6 clients are keyed by their /64.
+enabled = true
+# POST /api/v1/auth/device, per client IP.
+device_create_per_hour = 5
+device_create_burst = 5
+# Other /api/v1/auth/* routes (sign-in, refresh, logout, providers), per client IP.
+auth_per_minute = 30
+auth_burst = 10
+# Authenticated routes (/me, /account, ...), per account.
+account_per_minute = 120
+account_burst = 30
+# Run submissions (POST /api/v1/runs and /runs/legacy), per account, on top of the
+# account limit.
+runs_per_hour = 30
+runs_burst = 10
+# Social writes per account (friend requests, blocks, crew create / join, reports), on top of
+# the account limit.
+social_per_hour = 60
+social_burst = 20
+
+[deeplinks]
+# Directory with apple-app-site-association and assetlinks.json. Empty, or a
+# missing file, serves the built-in placeholder.
+dir = ""
+
+[gateway]
+# The realtime gateway on /ws (docs/SERVER.md → "Realtime gateway").
+# The first message must be Hello within this long, else a fatal handshake_required.
+hello_timeout_ms = 5000
+# Server tick rate announced in Welcome and used by Pong (spec: 20 Hz).
+tick_rate_hz = 20
+# Oldest Hello.client_build accepted; older clients get update_required.
+min_client_build = 0
+# Accepted Hello.map_hash values: 64 hex characters each, the SHA-256 of the loop's
+# road-space file (N3 provides loop_v1's). Empty: any hash when server.env = "dev",
+# none in production (every Hello gets map_mismatch). From the environment:
+# WB_GATEWAY__MAP_HASHES=<hash>,<hash>.
+map_hashes = []
+# How often live sessions are re-checked for bans, deleted accounts and revoked tokens
+# (the admin CLI is a separate process, so its bans reach open sockets this way).
+ban_recheck_ms = 30000
+# After a fatal Error, wait up to this long for the client to close before sending the
+# close frame (a client reading the error and the close in one read may drop the error).
+fatal_close_delay_ms = 1000
+# Serve the /ws/echo ops route (the /api/v1/echo-check page, tools/net_echo_check.gd).
+echo_enabled = true
+
+[ws_rate_limits]
+# Per-connection token buckets on every client message type on /ws: <type>_per_sec
+# refilled evenly, <type>_burst available at once. A message over its limit is dropped
+# (the client gets a non-fatal rate_limited at most every notice_interval_ms); every drop
+# also takes a token from the violation bucket, and a client that empties it is
+# disconnected with a fatal rate_limited.
+enabled = true
+ping_per_sec = 2.0
+ping_burst = 5
+lobby_command_per_sec = 5.0
+lobby_command_burst = 10
+player_state_per_sec = 25.0
+player_state_burst = 40
+score_claim_per_sec = 10.0
+score_claim_burst = 20
+hit_report_per_sec = 5.0
+hit_report_burst = 10
+run_event_per_sec = 2.0
+run_event_burst = 5
+quick_chat_per_sec = 1.0
+quick_chat_burst = 3
+room_host_command_per_sec = 2.0
+room_host_command_burst = 5
+violation_per_sec = 5.0
+violation_burst = 100
+notice_interval_ms = 1000
+
+[leaderboards]
+# Boards, views and the top-N cache (docs/SERVER.md → "Leaderboards & runs API").
+# Until the replay verifier (N8) exists: whether pending runs (awaiting their replay) go
+# on the boards, marked "verifying". false: they wait and N8 writes them once verified.
+show_pending = true
+# view=global: default and largest limit (spec: global top 100).
+global_limit_default = 100
+global_limit_max = 100
+# view=around_me: ranks on each side of the caller, default and largest.
+around_me_default = 10
+around_me_max = 50
+# A run that improves the player's entry and ranks within this many places needs a replay.
+replay_top_n = 100
+# Cached board tops are dropped on every write, and after this many seconds anyway
+# (renames, admin CLI removals). At most cache_max_boards board/period pairs are cached.
+cache_ttl_secs = 60
+cache_max_boards = 256
+# Loop crew: the sum of the best this-many members' season-best Loop runs (spec: 4).
+crew_top_members = 4
+# Legacy personal-best upload caps; above them an item is refused (over_cap).
+legacy_max_journey_score = 50000000
+legacy_max_distance_m = 2000000.0
+
+[runs]
+# Plausibility checks on POST /api/v1/runs. The scoring numbers mirror the game's
+# data/tuning (scoring.tres, legs.tres, lives.tres, vehicle.tres): keep them at or above
+# the game's values.
+# Oldest accepted client build, and the accepted builds (decimal build numbers; empty:
+# every build from min_build on). From the environment: WB_RUNS__SUPPORTED_BUILDS=41,42.
+min_build = 0
+supported_builds = []
+# Score per minute cap (a close pass at x50, 250 km/h, at night pays 6000).
+max_score_per_minute = 200000.0
+# Shorter runs count as this long for the score rate; longer than max_duration_s is refused.
+min_duration_s = 10.0
+max_duration_s = 21600.0
+# Fastest car 300 km/h, +8 % boost, top-gear overshoot.
+max_top_speed_kmh = 360.0
+# Distance may exceed top speed x duration by this fraction and this many metres.
+distance_slack_pct = 5.0
+distance_slack_m = 200.0
+# Each completed leg needs this much distance (3.5 km legs); the coast needs legs_to_coast.
+leg_min_length_m = 3000.0
+legs_to_coast = 8
+# Hits <= lives + legs completed (a clean leg restores a life).
+lives = 2
+# Base points and multiplier gains per event.
+pass_points = 10.0
+close_pass_points = 30.0
+cut_points = 15.0
+thread_points = 50.0
+pass_multiplier_gain = 1.0
+close_pass_multiplier_gain = 3.0
+cut_multiplier_gain = 1.0
+thread_multiplier_gain = 5.0
+multiplier_start = 1.0
+speed_factor_max = 2.0
+night_factor = 2.0
+# Most bonus points per leg (clean 5000 + pace 3000 + threads 3000 + heat 5000 +
+# objective 2500) and the journey bonus at the coast, before the night factor.
+leg_bonus_max_points = 18500.0
+journey_bonus_points = 50000.0
+# Headroom on the score bound from the stats.
+score_slack_pct = 1.0
+# A run's date (UTC) is accepted from date_early_secs before that day starts until
+# date_late_secs after it ends.
+date_early_secs = 3600
+date_late_secs = 21600
+
+[social]
+# Friends, blocks, crews and reports (docs/SERVER.md → "Social API").
+# Accepted friends per account, and friend requests waiting on others / on the account.
+max_friends = 100
+max_outgoing_requests = 50
+max_incoming_requests = 100
+# Accounts one account may block.
+max_blocks = 500
+# Members per crew, the owner included (spec: 16).
+crew_max_members = 16
+# Characters in a crew invite code (6-16, from the room-code alphabet: no 0/O, 1/I/L).
+crew_invite_code_len = 8
+# Reports per account per rolling 24 hours, and the largest report context (compact JSON).
+reports_per_day = 10
+report_context_max_bytes = 1024

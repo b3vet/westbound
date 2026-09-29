@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="SetPieceDef" format=3]
+
+[ext_resource type="Script" uid="uid://cc0n7yjgviyxv" path="res://src/traffic/set_piece_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"convoy"
+kind = 5
+display_name = "Convoy"
+warning = 1
+warning_sign_distances_m = PackedFloat64Array(400)
+length_m = 150.0
+hazards = true
+min_leg = 1
+weight = 1.0
+min_lanes = 2
+profile_ids = Array[StringName]([&"van", &"commuter"])
+profile_weights = PackedFloat64Array(2, 1)
+speed_kmh = 105.0
+start_distance_m = 50.0
+end_margin_m = 40.0
+duration_max_s = 60.0
+approach_max_s = 150.0
+clear_behind_m = 60.0
+clear_ahead_m = 80.0
+vehicles_min = 4
+vehicles_max = 6
+vehicle_extra_gap_m = 4.0
+formation_gain_per_s = 0.2
+formation_limit_kmh = 8.0
+next_lane_pct = 30.0
+next_lane_min_lanes = 3
+honk_range_m = 120.0
+honk_interval_min_s = 2.0
+honk_interval_max_s = 5.0

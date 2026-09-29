@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"n!: i64\" FROM friends\n           WHERE (account_a = ?1 OR account_b = ?1) AND status = 'pending'\n             AND (requester_id = ?1) = ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b84d7d6275558093d0616e90ce888fc1b24a16ef3dfc37ffecf519ea0ce211c3"
+}

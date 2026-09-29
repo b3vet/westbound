@@ -5,6 +5,7 @@ Godot 4.7, GDScript only. iOS and Android first, web second.
 
 - **Spec (source of truth):** [`WESTBOUND HANDOFF.md`](WESTBOUND%20HANDOFF.md). Read the sections for your task before coding.
 - **Plan (order, work packages, gates):** [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
+- **Multiplayer spec:** [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](WESTBOUND_MULTIPLAYER_HANDOFF.md) (extends the spec). **Plan:** [`docs/MULTIPLAYER_PLAN.md`](docs/MULTIPLAYER_PLAN.md). Server code lives in `westbound-server/` (Rust workspace; Godot ignores it via `.gdignore`), client code in `src/net/`.
 - **Contracts (coordinates, interfaces):** [`docs/CONTRACTS.md`](docs/CONTRACTS.md). Frozen after Phase 0; changes need an orchestrator decision.
 
 ## Commands
@@ -16,6 +17,7 @@ tools/test.sh --filter=traffic      # substring of test path or method
 tools/godot.sh <args>               # the pinned Godot 4.7 binary (downloads on first use; GODOT=... overrides)
 tools/lint [--strict]               # budget + working-rule linter (rule table in docs/TOOLS.md)
 tools/check_warnings.sh             # every enabled GDScript warning as an error (headless runs never print warnings)
+(cd westbound-server && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test --workspace)   # server gate
 tools/snap.sh <scene.tscn> [--renderer=compat|mobile|both] [--sweep=sky_t:0,0.5] [--key=value]   # screenshots to tests/out/snaps/
 ```
 

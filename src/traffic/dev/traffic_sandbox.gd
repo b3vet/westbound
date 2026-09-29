@@ -6,7 +6,7 @@ extends Node3D
 ## incentive values, blinker timers, the player's predicted occupancy, and the
 ## passability paths the director found"); Tech stack → dev HUD; plan WP3.2.
 ##
-## The real stack of a run: ProceduralRoadPath, FloatingOrigin, RoadBuilder, Roadside,
+## The real stack of a run: ProceduralRoadPath (or road_override), FloatingOrigin, RoadBuilder, Roadside,
 ## BiomeDirector, SkyRig; TrafficSim + TrafficDirector (+ opposite carriageway); the
 ## real PlayerCar, driven either by PlayerInput (touch / keys, PlayerController) or by
 ## SandboxBot (lane keeping or weaving). The player takes part in the sim as in a run
@@ -29,8 +29,14 @@ extends Node3D
 ##           (cap), SEL < / SEL > (ask the selected car to change lanes)
 ##   LAYERS  IDM, MOBIL, BLINK, OCC, PASS
 ##   HUD     dev HUD (COPY report)
-##   WALL / BLOCK / WAVES (top right, second row; SetPieceControls, WP6.2): force a set
-##           piece into the next ahead batch; show the intensity curve (IntensityPlot)
+##   WALL / BLOCK / SLALOM / CONVOY / MERGE / WORKS / TUNNEL / TOLL / WAVES (top right,
+##           second row; SetPieceControls, WP6.2 + WP6.3): force a set piece (the next
+##           batch; a road-anchored one beyond the view, a feature-triggered one at its
+##           next tunnel / toll-gantry checkpoint); show the intensity curve (IntensityPlot).
+##           The pieces' props are drawn by SetPieceView (WP6.3).
+##   FAST xK / RACER (top right, below the set pieces; FastTrafficControls, WP6.6): scale
+##           the fast shares (aggressive + racer); spawn a racer behind the player; below
+##           them ARR ON/OFF and ARRIVE: the director's racer arrivals from behind (WP6.7)
 ## Tap a vehicle to select it (all MOBIL terms in a side panel).
 ## Keys: Space pause, . step, N +1 s, [ ] time scale, V camera mode, B driver,
 ## X clear, 1-5 layers (IDM, MOBIL, BLINK, OCC, PASS), backtick dev HUD, C rig camera.
@@ -94,7 +100,14 @@ var spawn_lane: int = 1
 var spawn_ahead: bool = true
 
 var tuning: Tuning
-var road: ProceduralRoadPath
+var road: RoadPath
+## Road injection (N3.1, the loop editor's PREVIEW TRAFFIC): set before the node enters
+## the tree to run the sandbox on another RoadPath (e.g. LoopRoadPath) instead of the
+## procedural road; with biome_plan_override the look follows that plan. start_s: where
+## the car starts.
+var road_override: RoadPath
+var biome_plan_override: BiomePlan
+var start_s: float = 0.0
 var origin: FloatingOrigin
 var sky: SkyRig
 var car: PlayerCar
@@ -117,6 +130,10 @@ var bot: SandboxBot
 var events: ScoreEventBuffer
 ## Set-piece triggers and the intensity curve (WP6.2).
 var set_piece_controls: SetPieceControls
+## The fast-traffic controls (plan D15, WP6.6).
+var fast_controls: FastTrafficControls
+## The set pieces' props (WP6.3).
+var set_piece_view: SetPieceView
 
 var _ctx: RunContext
 var _biome: BiomeDirector
@@ -157,7 +174,7 @@ func _ready() -> void:
 	tuning = Tuning.load_default()
 	_ctx = RunContext.new(run_seed, RunContext.MODE_JOURNEY, tuning)
 	_inset = tuning.lives.collision_inset_m
-	road = ProceduralRoadPath.new(_ctx)
+	road = road_override if road_override != null else ProceduralRoadPath.new(_ctx)
 	registry = TrafficRegistry.load_default(tuning.traffic)
 	events = ScoreEventBuffer.new(tuning.scoring.event_buffer_capacity)
 	_lc_ring.resize(LC_WINDOW_S + 1)
@@ -185,18 +202,23 @@ func _ready() -> void:
 	hub = $PlayerInput
 	rig = $CameraRig
 	hub.camera_cycle_requested.connect(rig.cycle_mode)
-	road.ensure_generated_to(_view_ahead(0.0))
-	road.sample_into(0.0, _smp)
+	road.ensure_generated_to(_view_ahead(start_s))
+	road.sample_into(start_s, _smp)
 	origin.update_focus(_smp.pos_x, _smp.pos_y, _smp.pos_z)
+	_biome.plan = biome_plan_override
 	_biome.setup(_ctx, road, origin)
 	_builder.setup(_ctx, road, origin)
 	_roadside.setup(_ctx, road, origin)
 	sky.setup(_ctx, road, origin)
-	_builder.build_all_now(0.0)
+	_builder.build_all_now(start_s)
 
 	_spawn_car()
 	_player_ctl = PlayerController.new(hub)
 	view = _make_traffic_view()
+	set_piece_view = SetPieceView.new()
+	set_piece_view.name = "SetPieceView"
+	add_child(set_piece_view)
+	set_piece_view.setup(_ctx, road, origin)
 	cam = SandboxCamera.new()
 	cam.name = "SandboxCamera"
 	add_child(cam)
@@ -222,6 +244,10 @@ func _ready() -> void:
 	add_child(set_piece_controls)
 	_place_slider()
 	get_viewport().size_changed.connect(_place_slider)
+	fast_controls = FastTrafficControls.new()
+	fast_controls.name = "FastTrafficControls"
+	fast_controls.sandbox = self
+	add_child(fast_controls)
 	if Game.can_change_to(Game.COUNTDOWN):
 		Game.change_state(Game.COUNTDOWN)
 	if Game.can_change_to(Game.RUNNING):
@@ -357,6 +383,7 @@ func _process(delta: float) -> void:
 	_biome.update_view(st.s)
 	_builder.update_view(st.s)
 	_roadside.update_view(st.s)
+	set_piece_view.update_view(st.s)
 	sky.update_view(st.s)
 	view.call(&"update_view", st.s)
 	cam.view_distance_m = _builder.view_distance_m()
@@ -416,6 +443,7 @@ func reseed(seed_value: int) -> void:
 	director.record_pass_paths = true
 	director.set_leg(leg, car.state.s)
 	director.set_biome(_biome.current())
+	director.checkpoint_style = _biome.checkpoint_style   # WP6.3: toll gantries
 	_night = sky.current().emissive_headlight > HEADLIGHTS_ON
 	sim.set_headlights(_night)
 	director.set_night(_night)
@@ -426,9 +454,12 @@ func reseed(seed_value: int) -> void:
 	probe.set_player(car.state)
 	view.call(&"setup", traffic_ctx, road, origin, registry, sim.state, director.opposite.state)
 	view.set(&"show_opposite", show_opposite)
+	set_piece_view.bind(director.set_pieces)
 	overlay.bind(sim, road, origin, probe)
 	if bot != null:
 		bot.traffic = sim.state
+	if fast_controls != null:
+		fast_controls.apply_to(director)   # racer arrivals on / off (WP6.7)
 	_lc_ring_n = 0
 	_lc_sample()
 	_lc_next_t = sim_time + 1.0
@@ -594,6 +625,19 @@ func reset_car() -> void:
 	rig.snap_to_target()
 
 
+## Moves the car to `s` (its lane and speed kept), refills traffic around it and builds
+## the road there at once (set-piece snaps, WP6.3).
+func teleport(s: float) -> void:
+	road.ensure_generated_to(s + _view_ahead(0.0))
+	car.state.s = s
+	reset_car()
+	var smp := road.sample(s)
+	origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+	director.reset(car.state)
+	_builder.build_all_now(s)
+	_next_forget_s = s
+
+
 func _spawn_car() -> void:
 	var car_def: CarDef = load(CAR_PATH)
 	car = (load(PLAYER_CAR_SCENE) as PackedScene).instantiate()
@@ -601,7 +645,7 @@ func _spawn_car() -> void:
 	car.self_tick = false
 	add_child(car)
 	car.setup(_ctx, road, origin, car_def)
-	car.place_at(0.0, road.lane_center_d(START_LANE, 0.0), Units.kmh_to_mps(START_SPEED_KMH))
+	car.place_at(start_s, road.lane_center_d(START_LANE, start_s), Units.kmh_to_mps(START_SPEED_KMH))
 	rig.set_target(car, car.state, car.params.top_speed_mps)
 	rig.snap_to_target()
 
@@ -699,6 +743,8 @@ func refresh_stats() -> void:
 	lines.append("lane changes %.1f/min  signals %d  cancels P%d H%d U%d" % [lc_min, sim.stat_signals,
 		sim.stat_cancel_player, sim.stat_cancel_hesitant, sim.stat_cancel_unsafe])
 	lines.append("mean km/h" + lane_txt)
+	lines.append("speeds " + DevReport.traffic_line(sim))
+	lines.append("racers " + DevReport.racers_line(director))
 	lines.append("sim tick %.0f us avg 1 s (max %d)  frame %.1f ms" % [tick_avg,
 		DevStats.get_sim_tick_max_usec(), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0)])
 	lines.append("player %.0f km/h  lane %d  %s" % [Units.mps_to_kmh(p.v), road.lane_index_at(p.d, p.s),
@@ -721,6 +767,9 @@ func refresh_stats() -> void:
 	DevStats.report(&"sandbox_driver", DRIVER_NAMES[driver])
 	DevStats.report(&"sandbox_player_kmh", roundi(Units.mps_to_kmh(p.v)))
 	DevStats.report(&"sandbox_hits", hits)
+	DevStats.report(&"racers_passed_you", director.racers_passed_player)
+	DevStats.report(&"racers_overtaken", director.racers_overtaken)
+	DevStats.report(&"racer_arrivals", director.racer_arrivals)
 
 
 ## Completed lane changes per minute over the last LC_WINDOW_S sim seconds (or since
@@ -1040,6 +1089,7 @@ func snap_setup(args: Dictionary) -> void:
 		var ti := TAB_NAMES.find(String(args["tab"]).to_upper())
 		_tab = Tab.NONE
 		_open_tab(maxi(ti, 0) as Tab)
+	fast_controls.snap_run(args)   # racer=true, fast=K (WP6.6); arrival=true (WP6.7)
 	paused = not bool(args.get("run", false))
 	view.call(&"capture_tick")
 	rig.snap_to_target()

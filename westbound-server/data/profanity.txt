@@ -1,0 +1,144 @@
+# Westbound display-name profanity list (English + Turkish). Kept small on purpose:
+# it catches the obvious slurs and obscenities, not every insult. Moderators handle
+# the rest with `westbound-server admin rename` (docs/SERVER.md → "Admin CLI").
+#
+# Used by crates/server/src/profanity.rs, compiled into the binary. Entries are
+# normalized the same way as names: lowercased, Turkish letters folded (ç→c, ğ→g,
+# ı/İ→i, ö→o, ş→s, ü→u), leetspeak mapped (0→o 1→i/l 3→e 4→a 5→s 7→t @→a $→s …),
+# separators dropped, and every letter may repeat ("fuuuck").
+#
+#   word     banned anywhere in the name ("xXwordXx", "w.o.r.d", "W0rd")
+#   =word    banned only as a whole word of the name: short words that hide inside
+#            ordinary ones ("=ass" rejects "Ass Man" and "BigAss", not "Classic")
+#   !word    allowed: a banned match lying wholly inside this word is ignored
+#            (the Scunthorpe problem)
+#
+# One entry per line, letters only (no digits). Changing this file changes which
+# new names are accepted; existing names are not re-checked.
+
+# --- English: anywhere --------------------------------------------------------
+fuck
+shit
+cunt
+bitch
+whore
+slut
+nigger
+nigga
+faggot
+cock
+dick
+pussy
+penis
+vagina
+clit
+rape
+rapist
+porn
+dildo
+jizz
+wanker
+twat
+bastard
+retard
+tranny
+asshole
+nazi
+hitler
+kkk
+sex
+
+# --- English: whole word only -------------------------------------------------
+=ass
+=arse
+=anal
+=anus
+=cum
+=tit
+=tits
+=boob
+=boobs
+=fag
+=wank
+=spic
+=chink
+=kike
+=coon
+=jap
+
+# --- Turkish: anywhere --------------------------------------------------------
+orospu
+orosbu
+yarak
+yarram
+amcık
+aminakoy
+siktir
+sikerim
+sikeyim
+sikik
+sikiş
+pickurusu
+gotveren
+götlek
+ibne
+pezevenk
+kahpe
+kaltak
+yavşak
+gavat
+sürtük
+kevaşe
+şerefsiz
+
+# --- Turkish: whole word only -------------------------------------------------
+=amk
+=amq
+=aq
+=sik
+=piç
+=puşt
+
+# --- Allowed: ordinary words that contain a banned one ------------------------
+!scunthorpe
+!shiitake
+!shitake
+!snigger
+!cocktail
+!peacock
+!hancock
+!hitchcock
+!cockpit
+!cockatoo
+!cockatiel
+!cockroach
+!cockney
+!woodcock
+!shuttlecock
+!dickens
+!dickson
+!dickinson
+!penistone
+!clitheroe
+!grape
+!drape
+!scrape
+!trapeze
+!parapet
+!therapist
+!therapeutic
+!essex
+!sussex
+!wessex
+!middlesex
+!sextant
+!sextet
+!sexton
+!ashkenazi
+!nazim
+!nazif
+!nazik
+!nazir
+# sıkışık (crowded), sıkıştır (squeeze): "ı" folds to "i"
+!sıkışık
+!sıkıştır

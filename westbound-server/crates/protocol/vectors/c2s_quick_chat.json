@@ -1,0 +1,51 @@
+{
+  "protocol_version": 1,
+  "direction": "client_to_server",
+  "type": "quick_chat",
+  "type_id": 8,
+  "vectors": [
+    {
+      "name": "phrase",
+      "message": {
+        "item": {
+          "kind": "phrase",
+          "phrase": "nice_thread"
+        },
+        "type": "quick_chat"
+      },
+      "hex": "0802000000"
+    },
+    {
+      "name": "phrase_one_more_lap",
+      "message": {
+        "item": {
+          "kind": "phrase",
+          "phrase": "one_more_lap"
+        },
+        "type": "quick_chat"
+      },
+      "hex": "0802000005"
+    },
+    {
+      "name": "horn",
+      "message": {
+        "item": {
+          "kind": "horn"
+        },
+        "type": "quick_chat"
+      },
+      "hex": "08010001"
+    },
+    {
+      "name": "emote_max",
+      "message": {
+        "item": {
+          "emote": 31,
+          "kind": "emote"
+        },
+        "type": "quick_chat"
+      },
+      "hex": "080200021f"
+    }
+  ]
+}

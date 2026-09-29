@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE reports SET handled = 1, handled_at = ? WHERE id = ? AND handled = 0",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b8ba1109d0661519253f71d835b4241d79439b306450ba1c0aab1ac875447b37"
+}

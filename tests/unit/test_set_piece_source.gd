@@ -11,6 +11,7 @@ extends WBTest
 const SEED := 620301
 const DT := 1.0 / 120.0
 const EPS := 1e-6
+const FORCE_ATTEMPTS := 2
 
 var tuning: Tuning
 var sc: TrafficScenario
@@ -74,13 +75,19 @@ func _run(seconds: float) -> void:
 
 
 ## Forces `id` and runs until it spawned; returns its instance.
+## A forced piece is dropped when no stretch within reach fits the live traffic; with
+## the faster traffic of plan D15 (WP6.6) that happens now and then (4 lanes): it is
+## forced again, up to FORCE_ATTEMPTS times.
 func _spawn(id: StringName) -> SetPieceSource.Instance:
-	check(dir.force_set_piece(id), "forced %s" % id)
-	for k in roundi(30.0 / DT):
-		_tick()
-		var inst := _running()
-		if inst != null:
-			return inst
+	for attempt in FORCE_ATTEMPTS:
+		var forced := dir.force_set_piece(id)
+		if attempt == 0:
+			check(forced, "forced %s" % id)
+		for k in roundi(30.0 / DT):
+			_tick()
+			var inst := _running()
+			if inst != null:
+				return inst
 	fail("%s never spawned" % id)
 	return null
 
@@ -137,9 +144,10 @@ func test_defs_load_with_their_controllers() -> void:
 			ge(d.speed_mps(0.0), tuning.scoring.min_speed_mps(), "%s never below the minimum speed" % id)
 			check(not d.warning_sign_distances_m.is_empty(), "%s is announced" % id)
 			check(not d.profile_ids.is_empty(), "%s has its vehicle mix" % id)
-	for k: SetPieceDef.Kind in [SetPieceDef.Kind.MERGE_ZONE, SetPieceDef.Kind.ROAD_WORKS, SetPieceDef.Kind.SLALOM,
-			SetPieceDef.Kind.CONVOY, SetPieceDef.Kind.TUNNEL_SQUEEZE, SetPieceDef.Kind.TOLL_GANTRY]:
-		eq(SetPieceSource.controller_for(k), null, "kind %d comes in WP6.3" % k)
+	# WP6.3: every kind has its controller and its data.
+	for k in SetPieceDef.Kind.size():
+		check(SetPieceSource.controller_for(k as SetPieceDef.Kind) != null, "kind %d has a controller" % k)
+	eq(defs.size(), SetPieceDef.Kind.size(), "every kind has a data file")
 
 
 func test_kinds_unlock_by_leg_and_follow_the_biome_mix() -> void:
@@ -149,15 +157,26 @@ func test_kinds_unlock_by_leg_and_follow_the_biome_mix() -> void:
 		eq(sp.pick(1, null, u, 3).id, &"truck_wall", "leg 1: one kind (u %.2f)" % u)
 	eq(sp.pick(2, null, 0.1, 3).id, &"truck_wall", "leg 2: two kinds")
 	eq(sp.pick(2, null, 0.9, 3).id, &"rolling_roadblock")
-	var only_wall := BiomeDef.new()
-	only_wall.set_piece_ids = [&"slalom", &"truck_wall"]
-	only_wall.set_piece_weights = PackedFloat64Array([1.0, 0.4])
+	var no_block := BiomeDef.new()
+	no_block.set_piece_ids = [&"slalom", &"truck_wall"]
+	no_block.set_piece_weights = PackedFloat64Array([1.0, 0.4])
 	for u: float in [0.0, 0.5, 0.99]:
-		eq(sp.pick(5, only_wall, u, 3).id, &"truck_wall", "a biome without roadblocks never gets one")
-	var none := BiomeDef.new()
-	none.set_piece_ids = [&"convoy"]
-	none.set_piece_weights = PackedFloat64Array([1.0])
-	eq(sp.pick(8, none, 0.5, 3), null, "nothing of the biome's mix is implemented or unlocked")
+		ne(sp.pick(5, no_block, u, 3).id, &"rolling_roadblock", "a biome without roadblocks never gets one")
+	eq(sp.pick(2, no_block, 0.1, 3).id, &"truck_wall", "slalom is not unlocked on leg 2")
+	var convoy := BiomeDef.new()
+	convoy.set_piece_ids = [&"convoy"]
+	convoy.set_piece_weights = PackedFloat64Array([1.0])
+	eq(sp.pick(3, convoy, 0.5, 3), null, "nothing of the biome's mix unlocked on leg 3")
+	eq(sp.pick(8, convoy, 0.5, 3).id, &"convoy", "the convoy from leg 4")
+	var tied := BiomeDef.new()
+	tied.set_piece_ids = [&"tunnel_squeeze", &"toll_gantry"]
+	tied.set_piece_weights = PackedFloat64Array([1.0, 1.0])
+	eq(sp.pick(8, tied, 0.5, 3), null, "feature-triggered pieces are never a peak's pick")
+	var merge := BiomeDef.new()
+	merge.set_piece_ids = [&"merge_zone"]
+	merge.set_piece_weights = PackedFloat64Array([1.0])
+	eq(sp.pick(8, merge, 0.5, 3).id, &"merge_zone", "the merge zone on 3 lanes")
+	eq(sp.pick(8, merge, 0.5, 4), null, "not on 4 (no room for its extra lane)")
 	var weights := BiomeDef.new()
 	weights.set_piece_ids = [&"truck_wall", &"rolling_roadblock"]
 	weights.set_piece_weights = PackedFloat64Array([1.0, 3.0])

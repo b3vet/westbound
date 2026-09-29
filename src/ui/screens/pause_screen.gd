@@ -11,6 +11,8 @@ extends RunScreen
 ## left-handed), stacked bottom-up from the thumb: RESUME (primary, nearest the thumb),
 ## RECALIBRATE (gyro only), SETTINGS, and QUIT furthest away. Every target is at least
 ## touch_target_px tall. SETTINGS swaps the menu for the SettingsPanel; DONE comes back.
+## N1.2: in the settings, ACCOUNT (shown when a NetSession exists) swaps the grid for the
+## ProfilePanel (name, rename, delete account) and SETTINGS swaps it back.
 
 signal resume()
 signal recalibrate()
@@ -24,6 +26,7 @@ const TEXT_RECALIBRATE := "RECALIBRATE"
 const TEXT_RECALIBRATED := "CALIBRATED"
 const TEXT_QUIT := "QUIT"
 const TEXT_DONE := "DONE"
+const TEXT_ACCOUNT := "ACCOUNT"
 const TEXT_LEG := "LEG %d OF %d"
 const TEXT_BANKED := "BANKED  %s"
 const TEXT_DISTANCE := "%s %s DRIVEN"
@@ -47,6 +50,9 @@ var settings_button: ScreenButton
 var quit_button: ScreenButton
 var done_button: ScreenButton
 var settings: SettingsPanel
+var account_open: bool = false
+var account_button: ScreenButton
+var profile: ProfilePanel
 
 var _note_left: float = 0.0
 
@@ -77,6 +83,11 @@ func _init() -> void:
 	add_child(settings)
 	done_button = _button(TEXT_DONE, ScreenButton.Kind.PRIMARY, close_settings)
 	done_button.visible = false
+	profile = ProfilePanel.new()
+	profile.visible = false
+	add_child(profile)
+	account_button = _button(TEXT_ACCOUNT, ScreenButton.Kind.NORMAL, toggle_account)
+	account_button.visible = false
 
 
 func _button(label: String, kind: ScreenButton.Kind, action: Callable) -> ScreenButton:
@@ -91,9 +102,10 @@ func _restyled() -> void:
 	if settings.rows.is_empty():
 		settings.build(tuning)
 	settings.setup(style)
+	profile.setup(style, tuning)
 	title.size_px = tuning.font_title_px
 	title.use_tilt(TILT_SHADER, tuning.speed_tilt_rad())
-	for b: ScreenButton in [quit_button, settings_button, recalibrate_button, resume_button, done_button]:
+	for b: ScreenButton in [quit_button, settings_button, recalibrate_button, resume_button, done_button, account_button]:
 		b.size_px = tuning.font_screen_button_px
 	summary_distance.size_px = tuning.font_screen_body_px
 	summary_banked.size_px = tuning.font_screen_body_px
@@ -137,6 +149,7 @@ func open() -> void:
 
 func open_settings() -> void:
 	settings_open = true
+	account_open = false
 	settings.refresh()
 	_apply_mode()
 	_layout()
@@ -145,19 +158,39 @@ func open_settings() -> void:
 
 func close_settings() -> void:
 	settings_open = false
+	account_open = false
 	_apply_mode()
 	_layout()
 	# The gyro may have been switched on or off in the settings.
 	slide_in(resume_button, 0.0, tuning.screen_fade_in_s, 0.0)
 
 
+## ACCOUNT <-> SETTINGS inside the settings view.
+func toggle_account() -> void:
+	account_open = not account_open
+	if account_open:
+		profile.hub = settings.hub
+		profile.open()
+	_apply_mode()
+	_layout()
+	var shown: Control = settings
+	if account_open:
+		shown = profile
+	slide_in(shown, 0.0, tuning.screen_fade_in_s, 0.0)
+
+
 func _apply_mode() -> void:
 	var menu := not settings_open
 	title.text = TEXT_SETTINGS if settings_open else TEXT_PAUSED
+	if settings_open and account_open:
+		title.text = TEXT_ACCOUNT
 	for c: CanvasItem in [summary_leg, summary_distance, summary_banked, resume_button, settings_button, quit_button]:
 		c.visible = menu
 	recalibrate_button.visible = menu and gyro
-	settings.visible = settings_open
+	settings.visible = settings_open and not account_open
+	profile.visible = settings_open and account_open
+	account_button.visible = settings_open and (account_open or profile.has_session())
+	account_button.text = TEXT_SETTINGS if account_open else TEXT_ACCOUNT
 	done_button.visible = settings_open
 
 
@@ -208,10 +241,16 @@ func _layout() -> void:
 		var dw := maxf(bw * DONE_WIDTH, done_button.get_combined_minimum_size().x)
 		done_button.size = Vector2(dw, th)
 		done_button.position = Vector2(a.end.x - dw, a.position.y + (ts.y - th) * 0.5)
+		account_button.size = Vector2(dw, th)
+		account_button.position = done_button.position - Vector2(dw + g, 0.0)
 		var top := a.position.y + maxf(ts.y, th) + g * 2.0
+		var body := Rect2(Vector2(a.position.x, top), Vector2(a.size.x, a.end.y - top))
 		settings.position = Vector2.ZERO
 		settings.size = full.size
-		settings.layout(Rect2(Vector2(a.position.x, top), Vector2(a.size.x, a.end.y - top)))
+		settings.layout(body)
+		profile.position = Vector2.ZERO
+		profile.size = full.size
+		profile.layout(body)
 		return
 	# Menu column on the thumb side, bottom-up from the thumb.
 	var x := a.position.x if mirrored else a.end.x - bw

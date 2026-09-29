@@ -1,0 +1,53 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "score_event",
+  "type_id": 75,
+  "vectors": [
+    {
+      "name": "train",
+      "message": {
+        "kind": "train",
+        "link": 3,
+        "multiplier_gain_milli": 2000,
+        "player_id": 1,
+        "points": 25,
+        "ref_id": 412,
+        "sector": 0,
+        "tick": 123470,
+        "type": "score_event"
+      },
+      "hex": "4b13004ee2010001000019000000d007000003009c01"
+    },
+    {
+      "name": "sector_clean",
+      "message": {
+        "kind": "sector_clean",
+        "link": 0,
+        "multiplier_gain_milli": 0,
+        "player_id": 0,
+        "points": 5000,
+        "ref_id": 0,
+        "sector": 5,
+        "tick": 130000,
+        "type": "score_event"
+      },
+      "hex": "4b1300d0fb0100000001881300000000000000050000"
+    },
+    {
+      "name": "claim_rejected",
+      "message": {
+        "kind": "claim_rejected",
+        "link": 0,
+        "multiplier_gain_milli": 0,
+        "player_id": 65535,
+        "points": 0,
+        "ref_id": 65535,
+        "sector": 0,
+        "tick": 4294967295,
+        "type": "score_event"
+      },
+      "hex": "4b1300ffffffffffff0500000000000000000000ffff"
+    }
+  ]
+}

@@ -300,6 +300,25 @@ func is_leg_clean() -> bool:
 	return not _hit
 
 
+## Dev (snaps): drops the queued checkpoints and signs before `s` without crossing them
+## (no bonus, no sun lift) and starts the leg `s` lies in there. Director rate.
+func skip_to(s: float) -> void:
+	var last_cp := -INF
+	var last_leg := leg_index - 1
+	while _cp_head < _cp_count and _cp_s[_cp_head] <= s:
+		last_cp = _cp_s[_cp_head]
+		last_leg = _cp_leg[_cp_head]
+		_cp_head += 1
+		legs_completed += 1
+		if last_leg >= _legs.legs_to_coast:
+			coast_reached = true
+	while _sign_head < _sign_count and _sign_s[_sign_head] <= s:
+		_sign_head += 1
+	if is_finite(last_cp):
+		leg_index = last_leg + 1
+		_start_leg(last_cp)
+
+
 ## Distance from `player_s` to the next queued checkpoint (HUD sun bar), or INF.
 func distance_to_checkpoint(player_s: float) -> float:
 	if _cp_head >= _cp_count:

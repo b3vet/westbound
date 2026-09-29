@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO runs (account_id, mode, map_or_seed, date, score, distance_m, duration_s,\n                               stats, car, build, room_type, verification, created_at)\n             VALUES (?, 'loop', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "aedb6de4a737553c42a5b4148b37f9b0a18e6c1a52ac044c662491cdb80ec435"
+}

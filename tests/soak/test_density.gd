@@ -7,6 +7,11 @@ extends WBTest
 
 ## The effective density tracks the leg's target within this (plan D11: ~8%).
 const TRACK_TOLERANCE := 0.10
+## At the last leg the waves' peaks sit at IDM's ceiling and set pieces clear their zones
+## (WP6.2), and faster lanes hold fewer vehicles (D15): plan D17 rebalanced it to 83-89 %
+## of the target over the waves (docs/SPAWNING.md, "Density with faster traffic and
+## waves"). The survey's 3 seeds x 7 km vary by about +-5 %.
+const LAST_LEG_MIN_RATIO := 0.78
 
 var t: Tuning
 
@@ -27,13 +32,18 @@ func test_survey_pipeline_on_a_short_run() -> void:
 
 
 ## Legs 1, 4 and 8 on 3 and 4 lanes: the density a player at typical speeds meets is
-## the leg's target (the director's shortfall, 67-94% before D11, is gone), without
-## rule violations and without living at the cap.
+## the leg's target (the director's shortfall, 67-94% before D11, is gone; leg 8: at
+## least LAST_LEG_MIN_RATIO, plan D17), without rule violations and without living at
+## the cap.
 func soak_effective_density_tracks_target() -> void:
 	for lanes: int in [3, 4]:
 		for leg: int in [1, 4, 8]:
 			var row := DensitySurvey.cell(lanes, leg, DensitySurvey.SCRIPTED, 3, 2)
 			print("      %s" % DensitySurvey.format_row(row))
-			within_pct(float(row["density"]), float(row["target"]), TRACK_TOLERANCE, "%d lanes leg %d" % [lanes, leg])
+			if leg >= t.director.ramp_last_leg:
+				ge(float(row["ratio"]), LAST_LEG_MIN_RATIO, "%d lanes leg %d" % [lanes, leg])
+				le(float(row["ratio"]), 1.0 + TRACK_TOLERANCE, "%d lanes leg %d" % [lanes, leg])
+			else:
+				within_pct(float(row["density"]), float(row["target"]), TRACK_TOLERANCE, "%d lanes leg %d" % [lanes, leg])
 			eq(int(row["violations"]), 0)
 			lt(float(row["at_cap_pct"]), 5.0, "%d lanes leg %d: the cap rarely binds" % [lanes, leg])

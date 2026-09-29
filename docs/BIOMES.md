@@ -38,6 +38,8 @@ Everything is data plus the run seed: tunnels come from `rng_road.derive(&"tunne
 
 A leg's **road rules are latched** the first time the generator asks about the leg, which happens while it generates the previous leg. A later `plan_next` for that leg changes its look (props, colours, horizon, toast), but not its geometry. For a fork to change the next leg's lanes, curves or tunnels, WP6.5 must plan it before the road generates past the fork's leg start minus one leg. To keep Daily Drive identical across quality tiers (different view distances generate different distances ahead), fork plans must not depend on how far the road happened to be generated. Otherwise the road would differ between tiers.
 
+**Resolved in WP6.5** ([FORKS.md](FORKS.md)): the forks are planned from the seed at run start (`ForkPlan`), and each branch is its own path with its own plan (the main road follows the left branch, a second path the right one), so both branches get their own road rules and sun side from the start; nothing depends on how far the road was generated. The run hands the road its route plan (`BiomeDirector.apply_to_road = false`) and the director a look plan in which the leg after a pending fork keeps the biome before it; a fork checkpoint blends its look from the split on (`BiomePlan.set_blend_from_line`). With no fork taken the route is exactly the table above.
+
 ## Adding a biome (for WP6.4b)
 
 1. Create `data/biomes/<id>.tres` (`BiomeDef`). `id` must equal the file name, because the HUD and `BiomePlan.load_biome` find it by id.
@@ -225,7 +227,7 @@ The coast's sea is on the right, so the sun must be right of the road's axis the
 
 Everywhere else the heading stays in the 15–30° band, as before. Only the switch bends cross it, the same geometry as a scheduled switch. The rule is deterministic by seed and plan, and a plan without requiring legs leaves the road bit-identical. Because the coast is endless, the road never switches sides again after leg 9. Tests: `tests/unit/test_road_biomes.gd` (24 seeds: every coast sample 15–30° with the sun on the right, leg 1 still either side, determinism, a coast-only road).
 
-**Flag (forks, WP6.5).** A leg's sun side is latched when the generator looks ahead to it, about `sun_lookahead_m` before the leg. That is earlier than its other road rules, which latch one leg ahead. A fork into an ocean biome must be planned before then; otherwise that leg keeps the side it had.
+**Flag (forks, WP6.5).** A leg's sun side is latched when the generator looks ahead to it, about `sun_lookahead_m` before the leg. That is earlier than its other road rules, which latch one leg ahead. A fork into an ocean biome must be planned before then; otherwise that leg keeps the side it had. *WP6.5:* forks never lead to the coast (the destination after 8 legs), and every branch path is planned from s = 0 with its own route, so this never bites; the fork bends stay inside the sun band.
 
 ### No props over the sea (WP6.4c)
 

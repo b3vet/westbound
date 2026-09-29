@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account_id, family FROM refresh_tokens WHERE token_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "account_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "family",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "family"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8afdd3b72f729122babc4ce2a7a286e6c90d734020a374b6234fff7f86065b5f"
+}

@@ -1,0 +1,78 @@
+{
+  "format_version": 1,
+  "map_id": "loop_v1",
+  "units": {"length": "mm", "speed": "km/h"},
+  "generator": {
+    "name": "LoopGen",
+    "version": 1,
+    "seed": 1,
+    "section_length_mm": 5000000,
+    "edits": {}
+  },
+  "length_mm": 25000000,
+  "cross_section": {"median_half_width_mm": 500, "inner_shoulder_mm": 1200, "lane_width_mm": 3600, "shoulder_mm": 3000, "guardrail_offset_mm": 500},
+  "sections": [
+    {"index": 0, "id": "desert", "s_start_mm": 0, "s_end_mm": 5000000, "lanes": 4, "lane_flow_speeds_from_right_kmh": [100.0, 135.0, 170.0, 185.0]},
+    {"index": 1, "id": "canyon", "s_start_mm": 5000000, "s_end_mm": 10000000, "lanes": 3, "lane_flow_speeds_from_right_kmh": [90.0, 120.0, 150.0, 165.0]},
+    {"index": 2, "id": "coast", "s_start_mm": 10000000, "s_end_mm": 15000000, "lanes": 3, "lane_flow_speeds_from_right_kmh": [95.0, 125.0, 155.0, 170.0]},
+    {"index": 3, "id": "city", "s_start_mm": 15000000, "s_end_mm": 20000000, "lanes": 4, "lane_flow_speeds_from_right_kmh": [85.0, 110.0, 135.0, 150.0]},
+    {"index": 4, "id": "farmland", "s_start_mm": 20000000, "s_end_mm": 25000000, "lanes": 3, "lane_flow_speeds_from_right_kmh": [95.0, 130.0, 165.0, 180.0]}
+  ],
+  "lanes": [
+    {"s_start_mm": 0, "s_end_mm": 320000, "count": 3, "lane_width_mm": 3600, "taper_mm": 0},
+    {"s_start_mm": 320000, "s_end_mm": 4450000, "count": 4, "lane_width_mm": 3600, "taper_mm": 250000},
+    {"s_start_mm": 4450000, "s_end_mm": 6066604, "count": 3, "lane_width_mm": 3600, "taper_mm": 250000},
+    {"s_start_mm": 6066604, "s_end_mm": 6908706, "count": 2, "lane_width_mm": 3600, "taper_mm": 200000},
+    {"s_start_mm": 6908706, "s_end_mm": 15320000, "count": 3, "lane_width_mm": 3600, "taper_mm": 200000},
+    {"s_start_mm": 15320000, "s_end_mm": 20320000, "count": 4, "lane_width_mm": 3600, "taper_mm": 250000},
+    {"s_start_mm": 20320000, "s_end_mm": 25000000, "count": 3, "lane_width_mm": 3600, "taper_mm": 250000}
+  ],
+  "tunnels": [
+    {"index": 0, "s_start_mm": 6416604, "s_end_mm": 6828706, "lanes": 2},
+    {"index": 1, "s_start_mm": 9266141, "s_end_mm": 9746134, "lanes": 3}
+  ],
+  "bridge": {"sector": 3, "s_start_mm": 12230000, "s_end_mm": 12770000},
+  "ramps": [
+    {"pair": 0, "kind": "off", "side": "right", "section": 3, "s_mm": 15970000, "length_mm": 250000},
+    {"pair": 0, "kind": "on", "side": "right", "section": 3, "s_mm": 16920000, "length_mm": 300000},
+    {"pair": 1, "kind": "off", "side": "right", "section": 4, "s_mm": 21090000, "length_mm": 250000},
+    {"pair": 1, "kind": "on", "side": "right", "section": 4, "s_mm": 22040000, "length_mm": 300000}
+  ],
+  "closure_zones": [
+    {"index": 0, "section": 0, "s_start_mm": 640000, "s_end_mm": 1100000, "taper_mm": 80000, "lanes_closed_from_right": 1, "default_on": false},
+    {"index": 1, "section": 1, "s_start_mm": 5200000, "s_end_mm": 5660000, "taper_mm": 80000, "lanes_closed_from_right": 1, "default_on": false},
+    {"index": 2, "section": 2, "s_start_mm": 11400000, "s_end_mm": 11860000, "taper_mm": 80000, "lanes_closed_from_right": 1, "default_on": false},
+    {"index": 3, "section": 3, "s_start_mm": 17560000, "s_end_mm": 18020000, "taper_mm": 80000, "lanes_closed_from_right": 1, "default_on": false},
+    {"index": 4, "section": 4, "s_start_mm": 24030000, "s_end_mm": 24490000, "taper_mm": 80000, "lanes_closed_from_right": 1, "default_on": false}
+  ],
+  "sectors": [
+    {"index": 0, "s_mm": 0, "style": "toll_gantry", "start_finish": true},
+    {"index": 1, "s_mm": 4166667, "style": "sign_gantry", "start_finish": false},
+    {"index": 2, "s_mm": 8333333, "style": "tunnel_portal", "start_finish": false},
+    {"index": 3, "s_mm": 12500000, "style": "suspension_bridge", "start_finish": false},
+    {"index": 4, "s_mm": 16666667, "style": "sign_gantry", "start_finish": false},
+    {"index": 5, "s_mm": 20833333, "style": "sign_gantry", "start_finish": false}
+  ],
+  "spawn_points": [
+    {"s_mm": 150000, "lane": 0},
+    {"s_mm": 150000, "lane": 1},
+    {"s_mm": 150000, "lane": 2},
+    {"s_mm": 4316667, "lane": 0},
+    {"s_mm": 4316667, "lane": 1},
+    {"s_mm": 4316667, "lane": 2},
+    {"s_mm": 4316667, "lane": 3},
+    {"s_mm": 8483333, "lane": 0},
+    {"s_mm": 8483333, "lane": 1},
+    {"s_mm": 8483333, "lane": 2},
+    {"s_mm": 12650000, "lane": 0},
+    {"s_mm": 12650000, "lane": 1},
+    {"s_mm": 12650000, "lane": 2},
+    {"s_mm": 16816667, "lane": 0},
+    {"s_mm": 16816667, "lane": 1},
+    {"s_mm": 16816667, "lane": 2},
+    {"s_mm": 16816667, "lane": 3},
+    {"s_mm": 20983333, "lane": 0},
+    {"s_mm": 20983333, "lane": 1},
+    {"s_mm": 20983333, "lane": 2}
+  ]
+}

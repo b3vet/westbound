@@ -49,3 +49,32 @@ static func landmark(kind: StringName, cp_leg: int, next_name: String, next_dist
 		BiomeDef.LANDMARK_TUNNEL_PORTAL:
 			return PackedStringArray(["CHECKPOINT", next])
 	return PackedStringArray()
+
+
+## WP6.5 forks: the roadside sign before a fork, one branch per line so both names read
+## at speed (the sign's place gives the distance, 1 km and 500 m, like the checkpoint
+## warnings): < LEFT / RIGHT >.
+static func fork_sign(_metres: float, left_name: String, right_name: String) -> PackedStringArray:
+	var l := left_name.strip_edges().to_upper()
+	var r := right_name.strip_edges().to_upper()
+	return PackedStringArray(["< " + (l if l != "" else "?"), (r if r != "" else "?") + " >"])
+
+
+## "< DESERT MESAS   CANYON PASS >" (upper case; a missing name reads "?").
+static func fork_names(left_name: String, right_name: String) -> String:
+	var l := left_name.strip_edges().to_upper()
+	var r := right_name.strip_edges().to_upper()
+	return "< %s   %s >" % [l if l != "" else "?", r if r != "" else "?"]
+
+
+## Lines of a fork checkpoint's landmark (the sign gantry over the split).
+static func fork_landmark(kind: StringName, cp_leg: int, left_name: String, right_name: String) -> PackedStringArray:
+	var names := fork_names(left_name, right_name)
+	match kind:
+		BiomeDef.LANDMARK_SIGN_GANTRY:
+			return PackedStringArray([names, "LEG %d  —  PICK YOUR SIDE" % (cp_leg + 1), "CHECKPOINT"])
+		BiomeDef.LANDMARK_TOLL_GANTRY:
+			return PackedStringArray(["EXPRESS", "CHECKPOINT", names])
+		BiomeDef.LANDMARK_TUNNEL_PORTAL:
+			return PackedStringArray(["CHECKPOINT", names])
+	return PackedStringArray()

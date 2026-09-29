@@ -35,6 +35,19 @@ extends SpawnSource
 ## scripted_brake_tap, request_lane_change, set_hard_decel_allowed, release_scripted),
 ## and only when the sim has them (a spawn-test fake does not: pieces then just roll).
 ## New kinds (WP6.3): a Controller subclass + a line in controller_for() + a data file.
+##
+## Road-anchored pieces (WP6.3: merge zone, road works, tunnel squeeze, toll gantry;
+## SetPieceDef.anchored) have a zone fixed on the road. schedule_zone() lays the zone
+## out (Controller.setup_zone: seeded layout, road hooks: lane counts, rail gaps, lane
+## closures, speed and headway zones) well beyond the view (schedule_lead_min_m), and
+## the piece runs at once (RUNNING, `spawned` counts it) with or without vehicles. Its
+## warnings count down to the zone, it starts and ends by the player's position on the
+## zone, and its road hooks go at the end (Controller.on_end). Vehicles it has are
+## planned later, in the batch where Controller.vehicles_rear_s() falls (the meeting
+## map), through the same commit path, and bound to the running piece.
+## Rolling pieces (WP6.3: slalom, convoy) work like the WP6.2 pieces; formations keep
+## their shape with Controller.keep_formation().
+## The pieces are in src/traffic/set_pieces/.
 
 const KIND_WARNING := &"set_piece_warning"   ## tag = SetPieceDef id, value = distance (m), points = serial
 const KIND_STARTED := &"set_piece_started"   ## tag = id, points = serial
@@ -52,7 +65,11 @@ var flow: SpawnSources.Flow
 var waves: IntensityWaves
 ## Duck-typed sim (TrafficSim or a fake): `state`, and the set-piece hooks if present.
 var sim: Object
+## The sim when it is a TrafficSim (null for a fake): its speed zones (spawn_speed_ok).
+var zone_sim: TrafficSim
 var state: TrafficState
+## The road (the director sets it): road-anchored pieces lay their zones out on it.
+var road: RoadPath
 ## Loaded SetPieceDefs by id (every id of set_piece_unlock_order with a data file).
 var defs: Dictionary = {}
 ## Where set-piece events go (null = nowhere). The run's buffer, drained by RunEvents.
@@ -63,6 +80,9 @@ var rng: Rng
 var min_speed_mps: float
 ## True when the sim has the scripting hooks.
 var can_script: bool = false
+## True when the sim has the WP6.3 zone hooks (lane closures, speed / headway zones,
+## merge holds).
+var can_zone: bool = false
 
 var instances: Array[Instance] = []
 
@@ -86,6 +106,10 @@ var unfit_lanes: int = 0
 var unfit_blind: int = 0
 var unfit_checkpoint: int = 0
 var unfit_road: int = 0
+## Road-anchored pieces (WP6.3) whose zone overlapped a live piece's, and whose road
+## hooks could not be set up.
+var unfit_live: int = 0
+var unfit_setup: int = 0
 
 var _serial: int = 0
 var _slot_serial := PackedInt32Array()   ## per slot: the instance serial it belongs to
@@ -121,6 +145,18 @@ class Instance:
 	var warned_m: float = -1.0        ## the player's distance at the first warning (-1: none)
 	var announced: bool = false
 	var did_start: bool = false
+	## Road-anchored pieces (WP6.3): the zone on the road, where the warnings count to,
+	## and whether vehicles are still to be planned (vehicles_rear_s() each batch).
+	var zone_s0: float = 0.0
+	var zone_s1: float = 0.0
+	var warn_s: float = 0.0
+	var pending_vehicles: bool = false
+	## Formation keeping (Controller.keep_formation): the reference line and each bound
+	## vehicle's slot offset from it.
+	var ref_s: float = 0.0
+	var slot_off := PackedFloat64Array()
+	## The player's s at the last step (views, the prop query).
+	var player_s: float = 0.0
 
 	func _init() -> void:
 		slot.resize(MAX_VEHICLES)
@@ -128,6 +164,11 @@ class Instance:
 		lane.resize(MAX_VEHICLES)
 		row.resize(MAX_VEHICLES)
 		natural_v0.resize(MAX_VEHICLES)
+		slot_off.resize(MAX_VEHICLES)
+
+	## True for a road-anchored piece (WP6.3).
+	func is_anchored() -> bool:
+		return def != null and def.anchored
 
 	## Planned length of the piece's footprint along the road (m).
 	func span() -> float:
@@ -153,18 +194,68 @@ class Controller:
 	func step(_src: SetPieceSource, _inst: Instance, _dt: float, _player: VehicleState) -> void:
 		pass
 
+	## Road-anchored pieces (WP6.3): lays the zone out from inst.zone_s0 (inst.zone_s1,
+	## the seeded layout) and puts its road hooks on the road and in the sim (tag =
+	## inst.serial). False when it cannot (then nothing was changed). Director rate.
+	func setup_zone(_src: SetPieceSource, _inst: Instance) -> bool:
+		return true
 
-## The controller of a kind, or null while that kind is not implemented (WP6.3).
+	## Road-anchored pieces: where the rear of the piece's vehicles is planned now (the
+	## meeting map to zone_s0 + zone_meet_m by default), INF when it has none. Director rate.
+	func vehicles_rear_s(src: SetPieceSource, inst: Instance) -> float:
+		if inst.def.vehicles_max <= 0:
+			return INF
+		return src.meet_plan_s(inst.speed, inst.zone_s0 + inst.def.zone_meet_m)
+
+	## The piece ended: take its road hooks back out of the sim (the road keeps its lane
+	## counts and rail gaps, which are behind the player by then). Director rate.
+	func on_end(src: SetPieceSource, inst: Instance) -> void:
+		src.remove_sim_hooks(inst)
+
+	## Formation keeping (tick, allocation-free): each vehicle's desired speed is the
+	## piece's speed + formation_gain_per_s x its lag behind its slot on the reference
+	## line (advancing at the piece's speed), within +- formation_limit_kmh.
+	func keep_formation(src: SetPieceSource, inst: Instance, dt: float) -> void:
+		inst.ref_s += inst.speed * dt
+		var d := inst.def
+		var lim := Units.kmh_to_mps(d.formation_limit_kmh)
+		for k in inst.n:
+			if not src.controllable(inst, k):
+				continue
+			var lag := inst.ref_s + inst.slot_off[k] - src.state.s[inst.slot[k]]
+			src.set_v0(inst, k, inst.speed + clampf(lag * d.formation_gain_per_s, -lim, lim))
+
+	## Formation keeping: the current layout becomes the formation (on_bound).
+	func mark_formation(src: SetPieceSource, inst: Instance) -> void:
+		inst.ref_s = inst.s_rear
+		for k in inst.n:
+			inst.slot_off[k] = src.state.s[inst.slot[k]] - inst.ref_s
+
+
+## The controller of a kind, or null while that kind is not implemented.
 static func controller_for(kind: SetPieceDef.Kind) -> Controller:
 	match kind:
 		SetPieceDef.Kind.TRUCK_WALL:
 			return TruckWall.new()
 		SetPieceDef.Kind.ROLLING_ROADBLOCK:
 			return RollingRoadblock.new()
+		SetPieceDef.Kind.MERGE_ZONE:
+			return MergeZonePiece.new()
+		SetPieceDef.Kind.ROAD_WORKS:
+			return RoadWorksPiece.new()
+		SetPieceDef.Kind.SLALOM:
+			return SlalomPiece.new()
+		SetPieceDef.Kind.CONVOY:
+			return ConvoyPiece.new()
+		SetPieceDef.Kind.TUNNEL_SQUEEZE:
+			return TunnelSqueezePiece.new()
+		SetPieceDef.Kind.TOLL_GANTRY:
+			return TollGantryPiece.new()
 	return null
 
 
-## Every SetPieceDef named in the unlock order that has a data file, by id.
+## Every SetPieceDef named in the unlock order that has a data file, by id, plus the
+## checkpoint-landmark pieces (is_checkpoint_landmark: the toll gantry) in DEF_DIR.
 static func load_defs(director_tuning: DirectorTuning) -> Dictionary:
 	var out: Dictionary = {}
 	for id in director_tuning.set_piece_unlock_order:
@@ -173,6 +264,14 @@ static func load_defs(director_tuning: DirectorTuning) -> Dictionary:
 			var d := load(path) as SetPieceDef
 			if d != null:
 				out[id] = d
+	for f in DirAccess.get_files_at(DEF_DIR):
+		var file := f.trim_suffix(".remap")
+		if not file.ends_with(".tres"):
+			continue
+		var res := load(DEF_DIR + file)
+		var d := res as SetPieceDef
+		if d != null and d.is_checkpoint_landmark and not out.has(d.id):
+			out[d.id] = d
 	return out
 
 
@@ -189,6 +288,10 @@ func _init(run: RunContext, flow_source: SpawnSources.Flow, traffic_sim: Object,
 	can_script = sim.has_method(&"set_scripted_v0") and sim.has_method(&"scripted_brake_tap") \
 		and sim.has_method(&"release_scripted") and sim.has_method(&"set_hard_decel_allowed") \
 		and sim.has_method(&"request_lane_change")
+	can_zone = sim.has_method(&"add_lane_closure") and sim.has_method(&"add_speed_zone") \
+		and sim.has_method(&"add_headway_zone") and sim.has_method(&"remove_zones") \
+		and sim.has_method(&"set_merge_hold") and sim.has_method(&"set_hazards")
+	zone_sim = sim as TrafficSim
 	for k in MAX_INSTANCES:
 		instances.append(Instance.new())
 	_slot_serial.resize(state.capacity)
@@ -214,7 +317,8 @@ func pick(leg: int, biome: BiomeDef, u: float, lanes: int) -> SetPieceDef:
 	var total := 0.0
 	for i in tuning.set_pieces_unlocked(leg):
 		var d: SetPieceDef = defs.get(tuning.set_piece_unlock_order[i])
-		if d == null or d.is_checkpoint_landmark or d.min_leg > leg or d.min_lanes > lanes or controller_for(d.kind) == null:
+		if d == null or d.is_checkpoint_landmark or d.trigger != SetPieceDef.Trigger.PEAK or not fits_lanes(d, lanes) \
+				or d.min_leg > leg or controller_for(d.kind) == null:
 			continue
 		var w := d.weight
 		if biome != null and not biome.set_piece_ids.is_empty():
@@ -234,6 +338,27 @@ func pick(leg: int, biome: BiomeDef, u: float, lanes: int) -> SetPieceDef:
 	return cands[cands.size() - 1]
 
 
+## True when `def` may be laid out on `lanes` lanes (min_lanes, max_lanes).
+static func fits_lanes(def: SetPieceDef, lanes: int) -> bool:
+	return lanes >= def.min_lanes and (def.max_lanes <= 0 or lanes <= def.max_lanes)
+
+
+## A feature-triggered kind (tunnel squeeze, toll gantry) is available on `leg` in
+## `biome`: its own min_leg; in the unlock order, unlocked by the leg; listed in the
+## biome's mix when the biome has one (the toll gantry follows the landmark style
+## instead). Director rate.
+func tied_allowed(def: SetPieceDef, leg: int, biome: BiomeDef) -> bool:
+	if def.min_leg > leg or controller_for(def.kind) == null:
+		return false
+	var at := tuning.set_piece_unlock_order.find(def.id)
+	if at >= 0 and at >= tuning.set_pieces_unlocked(leg):
+		return false
+	if def.trigger == SetPieceDef.Trigger.TUNNEL and biome != null and not biome.set_piece_ids.is_empty():
+		var bi := biome.set_piece_ids.find(def.id)
+		return bi >= 0 and bi < biome.set_piece_weights.size() and biome.set_piece_weights[bi] > 0.0
+	return true
+
+
 ## Live (scheduled or running) pieces.
 func active_count() -> int:
 	var n := 0
@@ -245,6 +370,132 @@ func active_count() -> int:
 
 func can_schedule() -> bool:
 	return active_count() < tuning.set_piece_max_active and _free_instance() != null
+
+
+## WP6.3: a new piece the player faces over [x0, x1] (road positions of the player: its
+## first warning to its end) may be scheduled when an instance is free and fewer than
+## set_piece_max_active live pieces overlap that range (a road-anchored piece is decided
+## far ahead: one the player will have passed by x0, or will only meet after x1, does
+## not count). Director rate.
+func can_schedule_at(x0: float, x1: float) -> bool:
+	if _free_instance() == null:
+		return false
+	var n := 0
+	for inst in instances:
+		if inst.stage != Stage.FREE and end_x(inst) >= x0 and start_x(inst) <= x1:
+			n += 1
+	return n < tuning.set_piece_max_active
+
+
+## Where the player will be when a live piece ends (its zone end + end margin; for a
+## rolling piece, where the player meets its front, + end margin).
+func end_x(inst: Instance) -> float:
+	if inst.is_anchored():
+		return inst.zone_s1 + inst.def.end_margin_m
+	return waves.meet_x(inst.speed, inst.s_front) + inst.def.end_margin_m
+
+
+## Where the player first hears of a live piece (its first warning, its zone or rear).
+func start_x(inst: Instance) -> float:
+	if inst.is_anchored():
+		return minf(first_notice_s(inst.def, inst.zone_s0), inst.zone_s0)
+	var x := waves.meet_x(inst.speed, inst.s_rear)
+	return minf(first_notice_s(inst.def, x), x)
+
+
+## Where the player first hears of a piece at `s_first` (its rear / zone start): its
+## farthest warning before it.
+static func first_notice_s(def: SetPieceDef, s_first: float) -> float:
+	var w := 0.0
+	for x in def.warning_sign_distances_m:
+		w = maxf(w, x)
+	return s_first + def.warning_anchor_m - w
+
+
+## Road-anchored pieces (WP6.3): lays `def` out with its zone starting at `zone_s0` on
+## `lanes` lanes, puts its road hooks in (Controller.setup_zone) and runs it at once.
+## Null when no instance is free or the controller could not set it up. Director rate.
+func schedule_zone(def: SetPieceDef, zone_s0: float, lanes: int, speed: float) -> Instance:
+	var inst := schedule(def, zone_s0, lanes, speed)
+	if inst == null:
+		return null
+	inst.zone_s0 = zone_s0
+	inst.zone_s1 = zone_s0 + def.length_m
+	if not inst.controller.setup_zone(self, inst):
+		remove_sim_hooks(inst)
+		unfit_setup += 1
+		inst.stage = Stage.FREE
+		inst.controller = null
+		return null
+	inst.warn_s = inst.zone_s0 + def.warning_anchor_m
+	inst.pending_vehicles = def.vehicles_max > 0
+	# No footprint until its vehicles are planned (prepare_anchored places them).
+	inst.s_rear = INF if inst.pending_vehicles else inst.zone_s0
+	inst.s_front = inst.s_rear
+	inst.stage = Stage.RUNNING
+	spawned += 1
+	spawned_by_kind[def.id] = int(spawned_by_kind.get(def.id, 0)) + 1
+	return inst
+
+
+## Road-anchored pieces: the rear s where vehicles planned now at `v` are met by the
+## player at road position x (the meeting map), INF when the player is not closing on
+## them (pace within the closing floor of v). Director rate.
+func meet_plan_s(v: float, x: float) -> float:
+	var dv := waves.pace - v
+	if dv < Units.kmh_to_mps(tuning.wave_min_closing_kmh):
+		return INF
+	return waves.player_s + (x - waves.player_s) * dv / waves.pace
+
+
+## Road-anchored pieces: fits the road at [s0, s1] (zone and signs, from its first
+## warning to its end + end_margin): lanes; rule 6 (no part just beyond a blind crest or
+## bend, at rest); clear of checkpoints (unless triggered by one) and of lane-count
+## changes, tunnels and forks (unless triggered by a tunnel); no other live piece's zone.
+func fits_zone(def: SetPieceDef, s0: float, s1: float, lanes: int) -> bool:
+	if not fits_lanes(def, lanes):
+		unfit_lanes += 1
+		return false
+	var first := first_notice_s(def, s0)
+	if waves.is_blind(0.0, s0) or waves.is_blind(0.0, (s0 + s1) * 0.5) or waves.is_blind(0.0, s1):
+		unfit_blind += 1
+		return false
+	var x_end := s1 + def.end_margin_m
+	if def.trigger != SetPieceDef.Trigger.CHECKPOINT and not waves.clear_of_checkpoints(minf(first, s0), x_end):
+		unfit_checkpoint += 1
+		return false
+	if def.trigger != SetPieceDef.Trigger.TUNNEL and (not waves.clear_of_zones(minf(first, s0), x_end) \
+			or road.lane_count(x_end) != lanes or road.lane_count(minf(first, s0)) != lanes):
+		unfit_road += 1
+		return false
+	if not clear_of_live(minf(first, s0), x_end):
+		unfit_live += 1
+		return false
+	if x_end > road.length_generated():
+		unfit_road += 1   # beyond an unresolved fork (WP6.5): its road is not decided yet
+		return false
+	return true
+
+
+## True when [s0, s1] overlaps no live road-anchored piece's zone (from its first
+## notice to its end + end margin).
+func clear_of_live(s0: float, s1: float) -> bool:
+	for inst in instances:
+		if inst.stage == Stage.FREE or not inst.is_anchored():
+			continue
+		var a := minf(first_notice_s(inst.def, inst.zone_s0), inst.zone_s0)
+		var b := inst.zone_s1 + inst.def.end_margin_m
+		if s1 >= a and s0 <= b:
+			return false
+	return true
+
+
+## Takes every sim hook of the piece (closures, zones) out. Director rate.
+func remove_sim_hooks(inst: Instance) -> void:
+	if not can_zone:
+		return
+	sim.call(&"remove_lane_closures", inst.serial)
+	sim.call(&"remove_zones", inst.serial)
 
 
 ## Schedules `def` with its rear at `s_rear` on `lanes` lanes at `speed` m/s; the next
@@ -283,9 +534,12 @@ func has_pending_in(s_from: float, s_to: float) -> bool:
 	return _pending_in(s_from, s_to) != null
 
 
-## Frees every instance (no events): a director reset.
+## Frees every instance (no events): a director reset. Road-anchored pieces take their
+## sim hooks out (the road keeps its lane counts and rail gaps).
 func clear() -> void:
 	for inst in instances:
+		if inst.stage != Stage.FREE and inst.is_anchored():
+			remove_sim_hooks(inst)
 		inst.stage = Stage.FREE
 		inst.n = 0
 		inst.controller = null
@@ -300,7 +554,10 @@ func clear() -> void:
 func plan_batch(ctx: SpawnSource.Context, s_from: float, s_to: float, out_spawns: Array[SpawnSource.Record]) -> void:
 	var inst := _pending_in(s_from, s_to) if ctx.set_pieces_allowed else null
 	if inst != null:
-		_plan_piece(ctx, inst, s_to)
+		if inst.is_anchored():
+			_plan_anchored(ctx, inst, s_to)
+		else:
+			_plan_piece(ctx, inst, s_to)
 		for r in inst.records:
 			out_spawns.append(r)
 	if active_count() == 0:
@@ -349,14 +606,39 @@ func _plan_piece(ctx: SpawnSource.Context, inst: Instance, s_to: float) -> void:
 	inst.records.clear()
 
 
+## A road-anchored piece's vehicles (WP6.3), laid out by its controller from inst.s_rear
+## (the rear vehicles_rear_s() gave): the ones that fit the live traffic are kept (the
+## zone does not move). Director rate.
+func _plan_anchored(ctx: SpawnSource.Context, inst: Instance, _s_to: float) -> void:
+	inst.records.clear()
+	inst.rec_natural_v0.clear()
+	inst.rec_row.clear()
+	inst.controller.plan(self, ctx, inst)
+	inst.pending_vehicles = false
+	var k := 0
+	while k < inst.records.size():
+		var rec := inst.records[k]
+		# Its lane must exist where it spawns and keep it to the zone (no lane drop,
+		# tunnel or fork on the way: a tunnel-triggered piece drives into its own).
+		var road_ok := flow.lane_open_for_spawn(ctx.road, rec.lane, rec.s) and (inst.def.trigger == SetPieceDef.Trigger.TUNNEL \
+			or waves.clear_of_zones(rec.s, inst.zone_s0))
+		if road_ok and fits_live(ctx, inst, rec):
+			k += 1
+			continue
+		inst.records.remove_at(k)
+		inst.rec_natural_v0.remove_at(k)
+		inst.rec_row.remove_at(k)
+	inst.planned = not inst.records.is_empty()
+
+
 ## Rule 6 and the road for a piece of `def` at speed `v` (m/s), rear at `s`, `span`
 ## long, on `lanes` lanes: enough lanes; none of it hidden just beyond a blind crest or
 ## bend while the player drives it (IntensityWaves.is_blind at its rear, middle and
 ## front); met by the player clear of every checkpoint's range; and no lane-count change,
 ## tunnel or fork on the road it drives until it ends (the player passing its front
 ## + end_margin_m). Director rate.
-func fits_road(def: SetPieceDef, v: float, s: float, span: float, lanes: int, road: RoadPath) -> bool:
-	if lanes < def.min_lanes:
+func fits_road(def: SetPieceDef, v: float, s: float, span: float, lanes: int, on_road: RoadPath) -> bool:
+	if not fits_lanes(def, lanes):
 		unfit_lanes += 1
 		return false
 	if waves.is_blind(v, s) or waves.is_blind(v, s + span * 0.5) or waves.is_blind(v, s + span):
@@ -366,8 +648,11 @@ func fits_road(def: SetPieceDef, v: float, s: float, span: float, lanes: int, ro
 	if not waves.clear_of_checkpoints(waves.meet_x(v, s), x_end):
 		unfit_checkpoint += 1
 		return false
-	if not waves.clear_of_zones(s, x_end) or road.lane_count(x_end) != lanes:
+	if not waves.clear_of_zones(s, x_end) or on_road.lane_count(x_end) != lanes:
 		unfit_road += 1
+		return false
+	if not clear_of_live(s, x_end):
+		unfit_live += 1
 		return false
 	return true
 
@@ -386,8 +671,10 @@ func fits_live(ctx: SpawnSource.Context, _inst: Instance, rec: SpawnSource.Recor
 ## behind it at least the IDM gap it would keep (closing speed included) and ahead of it
 ## beyond its catch_reach. Allocation-free.
 func keeps_clear(rec: SpawnSource.Record) -> bool:
+	if not spawn_speed_ok(rec):
+		return false
 	for inst in instances:
-		if inst.stage == Stage.FREE:
+		if inst.stage == Stage.FREE or not has_footprint(inst):
 			continue
 		var d := inst.def
 		if rec.s >= inst.s_rear - d.clear_behind_m and rec.s <= inst.s_front + d.clear_ahead_m:
@@ -404,10 +691,26 @@ func keeps_clear(rec: SpawnSource.Record) -> bool:
 	return true
 
 
+## False when `rec` would come in faster than a piece's speed zone lets it drive where it
+## spawns (in a toll's booth lane, or on its braking approach: TrafficSim.speed_limit_at);
+## the director also asks this of its behind spawns. Allocation-free.
+func spawn_speed_ok(rec: SpawnSource.Record) -> bool:
+	if zone_sim == null or zone_sim.speed_zone_count() == 0:
+		return true
+	return zone_sim.speed_limit_at(rec.lane, rec.s + flow.length_of(rec.type_id) * 0.5, rec.profile_id) >= rec.v
+
+
+## True when a live piece has vehicles (or planned ones) Flow must keep clear of: a
+## road-anchored piece only once its vehicles are planned or bound (its closures and
+## zones steer traffic themselves). Allocation-free.
+func has_footprint(inst: Instance) -> bool:
+	return not inst.is_anchored() or inst.n > 0 or inst.planned
+
+
 ## True when the piece has a vehicle in `lane` (its planned records until it runs).
 ## Allocation-free.
 func occupies(inst: Instance, lane: int) -> bool:
-	if inst.stage == Stage.RUNNING:
+	if inst.stage == Stage.RUNNING and not inst.planned:
 		for k in inst.n:
 			if alive(inst, k) and state.lane[inst.slot[k]] == lane:
 				return true
@@ -477,6 +780,9 @@ func add_record(inst: Instance, rec: SpawnSource.Record, row_index: int) -> void
 ## vehicles made it.
 func bind_committed() -> void:
 	for inst in instances:
+		if inst.stage == Stage.RUNNING and inst.planned:
+			_bind_anchored(inst)
+			continue
 		if inst.stage != Stage.SCHEDULED:
 			continue
 		inst.n = 0
@@ -485,23 +791,7 @@ func bind_committed() -> void:
 			inst.stage = Stage.FREE
 			inst.controller = null
 			continue
-		for i in state.capacity:
-			if inst.n >= MAX_VEHICLES:
-				break
-			if state.active[i] == 0 or (state.flags[i] & TrafficState.FLAG_SCRIPTED) == 0 or instance_of(i) >= 0:
-				continue
-			var r := _record_at(inst, i)
-			if r < 0:
-				continue
-			var k := inst.n
-			inst.slot[k] = i
-			inst.vid[k] = state.vehicle_id[i]
-			inst.lane[k] = inst.records[r].lane
-			inst.row[k] = inst.rec_row[r]
-			inst.natural_v0[k] = inst.rec_natural_v0[r]
-			_slot_serial[i] = inst.serial
-			_slot_vid[i] = state.vehicle_id[i]
-			inst.n += 1
+		_bind_records(inst)
 		if inst.n == 0:
 			uncommitted += 1
 			inst.stage = Stage.FREE
@@ -509,11 +799,48 @@ func bind_committed() -> void:
 			continue
 		_sort_by_lane(inst)
 		inst.stage = Stage.RUNNING
+		inst.planned = false
 		inst.records.clear()
 		spawned += 1
 		spawned_by_kind[inst.def.id] = int(spawned_by_kind.get(inst.def.id, 0)) + 1
 		_refresh(inst)
 		inst.controller.on_bound(self, inst)
+
+
+## A running road-anchored piece's planned vehicles, now committed, join it.
+func _bind_anchored(inst: Instance) -> void:
+	inst.planned = false
+	var n0 := inst.n
+	_bind_records(inst)
+	inst.records.clear()
+	if inst.n == n0:
+		uncommitted += 1
+		return
+	_sort_by_lane(inst)
+	_refresh(inst)
+	inst.controller.on_bound(self, inst)
+
+
+## Binds every committed record of `inst` (FLAG_SCRIPTED, not yet in a piece, at a
+## record's lane / type / s) to its slot.
+func _bind_records(inst: Instance) -> void:
+	for i in state.capacity:
+		if inst.n >= MAX_VEHICLES:
+			break
+		if state.active[i] == 0 or (state.flags[i] & TrafficState.FLAG_SCRIPTED) == 0 or instance_of(i) >= 0:
+			continue
+		var r := _record_at(inst, i)
+		if r < 0:
+			continue
+		var k := inst.n
+		inst.slot[k] = i
+		inst.vid[k] = state.vehicle_id[i]
+		inst.lane[k] = inst.records[r].lane
+		inst.row[k] = inst.rec_row[r]
+		inst.natural_v0[k] = inst.rec_natural_v0[r]
+		_slot_serial[i] = inst.serial
+		_slot_vid[i] = state.vehicle_id[i]
+		inst.n += 1
 
 
 ## The serial of the piece `slot`'s vehicle belongs to, or -1. Allocation-free.
@@ -564,6 +891,9 @@ static func _swap(inst: Instance, a: int, b: int) -> void:
 	var t_v0 := inst.natural_v0[a]
 	inst.natural_v0[a] = inst.natural_v0[b]
 	inst.natural_v0[b] = t_v0
+	var t_off := inst.slot_off[a]
+	inst.slot_off[a] = inst.slot_off[b]
+	inst.slot_off[b] = t_off
 
 
 # ---------------------------------------------------------------- Runtime (per tick, allocation-free)
@@ -574,7 +904,11 @@ func step(dt: float, player: VehicleState) -> void:
 		if inst.stage != Stage.RUNNING:
 			continue
 		inst.age += dt
+		inst.player_s = player.s
 		_refresh(inst)
+		if inst.is_anchored():
+			_step_anchored(inst, dt, player)
+			continue
 		if inst.n == 0:
 			ended_empty += 1
 			_end(inst)
@@ -597,10 +931,32 @@ func step(dt: float, player: VehicleState) -> void:
 			ended_duration += 1
 		elif not inst.did_start and inst.age > inst.def.approach_max_s:
 			ended_unmet += 1
-		elif not waves.clear_of_zones(inst.s_rear, inst.s_front + inst.def.clear_ahead_m):
-			ended_zone += 1   # rolling into a lane drop, tunnel or fork
+		elif not waves.clear_of_zones(inst.s_rear, inst.s_front + inst.def.clear_ahead_m) \
+				or not clear_of_live(inst.s_rear, inst.s_front + inst.def.clear_ahead_m):
+			ended_zone += 1   # rolling into a lane drop, tunnel or fork, or a road-anchored piece
 		else:
 			continue
+		_end(inst)
+
+
+## A road-anchored piece's tick (WP6.3): warnings count down to its warn_s, it starts
+## start_distance_m before its zone and ends end_margin_m past it (never by time, approach
+## or an empty formation: its road hooks stay until the player has passed).
+func _step_anchored(inst: Instance, dt: float, player: VehicleState) -> void:
+	var dist := inst.warn_s - player.s
+	var ws := inst.def.warning_sign_distances_m
+	while inst.next_warning < ws.size() and dist <= ws[inst.next_warning]:
+		_warn(inst, dist)
+	if not inst.did_start and inst.zone_s0 - player.s <= inst.def.start_distance_m:
+		inst.did_start = true
+		inst.announced = true
+		started += 1
+		_push(KIND_STARTED, inst, 0.0)
+	inst.controller.step(self, inst, dt, player)
+	if inst.did_start:
+		inst.run_s += dt
+	if player.s > inst.zone_s1 + inst.def.end_margin_m:
+		ended_passed += 1
 		_end(inst)
 
 
@@ -624,6 +980,7 @@ func _refresh(inst: Instance) -> void:
 			inst.lane[w] = inst.lane[k]
 			inst.row[w] = inst.row[k]
 			inst.natural_v0[w] = inst.natural_v0[k]
+			inst.slot_off[w] = inst.slot_off[k]
 		var i := inst.slot[w]
 		var hl := state.length[i] * 0.5
 		lo = minf(lo, state.s[i] - hl)
@@ -649,6 +1006,7 @@ func _warn(inst: Instance, dist: float) -> void:
 
 
 func _end(inst: Instance) -> void:
+	inst.controller.on_end(self, inst)
 	if can_script:
 		for k in inst.n:
 			if alive(inst, k):
@@ -680,9 +1038,40 @@ func _free_instance() -> Instance:
 
 func _pending_in(s_from: float, s_to: float) -> Instance:
 	for inst in instances:
-		if inst.stage == Stage.SCHEDULED and inst.s_rear >= s_from and inst.s_rear < s_to:
+		if inst.s_rear < s_from or inst.s_rear >= s_to:
+			continue
+		if inst.stage == Stage.SCHEDULED or (inst.stage == Stage.RUNNING and inst.pending_vehicles):
 			return inst
 	return null
+
+
+## The piece whose vehicles the batch [s_from, s_to) lays out (a scheduled rolling piece,
+## or a running road-anchored piece's vehicles), or null.
+func planning_in(s_from: float, s_to: float) -> Instance:
+	return _pending_in(s_from, s_to)
+
+
+## Before the batch [a, b) is planned (WP6.3): each running road-anchored piece whose
+## vehicles are still to come gets their rear for this batch (Controller.vehicles_rear_s)
+## when it falls in it, or at the batch start when the player still meets them in the
+## zone from there; a piece whose vehicles the player can no longer meet gives them up.
+## Director rate.
+func prepare_anchored(a: float, b: float) -> void:
+	for inst in instances:
+		if inst.stage != Stage.RUNNING or not inst.is_anchored() or not inst.pending_vehicles:
+			continue
+		var r := inst.controller.vehicles_rear_s(self, inst)
+		if is_inf(r):
+			inst.pending_vehicles = false
+		elif r >= b:
+			inst.s_rear = INF
+			continue
+		elif r < a:
+			if waves.meet_x(inst.speed, a) > inst.zone_s1:
+				inst.pending_vehicles = false
+			r = a
+		inst.s_rear = r if inst.pending_vehicles else inst.zone_s0
+		inst.s_front = inst.s_rear
 
 
 # ---------------------------------------------------------------- Scripting helpers (tick)
@@ -690,6 +1079,36 @@ func _pending_in(s_from: float, s_to: float) -> Instance:
 func set_v0(inst: Instance, k: int, v0: float) -> void:
 	if can_script and alive(inst, k):
 		sim.call(&"set_scripted_v0", inst.slot[k], maxf(v0, min_speed_mps))
+
+
+## A desired speed below the minimum-speed floor (WP6.3: ramp traffic coming off the
+## on-ramp, in the acceleration lane the player need not use).
+func set_v0_unfloored(inst: Instance, k: int, v0: float) -> void:
+	if can_script and alive(inst, k):
+		sim.call(&"set_scripted_v0", inst.slot[k], v0)
+
+
+## Holds a vehicle out of the mandatory merge (WP6.3: ramp traffic waits for the player).
+func merge_hold(inst: Instance, k: int, on: bool) -> void:
+	if can_zone and alive(inst, k):
+		sim.call(&"set_merge_hold", inst.slot[k], on)
+
+
+## True while vehicle k is held out of the mandatory merge.
+func is_held(inst: Instance, k: int) -> bool:
+	return can_zone and alive(inst, k) and bool(sim.call(&"merge_held", inst.slot[k]))
+
+
+## A vehicle's hazard lights (WP6.3: the convoy).
+func hazards(inst: Instance, k: int, on: bool) -> void:
+	if can_zone and alive(inst, k):
+		sim.call(&"set_hazards", inst.slot[k], on)
+
+
+## Sounds a vehicle's horn (WP6.3: the convoy honks).
+func honk(inst: Instance, k: int) -> void:
+	if alive(inst, k) and sim.has_method(&"honk"):
+		sim.call(&"honk", inst.slot[k], TrafficSim.TAG_HONK)
 
 
 func brake_tap(inst: Instance, k: int) -> bool:

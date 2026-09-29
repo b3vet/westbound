@@ -45,6 +45,15 @@ extends RefCounted
 ## seeded draws decide: deterministic by seed and plan. Without requiring legs nothing
 ## changes (bit-identical).
 
+## Forks (WP6.5, docs/FORKS.md): `set_forks(splits, sides)`. A section that would run
+## into a fork's approach (fork_approach_straight_m before its split) instead ends with a
+## bend to the middle of the sun band (when there is room) and a straight to the split;
+## at the split this path takes its branch: one bend of fork_branch_deflection_deg to its
+## side (left = -1) at fork_branch_radius_m, then fork_straight_after_m of straight. The
+## branch bends are mirror images within the band and draw no random numbers, so every
+## path of a run is identical up to the split, and after it until the other branch is
+## out of sight.
+
 ## Plan-view sight distance past an obstruction `m` inside the driving line on an
 ## arc of radius R (middle-ordinate rule): S^2 = 8 R m.
 const MIDDLE_ORDINATE_FACTOR := 8.0   # lint: allow-number geometry constant, not tuning
@@ -103,6 +112,17 @@ var _bend_max: float
 ## How far past a section's straight and bend a requiring leg is looked for.
 var sun_lookahead_m: float = 0.0
 
+## Fork splits (increasing) and this path's branch at each (-1 left, +1 right).
+var fork_s := PackedFloat64Array()
+var fork_side := PackedInt32Array()
+var _fork_i: int = 0
+var _fork_approach: float = 0.0
+var _fork_defl: float = 0.0
+var _fork_radius: float = 0.0
+var _fork_after: float = 0.0
+## A section this close to a split counts as starting at it (float noise).
+const FORK_EPS_M := 1e-6   # lint: allow-number numeric tolerance, not tuning
+
 
 func _init(rng: Rng, t: RoadTuning) -> void:
 	_rng = rng
@@ -132,8 +152,22 @@ func _init(rng: Rng, t: RoadTuning) -> void:
 	var arc_max := maxf(2.0 * _band_hi * _switch_radius, maxf(_band_hi - _band_lo, _defl_max) * _radius_max)
 	_bend_max = 2.0 * _ramp_max + arc_max
 	sun_lookahead_m = 2.0 * (_straight_min + _bend_max)
+	_fork_approach = t.fork_approach_straight_m
+	_fork_defl = deg_to_rad(t.fork_branch_deflection_deg)
+	_fork_radius = maxf(t.fork_branch_radius_m, t.min_curve_radius_m)
+	_fork_after = t.fork_straight_after_m
 	assert(_band_hi - _band_lo >= 2.0 * _defl_min, "sun band narrower than two minimum bends")
 	assert(_band_lo + _switch_ramp_margin < _band_hi, "switch transitions do not fit in the sun band")
+
+
+## The forks this path meets: split positions (increasing) and its branch side at each.
+## Set before generating past the first approach.
+func set_forks(splits: PackedFloat64Array, sides: PackedInt32Array) -> void:
+	fork_s = splits.duplicate()
+	fork_side = sides.duplicate()
+	_fork_i = 0
+	while _fork_i < fork_s.size() and fork_s[_fork_i] < end_s - FORK_EPS_M:
+		_fork_i += 1
 
 
 ## Generates elements until they cover at least `s`. Director rate.
@@ -198,10 +232,17 @@ func _start() -> void:
 
 ## One straight followed by one bend.
 func _add_section() -> void:
+	if _fork_i < fork_s.size() and end_s >= fork_s[_fork_i] - FORK_EPS_M:
+		_add_fork_branch(fork_side[_fork_i])
+		_fork_i += 1
+		return
 	var scale := biome_rules.curve_scale_at(end_s) if biome_rules != null else 1.0
 	if scale <= 0.0:
 		scale = 1.0
 	var straight := _rng.float_range(_straight_min, _straight_max) / scale
+	if _fork_i < fork_s.size() and fork_s[_fork_i] - _fork_approach - end_s < straight + 2.0 * _bend_max:
+		_add_fork_approach(fork_s[_fork_i])
+		return
 	# The sun side a leg ahead requires (0 = none within reach): switch now, or hold.
 	var need := _sun_side_ahead(end_s, end_s + straight + _bend_max + sun_lookahead_m)
 	var forced := need != 0 and float(need) != _side
@@ -238,6 +279,44 @@ func _add_section() -> void:
 	_add_bend(_side * dir * mag, _rng.float_range(_radius_min, r_max), ramp)
 
 
+# ---------------------------------------------------------------- Hand-built alignments (N3.1)
+# LoopRoadPath (docs/LOOP_MAP.md) lays a closed loop out of the same elements instead of
+# the seeded section stream: begin_alignment(heading), then add_straight / add_bend in
+# driving order. No random draws; the element math, the BEND / BLIND_BEND / SIGN features
+# and eval() are this generator's own. Nothing here is used by the procedural road.
+
+## Starts a hand-built alignment at s = 0 with `heading` (instead of _start()).
+func begin_alignment(heading: float) -> void:
+	_started = true
+	_h = heading
+
+
+func add_straight(length: float) -> void:
+	_push(length, 0.0, 0.0, _h)
+
+
+## One bend exactly as the generator lays it (see _add_bend).
+func add_bend(dh: float, radius: float, ramp: float) -> void:
+	_add_bend(dh, radius, ramp)
+
+
+## Heading at end_s.
+func heading_end() -> float:
+	return _h
+
+
+## Plan length of add_bend(dh, radius, ramp) (the same rule as _add_bend, whose short
+## bends lengthen their transitions to at least `ramp_min`).
+static func bend_length(dh: float, radius: float, ramp: float, ramp_min: float) -> float:
+	var mag := absf(dh)
+	if mag <= 0.0:
+		return 0.0
+	var arc := mag * radius - ramp
+	if arc < 0.0:
+		return 2.0 * maxf(mag * radius, ramp_min)
+	return 2.0 * ramp + arc
+
+
 ## The sun side required by the first leg overlapping [a, b] that requires one (0 when
 ## none, or without biome rules).
 func _sun_side_ahead(a: float, b: float) -> int:
@@ -248,6 +327,27 @@ func _sun_side_ahead(a: float, b: float) -> int:
 		if need != 0:
 			return need
 	return 0
+
+
+## The road into a fork: a bend to the middle of the sun band (when it fits before the
+## approach), then straight to the split. No random draws.
+func _add_fork_approach(split: float) -> void:
+	var room := split - _fork_approach - end_s
+	if room >= _bend_max:
+		_push(room - _bend_max, 0.0, 0.0, _h)
+		var off := _side * _h
+		var mid := 0.5 * (_band_lo + _band_hi)
+		_add_bend(_side * (mid - off), _fork_radius, _ramp_min)
+	if split > end_s:
+		_push(split - end_s, 0.0, 0.0, _h)
+
+
+## At a split: this path's branch bend (side -1 left, +1 right), then the straight while
+## the other branch is in sight. No random draws.
+func _add_fork_branch(side: int) -> void:
+	if side != 0:
+		_add_bend(float(side) * _fork_defl, _fork_radius, _ramp_min)
+	_push(_fork_after, 0.0, 0.0, _h)
 
 
 func _add_side_switch(ramp: float) -> void:

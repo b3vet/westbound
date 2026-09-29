@@ -153,13 +153,24 @@ func _begin(s_lo: float, s_hi: float) -> int:
 				continue
 			var a := mid + shift - length * 0.5
 			var b := a + length
-			if b < s_lo or a > s_hi:
+			if b < s_lo or a > s_hi or _in_fork_span(a, b):
 				continue
 			var side := 1.0 if salt == SALT_RIGHT else -1.0
 			_banks.append_array(PackedFloat64Array([maxf(a, 0.0), b, side, setback, depth, cd.alpha * vf]))
 			_bank_defs.append(cd)
 	bank_count = _bank_defs.size()
 	return bank_count
+
+
+## WP6.5: no fog bank across a fork (the branches and the veering opposite carriageway).
+func _in_fork_span(a: float, b: float) -> bool:
+	var pr := road as ProceduralRoadPath
+	if pr == null:
+		return false
+	for f in pr.forks:
+		if b >= f.span_start_s() and a <= f.span_end_s():
+			return true
+	return false
 
 
 func _emit(i: int, out: FeatureMesh) -> void:

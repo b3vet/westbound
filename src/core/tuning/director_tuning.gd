@@ -23,8 +23,9 @@ extends Resource
 ## Intensity at the start of a build (it rises linearly to 1 at the peak; a breather is 0).
 @export var wave_build_start_intensity: float = 0.5   # not in spec
 ## Density at intensity 0 (a breather) and 1 (a peak), % of the leg's target density.
-## Linear in between. With the defaults a cycle averages ~99% of the target.
-@export var wave_breather_density_pct: float = 50.0   # not in spec
+## Linear in between. Plan D17 (WP6.6): breathers 50 -> 70 % (at leg 8 the peaks sit at
+## IDM's ceiling, so deep breathers only took density away: 74 % of the leg-8 target).
+@export var wave_breather_density_pct: float = 70.0   # not in spec
 @export var wave_peak_density_pct: float = 125.0   # not in spec
 ## The meeting map (which part of the wave a vehicle planned now belongs to): the
 ## player meets a vehicle ahead in a lane slower than itself at its closing speed. The
@@ -102,7 +103,8 @@ extends Resource
 @export var density_gain_rate_per_s: float = 0.05   # not in spec: slow (spawns reach the window 10-40 s later)
 ## Planning gain range (1 = the target density exactly).
 @export var density_gain_min: float = 0.7   # not in spec
-@export var density_gain_max: float = 1.5   # not in spec
+## Plan D17 (WP6.6): 1.5 -> 1.8 (the leg-8 gain sat at 1.5 with the waves and faster lanes).
+@export var density_gain_max: float = 1.8   # not in spec
 ## After each batch, lanes the player is catching (their flow speed + this below the
 ## player's speed) are topped up to target x gain in the band beyond the fog.
 @export var density_topup_speed_margin_kmh: float = 10.0   # not in spec
@@ -115,7 +117,8 @@ extends Resource
 ## can stay at its flow speed (~13-14 vehicles per km per lane with the profiles' own
 ## T around a fast player); denser late legs need closer following.
 @export var headway_scale_first: float = 1.0   # not in spec
-@export var headway_scale_last: float = 0.8   # not in spec
+## Plan D17 (WP6.6): 0.8 -> 0.55, the ceiling for waves and faster lanes (D15) at leg 8.
+@export var headway_scale_last: float = 0.55   # not in spec
 
 @export_group("Behind spawns: the view test (orchestrator, D11; not in spec)")
 ## Fairness rule 5 ("behind the camera frustum") as a fixed virtual view volume, not the
@@ -162,3 +165,73 @@ func set_pieces_unlocked(leg: int) -> int:
 ## Density multiplier (x the leg's target) at wave intensity `intensity` (0..1).
 func wave_density_mult(intensity: float) -> float:
 	return Units.pct_to_frac(lerpf(wave_breather_density_pct, wave_peak_density_pct, clampf(intensity, 0.0, 1.0)))
+
+
+# ---------------------------------------------------------------- Fast traffic (plan D15, WP6.6)
+
+## The Racer's share (190-250 km/h sports cars, plan D15; owner, M5 playtest), ramped
+## like the aggressive share, wherever it may spawn (its profile's left lanes). With
+## the aggressive share (5 -> 20 %) the fast traffic rises from 15 % at leg 1 to 35 %
+## at leg 8 of the lanes both may use. A lane only fast profiles fit (the leftmost
+## lane, see TrafficTuning.lane_flow_speeds_from_right_kmh) is all fast: the two share
+## it in proportion.
+@export_group("Fast traffic (plan D15; not in spec)")
+@export var racer_share_first_pct: float = 10.0   # not in spec
+@export var racer_share_last_pct: float = 15.0   # not in spec
+
+
+func racer_share_frac(leg: int) -> float:
+	return Units.pct_to_frac(lerpf(racer_share_first_pct, racer_share_last_pct, leg_ramp(leg)))
+
+
+# ---------------------------------------------------------------- Racers from behind (plan D17, WP6.7)
+
+## Owner decision (plan D17: "Yes, pass me at speed"): behind spawns need the player to
+## be slower than a lane's flow, so a player at 170-230 km/h only ever met racers ahead.
+## Racer arrivals: a seeded process of fast cars (racers, and aggressive drivers when
+## theirs can be) spawned out of view behind the player whenever the arriving car's OWN
+## desired speed beats the player's by racer_arrival_speed_margin_kmh. They pass it
+## legally (IDM gaps at spawn, MOBIL with blinkers, no-ambush, rear-end prevention).
+## See docs/SPAWNING.md "Racers from behind (WP6.7)".
+@export_group("Racers from behind (plan D17, WP6.7; not in spec)")
+## Seconds between arrivals, drawn uniformly per arrival, ramped like the density from
+## leg 1 to leg 8. The clock runs at the wave's density multiplier where the player is
+## and stops in breathers (wave, fork and finale) and near set pieces.
+@export var racer_arrival_interval_first_min_s: float = 20.0   # not in spec
+@export var racer_arrival_interval_first_max_s: float = 40.0   # not in spec
+@export var racer_arrival_interval_last_min_s: float = 10.0   # not in spec
+@export var racer_arrival_interval_last_max_s: float = 20.0   # not in spec
+## An arrival's desired speed is drawn at least this far above the player's speed (and
+## its spawn speed never goes below it), so it always closes on the player.
+@export var racer_arrival_speed_margin_kmh: float = 15.0   # not in spec
+## Share of the arrivals drawn as aggressive drivers (when the profile's top speed beats
+## the player's by the margin; otherwise a racer arrives).
+@export var racer_arrival_aggressive_pct: float = 25.0   # not in spec
+## A due arrival that finds no lane (visible, the gaps don't fit, the lane is not clear
+## to the player) retries after this.
+@export var racer_arrival_retry_s: float = 0.5   # not in spec
+## Spawn points tried, farthest first: spawn_behind_m (TrafficTuning, ~150 m) behind the
+## player, then this much closer at a time down to racer_arrival_behind_min_m (every one
+## far beyond behind_spawn_view_margin_m, so out of view in every camera mode).
+@export var racer_arrival_behind_min_m: float = 90.0   # not in spec
+@export var racer_arrival_behind_step_m: float = 20.0   # not in spec
+## No arrival while a requested breather (fork approach, journey finale) or a live set
+## piece's zone lies within this far ahead of the player: a racer passing now would
+## reach it (the fork guard would remove it in view; it would drive into the piece).
+@export var racer_arrival_clear_ahead_m: float = 2000.0   # not in spec
+## A clear run: holding its spawn speed, the arrival must get this far past the player
+## (the player and the lane's traffic predicted at their speeds) before any slower car
+## in its lane makes it brake below the player's speed, so it passes instead of
+## queueing, out of view, behind a car the player is passing.
+@export var racer_arrival_pass_clear_m: float = 40.0   # not in spec
+## Racers passing the player / overtaken by it (DevStats, the dev report) are counted
+## this often (a dev counter; the side test has hysteresis).
+@export var racer_pass_check_interval_s: float = 0.1   # not in spec
+
+
+## Seconds to the next arrival on `leg` for a uniform draw `u` in [0, 1].
+func racer_arrival_interval_s(leg: int, u: float) -> float:
+	var k := leg_ramp(leg)
+	var lo := lerpf(racer_arrival_interval_first_min_s, racer_arrival_interval_last_min_s, k)
+	var hi := lerpf(racer_arrival_interval_first_max_s, racer_arrival_interval_last_max_s, k)
+	return lerpf(lo, hi, clampf(u, 0.0, 1.0))

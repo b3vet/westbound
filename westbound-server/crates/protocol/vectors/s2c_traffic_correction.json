@@ -1,0 +1,58 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "traffic_correction",
+  "type_id": 73,
+  "vectors": [
+    {
+      "name": "typical",
+      "message": {
+        "cars": [
+          {
+            "car_id": 412,
+            "d_cm": 525,
+            "s_mm": 13000250,
+            "speed_cms": 3056
+          },
+          {
+            "car_id": 97,
+            "d_cm": -350,
+            "s_mm": 12990000,
+            "speed_cms": 2800
+          },
+          {
+            "car_id": 98,
+            "d_cm": 175,
+            "s_mm": 13400125,
+            "speed_cms": 3333
+          }
+        ],
+        "tick": 123456,
+        "type": "traffic_correction"
+      },
+      "hex": "49230040e20100039c013a5ec6000d02f00b61003036c600a2fef00a62003d78cc00af00050d"
+    },
+    {
+      "name": "edges",
+      "message": {
+        "cars": [
+          {
+            "car_id": 0,
+            "d_cm": -10000,
+            "s_mm": 0,
+            "speed_cms": 0
+          },
+          {
+            "car_id": 65535,
+            "d_cm": 10000,
+            "s_mm": 4294967295,
+            "speed_cms": 20000
+          }
+        ],
+        "tick": 4294967295,
+        "type": "traffic_correction"
+      },
+      "hex": "491900ffffffff02000000000000f0d80000ffffffffffff1027204e"
+    }
+  ]
+}

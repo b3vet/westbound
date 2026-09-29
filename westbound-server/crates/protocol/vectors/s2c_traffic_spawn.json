@@ -1,0 +1,80 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "traffic_spawn",
+  "type_id": 70,
+  "vectors": [
+    {
+      "name": "typical",
+      "message": {
+        "cars": [
+          {
+            "car_id": 412,
+            "color": 7,
+            "d_cm": 525,
+            "flags": {
+              "braking": false,
+              "hazard": false
+            },
+            "lane": 2,
+            "lc_duration_ms": 0,
+            "lc_move_start_tick": 0,
+            "lc_phase": "none",
+            "lc_target_lane": 0,
+            "profile": 1,
+            "s_mm": 13000250,
+            "speed_cms": 3056,
+            "vehicle": 3
+          },
+          {
+            "car_id": 413,
+            "color": 7,
+            "d_cm": 525,
+            "flags": {
+              "braking": false,
+              "hazard": false
+            },
+            "lane": 2,
+            "lc_duration_ms": 2400,
+            "lc_move_start_tick": 123470,
+            "lc_phase": "signaling",
+            "lc_target_lane": 1,
+            "profile": 1,
+            "s_mm": 13000250,
+            "speed_cms": 3056,
+            "vehicle": 3
+          }
+        ],
+        "type": "traffic_spawn"
+      },
+      "hex": "462f00029c01030701023a5ec6000d02f00b0000000000000000009d01030701023a5ec6000d02f00b01014ee20100600900"
+    },
+    {
+      "name": "max",
+      "message": {
+        "cars": [
+          {
+            "car_id": 65535,
+            "color": 255,
+            "d_cm": 10000,
+            "flags": {
+              "braking": true,
+              "hazard": true
+            },
+            "lane": 7,
+            "lc_duration_ms": 65535,
+            "lc_move_start_tick": 4294967295,
+            "lc_phase": "moving",
+            "lc_target_lane": 7,
+            "profile": 255,
+            "s_mm": 4294967295,
+            "speed_cms": 20000,
+            "vehicle": 255
+          }
+        ],
+        "type": "traffic_spawn"
+      },
+      "hex": "46180001ffffffffff07ffffffff1027204e0207ffffffffffff03"
+    }
+  ]
+}

@@ -49,6 +49,12 @@ const FORGET_EVERY_M := 500.0
 const SNAP_LEG_S_M := 600.0   # lint: allow-number dev snap position, not tuning
 ## --at=lane_ends snaps stop this far before the sign.
 const SNAP_AT_M := 150.0   # lint: allow-number dev snap position, not tuning
+## --at=fork snaps stop this far before the next fork's split (the 1 km sign).
+const SNAP_FORK_M := 1000.0   # lint: allow-number dev snap position, not tuning
+## --at=finale snaps start this far before the finale point.
+const SNAP_FINALE_M := 5.0   # lint: allow-number dev snap position, not tuning
+## --set_piece snaps (WP6.3) search this many legs for a feature-triggered piece's feature.
+const SNAP_FEATURE_LEGS := 8
 ## tools/snap.sh runs use this seed unless --seed is given.
 const SNAP_SEED := 20260929
 ## After the physics car (tick) and before the camera rig (100).
@@ -69,6 +75,8 @@ const PHYSICS_PRIORITY := 50
 @export var crash_cinematic: bool = true
 ## Tests: tick() and frame() are called by the test instead of the engine.
 @export var manual_ticks: bool = false
+## WP6.5: some checkpoints fork (ForkPlan from the seed). Off: the plain journey.
+@export var forks_enabled: bool = true
 
 ## StringName of Game.* (BOOT, COUNTDOWN, RUNNING, PAUSED, CRASH, RESULTS).
 var state: StringName = &"boot"
@@ -86,6 +94,11 @@ var roadside: Roadside
 var landmarks: Landmarks
 ## WP6.4b's biome features (water, elevated stretches, fog cards), wired in WP6.4c.
 var features: BiomeFeatures
+## WP6.5: the forks (plan, candidates, choices) and the view of both branches.
+var forks := RunForks.new()
+var fork_view: ForkView
+## WP6.5: the journey finale at the coast (breather, camera swing, journey complete).
+var finale := RunFinale.new()
 var sky: SkyRig
 var hub: PlayerInput
 var rig: CameraRig
@@ -94,6 +107,11 @@ var registry: TrafficRegistry
 var sim: TrafficSim
 var director: TrafficDirector
 var traffic_view: TrafficView
+## Set pieces (WP6.3): their props (signs, cones, barriers, the arrow board, the on-ramp,
+## the toll legends), hits on the road works' props, and the light change in tunnels.
+var set_piece_view: SetPieceView
+var works_query: WorksPropQuery
+var tunnel_light: TunnelLight
 ## Night lighting (WP5.4): the player's headlights, traffic cones, street-lamp pools.
 var headlights: PlayerHeadlights
 var headlight_cones: HeadlightCones
@@ -154,6 +172,7 @@ var _director_leg: int = 1
 var _next_forget_s: float = 0.0
 var _resets: int = 0
 var _best_before: int = 0
+var _pending_journey_save: bool = false
 
 
 ## Full brake, wheel straight: the fallback crash (the car skids to a stop).
@@ -201,6 +220,11 @@ func _ready() -> void:
 	builder.name = "RoadBuilder"
 	builder.biome_director = biome_director
 	add_child(builder)
+	fork_view = ForkView.new()
+	fork_view.name = "ForkView"
+	add_child(fork_view)
+	# The forks give the road its route plan (RunForks.setup); the director keeps the look.
+	biome_director.apply_to_road = false
 	roadside = Roadside.new()
 	roadside.name = "Roadside"
 	roadside.biome_director = biome_director
@@ -222,6 +246,9 @@ func _ready() -> void:
 	# Each new car wears the palette of the biome where it appears (WP6.4c).
 	traffic_view.biome_director = biome_director
 	add_child(traffic_view)
+	set_piece_view = SetPieceView.new()
+	set_piece_view.name = "SetPieceView"
+	add_child(set_piece_view)
 	_add_night_lights()
 	registry = TrafficRegistry.load_default(tuning.traffic)
 	scoring = Scoring.new()
@@ -405,9 +432,13 @@ func _countdown_tick() -> void:
 func _sim_tick(dt: float) -> void:
 	var st := car.state
 	var from := events.size()
+	# The fork at the split (WP6.5): may swap the road's branch and move the car's d.
+	forks.tick(st)
 	# 3. traffic, the player as participant, then the director.
 	sim.step(dt, st, car.params, events)
 	director.step(dt, st)
+	forks.guard_traffic()
+	finale.tick(dt, st)
 	traffic_view.capture_tick()
 	# 4. collisions and hits.
 	lives.step(dt, st, events)
@@ -517,6 +548,7 @@ func _dispatch_crossing() -> void:
 		legs.complete_crossing_objective(_pay_objective())
 	if c.coast:
 		scoring.award_bonus(BONUS_JOURNEY, tuning.legs.journey_bonus_points, events)
+		finale.arm(c.s)
 	if c.clean:
 		lives.restore_life(events)
 	# After the bonuses: a leg finished at night pays x2, then the dawn clears the night.
@@ -541,6 +573,7 @@ func _crash_tick(dt: float) -> void:
 	var st := car.state
 	sim.step(dt, st, car.params, events)
 	director.step(dt, st)
+	forks.guard_traffic()
 	traffic_view.capture_tick()
 	_safety_net()
 
@@ -559,6 +592,7 @@ func _road_ahead() -> void:
 	legs.plan_ahead(road, _plan_ahead_to(s))
 	if s >= _next_forget_s:
 		road.forget_before(s - reach_behind_m() - tuning.road.chunk_length_m)
+		forks.forget_before(s - reach_behind_m() - tuning.road.chunk_length_m)
 		_next_forget_s = s + FORGET_EVERY_M
 
 
@@ -648,6 +682,10 @@ func frame(real_dt: float) -> void:
 		if _crash_left_s <= 0.0:
 			_end_crash()
 	adapter.drain()
+	if _pending_journey_save:
+		_pending_journey_save = false
+		if record_best:
+			Save.record_journey(mode, stats.journey_time_s, stats.journey_distance_m)
 	var feel := tuning.feel
 	if _pending_first_hit_fx:
 		_pending_first_hit_fx = false
@@ -662,9 +700,13 @@ func frame(real_dt: float) -> void:
 	sky.sky_t = sun.sky_t
 	biome_director.update_view(s)
 	builder.update_view(s)
+	fork_view.update_view(s)
 	roadside.update_view(s)
 	landmarks.update_view(s)
 	features.update_view(s)
+	set_piece_view.update_view(s)
+	var tl := tunnel_light.def
+	sky.set_tunnel_light(tunnel_light.factor_at(s), tl.tunnel_dark_frac, tl.tunnel_lamp_on)
 	sky.update_view(s)
 	traffic_view.update_view(s)
 	_update_night_lights(s)
@@ -711,6 +753,7 @@ func _start_run() -> void:
 	tick_count = 0
 	ctx = RunContext.new(current_seed, mode, tuning)
 	road = ProceduralRoadPath.new(ctx)
+	forks.setup(self, forks_enabled)
 	var start_s := start_s_m()
 	origin.setup(tuning.road.floating_origin_shift_km)
 	road.ensure_generated_to(_view_ahead(start_s))
@@ -718,6 +761,7 @@ func _start_run() -> void:
 	origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
 	biome_director.setup(ctx, road, origin)
 	builder.setup(ctx, road, origin)
+	fork_view.setup(ctx, origin)
 	roadside.setup(ctx, road, origin)
 	landmarks.setup(ctx, road, origin)
 	# Before the builder's first build: its ground-drop hook reads the features' plans.
@@ -733,7 +777,14 @@ func _start_run() -> void:
 	director.set_fog_end(builder.view_distance_m())
 	director.events = events
 	director.set_biome(biome_director.current())
+	forks.start()
+	director.checkpoint_style = biome_director.checkpoint_style   # WP6.3: toll gantries
 	traffic_view.setup(ctx, road, origin, registry, sim.state, director.opposite.state)
+	set_piece_view.setup(ctx, road, origin)
+	set_piece_view.bind(director.set_pieces)
+	works_query = WorksPropQuery.new(director.set_pieces, tuning.lives)
+	hits.set_prop_query(works_query)
+	tunnel_light = TunnelLight.new(road)
 
 	headlights.setup(ctx, road, origin)
 	headlight_cones.setup(ctx, road, origin)
@@ -751,6 +802,8 @@ func _start_run() -> void:
 	# Leg 1 is announced like every other leg (its objective "on entry").
 	events.push(LegTracker.KIND_LEG_STARTED, 0, 0.0, -1.0, -1, float(legs.leg_index))
 	_force_pending = false
+	_pending_journey_save = false
+	finale.reset(self)
 	_pending_first_hit_fx = false
 	_pending_crash_fx = false
 	_crash_by_sequence = false
@@ -776,6 +829,7 @@ func _start_run() -> void:
 	adapter.road = road
 	adapter.origin = origin
 	adapter.traffic = sim.state
+	adapter.forks = forks
 
 	_best_before = Save.best_score(mode)
 	feed.reset()
@@ -948,7 +1002,20 @@ func trace_hash() -> int:
 	h = legs.hash_into(h)
 	h = objectives.hash_into(h)
 	h = TraceHash.mix_float(h, sun.sky_t)
+	h = forks.hash_into(h)
+	h = TraceHash.mix_int(h, finale.phase)
 	return stats.hash_into(h)
+
+
+## RunFinale: "Journey complete" (the save is written at frame time).
+func on_journey_complete() -> void:
+	_pending_journey_save = true
+
+
+## RunForks swapped the road's branch (the right branch was taken; the car's d moved):
+## the hit sweep restarts from the new position.
+func on_fork_swapped() -> void:
+	hits.reset(car.state, sim.state)
 
 
 # ---------------------------------------------------------------- Dev
@@ -968,11 +1035,14 @@ func dev_reset_car() -> void:
 ## (snaps, tests, dev). The leg keeps counting from its start.
 func dev_teleport(s: float, v_mps: float) -> void:
 	road.ensure_generated_to(_view_ahead(s))
+	# Forks jumped past take their left branch (and release the road's hold) first.
+	forks.sync(s)
 	legs.plan_ahead(road, _plan_ahead_to(s))
 	car.place_at(s, road.lane_center_d(tuning.legs.start_lane, s), v_mps)
 	var smp := road.sample(s)
 	origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
 	builder.build_all_now(s)
+	fork_view.build_all_now(s)
 	director.reset(car.state)
 	hits.reset(car.state, sim.state)
 	rig.snap_to_target()
@@ -1005,8 +1075,11 @@ func open_drive_scene() -> void:
 ## --s=, --speed_kmh=, --car=0..2, --cam=, --damaged, --ghost, --high_beam, --seed= (default SNAP_SEED),
 ## --leg=N (start --leg_s= metres into leg N, default 600: look at a biome; WP6.4a),
 ## --at=elevated|lane_ends (WP6.4c: from there, the middle of the next elevated stretch,
-## or --at_m= metres, default 150, before the next lane-ends sign),
-## --hud=false (hide the HUD, the dev HUD and the touch overlay: clean look reviews).
+## or --at_m= metres, default 150, before the next lane-ends sign), --at=fork (WP6.5:
+## --at_m= metres, default 1000, before the next fork's split), --lane=N, --bot=keep
+## (a lane-keeping bot drives through --seconds),
+## --hud=false (hide the HUD, the dev HUD and the touch overlay: clean look reviews),
+## --set_piece=<id> (WP6.3: _snap_set_piece: force that piece, drive up to it).
 func snap_setup(args: Dictionary) -> void:
 	# Reproducible snaps: a fixed seed unless --seed is given.
 	if args.has("car"):
@@ -1022,8 +1095,30 @@ func snap_setup(args: Dictionary) -> void:
 		s = _snap_elevated_s(s)
 	elif str(args.get("at", "")) == "lane_ends":
 		s = _snap_sign_s(s, ProceduralRoadPath.SIGN_LANE_ENDS) - float(args.get("at_m", SNAP_AT_M))
+	elif str(args.get("at", "")) == "fork":
+		s = forks.split_s(forks.active) - float(args.get("at_m", SNAP_FORK_M))
+	elif str(args.get("at", "")) == "finale":
+		# --at_m before the coast finale's point (WP6.5): arm it as the crossing would.
+		var coast := float(tuning.legs.legs_to_coast) * tuning.legs.leg_length_m()
+		s = coast + tuning.legs.finale_after_m - float(args.get("at_m", SNAP_FINALE_M))
+		dev_teleport(s, Units.kmh_to_mps(float(args.get("speed_kmh", tuning.legs.start_speed_kmh))))
+		finale.arm(coast)
 	if s > 0.0 or args.has("speed_kmh"):
 		dev_teleport(s, Units.kmh_to_mps(float(args.get("speed_kmh", tuning.legs.start_speed_kmh))))
+		if args.has("at"):
+			# The legs jumped over are not crossed (no sun lift: --sky_t holds).
+			legs.skip_to(s)
+	if args.has("lane"):
+		car.place_at(car.state.s, road.lane_center_d(int(args["lane"]), car.state.s), car.state.v)
+		hits.reset(car.state, sim.state)
+	if str(args.get("bot", "")) == "keep":
+		# Snaps that drive (--seconds): a lane-keeping bot at the current speed (WP6.5).
+		var bot := SandboxBot.new(road, sim.state, car.params, SNAP_SEED)
+		bot.mode = SandboxBot.Mode.KEEP
+		bot.v_target = car.state.v
+		bot.length_m = car.car.length_m
+		bot.width_m = car.car.width_m
+		drive_controller = bot
 	if args.has("sky_t"):
 		sun.sky_t = float(args["sky_t"])
 		var sun_t := tuning.sun
@@ -1049,11 +1144,116 @@ func snap_setup(args: Dictionary) -> void:
 	if args.get("ghost", false):
 		fx.start_ghost(tuning.lives.ghost_period_s)
 	hub.set_high_beam(bool(args.get("high_beam", false)))
+	if args.has("set_piece") and state == Game.RUNNING:
+		_snap_set_piece(args)
 	if not bool(args.get("hud", true)):
 		for n: Node in [hud, get_node_or_null(^"DevHud"), get_node_or_null(^"Overlay"), screens, dev.controls]:
 			if n != null:
 				n.set(&"visible", false)
 	rig.snap_to_target()
+
+
+## Dev (snaps, WP6.3): --set_piece=<id> forces that set piece and drives up to it with a
+## lane-keeping bot (SandboxBot) at --speed_kmh: a feature-triggered piece (tunnel
+## squeeze, toll gantry) from --piece_lead_m (default 500) before its lead distance from its next feature (a road tunnel, a
+## toll-gantry checkpoint; lives infinite), any other from where the snap stands. It stops
+## --piece_dist_m (default 60) before the piece (its zone start, or its rear), in
+## --piece_lane (default the start lane), and hands the car back to the player's input.
+func _snap_set_piece(args: Dictionary) -> void:
+	var id := StringName(str(args["set_piece"]))
+	var def: SetPieceDef = director.set_pieces.defs.get(id)
+	if def == null:
+		print("snap: no set piece %s" % id)
+		return
+	infinite_lives = true
+	var v := car.state.v
+	var bot := SandboxBot.new(road, sim.state, car.params, current_seed)
+	bot.v_target = v
+	bot.length_m = car.car.length_m
+	bot.width_m = car.car.width_m
+	var human := drive_controller
+	drive_controller = bot
+	bot.target_lane = int(args.get("piece_lane", tuning.legs.start_lane))   # after on_attached
+	var inst: SetPieceSource.Instance = null
+	var tries := SNAP_FEATURE_LEGS if def.trigger != SetPieceDef.Trigger.PEAK else 1
+	for attempt in tries:
+		if def.trigger != SetPieceDef.Trigger.PEAK:
+			# Leg by leg (a teleport resolves the forks it jumps, WP6.5) to the next feature.
+			var f := NAN
+			for k in SNAP_FEATURE_LEGS:
+				f = _snap_feature_s(def, car.state.s)
+				if not is_nan(f):
+					break
+				dev_teleport(car.state.s + tuning.legs.leg_length_m(), v)
+			if is_nan(f):
+				break
+			dev_teleport(f - def.schedule_lead_min_m - float(args.get("piece_lead_m", 500.0)), v)
+			bot.traffic = sim.state
+		if not director.force_set_piece(id):
+			print("snap: %s refused" % id)
+		inst = _snap_drive_to(id, args)
+		if inst != null:
+			break
+		if def.trigger != SetPieceDef.Trigger.PEAK:
+			dev_teleport(car.state.s + def.schedule_lead_min_m, v)   # that feature did not fit: the next
+	drive_controller = human
+	builder.build_all_now(car.state.s)
+	if inst == null:
+		print("snap: %s did not run" % id)
+	else:
+		print("snap: %s, player %.0f m before it, %d vehicles" % [id,
+			(inst.zone_s0 if inst.is_anchored() else inst.s_rear) - car.state.s, inst.n])
+
+
+## Dev (snaps): ticks until the forced piece `id` runs and the car is --piece_dist_m
+## before it (null when it did not run within the lead distance at the car's speed, or
+## --piece_wait_s).
+func _snap_drive_to(id: StringName, args: Dictionary) -> SetPieceSource.Instance:
+	var dist := float(args.get("piece_dist_m", 60.0))
+	var limit := roundi(float(args.get("piece_wait_s", 240.0)) / _dt)
+	var give_up := roundi(director_tuning_lead(id) / maxf(car.state.v, 1.0) / _dt)
+	var inst: SetPieceSource.Instance = null
+	for k in limit:
+		tick()
+		if k % 2 == 0:
+			frame(_dt * 2.0)
+		inst = null
+		for x in director.set_pieces.instances:
+			if x.stage == SetPieceSource.Stage.RUNNING and x.def.id == id:
+				inst = x
+		if inst == null:
+			if k > give_up:
+				return null
+			continue
+		var at := inst.zone_s0 if inst.is_anchored() else inst.s_rear
+		if car.state.s >= at - dist:
+			return inst
+	return inst
+
+
+## Dev (snaps): how far a piece is decided ahead (its lead, or two batches).
+func director_tuning_lead(id: StringName) -> float:
+	var def: SetPieceDef = director.set_pieces.defs.get(id)
+	return maxf(def.schedule_lead_max_m if def.anchored else 0.0, tuning.director.spawn_batch_length_m * 4.0)
+
+
+## Dev (snaps): the zone start of the next feature a feature-triggered piece belongs to
+## from s on (within a leg, on the road generated so far), NAN when none.
+func _snap_feature_s(def: SetPieceDef, from_s: float) -> float:
+	var end := from_s + tuning.legs.leg_length_m() + def.schedule_lead_min_m
+	forks.sync(end)   # forks up to there take their left branch (the road holds at them)
+	road.ensure_generated_to(end)
+	var found: Array[RoadFeature] = []
+	road.features_in(from_s + def.schedule_lead_min_m, end, found)
+	biome_director.tag_checkpoints(found)
+	for f in found:
+		if def.trigger == SetPieceDef.Trigger.TUNNEL and f.kind == RoadFeature.Kind.TUNNEL \
+				and f.s_end - f.s_start >= def.tunnel_min_length_m:
+			return f.s_start
+		if def.trigger == SetPieceDef.Trigger.CHECKPOINT and f.kind == RoadFeature.Kind.CHECKPOINT \
+				and f.tag == def.checkpoint_style:
+			return f.s_start - def.booth_before_m
+	return NAN
 
 
 ## Dev (snaps): the first SIGN tagged `tag` from s on (within two legs), else s.

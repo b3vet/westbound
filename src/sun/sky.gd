@@ -127,6 +127,10 @@ var _heat_shimmer: float = 0.0
 var _player_light_pos: Vector3 = Vector3.ZERO
 var _player_light_dir: Vector3 = Vector3.FORWARD
 var _player_light_gain: float = 0.0
+## WP6.3: the road-tunnel light change (TunnelLight): 0 outside, 1 inside.
+var _tunnel_light: float = 0.0
+var _tunnel_dark: float = 0.0
+var _tunnel_lamps: float = 0.0
 var _fallback_view_m: float = 0.0
 var _origin_xz: Vector2 = Vector2.INF
 
@@ -231,6 +235,20 @@ func horizon_material() -> ShaderMaterial:
 
 ## Player "fake light" (spec: Night lighting). `gain` scales the color script's
 ## headlight ramp; 0 turns it off. Position and direction are render-space.
+## WP6.3 (tunnel squeeze, every road tunnel): the light change at a tunnel's entry and
+## exit. `factor` 0 outside .. 1 inside (TunnelLight); inside, the ambient and sun light
+## are darkened by `dark_frac` and the street-lamp ramp (the tunnel's lamp strips) is at
+## least `lamp_on`. Pushed with the next globals; sky_t and current() are untouched.
+func set_tunnel_light(factor: float, dark_frac: float, lamp_on: float) -> void:
+	_tunnel_light = clampf(factor, 0.0, 1.0)
+	_tunnel_dark = clampf(dark_frac, 0.0, 1.0)
+	_tunnel_lamps = maxf(lamp_on, 0.0)
+
+
+func tunnel_light() -> float:
+	return _tunnel_light
+
+
 func set_player_light(pos: Vector3, dir: Vector3, gain: float) -> void:
 	_player_light_pos = pos
 	_player_light_dir = dir
@@ -308,14 +326,16 @@ func push_now() -> int:
 	_put(&"wb_horizon_tint_1", _tinted(_s.horizon_tint_1).srgb_to_linear())
 	_put(&"wb_horizon_tint_2", _tinted(_s.horizon_tint_2).srgb_to_linear())
 	_put(&"wb_horizon_tint_3", _tinted(_s.horizon_tint_3).srgb_to_linear())
-	_put(&"wb_ambient", _s.ambient.srgb_to_linear())
+	var dim := 1.0 - _tunnel_light * _tunnel_dark   # WP6.3: darker inside a road tunnel
+	var amb := _s.ambient.srgb_to_linear()
+	_put(&"wb_ambient", amb if dim >= 1.0 else Color(amb.r * dim, amb.g * dim, amb.b * dim, amb.a))
 	_put(&"wb_sun_light_color", _s.sun_light_color.srgb_to_linear())
-	_put(&"wb_sun_light_energy", _s.sun_light_energy)
+	_put(&"wb_sun_light_energy", _s.sun_light_energy * dim)
 	_put(&"wb_shadow_tint", _s.shadow_tint.srgb_to_linear())
 	_put(&"wb_road_tone", _s.road_tone.srgb_to_linear())
 	_put(&"wb_lane_line_tint", _s.lane_line_tint.srgb_to_linear())
 	_put(&"wb_emissive_headlight", _s.emissive_headlight)
-	_put(&"wb_emissive_streetlamp", _s.emissive_streetlamp)
+	_put(&"wb_emissive_streetlamp", maxf(_s.emissive_streetlamp, _tunnel_light * _tunnel_lamps))
 	_put(&"wb_emissive_reflector", _s.emissive_reflector)
 	_put(&"wb_player_light_pos", _player_light_pos)
 	_put(&"wb_player_light_dir", _player_light_dir)

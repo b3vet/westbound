@@ -1,0 +1,98 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "room_event",
+  "type_id": 77,
+  "vectors": [
+    {
+      "name": "join",
+      "message": {
+        "crew_slot": 1,
+        "crew_tag": "JDM",
+        "flags": {
+          "disconnected": false,
+          "host": false
+        },
+        "identity": {
+          "account_id": "78",
+          "display_name": "東京ドリフト",
+          "name_tag": 0
+        },
+        "kind": "join",
+        "player_id": 2,
+        "type": "room_event"
+      },
+      "hex": "4d26000002004e0000000000000012e69db1e4baace38389e383aae38395e383880000034a444d0100"
+    },
+    {
+      "name": "leave",
+      "message": {
+        "kind": "leave",
+        "player_id": 2,
+        "reason": "timed_out",
+        "type": "room_event"
+      },
+      "hex": "4d040001020001"
+    },
+    {
+      "name": "host_change",
+      "message": {
+        "kind": "host_change",
+        "player_id": 1,
+        "type": "room_event"
+      },
+      "hex": "4d0300020100"
+    },
+    {
+      "name": "kick",
+      "message": {
+        "kind": "kick",
+        "player_id": 2,
+        "type": "room_event"
+      },
+      "hex": "4d0300030200"
+    },
+    {
+      "name": "settings",
+      "message": {
+        "clock": {
+          "cycle_len_ms": 1920000,
+          "cycle_ms": 1000000,
+          "day_len_ms": 1320000
+        },
+        "kind": "settings",
+        "settings": {
+          "density": "rush",
+          "fixed_cycle_ms": 1140000,
+          "max_players": 8,
+          "time_mode": "night",
+          "visibility": "private"
+        },
+        "tick": 130000,
+        "type": "room_event"
+      },
+      "hex": "4d190004d0fb0100000802022065110040420f00004c1d0040241400"
+    },
+    {
+      "name": "crew",
+      "message": {
+        "color": 9,
+        "crew_slot": 1,
+        "kind": "crew",
+        "session_total": 4294967295,
+        "type": "room_event"
+      },
+      "hex": "4d0700050109ffffffff"
+    },
+    {
+      "name": "connection",
+      "message": {
+        "connected": false,
+        "kind": "connection",
+        "player_id": 1,
+        "type": "room_event"
+      },
+      "hex": "4d040006010000"
+    }
+  ]
+}

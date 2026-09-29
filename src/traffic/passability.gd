@@ -66,8 +66,11 @@ extends RefCounted
 ##
 ## 4. Lanes that end (WP6.2 lane drops, tapers): where the right edge of the driving
 ##    lanes (RoadPath.lanes_right_edge_d, sampled) leaves a grid position's body outside,
-##    a static road obstacle blocks that position and every one right of it. It is never
-##    a leader for traffic and never removable (Result.blocker_src = SRC_ROAD).
+##    a static road obstacle blocks that position and every one right of it. Lanes the
+##    traffic sim closes (WP6.3 road works, a merge zone's lane end: `zones`) block the
+##    positions overlapping them the same way. Road obstacles are never leaders for
+##    traffic and never removable (Result.blocker_src = SRC_ROAD). The sim's speed zones
+##    (a toll's booth lanes) cap the predicted vehicles' desired speed there.
 ##
 ## Pure and deterministic (RefCounted, no Node, no randomness). Allocation-free per
 ## check after _init (preallocated structure-of-arrays storage).
@@ -95,6 +98,8 @@ const SRC_ROAD := -(1 << 30)
 ## ends); lane counts are compared this far apart first (no change: no closures).
 const CLOSURE_SAMPLE_M := 5.0   # lint: allow-number geometry sampling resolution, not gameplay
 const CLOSURE_SCAN_M := 50.0    # lint: allow-number shorter than any lane taper or lane-count stretch
+## Room kept for road obstacles in the vehicle storage.
+const MAX_STATIC := 2 * MAX_POS
 ## Relevance entries per obstacle and step: at most 3 positions, 4 pairs, 3 starts.
 const REL_PER_OBSTACLE := 10
 ## Substeps for integrating the full-throttle speed envelope over one decision step.
@@ -250,6 +255,9 @@ var _p_v := 0.0
 var _n_veh := 0
 var _n_move := 0              ## simulated vehicles [0, _n_move); road obstacles after them
 var _cl_a := PackedFloat64Array()     ## per position: start of the closure being scanned (NAN: open)
+var _sz_on := false          ## speed zones live (zones): the predictor caps v0 in them
+var _left_d := 0.0           ## lanes' left edge and lane width at the reference s
+var _lane_w := 0.0
 var _vs := PackedFloat64Array()
 var _vv := PackedFloat64Array()
 var _vd := PackedFloat64Array()
@@ -354,6 +362,14 @@ var _probe_hi := 0.0
 var _cut := PackedFloat64Array()         ## path space cut per obstacle (one forward pass)
 ## Batch check: also extract one arrival path (the sandbox overlay). Off in the game.
 var record_paths := false
+## The traffic sim's lane closures and speed zones (WP6.3), read when set: anything with
+## lane_closure_count(), closure_ahead(lane, s), speed_zone_count() and
+## speed_limit_at(lane, front, profile) (TrafficSim); anything else is ignored (null).
+## Read only.
+var zones: Object:
+	set(v):
+		zones = v if v != null and v.has_method(&"lane_closure_count") and v.has_method(&"closure_ahead") \
+			and v.has_method(&"speed_zone_count") and v.has_method(&"speed_limit_at") else null
 
 # Sets per step: G_k(x) (backward) or R_k(x) (forward, stored): [(k * MAX_STATES + x) * MAX_IV + q]
 var _glo := PackedFloat64Array()
@@ -841,6 +857,8 @@ func _prepare(params: VehicleParams) -> void:
 	out.fail_t = INF
 	var s_ref := _p_s if _mode == MODE_PLAYER else _s_from
 	var lw := road.lane_width(s_ref)
+	_lane_w = lw
+	_left_d = road.lanes_left_edge_d(s_ref)
 	# A lane still tapering away at s_ref is on the grid (its closure blocks it).
 	var edge_lanes := ceili((road.lanes_right_edge_d(s_ref) - road.lanes_left_edge_d(s_ref)) / lw - STEP_EPS)
 	var lanes := clampi(maxi(road.lane_count(s_ref), edge_lanes), 1, MAX_LANES)
@@ -971,17 +989,19 @@ func _load(traffic: TrafficState) -> void:
 			continue
 		if s + h + maxf(0.0, maxf(traffic.v[i], traffic.v0[i]) - _v_lo) * horizon < lo0:
 			continue
-		if _n_veh >= MAX_VEHICLES - MAX_POS:
+		if _n_veh >= MAX_VEHICLES - MAX_STATIC:
 			break
 		_load_live(traffic, i, _n_veh)
 		_n_veh += 1
 	for k in _n_planned:
-		if _n_veh >= MAX_VEHICLES - MAX_POS:
+		if _n_veh >= MAX_VEHICLES - MAX_STATIC:
 			break
 		_load_planned(_planned[k], k, _n_veh)
 		_n_veh += 1
 	_n_move = _n_veh
 	_load_closures()
+	_load_lane_closures()
+	_sz_on = zones != null and int(zones.call(&"speed_zone_count")) > 0
 	for q in _n_veh:
 		_vord[q] = q
 		_v_start0[q] = _vv[q]
@@ -1032,16 +1052,43 @@ func _load_closures() -> void:
 			_add_closure(j, _cl_a[j], hi + CLOSURE_SAMPLE_M)
 
 
-## A static road obstacle over [a, b] blocking grid position j and every one right of it.
+## A static road obstacle over [a, b] blocking grid position j and every one right of it:
+## from half a grid step left of where position j's player body (with the clearance)
+## would touch it, to beyond the last position.
 func _add_closure(j: int, a: float, b: float) -> void:
+	_add_static(a, b, _pos_d[j] + _player_width() * 0.5 + _pt.clearance_m - _grid * 0.5,
+		_pos_d[_n_pos - 1] + _grid)
+
+
+## The sim's lane closures (zones) within the corridor: each closed stretch of a grid
+## lane blocks the positions whose player body would overlap that lane (its center and
+## both half-lanes). The start is exact (closure_ahead), the end sampled every
+## CLOSURE_SAMPLE_M (one sample later: conservative).
+func _load_lane_closures() -> void:
+	if zones == null or int(zones.call(&"lane_closure_count")) == 0:
+		return
+	var lo := _corr_lo[0] - _player_length()
+	var hi := _corr_hi[_k_steps] + _player_length()
+	var clr := _pt.clearance_m
+	for lane in (_n_pos + 1) >> 1:
+		var c := _d_first + float(lane) * _lane_w
+		var s := lo + float(zones.call(&"closure_ahead", lane, lo))
+		while s <= hi:
+			var b := s
+			while b <= hi and float(zones.call(&"closure_ahead", lane, b)) <= 0.0:
+				b += CLOSURE_SAMPLE_M
+			_add_static(s, b, c - _lane_w * 0.5 + clr, c + _lane_w * 0.5 - clr)
+			s = b + float(zones.call(&"closure_ahead", lane, b))
+
+
+## A static road obstacle: body [a, b] in s, [d_lo, d_hi] laterally.
+func _add_static(a: float, b: float, d_lo: float, d_hi: float) -> void:
 	if _n_veh >= MAX_VEHICLES:
 		_overflows += 1
 		return
 	var q := _n_veh
-	# Lateral body: from half a grid step left of where position j's player body (with
-	# the clearance) would touch it, to beyond the last position.
-	var lo := _pos_d[j] + _player_width() * 0.5 + _pt.clearance_m - _grid * 0.5
-	var hi := _pos_d[_n_pos - 1] + _grid
+	var lo := d_lo
+	var hi := d_hi
 	_vs[q] = (a + b) * 0.5
 	_vv[q] = 0.0
 	_vd[q] = (lo + hi) * 0.5
@@ -1224,6 +1271,9 @@ func _predict(m_from: int, m_to: int) -> void:
 			if _vsplit[q] == 1:
 				v0 = minf(v0, _split_v0)
 				mg = _split_clear
+			if _sz_on:
+				var zl := floori((_vd[q] - _left_d) / _lane_w)
+				v0 = minf(v0, float(zones.call(&"speed_limit_at", zl, s + _vlen[q] * 0.5, _vp[q])))
 			var lo := _vplo[q] - mg
 			var hi := _vphi[q] + mg
 			var gap := INF

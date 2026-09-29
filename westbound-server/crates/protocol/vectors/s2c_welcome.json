@@ -1,0 +1,36 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "welcome",
+  "type_id": 64,
+  "vectors": [
+    {
+      "name": "typical",
+      "message": {
+        "account_id": "42",
+        "max_frame_bytes": 16384,
+        "ping_interval_ms": 2000,
+        "protocol_version": 1,
+        "server_build": 42,
+        "tick_rate_hz": 20,
+        "timeout_ms": 8000,
+        "type": "welcome"
+      },
+      "hex": "40150001002a0000002a0000000000000014d007401f0040"
+    },
+    {
+      "name": "max",
+      "message": {
+        "account_id": "9223372036854775807",
+        "max_frame_bytes": 65535,
+        "ping_interval_ms": 65535,
+        "protocol_version": 65535,
+        "server_build": 4294967295,
+        "tick_rate_hz": 120,
+        "timeout_ms": 65535,
+        "type": "welcome"
+      },
+      "hex": "401500ffffffffffffffffffffffffff7f78ffffffffffff"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+# Westbound Online server workspace (WESTBOUND_MULTIPLAYER_HANDOFF.md → Server tech stack).
+# Orchestrator-owned: members and shared dependency versions. See docs/MULTIPLAYER_PLAN.md.
+[workspace]
+resolver = "2"
+members = ["crates/protocol", "crates/sim", "crates/server", "crates/bots"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+protocol = { path = "crates/protocol" }
+sim = { path = "crates/sim" }
+anyhow = "1"
+thiserror = "2"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

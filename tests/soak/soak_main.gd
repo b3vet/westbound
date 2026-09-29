@@ -5,7 +5,7 @@ extends SceneTree
 ##
 ##   godot --headless --path . --script res://tests/soak/soak_main.gd -- \
 ##       --shard=0 --shards=4 --km=10000 [--seed=N] [--legs=8] [--leg-km=3.5] \
-##       [--out=tests/out/soak/shard_0.json] [--no-windows] [--runs=I,J,...]
+##       [--out=tests/out/soak/shard_0.json] [--no-windows] [--all-pieces] [--canyon] [--runs=I,J,...]
 ##   --runs: exactly these run indices (resume an interrupted soak into another
 ##   shard_N.json in the same directory, then `tools/soak.sh --merge --out=DIR`)
 ##   godot ... -- --metrics=fast|reference --out=FILE     # a metrics reference run only
@@ -13,6 +13,9 @@ extends SceneTree
 ##       [--run-legs=2] [--out=FILE]                   # the D11 density survey (DensitySurvey)
 ##       [--cap=N] [--density-last=X] [--headway-last=X] [--before] [--gain-min=X] [--gain-max=X]
 ##       [--weights=PCT,...] [--flows=KMH,...] [--gain-rate=X]   # what-ifs
+##       [--racer=FIRST,LAST] [--aggressive=FIRST,LAST] [--jitter=PCT] [--tolerance=KMH] [--lookahead=M]
+##       [--set=profile.field=X;...]                  # fast-traffic what-ifs (plan D15)
+##       [--breather=PCT] [--peak=PCT]                # wave density what-ifs (plan D17)
 ##
 ## Runs are numbered 0..ceil(km / run_km)-1; shard i runs every r with
 ## (r + r / N) % N == i: round robin, rotated by one every N runs, so the lane-count
@@ -84,8 +87,11 @@ func _main() -> void:
 				mine.append(k)
 	print("soak shard %d/%d: runs %d of %d (%.1f km each), seed %d" % [shard, shards, mine.size(), n_runs, run_km,
 		base_seed])
+	# --canyon: every run on the canyon's road (curves, crests, tunnels and their lane drops).
+	var biome: BiomeDef = BiomePlan.load_biome(&"canyon") if args.has("canyon") else null
 	for r in mine:
-		var run := TrafficSoakRun.new(r, base_seed, legs, leg_m)
+		var run := TrafficSoakRun.new(r, base_seed, legs, leg_m, null, 0, biome, args.has("all-pieces"),
+			TrafficSoakRun.BOT_PASSABILITY)
 		run.check_windows = windows
 		while not run.finished:
 			run.advance(60.0)
@@ -186,6 +192,43 @@ func _density(args: Dictionary) -> int:
 		t.director.density_gain_max = float(args["gain-max"])
 	if args.has("gain-rate"):
 		t.director.density_gain_rate_per_s = float(args["gain-rate"])
+	if args.has("set-pieces"):
+		t.director.set_piece_chance_first_pct = float(args["set-pieces"])
+		t.director.set_piece_chance_last_pct = float(args["set-pieces"])
+	# Fast traffic (plan D15, WP6.6).
+	if args.has("racer"):
+		var r := String(args["racer"]).split(",")
+		t.director.racer_share_first_pct = float(r[0])
+		t.director.racer_share_last_pct = float(r[r.size() - 1])
+	if args.has("aggressive"):
+		var g := String(args["aggressive"]).split(",")
+		t.director.aggressive_share_first_pct = float(g[0])
+		t.director.aggressive_share_last_pct = float(g[g.size() - 1])
+	if args.has("jitter"):
+		t.traffic.spawn_v0_jitter_pct = float(args["jitter"])
+	if args.has("breather"):
+		t.director.wave_breather_density_pct = float(args["breather"])
+	if args.has("peak"):
+		t.director.wave_peak_density_pct = float(args["peak"])
+	if args.has("fill"):
+		t.director.wave_fill_min_mult = float(args["fill"])
+	if args.has("lookahead"):
+		t.traffic.idm_lookahead_m = float(args["lookahead"])
+	if args.has("tolerance"):
+		t.traffic.spawn_lane_speed_tolerance_kmh = float(args["tolerance"])
+	var held: Array[Resource] = []   # keeps the edited profiles cached for the registry
+	if args.has("set"):
+		for item in String(args["set"]).split(";", false):
+			var kv := item.split("=")
+			var path := kv[0].split(".")
+			var prof := load(TrafficRegistry.PROFILE_DIR + path[0] + ".tres") as DriverProfile
+			var old: Variant = prof.get(path[1])
+			if typeof(old) == TYPE_INT:
+				prof.set(path[1], int(kv[1]))
+			else:
+				prof.set(path[1], float(kv[1]))
+			held.append(prof)
+			print("set %s.%s = %s (was %s)" % [path[0], path[1], kv[1], str(old)])
 	var rows: Array[Dictionary] = []
 	var t0 := Time.get_ticks_msec()
 	for lanes in lane_counts:

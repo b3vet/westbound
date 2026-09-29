@@ -54,6 +54,8 @@ static func compose(hud_rows: Array, scene_name: String) -> String:
 		str(DisplayServer.get_display_safe_area())])
 	lines.append(render_line(win))
 	lines.append("scene     %s" % scene_name)
+	lines.append("traffic   %s" % traffic_line(scene_traffic_sim()))
+	lines.append("racers    %s" % racers_line(scene_traffic_director()))
 	lines.append("-- hud")
 	for row: Array in hud_rows:
 		lines.append("%-9s %s" % [row[0], row[1]])
@@ -64,6 +66,82 @@ static func compose(hud_rows: Array, scene_name: String) -> String:
 		for k: Variant in keys:
 			lines.append("%-14s %s" % [String(k), str(DevStats.get_value(k))])
 	return "\n".join(lines)
+
+
+## The current scene's TrafficSim (its `sim` property: the run, the traffic sandbox), or null.
+static func scene_traffic_sim() -> TrafficSim:
+	var tree := Engine.get_main_loop() as SceneTree
+	var scene: Node = tree.current_scene if tree != null else null
+	return scene.get(&"sim") as TrafficSim if scene != null else null
+
+
+## The current scene's TrafficDirector (its `director` property: the run, the traffic
+## sandbox), or null.
+static func scene_traffic_director() -> TrafficDirector:
+	var tree := Engine.get_main_loop() as SceneTree
+	var scene: Node = tree.current_scene if tree != null else null
+	return scene.get(&"director") as TrafficDirector if scene != null else null
+
+
+## Racers from behind (plan D17, WP6.7), this run: racers that passed the player and
+## that the player overtook, and the arrivals spawned behind the player (of them, how
+## many got past it).
+static func racers_line(director: TrafficDirector) -> String:
+	if director == null:
+		return "-"
+	return "passed you %d, you overtook %d, arrivals %d (%d passed you)%s" % [director.racers_passed_player,
+		director.racers_overtaken, director.racer_arrivals, director.arrivals_passed_player,
+		"" if director.racer_arrivals_enabled else ", arrivals off"]
+
+
+## Live traffic speeds on the player's carriageway (plan D15, owner M5: "the traffic is
+## quite slow"): count, mean, the share faster than each TrafficTuning.dev_speed_bands_kmh,
+## the mean per lane (lane 0 = next to the median) and the aggressive + racer count.
+static func traffic_line(sim: TrafficSim) -> String:
+	if sim == null or sim.state == null:
+		return "-"
+	var st := sim.state
+	var bands := sim.tuning.dev_speed_bands_kmh
+	var over := PackedInt32Array()
+	over.resize(bands.size())
+	var lane_sum := PackedFloat64Array()
+	var lane_n := PackedInt32Array()
+	var agg := sim.registry.profile_index(sim.tuning.spawn_aggressive_profile_id)
+	var racer := sim.registry.profile_index(sim.tuning.spawn_racer_profile_id)
+	var n := 0
+	var fast := 0
+	var racers := 0
+	var sum := 0.0
+	for i in st.capacity:
+		if st.active[i] == 0:
+			continue
+		var kmh := Units.mps_to_kmh(st.v[i])
+		n += 1
+		sum += kmh
+		for b in bands.size():
+			if kmh > bands[b]:
+				over[b] += 1
+		var ln := st.lane[i]
+		if ln >= lane_sum.size():
+			lane_sum.resize(ln + 1)
+			lane_n.resize(ln + 1)
+		if ln >= 0:
+			lane_sum[ln] += kmh
+			lane_n[ln] += 1
+		if st.profile_id[i] == racer:
+			racers += 1
+		if st.profile_id[i] == racer or st.profile_id[i] == agg:
+			fast += 1
+	if n == 0:
+		return "0 vehicles"
+	var parts := PackedStringArray()
+	for b in bands.size():
+		parts.append(">%.0f %.0f%%" % [bands[b], 100.0 * float(over[b]) / float(n)])
+	var lanes := PackedStringArray()
+	for l in lane_sum.size():
+		lanes.append("%.0f" % (lane_sum[l] / float(lane_n[l])) if lane_n[l] > 0 else "-")
+	return "%d veh, mean %.0f km/h, %s, lanes [%s], fast %d (racer %d)" % [
+		n, sum / float(n), ", ".join(parts), " ".join(lanes), fast, racers]
 
 
 ## Web: an HTML overlay with a native Copy button (iOS Safari only allows

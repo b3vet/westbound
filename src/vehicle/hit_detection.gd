@@ -109,6 +109,9 @@ var _hl: float = 0.0
 var _hw: float = 0.0
 var _prop_query: PropQuery = null
 var _prop_contact := Contact.new()
+## WP6.3: the contact point of the last sweep_static_box() hit.
+var last_s: float = 0.0
+var last_d: float = 0.0
 
 var _has_prev: bool = false
 var _prev_ps: float = 0.0
@@ -141,6 +144,20 @@ func set_player_body(length_m: float, width_m: float) -> void:
 
 func set_prop_query(q: PropQuery) -> void:
 	_prop_query = q
+
+
+## WP6.3 (set-piece props, for PropQuery implementations): the swept test of the
+## player's box moving from (s0, d0) to (s1, d1) this tick at road-relative `yaw` with
+## half extents hl x hw, against a static box at (bs, bd) aligned with the road, half
+## extents bhl x bhw. Returns the first time of contact in [0, 1), or -1; on contact the
+## point is in last_s / last_d. Allocation-free.
+func sweep_static_box(s0: float, d0: float, s1: float, d1: float, yaw: float, hl: float, hw: float,
+		bs: float, bd: float, bhl: float, bhw: float) -> float:
+	var toi := _sweep_boxes(s0, d0, s1, d1, cos(yaw), sin(yaw), hl, hw, bs, bd, bs, bd, 1.0, 0.0, bhl, bhw)
+	if toi >= 0.0:
+		last_s = _c_s
+		last_d = _c_d
+	return toi
 
 
 ## Run start, respawn or any teleport: the next step() sweeps from these poses.

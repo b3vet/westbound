@@ -1,0 +1,121 @@
+name: Server
+
+# westbound-server (Rust workspace): fmt, clippy, tests, Docker image.
+# Pushes ghcr.io/<owner>/westbound-server to GHCR on pushes to the integration
+# branch (tags: edge, <branch>-<sha>). Runbook: docs/SERVER.md.
+
+on:
+  push:
+    paths:
+      - "westbound-server/**"
+      - ".github/workflows/server.yml"
+  pull_request:
+    paths:
+      - "westbound-server/**"
+      - ".github/workflows/server.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Compile-time checked queries use the committed metadata in westbound-server/.sqlx/.
+  SQLX_OFFLINE: "true"
+  PUSH_BRANCH: claude/game-implementation-phases-asl5jz
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: westbound-server
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install 1.94 --profile minimal --component rustfmt,clippy
+          rustup default 1.94
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: westbound-server
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image names
+        id: meta
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          branch="${GITHUB_REF_NAME//\//-}"
+          sha="${GITHUB_SHA::7}"
+          image="ghcr.io/${owner}/westbound-server"
+          push=false
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" == "${PUSH_BRANCH}" ]]; then
+            push=true
+          fi
+          {
+            echo "image=${image}"
+            echo "sha=${sha}"
+            echo "tags=${image}:edge,${image}:${branch}-${sha}"
+            echo "push=${push}"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: westbound-server
+          platforms: linux/amd64
+          build-args: WB_BUILD=${{ steps.meta.outputs.sha }}
+          tags: westbound-server:ci
+          load: true
+          cache-from: type=gha,scope=westbound-server
+          cache-to: type=gha,scope=westbound-server,mode=max
+      - name: Smoke test the image
+        run: |
+          docker run -d --name wb -p 127.0.0.1:8080:8080 -e WB_AUTH__JWT_SECRET="$(openssl rand -hex 32)" -e WB_AUTH__DEVICE_SECRET_PEPPER="$(openssl rand -hex 32)" westbound-server:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/v1/health; then echo; break; fi
+            sleep 1
+          done
+          docker exec wb /usr/local/bin/westbound-server healthcheck
+          docker stop --time 20 wb
+          code="$(docker inspect --format '{{.State.ExitCode}}' wb)"
+          docker logs wb 2>&1 | tail -n 20
+          test "$code" = 0
+          docker image ls westbound-server:ci --format 'image size: {{.Size}}'
+      - name: Log in to GHCR
+        if: steps.meta.outputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        if: steps.meta.outputs.push == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: westbound-server
+          platforms: linux/amd64
+          build-args: WB_BUILD=${{ steps.meta.outputs.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+          push: true
+          cache-from: type=gha,scope=westbound-server

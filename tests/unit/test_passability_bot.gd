@@ -11,7 +11,8 @@ const SEED := 5150
 ## Drives run `index` (its lane count: TrafficTuning.soak_lane_counts cycled) for
 ## `legs` legs of `leg_m` at leg `fixed_leg`'s density; checks the bot's record.
 func _drive(index: int, legs: int, leg_m: float, fixed_leg: int, label: String) -> void:
-	var r := TrafficSoakRun.new(index, SEED, legs, leg_m, null, fixed_leg)
+	var r := TrafficSoakRun.new(index, SEED, legs, leg_m, null, fixed_leg, null, false,
+		TrafficSoakRun.BOT_PASSABILITY)
 	var min_v := r.tuning.scoring.min_speed_mps()
 	var below := 0
 	while not r.finished:

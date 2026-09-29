@@ -6,8 +6,8 @@
 script = ExtResource("1_script")
 id = &"aggressive"
 display_name = "Aggressive"
-desired_speed_min_kmh = 150.0
-desired_speed_max_kmh = 190.0
+desired_speed_min_kmh = 140.0
+desired_speed_max_kmh = 200.0
 idm_a_max_mps2 = 2.5
 idm_b_comfort_mps2 = 3.0
 idm_headway_s = 1.0

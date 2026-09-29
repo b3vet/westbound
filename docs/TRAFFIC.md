@@ -3,7 +3,7 @@
 Traffic on the player's carriageway: IDM car following, MOBIL lane changes, the fairness rules, near/far ticks and reactions to the player. It implements the spec's *Traffic* sections (road-space simulation, IDM, MOBIL, fairness rules, driver types, traffic reacts to the player) and *Lives → Fairness rules*.
 
 - **Code:** `src/traffic/traffic_sim.gd` (`TrafficSim`), `idm.gd` (`Idm`), `mobil.gd` (`Mobil`), `no_ambush.gd` (`NoAmbush`), `traffic_registry.gd` (`TrafficRegistry`). All pure `RefCounted`, allocation-free per tick.
-- **Data:** `data/driver_profiles/*.tres` (8 `DriverProfile`s), `data/vehicle_types/*.tres` (10 `VehicleType`s), `data/tuning/traffic.tres` (`TrafficTuning`).
+- **Data:** `data/driver_profiles/*.tres` (9 `DriverProfile`s: the spec's 8 and the Racer, plan D15), `data/vehicle_types/*.tres` (10 `VehicleType`s), `data/tuning/traffic.tres` (`TrafficTuning`).
 - **Tests:** `tests/unit/test_idm.gd`, `test_mobil.gd`, `test_traffic_sim.gd`; fixtures in `tests/fixtures/traffic/` (`TrafficScenario`, `TrafficBotPlayer`, `TrafficRuleChecker`).
 - **Out of scope:** spawning policy and the director (WP2.5, WP6.x), rendering (WP3.1), scoring.
 
@@ -102,18 +102,19 @@ The check runs when signaling starts, on every model tick while signaling (a fai
 
 ### Driver profiles
 
-These values are not in the spec except the desired speeds, signal times and move times; they are tuned in the sandbox. Motorbikes and Hesitant drivers are described in their own sections.
+These values are not in the spec except the desired speeds, signal times and move times; they are tuned in the sandbox. Motorbikes and Hesitant drivers are described in their own sections. Plan D15 (WP6.6, owner M5 playtest: "a variety of fast cars") widened the commuter (spec 100–130) and aggressive (spec 150–190) speeds and added the **racer**; see *Fast traffic (D15)* below.
 
 | Profile | Vehicles | v0 km/h | a_max | b | T s | s0 m | p | Δa_th | a_bias | b_safe | Signal s | Move s | Freq | Other |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cruiser | sedan, hatchback | 80–100 | 1.2 | 2.0 | 1.6 | 2.5 | 0.6 | 0.3 | 0.5 | 3.0 | 1.0 | 2.5–3.0 | 0.5 | keep right |
-| commuter | sedan, SUV, pickup | 100–130 | 1.5 | 2.0 | 1.3 | 2.0 | 0.3 | 0.2 | 0.3 | 3.5 | 1.0 | 2.0–3.0 | 1.0 | |
-| aggressive | sports, coupe | 150–190 | 2.5 | 3.0 | 1.0 | 1.5 | 0.05 | 0.1 | 0.1 | 4.0 | **0.6** | **1.5** | 2.0 | |
+| commuter | sedan, SUV, pickup | **95–145** (D15) | 1.5 | 2.0 | 1.3 | 2.0 | 0.3 | 0.2 | 0.3 | 3.5 | 1.0 | 2.0–3.0 | 1.0 | |
+| aggressive | sports, coupe | **140–200** (D15) | 2.5 | 3.0 | 1.0 | 1.5 | 0.05 | 0.1 | 0.1 | 4.0 | **0.6** | **1.5** | 2.0 | |
 | truck | semi (16 m) | 80–90 | 0.6 | 1.5 | 1.8 | 3.0 | 0.5 | 0.3 | 0.6 | 2.5 | 1.0 | 3.0 | 0.3 | keep right, right 2 lanes |
 | bus | coach (12 m) | 85–95 | 0.8 | 1.5 | 1.6 | 3.0 | 0.5 | 0.3 | 0.5 | 2.5 | 1.0 | 2.5–3.0 | 0.4 | keep right, right 2 lanes |
 | van | delivery van | 95–110 | 1.2 | 2.0 | 1.4 | 2.0 | 0.3 | 0.2 | 0.3 | 3.0 | 1.0 | 2.0–3.0 | 0.8 | |
 | motorbike | motorbike | 110–150 | 2.5 | 3.0 | 1.0 | 1.5 | 0.2 | 0.1 | 0.2 | 3.5 | 1.0 | 2.0–2.5 | 1.5 | lane splitting |
 | hesitant | any car | 90–120 | 1.2 | 2.0 | 1.5 | 2.5 | 0.5 | 0.2 | 0.3 | 3.0 | 1.0 | 2.0–3.0 | 1.0 | cancels 20%, `min_leg` 3 |
+| **racer** (D15) | sports, coupe | **190–250** | 3.0 | 4.0 | 0.9 | 1.5 | 0.02 | 0.1 | 0.05 | 4.0 | **0.6** | **1.5** | 2.0 | fast lanes: `spawn_left_lane_count` 2 |
 
 Units: accelerations in m/s², δ = 4 for all.
 
@@ -259,6 +260,18 @@ After the spawner (a) treated `lc_state != NONE` cars as occupying their `target
 - **Behind-spawn retries:** a behind spawn that fails (the point is visible, or its gaps don't fit) is retried after `spawn_behind_retry_s` (0.5 s) instead of every tick. Before, a slow player in dense traffic cost the director ~40 µs per tick (a vehicle drawn and the lane scanned every tick) and burned the traffic stream; now ~4 µs (`test_failed_behind_spawns_back_off`).
 
 The 10,000 km soak (docs/SOAK.md) runs the real director with all of this.
+
+## Fast traffic (D15, WP6.6)
+
+Owner, M5 playtest (iPhone): "the traffic is quite slow ... I want to have a variety of fast cars during the runs ... cars that actually don't hesitate and move fast, even fast enough for me to follow for a bit and try to overtake." Plan D15. Fairness rules unchanged.
+
+- **Racer** (`data/driver_profiles/racer.tres`, `profile_id` 8, appended to `TrafficRegistry.PROFILE_IDS`): sports cars and coupes (the existing models; no new vehicle type), desired speed **190–250 km/h**, a = 3.0, b = 4.0, T = 0.9 s, s0 = 1.5 m, politeness 0.02, Δa_th 0.1, keep-right bias 0.05 (below Δa_th: a free racer does not drift right), b_safe 4.0, **0.6 s blinker, 1.5 s move** (the aggressive telegraphing; the 0.5 s floor holds), MOBIL twice as often. `spawn_left_lane_count` = 2: Flow spawns it only in the two left lanes, never in the slow lane. Its share comes from `DirectorTuning.racer_share_*_pct` (10 → 15 %, see docs/SPAWNING.md).
+- **Wider spreads:** commuter 100–130 → **95–145** km/h, aggressive 150–190 → **140–200** km/h; per-car desired-speed jitter ±5 % (`spawn_v0_jitter_pct`).
+- **Faster left lanes:** `lane_flow_speeds_from_right_kmh` 95 / 115 / 135 / 150 → **95 / 120 / 145 / 160** (3 lanes: 95 / 120 / 145; 4 lanes: 95 / 120 / 145 / 160). Faster flows cost density (below and docs/SPAWNING.md), which capped this at +10 km/h in the fast lane.
+- **Leader search:** `idm_lookahead_m` 400 → **560 m**. A racer at 250 km/h closing on an 80 km/h truck needs s* = 537 m (`test_registry_profiles_match_spec` / `test_lookahead_covers_the_racer` check the worst case). The cost is small: the search stops at the first vehicle on the path.
+- **Fairness:** the racer goes through the same sim as everyone: IDM with the 6 m/s² clamp, MOBIL safety with the player's b_safe of 2 m/s², no ambush, rear-end prevention with the player as leader. `tests/unit/test_driver_profiles.gd`: a racer at 250 km/h behind a player at 100 km/h in a single lane, and behind a stopped player, brakes within the clamp and never touches it; a racer from behind comes past a lane-keeping player, changes lanes around a slower car with the blinker first; dense weaving traffic with 20 % racers has no collisions and no rule violations; the trace is deterministic. The soak results are in docs/SOAK.md, *D15 soak*.
+- **What a player sees** (density survey, scripted player at 150–250 km/h, 3 lanes): racers average **186 km/h at leg 1** and 143 km/h at leg 8, where the lanes are crowded (D17) and they weave through; lane means 138 / 127 / 106 km/h at leg 1 (before: 128 / 116 / 101).
+- **Sandbox:** the profile cycles like the others (`RACE` tag, pink in the debug view); FAST ×1 / ×1.5 / ×2 / ×0 scales both fast shares (a private copy of the tuning, then a re-seed); RACER spawns one behind the player, a lane to its left, and selects it; the stats panel's `speeds` line and the dev report's `traffic` line (also in a run: `DevReport.traffic_line`) give the live speed distribution: mean, the share above 150 / 180 / 200 km/h (`dev_speed_bands_kmh`), the mean per lane and the fast count. Snap: `tools/snap.sh src/traffic/dev/traffic_sandbox.tscn --racer=true --driver=keep --speed_kmh=130 --leg=3 --warm_s=12 --labels=6 --layers=blink --racer_ahead_m=8 --tag=racer`.
 
 ## Hooks and open points
 

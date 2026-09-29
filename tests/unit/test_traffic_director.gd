@@ -125,8 +125,14 @@ func test_prefill_populates_the_road_ahead() -> void:
 
 func test_ahead_spawns_land_beyond_the_fog_end() -> void:
 	# Default fog end (medium tier view distance) and the High tier's longer one.
+	# The player outruns every lane (plan D15 made the left lanes faster), so nothing
+	# arrives from behind.
+	var fastest := 0.0
+	for x in tuning.traffic.lane_flow_speeds_from_right_kmh.slice(0, LANES):
+		fastest = maxf(fastest, x)
+	var v_kmh := maxf(150.0, fastest + tuning.traffic.spawn_behind_speed_margin_kmh + 1.0)
 	for fog: float in [-1.0, 800.0]:
-		_setup()
+		_setup(SEED, LANES, null, -1, 1, v_kmh)
 		if fog > 0.0:
 			dir.set_fog_end(fog)
 		_reset()

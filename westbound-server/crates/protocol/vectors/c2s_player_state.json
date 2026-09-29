@@ -1,0 +1,74 @@
+{
+  "protocol_version": 1,
+  "direction": "client_to_server",
+  "type": "player_state",
+  "type_id": 4,
+  "vectors": [
+    {
+      "name": "typical",
+      "message": {
+        "d_cm": -175,
+        "flags": {
+          "boost": true,
+          "brake": false,
+          "ghost": false,
+          "headlights": true
+        },
+        "heading_e4": 873,
+        "lat_vel_cms": -42,
+        "run_state": "driving",
+        "s_mm": 12345678,
+        "speed_cms": 6944,
+        "steer_e4": -1250,
+        "tick": 123456,
+        "type": "player_state",
+        "yaw_rate_mrad_s": 118
+      },
+      "hex": "04160040e201004e61bc0051ff6903201bd6ff76001efb0602"
+    },
+    {
+      "name": "max",
+      "message": {
+        "d_cm": 10000,
+        "flags": {
+          "boost": true,
+          "brake": true,
+          "ghost": true,
+          "headlights": true
+        },
+        "heading_e4": 31416,
+        "lat_vel_cms": 32767,
+        "run_state": "crashed",
+        "s_mm": 4294967295,
+        "speed_cms": 20000,
+        "steer_e4": 10000,
+        "tick": 4294967295,
+        "type": "player_state",
+        "yaw_rate_mrad_s": 32767
+      },
+      "hex": "041600ffffffffffffffff1027b87a204eff7fff7f10270f03"
+    },
+    {
+      "name": "min",
+      "message": {
+        "d_cm": -10000,
+        "flags": {
+          "boost": false,
+          "brake": false,
+          "ghost": false,
+          "headlights": false
+        },
+        "heading_e4": -31416,
+        "lat_vel_cms": -32767,
+        "run_state": "not_running",
+        "s_mm": 0,
+        "speed_cms": 0,
+        "steer_e4": -10000,
+        "tick": 0,
+        "type": "player_state",
+        "yaw_rate_mrad_s": -32767
+      },
+      "hex": "0416000000000000000000f0d84885000001800180f0d80000"
+    }
+  ]
+}

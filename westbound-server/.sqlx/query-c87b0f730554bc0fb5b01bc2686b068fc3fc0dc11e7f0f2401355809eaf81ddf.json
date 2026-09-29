@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO crews (name, tag, owner_id, invite_code, created_at)\n             VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "c87b0f730554bc0fb5b01bc2686b068fc3fc0dc11e7f0f2401355809eaf81ddf"
+}

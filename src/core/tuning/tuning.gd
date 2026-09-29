@@ -38,6 +38,8 @@ const DEFAULT_PATH := "res://data/tuning.tres"
 @export var landmarks: LandmarkTuning
 ## Night lighting: headlight cones, high beams, lamp pools (WP5.4; visual only).
 @export var night: NightTuning
+## Multiplayer client: keepalive, clock sync, server URL (N2.2).
+@export var net: NetTuning
 
 static var _default: Tuning
 
@@ -63,5 +65,5 @@ func missing_sections() -> PackedStringArray:
 static func section_names() -> PackedStringArray:
 	return PackedStringArray([
 		"quality", "road", "vehicle", "controls", "camera", "traffic", "director",
-		"passability", "scoring", "lives", "sun", "legs", "feel", "hud", "progression", "traffic_view", "crash", "landmarks", "night",
+		"passability", "scoring", "lives", "sun", "legs", "feel", "hud", "progression", "traffic_view", "crash", "landmarks", "night", "net",
 	])

@@ -9,7 +9,7 @@ enum Kind {
 	BLIND_BEND,         ## s_start..s_end: a bend with limited sight distance
 	BEND,               ## value = signed curvature (1/m, + = right) at the apex
 	LANE_COUNT_CHANGE,  ## at s_start the lane count becomes int(value); s_start..s_end is the taper
-	FORK,               ## s_start = split point; tag = left biome, tag2 = right biome
+	FORK,               ## s_start..s_end = the fork's whole span (WP6.5: the opposite carriageway's veer before the split to its rejoin after the gore); value = the split s; tag = left biome, tag2 = right biome
 	CHECKPOINT,         ## s_start = crossing line; value = leg index ending there; tag = landmark style
 	TUNNEL,             ## s_start..s_end inside the tunnel
 	SIGN,               ## warning sign at s_start; tag = what it announces; value = distance announced (m)

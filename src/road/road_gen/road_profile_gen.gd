@@ -184,6 +184,21 @@ func _add_step() -> void:
 	_push(_rng.float_range(_len_min, _len_max), g2, 0.0)
 
 
+# ---------------------------------------------------------------- Hand-built profiles (N3.1)
+# LoopRoadPath (docs/LOOP_MAP.md) lays its periodic profile (grade tangents and parabolic
+# vertical curves around fixed PVIs) out of these same elements. No random draws.
+
+## Starts a hand-built profile at s = 0 with elevation `e0` (instead of generate_to()).
+func begin_profile(e0: float) -> void:
+	_started = true
+	_e = e0
+
+
+## Appends one element (grade g0 + dg t over `length`) at end_s.
+func add_element(length: float, g0: float, dg: float) -> void:
+	_push(length, g0, dg)
+
+
 ## Appends an element starting at end_s with the running elevation, then advances
 ## the running elevation and grade exactly (e += (g0 + dg L / 2) L).
 func _push(length: float, g0: float, dg: float) -> void:

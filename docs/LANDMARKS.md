@@ -106,3 +106,8 @@ No roadside prop stands inside a landmark or a warning sign. That includes the m
 ## Lane-ends signs (WP6.4c)
 
 The warning-sign pool (4 panels) also serves the `SIGN` features tagged `lane_ends` before tunnel lane drops ("LANE ENDS / MERGE LEFT"). Landmark clearance and canyon cliffs keep clear of them.
+
+## Fork signs (WP6.5)
+
+Before a fork (see [FORKS.md](FORKS.md)) the checkpoint warning signs at 1 km and 500 m carry `tag2 = ProceduralRoadPath.SIGN_FORK_TAG2` and read **< DESERT MESAS / CANYON PASS >** (one branch per line) (the left branch's biome points left); the fork checkpoint is always a sign gantry over the split (the road tags its CHECKPOINT), reading **< LEFT   RIGHT > / LEG n — PICK YOUR SIDE / CHECKPOINT** (`LandmarkText.fork_sign`, `fork_landmark`; names from the FORK feature's tags). Landmarks build a checkpoint's template from the cross-section just before its line (a fork's split starts the branches' layout at the line), and so does `LandmarkClearance`.
+

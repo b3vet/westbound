@@ -107,13 +107,13 @@ Baseline (`tests/baselines/traffic_metrics.json`, seed 3303, 16 runs, 3 lanes):
 
 | Metric | Baseline |
 | --- | --- |
-| `gaps_per_km` | 7.84 (WP4.8: 10.53, WP3.3: 8.34) |
-| `lane_changes_per_vehicle_min` | 0.828 (0.677, 0.709) |
-| `mean_speed_kmh_lane_0` / `_1` / `_2` | 125.9 / 116.6 / 106.3 (123.8 / 113.2 / 101.8; 124.6 / 115.4 / 103.4) |
-| `set_pieces_per_leg` | 0.117 (0, 0) |
-| `density_per_km_lane` | 9.18 (11.87, 9.67) |
+| `gaps_per_km` | 8.65 (WP6.2: 8.36, WP4.8: 10.53, WP3.3: 8.34) |
+| `lane_changes_per_vehicle_min` | 1.029 (0.766, 0.677, 0.709) |
+| `mean_speed_kmh_lane_0` / `_1` / `_2` | 139.2 / 127.1 / 115.6 (125.7 / 116.5 / 106.4; 123.8 / 113.2 / 101.8; 124.6 / 115.4 / 103.4) |
+| `set_pieces_per_leg` | 0.031 (0.023, 0, 0) |
+| `density_per_km_lane` | 10.00 (9.70, 11.87, 9.67) |
 
-(192 km, 5,466 simulated seconds, flow speeds 135 / 115 / 95 km/h.) **WP6.2 rewrote the baseline** (a deliberate change; see *WP6.2: the director* below). The earlier values are in brackets. The baseline was rewritten for WP4.8 (plan D11), a deliberate change. The density ramp now ends at 18 per km per lane, the director tops up and tracks the window, and late legs drive closer (IDM T × 0.8 at leg 8). As a result the density is +23%, gaps per km +26% (more vehicles, so more enterable gaps between them), lane speeds −1 to −2%, and lane changes per vehicle-minute −5%. See docs/SPAWNING.md, *Density (D11)*.
+(192 km, flow speeds 145 / 120 / 95 km/h.) **WP6.6 rewrote the baseline** (plans D15 and D17, deliberate; see *D15 / D17 soak (WP6.6)* below); the earlier values are in brackets. WP6.2 rewrote it before (see *WP6.2: the director*), and WP4.8 (plan D11) before that: the density ramp ends at 18 per km per lane, the director tops up and tracks the window, and late legs drive closer. See docs/SPAWNING.md, *Density (D11)* and *Fast traffic and density*.
 
 ## Results: the 10,000 km soak
 
@@ -317,6 +317,49 @@ A local experiment (not committed) forbidding vehicles with a desired speed belo
 | Set pieces | 324 peaks: 137 lost the chance roll, 173 missed (the bot too slow to meet a piece), 2 did not fit the road; **11 spawned** (9 truck walls, 2 rolling roadblocks), 3 started, 1 passed, 4 unmet, 2 timed out after starting (the lane-keeping bot stays behind the wall), the rest still live when their runs ended. 0 hard decelerations (neither piece asks for them; rule 4's exception is covered by `test_set_piece_source.gd`). |
 
 `soak_canyon_lane_drops` (2 × 28 km on the canyon road): 91 and 93 mandatory merges, every gate 0, offroad 0, one player-induced window. Cars that find no gap wait at the end of the lane (seen at 0-5 km/h in that window's snapshot, lane 2, 230-250 m ahead of the player).
+
+## D15 / D17 soak (WP6.6: fast traffic, density rebalance)
+
+`tools/soak.sh --km=2000 --shards=4` with WP6.6's traffic (the racer, wider spreads, flows 95 / 120 / 145 / 160, jitter; D17: breathers 70 %, T × 0.55 at leg 8, gain up to 1.8) on the integration branch with WP6.2 (before WP6.5's merge; WP6.5 adds no forks to the soak's road). Container shared with other agents (load 6-9 on 4 cores). After merging WP6.5, `tools/soak.sh --km=500 --shards=4` passed every gate (504 km, 18 runs: 0 traffic windows, 9 player-induced) and its 18 traces are identical to the same runs of the 2,000 km soak, so the results below hold for the merged tree.
+
+| | |
+| --- | --- |
+| Distance | **2,016 km** in 72 runs (1,008 km on 3 lanes, 504 km on 2, 504 km on 4), 15.4 simulated hours, 0 unfinished |
+| Wall time | 1,988 s on 4 shards (3,651 km per wall hour) |
+| Active vehicles | mean 42.3, peak 90 (the cap) |
+
+| Counter | Total | Gate |
+| --- | --- | --- |
+| Traffic-to-traffic collisions | 0 | ✅ 0 |
+| Signal-time violations | 0 (39,890 lane moves checked, 43,566 signals, 1,768 cancels) | ✅ 0 |
+| Unsignaled lateral moves | 0 | ✅ 0 |
+| No-ambush violations | 0 | ✅ 0 |
+| Deceleration beyond 6 m/s² | 0 (min −6.00) | ✅ 0 |
+| Brake-light flag mismatches | 0 | ✅ 0 |
+| Rear-ends of a normally driving player | 0 (67 rear-end contacts of 73 episodes, all after the bot's own move or hard braking) | ✅ 0 |
+| Off-road | 0 | ✅ 0 |
+| Impossible windows (traffic) | **1**, on a 2-lane road (0 on 3 and 4 lanes) | ❌ reported (WP6.1) |
+| Impossible windows (player-induced) | 60 | reported |
+
+Set pieces: 33 spawned (652 peaks: 265 lost the chance roll, 329 missed, 16 unfit), 15 started, 14 passed; 0 hard decelerations. Director: 13,388 ahead and 2,326 behind spawns, 2,043 refused by the live-gap re-check; sim cancels 1,525 unsafe, 160 for the player, 83 Hesitant.
+
+**The traffic window** (run 26, leg 3, 2 lanes, t = 279 s): the weaving bot at 93 km/h (below the 100 km/h minimum), 0.008 s after starting its own lane change into lane 1, with a cruiser at 86 km/h 7 m ahead moving between the two lanes and another at 95 km/h 126 m ahead: the 2-lane "slow wall" of D12 (a slow car's lane change spans both lanes while the player may not drop below 100 km/h). Not a fast-traffic pattern; WP6.1's passability owns it (the brief: report, don't fix here).
+
+Metrics by lane count (whole soak): mean speed per lane 120.6 / 105.7 (2 lanes), 139.5 / 127.5 / 116.0 (3 lanes), 147.6 / 139.9 / 127.7 / 120.4 (4 lanes); density 11.6 / 10.9 / 11.0; lane changes per vehicle-minute 0.72 / 1.02 / 1.22.
+
+**Why the baseline moved** (16-run reference, WP6.2 → WP6.6):
+
+| Metric | WP6.2 | WP6.6 | Change |
+| --- | --- | --- | --- |
+| `mean_speed_kmh_lane_0/1/2` | 125.7 / 116.5 / 106.4 | 139.2 / 127.1 / 115.6 | +10.7 / +9.1 / +8.7 % |
+| `lane_changes_per_vehicle_min` | 0.766 | 1.029 | +34 % |
+| `density_per_km_lane` | 9.70 | 10.00 | +3 % |
+| `gaps_per_km` | 8.36 | 8.65 | +3 % |
+| `set_pieces_per_leg` | 0.023 (3 pieces) | 0.031 (4 pieces) | one piece more |
+
+- **Speeds:** faster left lanes (145 and 120 km/h instead of 135 and 115 on 3 lanes), the racer, the wider commuter and aggressive ranges. The bot drives the reference 5 % faster (5,171 instead of 5,463 simulated seconds for the same 192 km).
+- **Lane changes:** racers and aggressive drivers change lanes twice as often as a commuter, and the fast share grew (15 → 35 % where they may drive), so more vehicle-minutes belong to frequent changers; wider speed spreads also give MOBIL more worthwhile moves.
+- **Density and gaps:** D17's shallower breathers and closer late-leg following bring back what the faster lanes cost (docs/SPAWNING.md, *Fast traffic and density*).
 
 ## WP6.1 after the WP6.2 merge (the final soak)
 

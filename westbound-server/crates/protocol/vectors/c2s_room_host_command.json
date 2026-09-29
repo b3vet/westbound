@@ -1,0 +1,36 @@
+{
+  "protocol_version": 1,
+  "direction": "client_to_server",
+  "type": "room_host_command",
+  "type_id": 9,
+  "vectors": [
+    {
+      "name": "kick",
+      "message": {
+        "kind": "kick",
+        "player_id": 3,
+        "type": "room_host_command"
+      },
+      "hex": "090300000300"
+    },
+    {
+      "name": "set_density",
+      "message": {
+        "density": "rush",
+        "kind": "set_density",
+        "type": "room_host_command"
+      },
+      "hex": "0902000102"
+    },
+    {
+      "name": "set_time_mode",
+      "message": {
+        "fixed_cycle_ms": 1500000,
+        "kind": "set_time_mode",
+        "time_mode": "fixed",
+        "type": "room_host_command"
+      },
+      "hex": "090600020160e31600"
+    }
+  ]
+}
