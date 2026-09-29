@@ -387,6 +387,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-29 | §7 `objective_completed` kind (WP5.2); §13 `wb_player_light_dir` length = fake-light reach, `wb_retro_light()` in the world include (WP5.4) | WP4.5 docs refresh, recording merged behaviour |
+| 2026-09-29 | §3 sun side per leg (`BiomeRoadRules.sun_side_for_leg`, `WaterDef.road_sun_side`: the sun sets over the sea at the coast), `SIGN lane_ends` rendered; §13 `SkyRig.horizon_material()`, one horizon shader with the biome extensions, `RoadBuilder.set_ground_drop` (WP6.4c) | Orchestrator merge review |
 | 2026-09-29 | §3 biome plan, any-order lane scheduling, tapered edges, TUNNEL/lane_ends features; §10 BiomeDef look/road fields (cliffs, horizon layers, heat shimmer, rock colours, bend sight clearance); SkyRig `set_fog_tint_offset` / `set_horizon_blend` / `set_heat_shimmer` (WP6.4a) | Orchestrator merge review |
 | 2026-09-29 | Cap 90; camera-independent behind-spawn view check (WP4.8, D11) | Orchestrator merge review |
 | 2026-09-29 | §14 Run, HudFeed, Hud, theme path, screens, CrashSequence (Phase 4) | Orchestrator, pre-Phase 4 |
