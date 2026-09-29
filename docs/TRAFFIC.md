@@ -143,12 +143,12 @@ The sim writes these into the caller's `ScoreEventBuffer` (`slot` = the car). Th
 
 | kind | tag | value | When | Adapter emits |
 | --- | --- | --- | --- | --- |
-| `&"traffic_high_beams"` | `tailgate` | bumper gap (m) | Headlights on (night) and the player tailgates within `tailgate_high_beam_distance_m` (10 m) for `tailgate_high_beam_s` (1 s). Sets `FLAG_HIGH_BEAM` for `high_beam_flash_s` (0.4 s). | `traffic_high_beams(slot)` |
 | `&"traffic_brake_tap"` | `cut_in` | bumper gap (m) | The player becomes the car's leader less than `cut_in_brake_tap_distance_m` (10 m) ahead. The car brakes at `brake_tap_decel_mps2` (2 m/s², brake lights on) for `brake_tap_s` (0.5 s). | `traffic_brake_tap(slot)` |
 | `&"traffic_horn"` | `blind_spot` | 0 | The player lingers one lane over, its center up to `blind_spot_behind_m` (6 m) behind the car's, for `blind_spot_horn_s` (3 s). Honks with `blind_spot_horn_pct` (50%, "occasional"). | `traffic_horn(slot, world_pos)` |
 | `&"traffic_horn"` | `close_pass` / `honk` | 0 | `notify_close_pass(slot)` (rolls 30%) or `honk(slot)`, at the next step. | `traffic_horn(slot, world_pos)` |
 | `&"traffic_hazards"` | `hit` | 1 on / 0 off | `notify_hit(slot)` (on, at the next step); recovery after `hit_recover_s` (off). | `traffic_hazards(slot, value == 1)` |
 
+- **No night-tailgating high beams (plan D8, owner decision):** the spec's "high beams flash when the player tailgates" was a grammar slip. The reaction, its tuning (`tailgate_high_beam_*`, `high_beam_flash_s`) and its test were removed in WP3.3. The player gets a manual high-beam control in WP5.4. `FLAG_HIGH_BEAM` stays defined; the sim never sets it (a spawn record's own flag is kept), and `test_no_automatic_high_beams_at_night` pins that.
 - **Re-arming:** each reaction re-arms on the same car after `reaction_cooldown_s` (6 s).
 - **Hit reaction:** the car swerves `hit_swerve_m` (0.5 m) away from the player and back over `hit_swerve_s` (1.2 s). This is a smoothstep out-and-back, so the checker does not count it as a lane change. The car also brakes at least `hit_brake_decel_mps2` (5 m/s², strong brake lights) for `hit_brake_s` (1 s), shows `FLAG_HIT | FLAG_HAZARD`, and recovers after 4 s. A car already moving between lanes finishes its move instead of swerving.
 
@@ -160,7 +160,7 @@ The sim writes these into the caller's `ScoreEventBuffer` (`slot` = the car). Th
 | `FLAG_BLINKER_LEFT`, `FLAG_BLINKER_RIGHT` | SIGNALING and MOVING (lane changes and split moves) |
 | `FLAG_HAZARD` | Hits (only cleared on recovery if the hit switched it on; a record's own hazards, e.g. a convoy, stay on) |
 | `FLAG_HEADLIGHTS` | `set_headlights` |
-| `FLAG_HIGH_BEAM` | Night tailgating flash |
+| `FLAG_HIGH_BEAM` | Never set by the sim (D8); kept from a spawn record, reserved for later use |
 | `FLAG_HIT` | `notify_hit` until recovery |
 | `FLAG_FAR` | Every tick, from the distance to the player |
 | `FLAG_SCRIPTED` | Never set by the sim; it only reads it (from the spawn record) |
@@ -183,6 +183,8 @@ Iteration order is the sorted-by-`s` order, with stable ties. The IDM power is m
 | `test_mobil.gd` | Incentive math; asymmetric keep-right bias; b_safe and the player tightening to 2 (pure, and in the sim: a traffic follower at −3 m/s² allows the change, the player at the same geometry refuses it); the no-ambush predicate (closing speed, lateral drift, time-disjoint overlaps); overtaking a slow truck; cruisers drift right; trucks stay in their lanes |
 | `test_traffic_sim.gd` | Profile data vs the spec table; spawn API; equilibrium gaps behind traffic and behind the player; free road → v0; stops behind a stopped player (single lane) without contact; impossible cut-in → exactly −6 m/s² and never beyond; brake-light thresholds every tick; signal, then smoothstep with v_lat; cancel when the player enters the gap; dense weaving rule checks; no rear-ending of a lane-keeping player; the Hesitant ratio; lane splitting (filters, stops behind trucks, never during the player's lane change, returns when traffic flows); every reaction; near/far vs a 120 Hz reference; the determinism trace; tick budget; no memory growth |
 | `soak_*` | 3 × 10 min dense weaving (3 lanes, 150 km/h player), 10 min on 4 lanes with a 190 km/h player, 9 × 3 min lane-keeping players (3 lanes × 95/120/150 km/h), the Hesitant ratio over about 7,300 requested signals plus an organic run, and the tick-cost report |
+| `test_traffic_integration.gd` | The real director + sim + bot on the procedural road (1 min fast, 3 × 10 min soak); the WP3.3 spawn hardening (lane changers and lane-splitting bikes occupy lanes, `s*` with the closing term, the commit re-check, behind-spawn back-off) |
+| `tests/soak/`, `test_traffic_metrics.gd` | WP3.3: the 10,000 km soak harness (tiny version in the fast tier, one run per lane count in the soak tier, the full distance with `tools/soak.sh`), the impossible-window oracle, cross-shard determinism, the metrics baseline and the D7 cap runs. See [SOAK.md](SOAK.md) |
 
 **The independent checker** (`TrafficRuleChecker`) reads only `TrafficState` and the player each tick. It checks:
 
@@ -191,7 +193,7 @@ Iteration order is the sorted-by-`s` order, with stable ties. The IDM power is m
 - traffic-to-traffic collisions, with oriented boxes (yaw = `atan2(v_lat, v)`) inset by `lives.collision_inset_m` and a separating-axis test;
 - the deceleration clamp;
 - the brake-light flags against the acceleration;
-- player contacts, including rear-ends by traffic.
+- player contacts, including rear-ends by traffic: per tick, and per contact episode (WP3.3), where a rear-end counts against traffic only when the player neither moved sideways nor braked beyond the 6 m/s² clamp for `soak_normal_driving_quiet_s` (3 s) before it ("a player driving normally").
 
 **The scenario spawner** (`TrafficScenario`) stands in for WP2.5. It keeps a target density (16 vehicles/km/lane) in [−200, +750] m, spawning ahead at lane flow speed with IDM spacing, and faster cars 150 m behind in the left lanes. It treats a car signaling or moving into a lane as already in it.
 
@@ -231,6 +233,7 @@ Measured in the headless dev container: Godot 4.7, Intel Xeon @ 2.10 GHz, one th
 | 4 lanes, weaving player 190 km/h, 10 min | 524 | 569 / 34 | 0 | 0 | 0 |
 | 3 lanes, lane-keeping player at 95/120/150 km/h in each lane, 9 × 3 min | 834 | 889 / 33 | 0 | 0 | 0 |
 | Fast tier: 2 × 45 s dense weaving | 72 | | 0 | 0 | |
+| **WP3.3: 10,000 km soak** (real director, procedural road, 2-4 lanes, legs 1-8, weaving and lane-keeping bot at 110-250 km/h; [SOAK.md](SOAK.md)) | 152,789 | 166,579 / 5,513 | 0 | 0 | 0 (of a normally driving player) |
 
 **Other measured numbers:**
 
@@ -248,10 +251,19 @@ Measured in the headless dev container: Godot 4.7, Intel Xeon @ 2.10 GHz, one th
 
 After the spawner (a) treated `lc_state != NONE` cars as occupying their `target_lane` and (b) required IDM's `s*` including `vΔv/(2√(ab))` in both directions, the soak has run clean. The director needs the same two rules.
 
+**WP3.3 status (director spawn hardening).** Both rules hold in the director, on both spawn paths (Flow's `plan_batch` / `plan_single` and the director's final `keeps_live_gaps` check in `_commit`), with tests in `tests/unit/test_traffic_integration.gd`:
+
+- (a) WP2.5's Flow already counted `target_lane`, which covers a signaled or running lane change (`target_lane` is set when the blinker comes on). It missed a **lane-splitting motorbike**: a split keeps `lane == target_lane` (the lane it came from) while the bike rides, or signals toward, the lane line, so the other lane looked empty. `SpawnSources.occupies_lane(ts, i, lane, road)` now decides occupancy from the lateral span: the body, widened while a lateral move is signaled or running to the target lane's center and half a lane toward the blinker. `test_spawn_gap_counts_a_lane_splitting_motorbike` fails without it.
+- (b) Flow's `min_spacing` already used `s*` with the closing term (`test_spawn_gap_behind_a_slower_leader_includes_closing_speed` pins it: behind a 60 km/h truck at 135 km/h, `s*` is 276 m against `s0 + vT` = 51 m; spawned at `s*`, the follower closes in at −1.7 m/s² at worst).
+- (c) The director's `_commit` now re-checks every spawn against every live vehicle occupying its lane (`keeps_live_gaps`, IDM `s*` in whichever order they drive), whatever the source planned; refusals count in `rejected_overlap`. Flow checks only the nearest neighbors, so this also catches a second live vehicle in the lane (e.g. a closing car behind a slow one).
+- **Behind-spawn retries:** a behind spawn that fails (the point is visible, or its gaps don't fit) is retried after `spawn_behind_retry_s` (0.5 s) instead of every tick. Before, a slow player in dense traffic cost the director ~40 µs per tick (a vehicle drawn and the lane scanned every tick) and burned the traffic stream; now ~4 µs (`test_failed_behind_spawns_back_off`).
+
+The 10,000 km soak (docs/SOAK.md) runs the real director with all of this.
+
 ## Hooks and open points
 
 - **Lane geometry tapers:** see *Lateral occupancy* above. Lane-count changes (a right lane ending) need a mandatory lane change, and so do per-`s` lane centers. WP6.3 set pieces are the hook.
 - **Set pieces:** `FLAG_SCRIPTED` vehicles skip MOBIL and may brake up to `scripted_max_decel_mps2`. `request_lane_change` drives scripted lane changes through the same telegraphing.
-- **Night tailgating (spec ambiguity):** the spec reads "high beams flash when the player tailgates". The trigger is implemented literally: the player is within 10 m *behind* the car for more than 1 s at night. The event carries the tailgated car's slot and sets `FLAG_HIGH_BEAM` on it. A car cannot flash its high beams backwards, though, so WP3.1 must decide what that flag looks like (e.g. a rear-light or hazard flash). The alternative reading is a car *behind the player* flashing when it is held up. That would be a one-line change of the relative-position test in `_tick_reactions`.
+- **Night tailgating:** resolved by plan D8 (no automatic high beams; see *Reactions to the player*).
 - **Lateral move start:** traffic starts its lateral move from its current `d` (usually the lane center). After a hit swerve, the car returns to its pre-hit line.
 

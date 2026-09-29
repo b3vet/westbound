@@ -97,6 +97,8 @@ extends Resource
 @export var spawn_behind_lane_count: int = 2   # not in spec: "the left lanes"
 ## A behind spawn must be at least this much faster than the player.
 @export var spawn_behind_speed_margin_kmh: float = 10.0   # not in spec: "only when the player is slower"
+## A behind spawn that failed (visible, or its IDM gaps don't fit) is retried after this.
+@export var spawn_behind_retry_s: float = 0.5   # not in spec: keeps failed attempts off the per-tick cost
 ## Default ghost zone (no spawns): the player's box grown by these margins.
 @export var spawn_ghost_margin_long_m: float = 20.0   # not in spec
 @export var spawn_ghost_margin_lat_m: float = 1.0   # not in spec
@@ -127,8 +129,6 @@ extends Resource
 @export var opposite_recycle_behind_m: float = 30.0   # not in spec: "recycled as it passes behind the camera"
 
 @export_group("Reactions to the player")
-@export var tailgate_high_beam_distance_m: float = 10.0   # at night
-@export var tailgate_high_beam_s: float = 1.0
 @export var close_pass_horn_pct: float = 30.0
 @export var cut_in_brake_tap_distance_m: float = 10.0
 @export var blind_spot_horn_s: float = 3.0
@@ -143,19 +143,41 @@ extends Resource
 ## Brake tap after a tight cut-in: at least this deceleration for brake_tap_s.
 @export var brake_tap_decel_mps2: float = 2.0   # not in spec: above the brake-light threshold
 @export var brake_tap_s: float = 0.5   # not in spec
-## High-beam flash duration (FLAG_HIGH_BEAM on) after night tailgating.
-@export var high_beam_flash_s: float = 0.4   # not in spec
 ## Blind spot: the player's center between the car's center and this far behind it, one lane over.
 @export var blind_spot_behind_m: float = 6.0   # not in spec
 ## "Occasional" horn: chance per blind_spot_horn_s spent in the blind spot.
 @export var blind_spot_horn_pct: float = 50.0   # not in spec
-## A reaction (brake tap, high beams, blind-spot horn) re-arms on the same car after this.
+## A reaction (brake tap, blind-spot horn) re-arms on the same car after this.
 @export var reaction_cooldown_s: float = 6.0   # not in spec
 
 @export_group("Tests and metrics")
 @export var soak_distance_km: float = 10000.0
 @export var trace_hash_interval_s: float = 1.0
 @export var metrics_tolerance_pct: float = 15.0
+## Soak runs (docs/SOAK.md): one run drives this many legs (leg length from LegsTuning),
+## leg k at leg k's density, on a fresh seed; the soak is many runs.
+@export var soak_run_legs: int = 8   # not in spec: one journey (legs_to_coast) per run
+## Bot player speeds, drawn per leg ("mixed speeds").
+@export var soak_bot_min_kmh: float = 110.0   # not in spec: WP3.3 brief
+@export var soak_bot_max_kmh: float = 250.0   # not in spec: WP3.3 brief
+## Share of legs the bot weaves; it keeps its lane in the others.
+@export var soak_bot_weave_pct: float = 60.0   # not in spec
+## Seconds between lane-change decisions of a weaving bot (uniform in [min, max]).
+@export var soak_bot_weave_min_s: float = 2.0   # not in spec
+@export var soak_bot_weave_max_s: float = 6.0   # not in spec
+## Lane counts the soak's runs cycle through (the procedural road with lanes_default set
+## to each; biomes have 2-4 lanes, farmland 3).
+@export var soak_lane_counts: PackedInt32Array = [3, 3, 2, 4]   # not in spec
+## A traffic car's rear-end contact counts against traffic ("a player driving normally")
+## only if the player neither moved sideways nor braked harder than max_decel_mps2 in
+## this long before the contact (else the player caused it: Lives → rear-end prevention).
+@export var soak_normal_driving_quiet_s: float = 3.0   # not in spec
+## How often the soak runs the impossible-window check (the passability oracle).
+@export var soak_window_check_interval_s: float = 1.0   # not in spec
+## Metrics: a gap between consecutive vehicles in a lane counts toward gaps_per_km if it
+## is at least this long (bumper to bumper; the player's car plus room either side).
+@export var metrics_gap_min_m: float = 15.0   # not in spec
+@export var metrics_sample_interval_s: float = 1.0   # not in spec
 
 
 func near_dt() -> float:

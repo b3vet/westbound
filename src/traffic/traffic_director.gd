@@ -59,11 +59,16 @@ var despawned: int = 0
 var rejected_cap: int = 0
 var rejected_ghost: int = 0
 var rejected_visible: int = 0
+## Spawns refused by the final live-traffic check in _commit (a source planned closer
+## than s* to a vehicle occupying the lane). Flow rarely trips it (it checks only the
+## nearest neighbors); set pieces and later sources may.
+var rejected_overlap: int = 0
 var batches_planned: int = 0
 
 var _rng: Rng
 var _spawned_to: float = 0.0
 var _behind_debt := PackedFloat64Array()   ## per lane, expected behind arrivals owed (0..1)
+var _behind_wait := PackedFloat64Array()   ## per lane, s until a failed behind spawn is retried
 var _batch: Array[SpawnSource.Record] = []
 var _behind_rec := SpawnSource.Record.new()
 var _prefilling: bool = false
@@ -87,6 +92,7 @@ func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profil
 	fog_end_m = q.view_distance_m[maxi(q.tier_index(q.default_tier), 0)]
 	set_player_box(player_length_m, player_width_m)
 	_behind_debt.resize(traffic_tuning.lane_flow_speeds_from_right_kmh.size())
+	_behind_wait.resize(_behind_debt.size())
 	_refresh_ctx(null)
 	opposite = OppositeTraffic.new(traffic_tuning, road, flow, ctx, run.rng_traffic.derive(&"opposite"), ahead_distance())
 
@@ -151,12 +157,14 @@ func reset(player: VehicleState) -> void:
 		if state.active[i] == 1:
 			sim.despawn(i)
 	_behind_debt.fill(0.0)
+	_behind_wait.fill(0.0)
 	spawned_ahead = 0
 	spawned_behind = 0
 	despawned = 0
 	rejected_cap = 0
 	rejected_ghost = 0
 	rejected_visible = 0
+	rejected_overlap = 0
 	batches_planned = 0
 	_prefilling = true
 	var batch := director_tuning.spawn_batch_length_m
@@ -246,8 +254,17 @@ func _step_behind(dt: float, player: VehicleState) -> void:
 			_behind_debt[lane] = 0.0
 			continue
 		_behind_debt[lane] = minf(_behind_debt[lane] + rate * (v_lane - player.v) * dt, 1.0)
-		if _behind_debt[lane] >= 1.0 and _step_try_behind(lane, player, player.v + margin):
+		if _behind_wait[lane] > 0.0:
+			_behind_wait[lane] -= dt
+			continue
+		if _behind_debt[lane] < 1.0:
+			continue
+		if _step_try_behind(lane, player, player.v + margin):
 			_behind_debt[lane] = 0.0
+		else:
+			# Visible, or the gaps don't fit: retry later, not every tick (each attempt
+			# draws a vehicle and scans the lane).
+			_behind_wait[lane] = traffic_tuning.spawn_behind_retry_s
 
 
 func _step_try_behind(lane: int, player: VehicleState, min_speed: float) -> bool:
@@ -279,7 +296,8 @@ func overlaps_ghost_zone(s: float, d: float, length_m: float, width_m: float, pl
 		and d + width_m * 0.5 > player.d - ghost_half_width_m and d - width_m * 0.5 < player.d + ghost_half_width_m
 
 
-## Every spawn goes through here: cap, ghost zone, no pop-in, then the sim. Allocation-free.
+## Every spawn goes through here: cap, ghost zone, no pop-in, the live-traffic gap,
+## then the sim. Allocation-free.
 func _commit(rec: SpawnSource.Record, player: VehicleState) -> bool:
 	if state.count >= traffic_tuning.max_active_vehicles or state.is_full():
 		rejected_cap += 1
@@ -294,8 +312,29 @@ func _commit(rec: SpawnSource.Record, player: VehicleState) -> bool:
 		if not (ahead_ok or behind_ok):
 			rejected_visible += 1
 			return false
+	if not keeps_live_gaps(rec):
+		rejected_overlap += 1
+		return false
 	var slot: int = sim.spawn(rec)
 	return slot >= 0
+
+
+## Final spawn-gap check against live traffic, whatever the source planned: `rec` must
+## keep IDM's s* (closing speed included) to every live vehicle occupying its lane
+## (SpawnSources.occupies_lane: lane changers and lane-splitting bikes count), in
+## whichever order they drive. Allocation-free.
+func keeps_live_gaps(rec: SpawnSource.Record) -> bool:
+	var ln := flow.length_of(rec.type_id)
+	for i in state.capacity:
+		if state.active[i] == 0 or not SpawnSources.occupies_lane(state, i, rec.lane, road):
+			continue
+		var ahead := state.s[i] - rec.s
+		if ahead >= 0.0:
+			if ahead < flow.min_spacing(rec.profile_id, rec.v, ln, state.v[i], state.length[i]):
+				return false
+		elif -ahead < flow.min_spacing(state.profile_id[i], state.v[i], state.length[i], rec.v, ln):
+			return false
+	return true
 
 
 ## Refreshes the shared planning context for the current leg. Phase 6: intensity waves

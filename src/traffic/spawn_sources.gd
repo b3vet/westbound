@@ -27,6 +27,36 @@ static func idm_desired_gap(v: float, dv: float, headway_s: float, s0_m: float, 
 	return s0_m + maxf(0.0, v * headway_s + v * dv / (2.0 * sqrt(a_max * b_comfort)))
 
 
+## True when live vehicle `i` of `ts` occupies `lane` for spawn-gap purposes (at its
+## own s): its lane or target lane is `lane`, or its lateral span overlaps the lane.
+## The span is its body, widened while a lateral move is signaled or running to the
+## target lane's center and half a lane toward its blinker. So a car signaling or
+## moving into a lane already occupies it, a motorbike splitting lanes (riding the
+## boundary, `lane` = the lane it came from) occupies both lanes, and so does one
+## signaling a split. Allocation-free (spawn-gap checks run in the tick for behind
+## spawns).
+static func occupies_lane(ts: TrafficState, i: int, lane: int, road: RoadPath) -> bool:
+	if ts.lane[i] == lane or ts.target_lane[i] == lane:
+		return true
+	var s := ts.s[i]
+	var d := ts.d[i]
+	var hw := ts.width[i] * 0.5
+	var lo := d - hw
+	var hi := d + hw
+	if ts.lc_state[i] != TrafficState.LaneChange.NONE:
+		var half_lane := road.lane_width(s) * 0.5
+		var tc := road.lane_center_d(ts.target_lane[i], s)
+		lo = minf(lo, tc - hw)
+		hi = maxf(hi, tc + hw)
+		if (ts.flags[i] & TrafficState.FLAG_BLINKER_LEFT) != 0:
+			lo = minf(lo, d - half_lane - hw)
+		if (ts.flags[i] & TrafficState.FLAG_BLINKER_RIGHT) != 0:
+			hi = maxf(hi, d + half_lane + hw)
+	var c := road.lane_center_d(lane, s)
+	var half := road.lane_width(s) * 0.5
+	return lo < c + half and hi > c - half
+
+
 ## Default traffic: per-lane renewal process at the leg's density, lane-conditioned
 ## driver mix, lane flow speed, IDM-consistent gaps to every neighbor (planned or live).
 class Flow:
@@ -126,12 +156,13 @@ class Flow:
 
 	## One lane as a renewal process: each vehicle sits its minimum IDM spacing plus a
 	## uniform extra (mean = the target spacing) ahead of the previous one. Live traffic
-	## in the lane (current or target lane) acts as renewal points, so the lane keeps
-	## its density and every new vehicle keeps s* to both neighbors.
+	## occupying the lane (occupies_lane: its lane, a lane change into it, a lane split
+	## over it) acts as renewal points, so the lane keeps its density and every new
+	## vehicle keeps s* to both neighbors.
 	func _plan_lane(ctx: SpawnSource.Context, lane: int, lanes: int, s_from: float, s_to: float,
 			spacing: float, out: Array[SpawnSource.Record]) -> void:
 		var ts := ctx.traffic
-		var live := _live_in_lane(ts, lane)
+		var live := _live_in_lane(ts, lane, ctx.road)
 		var k := 0
 		var has_prev := false
 		var prev_s := 0.0
@@ -183,13 +214,13 @@ class Flow:
 			out.append(rec)
 			rec = SpawnSource.Record.new()
 
-	## Live slots in `lane` (current or target lane), sorted by s.
-	func _live_in_lane(ts: TrafficState, lane: int) -> Array[int]:
+	## Live slots occupying `lane` (SpawnSources.occupies_lane), sorted by s.
+	func _live_in_lane(ts: TrafficState, lane: int, road: RoadPath) -> Array[int]:
 		var out: Array[int] = []
 		if ts == null:
 			return out
 		for i in ts.capacity:
-			if ts.active[i] == 1 and (ts.lane[i] == lane or ts.target_lane[i] == lane):
+			if ts.active[i] == 1 and SpawnSources.occupies_lane(ts, i, lane, road):
 				out.append(i)
 		out.sort_custom(func(a: int, b: int) -> bool: return ts.s[a] < ts.s[b])
 		return out
@@ -208,8 +239,10 @@ class Flow:
 		rec.s = s
 		return fits_between_neighbors_into(ctx, rec)
 
-	## True when `rec` (s, lane, v, type, profile set) keeps s* to its nearest live leader
-	## and follower in its lane, and to the player when the player overlaps the lane.
+	## True when `rec` (s, lane, v, type, profile set) keeps s* (closing speed included)
+	## to its nearest live leader and follower occupying its lane (occupies_lane: lane
+	## changers and lane-splitting bikes count), and to the player when the player
+	## overlaps the lane.
 	## Allocation-free.
 	func fits_between_neighbors_into(ctx: SpawnSource.Context, rec: SpawnSource.Record) -> bool:
 		var ts := ctx.traffic
@@ -218,7 +251,7 @@ class Flow:
 			var lead := -1
 			var follow := -1
 			for i in ts.capacity:
-				if ts.active[i] == 0 or (ts.lane[i] != rec.lane and ts.target_lane[i] != rec.lane):
+				if ts.active[i] == 0 or not SpawnSources.occupies_lane(ts, i, rec.lane, ctx.road):
 					continue
 				if ts.s[i] >= rec.s:
 					if lead < 0 or ts.s[i] < ts.s[lead]:

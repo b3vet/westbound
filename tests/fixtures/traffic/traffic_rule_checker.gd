@@ -44,6 +44,15 @@ var collisions := 0            ## ticks with at least one traffic-traffic overla
 var collision_pairs := 0
 var player_contacts := 0       ## ticks with a traffic-player overlap
 var rear_end_contacts := 0     ## ... where the car's center is behind the player's
+## Contact episodes (a car touching the player, counted once per touch).
+var contact_episodes := 0
+var rear_end_episodes := 0     ## ... started with the car's center behind the player's
+## ... of a player driving normally: no lateral motion and no braking beyond the traffic
+## clamp for `quiet_s` before the touch (Lives → rear-end prevention). Must stay 0.
+var rear_end_normal := 0
+## Slots whose contact with the player started this tick (the caller may notify_hit them).
+var contacts_started := PackedInt32Array()
+var quiet_s: float
 var decel_violations := 0
 var brake_flag_violations := 0
 var brake_seen := 0
@@ -73,6 +82,12 @@ var _strong: float
 var _in_list := PackedByteArray()
 var _list_vid := PackedInt32Array()
 var _max_len := 0.0
+var _touch := PackedByteArray()      # in contact with the player at the last observe
+var _touch_vid := PackedInt32Array()
+var _prev_pd := NAN
+var _last_lateral_t := -INF
+var _last_hard_brake_t := -INF
+var _time := 0.0
 
 
 func _init(t: Tuning, reg: TrafficRegistry, road_path: RoadPath, p_length: float, p_width: float) -> void:
@@ -87,6 +102,12 @@ func _init(t: Tuning, reg: TrafficRegistry, road_path: RoadPath, p_length: float
 	_strong = traffic_tuning.brake_light_strong_decel_mps2
 	for x in reg.length:
 		_max_len = maxf(_max_len, x)
+	quiet_s = traffic_tuning.soak_normal_driving_quiet_s
+
+
+## Time of the player's last lateral motion (-INF = never).
+func player_last_lateral_t() -> float:
+	return _last_lateral_t
 
 
 func total_violations() -> int:
@@ -96,12 +117,20 @@ func total_violations() -> int:
 
 func summary() -> String:
 	return ("signals %d moves %d cancels %d | violations: signal %d unsignaled %d ambush %d collisions %d "
-		+ "decel %d brake-flags %d | player contacts %d (rear-end %d)") % [
+		+ "decel %d brake-flags %d | player contacts %d (rear-end %d) episodes %d (rear-end %d, normal driving %d)") % [
 			signals, moves, cancels, signal_violations, unsignaled_moves, ambush_violations, collisions,
-			decel_violations, brake_flag_violations, player_contacts, rear_end_contacts]
+			decel_violations, brake_flag_violations, player_contacts, rear_end_contacts, contact_episodes,
+			rear_end_episodes, rear_end_normal]
 
 
 func observe(time: float, ts: TrafficState, player: VehicleState) -> void:
+	_time = time
+	contacts_started.clear()
+	if absf(player.d - _prev_pd) > LATERAL_EPS or absf(player.v_lat) > LATERAL_EPS:
+		_last_lateral_t = time
+	if player.accel_long < -_clamp - 1e-9:
+		_last_hard_brake_t = time
+	_prev_pd = player.d
 	if _vid.size() != ts.capacity:
 		_vid.resize(ts.capacity)
 		_vid.fill(0)
@@ -261,16 +290,32 @@ func _check_boxes(ts: TrafficState, player: VehicleState) -> void:
 				_msg("collision slots %d/%d at s=%.1f d=%.2f/%.2f" % [i, j, ts.s[i], ts.d[i], ts.d[j]])
 	if hit_tick:
 		collisions += 1
+	if _touch.size() != ts.capacity:
+		_touch.resize(ts.capacity)
+		_touch.fill(0)
+		_touch_vid.resize(ts.capacity)
 	var p_contact := false
-	for a in n:
-		var i := _ord[a]
-		if absf(ts.s[i] - player.s) >= (ts.length[i] + player_length) * 0.5:
-			continue
-		if _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], atan2(ts.v_lat[i], maxf(ts.v[i], 0.1)),
+	for i in ts.capacity:
+		var touching := false
+		if ts.active[i] == 1 and absf(ts.s[i] - player.s) < (ts.length[i] + player_length) * 0.5 \
+				and _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], atan2(ts.v_lat[i], maxf(ts.v[i], 0.1)),
 				player.s, player.d, player_length, player_width, player.yaw):
+			touching = true
 			p_contact = true
-			if ts.s[i] < player.s:
+			var rear := ts.s[i] < player.s
+			if rear:
 				rear_end_contacts += 1
+			if _touch[i] == 0 or _touch_vid[i] != ts.vehicle_id[i]:
+				contact_episodes += 1
+				contacts_started.append(i)
+				if rear:
+					rear_end_episodes += 1
+					if _time - _last_lateral_t >= quiet_s and _time - _last_hard_brake_t >= quiet_s:
+						rear_end_normal += 1
+						_msg("t=%.3f slot %d rear-ended a player driving normally (gap %.2f m, dv %.2f m/s)" % [
+							_time, i, player.s - ts.s[i] - (ts.length[i] + player_length) * 0.5, ts.v[i] - player.v])
+		_touch[i] = 1 if touching else 0
+		_touch_vid[i] = ts.vehicle_id[i]
 	if p_contact:
 		player_contacts += 1
 
