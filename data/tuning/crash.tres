@@ -1,0 +1,38 @@
+[gd_resource type="Resource" script_class="CrashTuning" format=3]
+
+[ext_resource type="Script" path="res://src/core/tuning/crash_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+cinematic_tail_s = 0.4
+skip_grace_s = 0.3
+restitution_frac = 0.35
+min_approach_kmh = 18.0
+tangential_frac = 0.25
+lift_frac = 0.3
+lift_max_kmh = 12.0
+contact_height_frac = 0.5
+tumble_roll_deg_per_s = 160.0
+tumble_yaw_deg_per_s = 70.0
+tumble_full_kmh = 60.0
+spin_max_deg_per_s = 200.0
+body_friction_frac = 0.7
+body_bounce_frac = 0.15
+body_linear_damp_factor = 0.05
+body_angular_damp_factor = 0.35
+arena_segment_m = 20.0
+arena_ahead_m = 320.0
+arena_behind_m = 40.0
+arena_ground_margin_m = 40.0
+arena_ground_thickness_m = 2.0
+arena_wall_thickness_m = 1.0
+orbit_speed_deg_per_s = 38.0
+orbit_reduced_motion_frac = 0.35
+orbit_radius_m = 9.0
+orbit_radius_per_separation_frac = 0.6
+orbit_radius_max_m = 30.0
+orbit_height_m = 3.2
+look_height_m = 0.4
+look_follow_s = 0.08
+orbit_start_offset_deg = 25.0
+fov_deg = 60.0

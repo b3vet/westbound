@@ -79,6 +79,8 @@ class Carriageway:
 	## +1: the player's carriageway (travel toward +s); -1: the opposite one.
 	var dir: float = 1.0
 	var live: PackedByteArray
+	## 1 = not drawn (set_slot_hidden); cleared when a new vehicle takes the slot.
+	var hidden: PackedByteArray
 	var id: PackedInt32Array
 	var model: PackedInt32Array
 	var inv_wheel_r: PackedFloat64Array
@@ -102,6 +104,7 @@ class Carriageway:
 		dir = direction
 		var n := st.capacity
 		live.resize(n)
+		hidden.resize(n)
 		id.resize(n)
 		model.resize(n)
 		inv_wheel_r.resize(n)
@@ -307,7 +310,7 @@ func render(fraction: float) -> void:
 	for sd in _sides:
 		var st := sd.state
 		for i in st.capacity:
-			if sd.live[i] == 0 or st.active[i] == 0 or sd.s1[i] < s_min or sd.s1[i] > s_max:
+			if sd.live[i] == 0 or sd.hidden[i] != 0 or st.active[i] == 0 or sd.s1[i] < s_min or sd.s1[i] > s_max:
 				continue
 			# Visual body motion (roll from lateral, pitch from longitudinal acceleration,
 			# + roll leans left as CarVisual) and wheel spin at v / r.
@@ -383,6 +386,15 @@ func render(fraction: float) -> void:
 		_glow_mm.visible_instance_count = _glow_count
 	if _shadow_mm.visible_instance_count != _shadow_count:
 		_shadow_mm.visible_instance_count = _shadow_count
+
+
+## Hides (or shows again) the vehicle in `slot`: no body, glow or shadow is drawn for
+## it (the crash sequence draws the hit car on a physics body instead). A new vehicle
+## taking the slot is drawn again. Allocation-free.
+func set_slot_hidden(slot: int, hidden: bool, opposite: bool = false) -> void:
+	var sd := _side(opposite)
+	if sd != null and slot >= 0 and slot < sd.hidden.size():
+		sd.hidden[slot] = 1 if hidden else 0
 
 
 # ---------------------------------------------------------------- Budget numbers
@@ -514,6 +526,7 @@ func _capture(sd: Carriageway, t_start: float) -> void:
 				sd.live[i] = 0
 				continue
 			sd.live[i] = 1
+			sd.hidden[i] = 0
 			sd.id[i] = st.vehicle_id[i]
 			sd.model[i] = mi
 			sd.inv_wheel_r[i] = 1.0 / _models[mi].wheel_radius_m
