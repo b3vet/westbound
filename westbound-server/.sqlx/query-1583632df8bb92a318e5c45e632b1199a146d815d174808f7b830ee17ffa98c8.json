@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT file_path FROM replays WHERE run_id IN (SELECT id FROM runs WHERE account_id = ?)",
+  "describe": {
+    "columns": [
+      {
+        "name": "file_path",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "file_path"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1583632df8bb92a318e5c45e632b1199a146d815d174808f7b830ee17ffa98c8"
+}

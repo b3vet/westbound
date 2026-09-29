@@ -262,6 +262,11 @@ pub async fn set_ban(db: &SqlitePool, id: i64, until: Option<i64>) -> sqlx::Resu
 pub struct DeleteReport {
     pub accounts: u64,
     pub refresh_tokens: u64,
+    /// N7.1: the account's runs, its leaderboard entries and its runs' replays (rows; the
+    /// replay files are deleted after commit).
+    pub runs: u64,
+    pub leaderboard_entries: u64,
+    pub replays: u64,
 }
 
 /// Deletes an account and everything that belongs to it, in one transaction, and
@@ -273,15 +278,37 @@ pub struct DeleteReport {
 /// - `blocks` (N9): rows where `account_id` or `blocked_id` is the account;
 /// - `crew_members` (N9): the membership; a crew it owns passes to the oldest member
 ///   or is disbanded when empty (`crews`);
-/// - `leaderboard_entries` (N7): the account's entries;
-/// - `runs` (N7) and `replays` (N8): the rows, then the replay files under
-///   `data/replays/` after commit;
+/// - `leaderboard_entries`, `runs` and `replays` (N7.1): done below; the replay files
+///   are deleted after commit. The Loop crew board's sums that counted the account are
+///   recomputed by N9 when it removes the crew membership;
 /// - `reports` (N9): keep the report for moderation but null out the reporter;
 /// - Apple token revocation (MP-D2): call Apple's revoke endpoint before deleting
 ///   when `apple_sub` is set.
 pub async fn delete(db: &SqlitePool, id: i64, actor: &str) -> anyhow::Result<DeleteReport> {
     let mut tx = db.begin().await?;
     let refresh_tokens = sqlx::query!("DELETE FROM refresh_tokens WHERE account_id = ?", id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let replay_files = sqlx::query_scalar!(
+        "SELECT file_path FROM replays WHERE run_id IN (SELECT id FROM runs WHERE account_id = ?)",
+        id
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let replays = sqlx::query!(
+        "DELETE FROM replays WHERE run_id IN (SELECT id FROM runs WHERE account_id = ?)",
+        id
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    let leaderboard_entries =
+        sqlx::query!("DELETE FROM leaderboard_entries WHERE account_id = ?", id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    let runs = sqlx::query!("DELETE FROM runs WHERE account_id = ?", id)
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -293,6 +320,9 @@ pub async fn delete(db: &SqlitePool, id: i64, actor: &str) -> anyhow::Result<Del
     let report = DeleteReport {
         accounts,
         refresh_tokens,
+        runs,
+        leaderboard_entries,
+        replays,
     };
     if accounts == 1 {
         crate::db::admin_log(
@@ -300,11 +330,17 @@ pub async fn delete(db: &SqlitePool, id: i64, actor: &str) -> anyhow::Result<Del
             actor,
             "account_delete",
             &id.to_string(),
-            &format!("refresh_tokens={refresh_tokens}"),
+            &format!(
+                "refresh_tokens={refresh_tokens} runs={runs} \
+                 leaderboard_entries={leaderboard_entries} replays={replays}"
+            ),
         )
         .await?;
     }
     tx.commit().await?;
+    for path in &replay_files {
+        crate::leaderboards::remove_replay_file(path).await;
+    }
     Ok(report)
 }
 

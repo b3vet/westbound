@@ -31,6 +31,16 @@ N2.3 puts the realtime protocol on `/ws` (the echo moves to `/ws/echo`):
 
 See "Realtime gateway".
 
+N7.1 adds the leaderboards:
+
+- five boards (Loop, Loop crew, Journey, Daily Drive, Distance) with their periods, and the global, around-me and friends views;
+- single-player run submissions with plausibility checks and the replay trigger;
+- the one-time legacy personal-best upload;
+- the hooks N6 (multiplayer runs) and N8 (replay verdicts) call;
+- admin removal of runs and entries.
+
+See "Leaderboards & runs API".
+
 | Path | What |
 | --- | --- |
 | `westbound-server/crates/server/` | The binary (`westbound-server`) and its library, with integration tests in `tests/` |
@@ -42,6 +52,7 @@ See "Realtime gateway".
 | `.github/workflows/server.yml` | CI: fmt, clippy, tests, image build, GHCR push |
 | `tools/net_echo_check.gd`, `tools/web_smoke/ws_echo.mjs` | Echo checks from Godot and from Chromium (point them at `/ws/echo`) |
 | `tests/net/live_ws_check.gd` | Godot's `NetClient` against a running server: account, `Hello` → `Welcome`, clock sync, keepalive (see "Realtime gateway → Live cross-side check") |
+| `tools/server_data/export_daily_seed_vectors.gd` | Exports `Rng.daily_seed` vectors to `crates/server/tests/data/daily_seed_vectors.json` for the Rust port's parity test |
 
 ## Routes
 
@@ -53,6 +64,7 @@ See "Realtime gateway".
 | `GET /api/v1/echo-check` | public | A small HTML page, used to check a phone (see "Verify a phone connects"): runs the echo on `/ws/echo`, then sends a token-less `Hello` to `/ws` and shows the gateway's `Error` (`map_mismatch` or `auth_failed`) |
 | `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files, read from `deeplinks.dir`, with built-in empty placeholders |
 | `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API" |
+| `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
 | `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info` |
 
 ## Local development
@@ -81,6 +93,8 @@ Subcommands:
 | `admin ban <id> <duration>` | Bans an account for `30m`, `12h`, `7d`, `2w`, or `perm`. See "Admin CLI" |
 | `admin unban <id>` | Lifts a ban |
 | `admin rename <id> <name>` | Force-renames an account |
+| `admin remove-run <run_id>` | Deletes a run and its replay; the entries it held fall back to the player's next best run |
+| `admin remove-entry <board> <period> <account_id>` | Deletes one leaderboard entry (crew id on `loop_crew`) |
 
 Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` environment variables.
 
@@ -92,6 +106,7 @@ Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` 
 - **Tables:**
   - Migration `0001` creates `accounts`, `refresh_tokens` and `admin_log`.
   - `0002` adds `accounts.token_version` and rebuilds `refresh_tokens` with its rotation state (`family`, `rotated_from`, `used_at`, `revoked_at`).
+  - `0003` (N7.1) creates `runs`, `leaderboard_entries` and `replays` (see "Leaderboards & runs API → Tables").
   - The other data-model tables come with their milestones.
 
 Queries written with `sqlx::query!` are checked at compile time against `westbound-server/.sqlx/`, and CI builds with `SQLX_OFFLINE=true`. After you add or change a `query!`, or change the schema, regenerate that data:
@@ -388,8 +403,8 @@ Every error is JSON:
 **`DELETE /api/v1/account`** (bearer; allowed while banned)
 
 - Response `204`.
-- In one transaction, deletes the account and its refresh tokens.
-- `accounts::delete` lists the tables later milestones add to that transaction: friends, blocks, crew memberships, leaderboard entries, runs and replays, reports, and Apple token revocation.
+- In one transaction, deletes the account, its refresh tokens, its runs, its leaderboard entries and its runs' replays (the replay files go after commit).
+- `accounts::delete` lists the tables later milestones add to that transaction: friends, blocks, crew memberships (and the Loop crew sums that counted the player), reports, and Apple token revocation.
 - Logs `account_delete` to `admin_log` with the account id and row counts only.
 
 **`POST /api/v1/auth/link/{apple,google}`, `POST /api/v1/auth/signin/{apple,google}`**
@@ -425,7 +440,8 @@ Rate limits use `tower_governor`. Each bucket refills evenly over its window, wi
 | --- | --- | --- |
 | `POST /auth/device` | client IP | 5 per hour, burst 5 |
 | other `/auth/*` | client IP | 30 per minute, burst 10 |
-| `/me`, `/account` (and later authenticated routes) | account | 120 per minute, burst 30 |
+| `/me`, `/account`, `/boards/*`, `/runs*` (and later authenticated routes) | account | 120 per minute, burst 30 |
+| `POST /runs`, `POST /runs/legacy` (also) | account | 30 per hour, burst 10 |
 
 - **Keys:**
   - IPv6 clients are keyed by their /64.
@@ -456,12 +472,15 @@ Admin commands run inside the container against the live database, from Coolify'
 westbound-server admin ban 42 7d           # 30m, 12h, 7d, 2w, or perm
 westbound-server admin unban 42
 westbound-server admin rename 42 "Road Runner"
+westbound-server admin remove-run 1234              # entries fall back to the next best run
+westbound-server admin remove-entry journey 2026-W40 42
 ```
 
 - **`rename`:**
   - applies the name rules and the filter, but not the cooldown;
   - keeps the tag when it is free for the new name;
   - restarts the player's 30-day cooldown.
+- **`remove-run` / `remove-entry`:** logged as `remove_run` (target: the run id; detail: the account and the entries rebuilt) and `remove_entry` (target: `board/period/account`). A removed entry is not rebuilt from older runs; it comes back only with a new run. The running server's cached board tops catch up within `leaderboards.cache_ttl_secs`.
 - **Bans:**
   - A ban applies from the next request: HTTP routes return `403 banned`, and the WebSocket `Hello` gets `banned`.
   - Open WebSocket sessions are dropped within `gateway.ban_recheck_ms` (30 s): the gateway re-checks every live session against the database and sends a fatal `banned` (see "Realtime gateway → Bans").
@@ -470,6 +489,199 @@ westbound-server admin rename 42 "Road Runner"
 
 - `config/dev.toml` sets `server.env = "dev"`, so no secrets are needed.
 - The Docker image defaults to `production`. For `deploy/local-tls.sh` and `docker compose`, pass `WB_SERVER__ENV=dev`, or real `WB_AUTH__JWT_SECRET` and `WB_AUTH__DEVICE_SECRET_PEPPER` values.
+
+## Leaderboards & runs API
+
+WP N7.1, in `crates/server/src/`: `leaderboards/` (`mod.rs`: boards, targets, placements, the cache, the N6 and N8 hooks, admin removals; `period.rs`: period keys; `store.rs`: the SQL; `routes.rs`: `GET /boards`), `runs/` (`mod.rs`: submissions and legacy uploads; `plausibility.rs`; `daily_seed.rs`: the port of `Rng.daily_seed`; `routes.rs`), `social.rs` (the N9 seams). Spec: multiplayer handoff → "Leaderboards", "Rooms → Leaderboard eligibility", "Data model (SQLite)". Tests: `tests/runs.rs`, `tests/leaderboards.rs`.
+
+### Boards and periods
+
+| Board (`{board}`) | Ranks | Periods (first = default) | Written by |
+| --- | --- | --- | --- |
+| `loop` | Best single run in a ranked room | season `YYYY-MM`, `all` | the server (N6, `record_multiplayer_run`) |
+| `loop_crew` | Sum of the crew's best 4 members' season-best Loop runs | season `YYYY-MM` | the server, when the run carries a crew (N9) |
+| `journey` | Best Journey run | ISO week `YYYY-Www`, `all` | `POST /runs` (`mode: journey`), legacy uploads (`all`) |
+| `daily` | Best run on the day's seed | date `YYYY-MM-DD` | `POST /runs` (`mode: daily`) |
+| `distance` | Longest single-player run, in whole metres | `all` | `POST /runs` (both modes), legacy uploads |
+
+- **Period keys** are UTC: the season is the calendar month; the week is the ISO 8601 week (Monday to Sunday, `2027-01-01` is in `2026-W53`); a period rolls over at 00:00 UTC.
+- **Which period a run lands in** comes from the run's `date` (the UTC date it was played; the seed's date for Daily Drive). A run finished at 23:59 on Sunday and sent after midnight still counts for that week. Multiplayer runs use their end time.
+- **Ranked rooms** (Loop): public rooms, and private rooms left on the default density and clock. A private room with a custom density or clock stores the run (`room_type = private_custom`) for personal stats only.
+- **One entry per player per board and period**, holding their best run. A new run replaces it only with a strictly higher value, so a tie keeps the earlier run. A run needs a value above 0 to enter a board.
+- **Ranking:** value descending, then the earlier run (`achieved_at`), then the lower id. Ranks never repeat.
+
+### `GET /api/v1/boards/{board}?period=&view=&limit=`
+
+- **Auth:** optional for `view=global` (a token adds `me`); required for `around_me` and `friends` (401 `unauthorized`). A token that is sent must be valid (401 `invalid_token` / `token_expired`, 403 `banned`).
+- **`period`:** a key the board keeps, or left out / `current` for the board's current default period.
+- **`view`:**
+  - `global` (default): the top `limit` (default and max `leaderboards.global_limit_*`: 100).
+  - `around_me`: `limit` ranks on each side of the caller (default 10, max 50), `2 × limit + 1` entries. At the top or bottom the window shifts so it still holds that many where the board has them. Without an entry: `entries: []`, `me: null`. On `loop_crew` the subject is the caller's crew (none until N9).
+  - `friends`: the caller and their friends, ranked among themselves. Until friends exist (N9): `entries: []` and `friends_available: false`.
+- **Errors:** 404 `unknown_board`; 400 `invalid_period` (not a key this board keeps), `invalid_view`, `invalid_limit`, `invalid_query` (an unknown or repeated parameter).
+
+```json
+{
+  "board": "journey", "period": "2026-W40", "period_kind": "week",
+  "period_start": "2026-09-28", "period_end": "2026-10-04",
+  "view": "global", "total": 1234, "friends_available": false, "generated_at": 1790600000,
+  "entries": [
+    {"rank": 1, "account_id": "42", "crew_id": null, "display_name": "Şahin 34", "tag": 42,
+     "full_name": "Şahin 34#0042", "crew_tag": null, "score": 183200,
+     "verification": "pending", "verifying": true, "legacy": false,
+     "run_id": "917", "run_date": "2026-09-29", "achieved_at": 1790640000}
+  ],
+  "me": { …an entry with the caller's rank, or null… }
+}
+```
+
+- `period_start` / `period_end`: the period's first and last UTC date (`null` for `all`).
+- `verification`: `pending` (awaiting its replay: show "verifying"), `verified`, `unverified` (plausible, needed no replay) or `legacy` (an uploaded local best: show the legacy marker, never used for rewards).
+- `crew_tag` is `null` until crews (N9). On `loop_crew`, `crew_id` is set and the account fields are `null` (N9 adds the crew's name and tag).
+- `score` is points, or whole metres on `distance`.
+
+**Cost and caching.** Every query walks the `leaderboard_rank` index `(board, period_key, score DESC, achieved_at, subject_id)`:
+
+- The top `global_limit_max` rows and the entry count of each board and period are cached in memory. A write through the server drops that pair at once (and account deletion and renames drop all), and every pair expires after `cache_ttl_secs` (60 s): that covers the admin CLI, which runs in another process.
+- A rank is 1 + a count of the entries ahead (two index ranges: higher values, and ties ahead). "Around me" walks the index outwards from the caller (keyset, no `OFFSET`).
+- `tests/leaderboards.rs → performance_100k_entries` (100,000 entries on one board, release build on a busy 4-core machine): top 100 in 0.4 ms from the database and 0.03 ms from the cache; around-me in 2.5 ms at rank 50,000 and 4.3 ms at rank 100,000 (the count is linear in the rank, about 40 ns per entry ahead). Debug builds are about 4× slower. A rank is also computed for `me` on every authenticated read and for each placement of a submission.
+
+### `POST /api/v1/runs` (bearer)
+
+The run summary the client sends when a single-player run ends: the `Events.run_over` results (`RunStats.results`, docs/RUN.md) without `personal_best` / `new_best` / `previous_best`, plus four submission fields. Unknown fields are refused.
+
+```json
+{
+  "idempotency_key": "3f0c9a7e-5b8e-4c1e-9d55-0d6c2f4e8a11",
+  "mode": "daily", "seed": "2538700399935769545", "date": "2026-09-29",
+  "car": "coupe", "client_build": 42,
+  "score": 183200, "distance_m": 24018.4, "duration_s": 512.3,
+  "legs_completed": 6, "coast_reached": false,
+  "best_chain": 41200, "best_multiplier": 23.5,
+  "passes": 212, "close_passes": 61, "threads": 9, "cuts": 34,
+  "top_speed_kmh": 287.1, "night_time_s": 94.0, "hits": 1,
+  "journey_complete": false, "journey_time_s": 0.0, "journey_distance_m": 0.0
+}
+```
+
+- `idempotency_key`: 8–64 characters of `A–Z a–z 0–9 _ -`, unique per run (a UUID). A second submission with the same key answers the stored receipt with **200** and `duplicate: true`.
+- `mode`: `journey` or `daily`. `seed`: a decimal string (or a JSON integer), 0..2^63−1. `date`: the UTC date the run was played (Daily: the seed's date). `car`: `a–z 0–9 _ -`, 1–32. `client_build`: the u32 build number.
+- `score`, `best_chain`: at most 2^53−1. The other numbers must be finite and ≥ 0. The three `journey_*` keys may be left out.
+- Malformed bodies are 400 `invalid_body`.
+
+Response **201** (also for a rejected run):
+
+```json
+{
+  "run_id": "917", "verification": "pending", "verifying": true, "reason": null,
+  "replay_required": true, "duplicate": false,
+  "placements": [
+    {"board": "daily", "period": "2026-09-29", "score": 183200, "rank": 3,
+     "improved": true, "previous_best": 150000, "on_board": true},
+    {"board": "distance", "period": "all", "score": 24018, "rank": 812,
+     "improved": false, "previous_best": 31000, "on_board": false}
+  ]
+}
+```
+
+- **`verification`:** `rejected` (a plausibility check failed; `reason` says which; stored for audit, never on a board), `pending` (a replay is required: shown as "verifying" until N8 checks it) or `unverified` (no replay needed).
+- **`replay_required`:** the run improves the player's entry on some board and period and either ranks within `leaderboards.replay_top_n` (100) there, or it is a personal best: an all-time period, or the day's Daily board. (Weekly and season boards reset, so a first run there is not a personal best.) The upload endpoint is N8's.
+- **`placements`:** each board and period the run feeds: Journey → the week, all-time and Distance; Daily → the date and Distance. `rank` is the player's rank there after the run (the run's own rank when it improved the entry). `on_board` is false for a `pending` run while `leaderboards.show_pending = false`.
+
+**Plausibility checks,** in this order; the first failure is the `reason`:
+
+| `reason` | Rejected when |
+| --- | --- |
+| `build_unsupported` | `client_build < runs.min_build`, or `runs.supported_builds` is set and does not list it |
+| `date_window` | `date` is not within [its day's start − `date_early_secs` (1 h), its end + `date_late_secs` (6 h)) of now |
+| `daily_seed` | a Daily run whose `seed` is not `Rng.daily_seed` of its `date` |
+| `duration` | `duration_s > max_duration_s` (6 h), or `night_time_s` / `journey_time_s` exceed it |
+| `top_speed` | `top_speed_kmh > max_top_speed_kmh` (360) |
+| `distance` | `distance_m > top_speed × duration × (1 + distance_slack_pct) + distance_slack_m`; `journey_distance_m > distance_m`; `legs_completed × leg_min_length_m > distance_m + distance_slack_m` |
+| `score_rate` | `score × 60 / max(duration_s, min_duration_s) > max_score_per_minute` (200,000) |
+| `stats` | `close_passes > passes`; `2 × threads > passes`; `coast_reached` with fewer than `legs_to_coast` legs; `journey_complete` without the coast; `hits > lives + legs_completed`; `best_multiplier` below the start or above start + the events' gains; `score` above the stats' bound (below); `best_chain` above the events' part of it |
+
+The score bound, with the `[runs]` values that mirror `scoring.tres` and `legs.tres`: `(plain passes × 10 + close passes × 30 + threads × 50 + cuts × 15) × best_multiplier × 2 (top speed factor) × 2 (night) + 0.5 per event (rounding)`, plus `((legs_completed + 1) × 18,500 + 50,000 if the coast was reached) × 2 (night)` for the leg, objective and journey bonuses, plus `score_slack_pct` (1 %). It is a bound, not a recomputation: the replay verifier (N8) recomputes.
+
+**Daily seed parity.** `runs/daily_seed.rs` ports `fnv1a32`, `derive_seed` and `daily_seed` from `src/core/rng.gd`. `tests/runs.rs → daily_seed_matches_gdscript_vectors` checks it against every day of 2024–2027 plus edge dates, exported from Godot. After changing `rng.gd`, re-export them:
+
+```sh
+tools/godot.sh --headless --path . --import      # once, if the project was never imported
+tools/godot.sh --headless --path . --script res://tools/server_data/export_daily_seed_vectors.gd
+```
+
+### `POST /api/v1/runs/legacy` (bearer)
+
+The one-time upload of the player's local personal bests from before online leaderboards (Game Center / Play Games are retired). Rate-limited like submissions.
+
+```json
+{"entries": [{"board": "journey", "score": 77000}, {"board": "distance", "score": 45000}]}
+```
+
+- Boards: `journey` (best score) and `distance` (longest run, metres), each at most once per request. Both go on the all-time period. Daily bests have no date and Loop is multiplayer-only. `score` is 1..2^53−1; leave out a board without a best (400 `invalid_body` otherwise).
+- Each board is accepted **once per account** (`runs.legacy_board` is unique per account): later uploads answer `already_uploaded`.
+- Above `leaderboards.legacy_max_journey_score` (50,000,000) / `legacy_max_distance_m` (2,000 km) an item is `over_cap`: not stored, so a fixed client may send it again.
+- An accepted item is stored as a `legacy` run and written like any run (only if better than the player's entry). It shows with `legacy: true`, and a real run that beats it replaces it.
+
+Response 200:
+
+```json
+{"results": [
+  {"board": "journey", "status": "accepted", "run_id": "918",
+   "placement": {"board": "journey", "period": "all", "score": 77000, "rank": 40,
+                 "improved": true, "previous_best": null, "on_board": true}},
+  {"board": "distance", "status": "already_uploaded", "run_id": null, "placement": null}
+]}
+```
+
+### Hooks for N6, N8 and N9
+
+- **N6, multiplayer runs:** `state.boards.record_multiplayer_run(&MultiplayerRun { account_id, map_id, room: Public | PrivateDefault | PrivateCustom, score, duration_s, distance_m, stats, car, client_build, ended_at, crew })`. It stores the run as `verified`. For a ranked room it writes Loop (the season of `ended_at`, and all-time), and with `crew: Some(CrewSnapshot { crew_id, member_ids })` the crew's Loop crew score: the sum of the best `crew_top_members` members' season entries, rewritten when it changes. It returns the run id, `ranked`, the placements and the new crew score.
+- **N8, replay verdicts:** `state.boards.set_run_verification(run_id, Accepted | Rejected)`. Accepted marks the run and its entries `verified` (and writes them if `show_pending` kept them off). Rejected marks the run `rejected` (`reject_reason = replay`) and rebuilds each entry it held from the player's next best eligible run. The `replays` table is ready (`run_id`, `file_path`, `status`, `result`, `created_at`); N8 adds the upload route, the queue and the files under `data/replays/`.
+- **N9, friends and crews:** `social::friend_ids` and `social::crew_of` answer "not available" today. N9 replaces their bodies with one query each (see the doc comments): the friends view (`store::of_subjects`) and the crew "me" already take their results. N9 also fills `crew_tag`, names the crew entries and recomputes crew sums when members join, leave or delete their account.
+
+### Tables
+
+- `runs`: every submitted or server-recorded run, rejected ones included.
+  - `mode`: `journey` | `daily` | `loop` | `legacy`.
+  - `map_or_seed`: the seed (decimal) or map id.
+  - `date`, `score`, `distance_m`, `duration_s`, `stats` (JSON), `car`, `build`, `room_type`.
+  - `verification`, `reject_reason`, `legacy_board`, `idempotency_key`, `response` (the stored receipt), `created_at`.
+  - Unique: `(account_id, idempotency_key)` and `(account_id, legacy_board)`.
+- `leaderboard_entries`: `(board, period_key, subject_id)` primary key, then `account_id` (NULL on `loop_crew`), `run_id`, `score`, `achieved_at`, `verification`, `run_date`. Indexed for ranking, by account (deletion) and by run (removal, verdicts).
+- `replays`: `run_id` (primary key), `file_path`, `status`, `result`, `created_at`.
+
+### Configuration
+
+`[leaderboards]`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `show_pending` | `true` | Pending runs (awaiting their replay) go on the boards, marked verifying. `false`: they wait until N8 verifies them |
+| `global_limit_default` / `_max` | `100` / `100` | `view=global` limit |
+| `around_me_default` / `_max` | `10` / `50` | `view=around_me`: ranks on each side |
+| `replay_top_n` | `100` | An improving run that ranks within this needs a replay |
+| `cache_ttl_secs` | `60` | Cached board tops expire after this, even without writes |
+| `cache_max_boards` | `256` | Most board/period pairs cached |
+| `crew_top_members` | `4` | Members summed on `loop_crew` |
+| `legacy_max_journey_score` / `legacy_max_distance_m` | `50000000` / `2000000.0` | Legacy upload caps |
+
+`[runs]` (plausibility; the scoring numbers mirror the game's tuning, keep them at or above it):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `min_build`, `supported_builds` | `0`, `[]` | Oldest accepted build; the accepted builds (empty: all from `min_build`). Env: `WB_RUNS__SUPPORTED_BUILDS=41,42` |
+| `max_score_per_minute` | `200000.0` | Score-rate cap |
+| `min_duration_s` / `max_duration_s` | `10.0` / `21600.0` | Shorter runs count as this long for the rate; longer ones are refused |
+| `max_top_speed_kmh` | `360.0` | Fastest car, boost and overshoot |
+| `distance_slack_pct` / `distance_slack_m` | `5.0` / `200.0` | Headroom on top speed × duration |
+| `leg_min_length_m`, `legs_to_coast`, `lives` | `3000.0`, `8`, `2` | Legs need distance; the coast needs 8 legs; hits ≤ lives + legs |
+| `pass_points`, `close_pass_points`, `cut_points`, `thread_points` | `10`, `30`, `15`, `50` | Base points (`scoring.tres`) |
+| `*_multiplier_gain`, `multiplier_start` | `1`, `3`, `1`, `5`; `1` | Multiplier gains and start |
+| `speed_factor_max`, `night_factor` | `2.0`, `2.0` | Largest point factors |
+| `leg_bonus_max_points`, `journey_bonus_points` | `18500.0`, `50000.0` | Bonus bound per leg; the coast's bonus (`legs.tres`) |
+| `score_slack_pct` | `1.0` | Headroom on the score bound |
+| `date_early_secs` / `date_late_secs` | `3600` / `21600` | The submission window around a run's date |
 
 ## Configuration reference
 
@@ -513,6 +725,7 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `rate_limits.device_create_per_hour` / `_burst` | `WB_RATE_LIMITS__DEVICE_CREATE_PER_HOUR` / `__DEVICE_CREATE_BURST` | `5` / `5` | `POST /auth/device` per client IP |
 | `rate_limits.auth_per_minute` / `_burst` | `WB_RATE_LIMITS__AUTH_PER_MINUTE` / `__AUTH_BURST` | `30` / `10` | The other `/auth/*` routes per client IP |
 | `rate_limits.account_per_minute` / `_burst` | `WB_RATE_LIMITS__ACCOUNT_PER_MINUTE` / `__ACCOUNT_BURST` | `120` / `30` | Authenticated routes per account |
+| `rate_limits.runs_per_hour` / `_burst` | `WB_RATE_LIMITS__RUNS_PER_HOUR` / `__RUNS_BURST` | `30` / `10` | Run submissions per account, on top of the account limit |
 | `gateway.hello_timeout_ms` | `WB_GATEWAY__HELLO_TIMEOUT_MS` | `5000` | `Hello` must arrive within this (else `handshake_required`) |
 | `gateway.tick_rate_hz` | `WB_GATEWAY__TICK_RATE_HZ` | `20` | Tick rate in `Welcome` and of the `Pong` clock (spec: 20 Hz) |
 | `gateway.min_client_build` | `WB_GATEWAY__MIN_CLIENT_BUILD` | `0` | Older `Hello.client_build` gets `update_required` |
@@ -525,6 +738,7 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `ws_rate_limits.violation_per_sec` / `_burst` | `WB_WS_RATE_LIMITS__VIOLATION_PER_SEC` / `__VIOLATION_BURST` | `5` / `100` | Drops allowed before a fatal `rate_limited` |
 | `ws_rate_limits.notice_interval_ms` | `WB_WS_RATE_LIMITS__NOTICE_INTERVAL_MS` | `1000` | At most one non-fatal `rate_limited` notice per interval |
 | `deeplinks.dir` | `WB_DEEPLINKS__DIR` | empty (image: `/data/well-known`) | Directory with `apple-app-site-association` and `assetlinks.json` |
+| `leaderboards.*`, `runs.*` | `WB_LEADERBOARDS__…`, `WB_RUNS__…` | see "Leaderboards & runs API → Configuration" | Views, cache, replay trigger, legacy caps; plausibility thresholds |
 
 The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLINKS__DIR` to the values above. It needs no config file.
 

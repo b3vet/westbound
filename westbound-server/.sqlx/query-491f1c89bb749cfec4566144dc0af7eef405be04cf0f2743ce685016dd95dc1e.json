@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM leaderboard_entries WHERE account_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "491f1c89bb749cfec4566144dc0af7eef405be04cf0f2743ce685016dd95dc1e"
+}

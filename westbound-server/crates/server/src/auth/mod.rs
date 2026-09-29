@@ -425,6 +425,25 @@ impl FromRequestParts<AppState> for AuthedAllowBanned {
     }
 }
 
+/// Authentication when a token is sent, none otherwise (public reads that add the
+/// caller's own data, e.g. `GET /api/v1/boards/{board}`). A token that is sent but
+/// invalid, expired or banned is still refused, so clients learn to refresh it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OptionalAuthed(pub Option<Authed>);
+
+impl FromRequestParts<AppState> for OptionalAuthed {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
+        if !parts.headers.contains_key(header::AUTHORIZATION) {
+            return Ok(OptionalAuthed(None));
+        }
+        extract(parts, state, false)
+            .await
+            .map(|a| OptionalAuthed(Some(a)))
+    }
+}
+
 /// 501 for the Apple / Google routes until MP-D2's developer setup lands.
 pub fn provider_not_enabled(provider: &str) -> ApiError {
     ApiError::new(

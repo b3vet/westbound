@@ -75,6 +75,8 @@ pub async fn patch_me(
     let acc = accounts::rename(&state.db, auth.account_id, &name, now, Some(cooldown))
         .await
         .map_err(rename_error)?;
+    // Cached board tops show display names.
+    state.boards.invalidate_all();
     tracing::info!(account_id = acc.id, "display name changed");
     Ok(Json(acc.profile(now, cooldown)))
 }
@@ -89,6 +91,7 @@ pub async fn delete_account(
     if report.accounts == 0 {
         return Err(gone());
     }
+    state.boards.invalidate_all();
     tracing::info!(account_id = auth.account_id, "account deleted");
     Ok(StatusCode::NO_CONTENT)
 }

@@ -6,6 +6,9 @@
 //! (docs/MULTIPLAYER_PLAN.md MP-D2: device accounts only).
 //! N2.3: the `/ws` protocol gateway (handshake, sessions, per-message rate limits, tick
 //! clock for Pong, live ban sweep); the echo moved to `/ws/echo`.
+//! N7.1: leaderboards (boards, periods, views, top-N cache), single-player run
+//! submissions with plausibility checks, legacy personal bests, the multiplayer-run hook
+//! for N6, the replay-verdict hook for N8, admin removals.
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Architecture", "Server tech stack",
 //! "Resource budget and deployment"; docs/MULTIPLAYER_PLAN.md → N0, MP-D1.
 
@@ -21,14 +24,17 @@ pub mod error;
 pub mod gateway;
 pub mod healthcheck;
 pub mod http;
+pub mod leaderboards;
 pub mod metrics;
 pub mod msg_limits;
 pub mod names;
 pub mod profanity;
 pub mod profile;
 pub mod ratelimit;
+pub mod runs;
 pub mod sessions;
 pub mod shutdown;
+pub mod social;
 pub mod telemetry;
 pub mod tick;
 pub mod ws;

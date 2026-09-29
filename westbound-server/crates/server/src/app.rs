@@ -26,11 +26,12 @@ use crate::config::Config;
 use crate::error::ApiError;
 use crate::gateway::GatewayPolicy;
 use crate::http::{self, DeepLinks};
+use crate::leaderboards::Leaderboards;
 use crate::metrics::Metrics;
 use crate::ratelimit::{RateLimiters, CLEANUP_INTERVAL};
 use crate::sessions::Sessions;
 use crate::tick::{MonotonicTickClock, TickClock};
-use crate::{accounts, profile, ws};
+use crate::{accounts, leaderboards, profile, runs, ws};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -53,6 +54,10 @@ pub struct AppState {
     pub sessions: Arc<Sessions>,
     /// Tick clock for `Pong` (server-wide 20 Hz since start; N5 adds room clocks).
     pub tick_clock: Arc<dyn TickClock>,
+    /// Leaderboards with their top-N cache (N7.1). N6 records multiplayer runs through
+    /// `boards.record_multiplayer_run`, N8 replay verdicts through
+    /// `boards.set_run_verification`.
+    pub boards: Arc<Leaderboards>,
 }
 
 impl AppState {
@@ -89,6 +94,11 @@ impl AppState {
         let rate_limiters = RateLimiters::new(&config, auth.clone(), metrics.clone());
         let gateway = crate::gateway::policy(&config);
         let sessions = Arc::new(Sessions::new(metrics.clone()));
+        let boards = Arc::new(Leaderboards::new(
+            db.clone(),
+            config.leaderboards.clone(),
+            clock.clone(),
+        ));
         Ok(Self {
             config: Arc::new(config),
             db,
@@ -102,6 +112,7 @@ impl AppState {
             gateway,
             sessions,
             tick_clock,
+            boards,
         })
     }
 }
@@ -141,19 +152,39 @@ fn accounts_router(state: &AppState) -> Router<AppState> {
             "/api/v1/account",
             axum::routing::delete(profile::delete_account),
         );
-    let (device_create, auth_routes, account_routes) = if rl.enabled {
+    // N7.1: boards read under the account limit; run submissions also under their own.
+    let board_routes = Router::new().route(
+        "/api/v1/boards/{board}",
+        get(leaderboards::routes::get_board),
+    );
+    let run_routes = Router::new()
+        .route("/api/v1/runs", post(runs::routes::submit))
+        .route("/api/v1/runs/legacy", post(runs::routes::legacy));
+    let (device_create, auth_routes, account_routes, board_routes, run_routes) = if rl.enabled {
         (
             device_create.layer(rl.layer(&rl.device_create)),
             auth_routes.layer(rl.layer(&rl.auth)),
             account_routes.layer(rl.layer(&rl.account)),
+            board_routes.layer(rl.layer(&rl.account)),
+            run_routes
+                .layer(rl.layer(&rl.runs))
+                .layer(rl.layer(&rl.account)),
         )
     } else {
-        (device_create, auth_routes, account_routes)
+        (
+            device_create,
+            auth_routes,
+            account_routes,
+            board_routes,
+            run_routes,
+        )
     };
     Router::new()
         .merge(device_create)
         .merge(auth_routes)
         .merge(account_routes)
+        .merge(board_routes)
+        .merge(run_routes)
         .layer(DefaultBodyLimit::max(state.config.http.max_body_bytes))
 }
 

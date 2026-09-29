@@ -245,3 +245,83 @@ async fn admin_ban_unban_rename() {
     }
     db::close(&pool).await;
 }
+
+#[tokio::test]
+async fn admin_remove_run_and_entry() {
+    use westbound_server::{accounts, db};
+    let dir = tempfile::tempdir().unwrap();
+    assert!(run(dir.path(), &["migrate"]).0);
+    let cfg = westbound_server::config::DbConfig {
+        path: dir.path().join("wb.db"),
+        ..Default::default()
+    };
+    let pool = db::connect(&cfg).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let (id, _) = accounts::insert_device_account(&mut conn, "LoneWolf", &[0u8; 32], 1_000)
+        .await
+        .unwrap();
+    drop(conn);
+    for (run_id, score) in [(1, 500), (2, 900)] {
+        sqlx::query(
+            "INSERT INTO runs (id, account_id, mode, map_or_seed, date, score, distance_m,
+                               duration_s, verification, created_at)
+             VALUES (?, ?, 'journey', '7', '2026-09-29', ?, 1000, 60, 'unverified', ?)",
+        )
+        .bind(run_id)
+        .bind(id)
+        .bind(score)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO leaderboard_entries (board, period_key, subject_id, account_id, run_id,
+                                          score, achieved_at, verification, run_date)
+         VALUES ('journey', 'all', ?, ?, 2, 900, 2, 'unverified', '2026-09-29')",
+    )
+    .bind(id)
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (ok, out, err) = run(dir.path(), &["admin", "remove-run", "2"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("journey/all"), "{out}");
+    let best: i64 = sqlx::query_scalar("SELECT score FROM leaderboard_entries")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(best, 500, "rebuilt from the next best run");
+    let ids = id.to_string();
+    let (ok, out, err) = run(
+        dir.path(),
+        &["admin", "remove-entry", "journey", "all", &ids],
+    );
+    assert!(ok, "{err}");
+    assert!(out.contains("removed"), "{out}");
+    // Refusals: unknown run, entry, board or period.
+    assert!(!run(dir.path(), &["admin", "remove-run", "2"]).0);
+    assert!(
+        !run(
+            dir.path(),
+            &["admin", "remove-entry", "journey", "all", &ids]
+        )
+        .0
+    );
+    assert!(!run(dir.path(), &["admin", "remove-entry", "nope", "all", &ids]).0);
+    assert!(
+        !run(
+            dir.path(),
+            &["admin", "remove-entry", "journey", "2026-09", &ids]
+        )
+        .0
+    );
+    let log: Vec<String> = sqlx::query_scalar("SELECT action FROM admin_log ORDER BY id")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(log, vec!["remove_run", "remove_entry"]);
+    db::close(&pool).await;
+}

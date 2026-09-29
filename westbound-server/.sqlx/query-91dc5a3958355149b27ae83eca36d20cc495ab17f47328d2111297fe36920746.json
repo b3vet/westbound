@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM leaderboard_entries WHERE board = ? AND period_key = ? AND subject_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "91dc5a3958355149b27ae83eca36d20cc495ab17f47328d2111297fe36920746"
+}

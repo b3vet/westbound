@@ -60,6 +60,8 @@ pub struct Config {
     pub deeplinks: DeepLinksConfig,
     pub gateway: GatewayConfig,
     pub ws_rate_limits: WsRateLimitsConfig,
+    pub leaderboards: LeaderboardsConfig,
+    pub runs: RunsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,6 +175,10 @@ pub struct RateLimitsConfig {
     /// Authenticated routes (`/me`, `/account`, later everything) per account.
     pub account_per_minute: u32,
     pub account_burst: u32,
+    /// Run submissions (`POST /api/v1/runs` and `/runs/legacy`) per account, on top of
+    /// the account limit: this many per hour, `runs_burst` at once.
+    pub runs_per_hour: u32,
+    pub runs_burst: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -251,6 +257,105 @@ pub struct WsRateLimitsConfig {
     pub violation_burst: u32,
     /// After a drop, a non-fatal `rate_limited` error goes out at most this often.
     pub notice_interval_ms: u64,
+}
+
+/// Leaderboard reads, caching and the replay trigger (N7.1; docs/SERVER.md →
+/// "Leaderboards & runs API").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LeaderboardsConfig {
+    /// Until the replay verifier (N8) exists: whether `pending` runs (awaiting their
+    /// replay) go on the boards, marked "verifying". When false they wait in `runs` and
+    /// N8 writes them once verified. Applies to runs recorded from then on.
+    pub show_pending: bool,
+    /// `view=global`: entries returned when `limit` is left out, and the most allowed
+    /// (spec: global top 100).
+    pub global_limit_default: u32,
+    pub global_limit_max: u32,
+    /// `view=around_me`: ranks on each side of the caller when `limit` is left out, and
+    /// the most allowed.
+    pub around_me_default: u32,
+    pub around_me_max: u32,
+    /// A run that improves the player's entry and ranks within this many places of a
+    /// board it is written to needs a replay (spec: "the top 100 of any board").
+    pub replay_top_n: u32,
+    /// Top-N cache per board and period: dropped on every write to it, and after this
+    /// many seconds anyway (renames, admin CLI removals from another process).
+    pub cache_ttl_secs: u64,
+    /// Most board/period pairs cached at once; past it the cache starts over.
+    pub cache_max_boards: usize,
+    /// Loop crew board: a crew's score is the sum of its best this many members'
+    /// season-best Loop runs (spec: top 4).
+    pub crew_top_members: u32,
+    /// Legacy personal-best upload (`POST /api/v1/runs/legacy`): the largest Journey
+    /// score and Distance (metres) accepted; anything above is refused as `over_cap`.
+    pub legacy_max_journey_score: u64,
+    pub legacy_max_distance_m: f64,
+}
+
+/// Plausibility checks on single-player submissions (`POST /api/v1/runs`). Spec:
+/// "Leaderboards" → single-player runs. The scoring numbers mirror the game's
+/// `data/tuning/scoring.tres`, `legs.tres`, `lives.tres` and `vehicle.tres`; keep them
+/// at or above the game's values (a bound, not a recomputation).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RunsConfig {
+    /// Oldest client build (the protocol's u32 build number) whose runs are accepted.
+    pub min_build: u32,
+    /// Builds whose runs are accepted (decimal build numbers). Empty: every build from
+    /// `min_build` on. N8 keeps a verifier per listed build (spec: build parity).
+    pub supported_builds: Vec<String>,
+    /// The banked score per minute of run time may not exceed this. A close pass at ×50,
+    /// 250 km/h at night pays 30 × 50 × 2 × 2 = 6000; about 30 of those a minute.
+    pub max_score_per_minute: f64,
+    /// Runs shorter than this are treated as this long for the score rate (a crash in
+    /// the first seconds with a few points is fine).
+    pub min_duration_s: f64,
+    /// Longest plausible run (the sun sets; journeys end at the coast).
+    pub max_duration_s: f64,
+    /// Highest plausible top speed: the fastest car (300 km/h) with boost (+8 %) and
+    /// top-gear overshoot, rounded up.
+    pub max_top_speed_kmh: f64,
+    /// Distance may exceed top speed × duration by this fraction and this many metres
+    /// (float rounding, the start line).
+    pub distance_slack_pct: f64,
+    pub distance_slack_m: f64,
+    /// Each completed leg needs at least this much distance (legs.tres: 3.5 km legs; the
+    /// first one starts a little in, forks change branch lengths).
+    pub leg_min_length_m: f64,
+    /// Checkpoints to the coast (legs.tres `legs_to_coast`): `coast_reached` needs this
+    /// many legs.
+    pub legs_to_coast: u32,
+    /// Lives at the start (lives.tres). Hits ≤ lives + legs completed (a clean leg
+    /// restores one).
+    pub lives: u32,
+    /// Base points and multiplier gains per event (scoring.tres).
+    pub pass_points: f64,
+    pub close_pass_points: f64,
+    pub cut_points: f64,
+    pub thread_points: f64,
+    pub pass_multiplier_gain: f64,
+    pub close_pass_multiplier_gain: f64,
+    pub cut_multiplier_gain: f64,
+    pub thread_multiplier_gain: f64,
+    /// Starting multiplier (scoring.tres `multiplier_start`).
+    pub multiplier_start: f64,
+    /// Highest speed factor (scoring.tres `speed_factor_at_max`) and the night factor.
+    pub speed_factor_max: f64,
+    pub night_factor: f64,
+    /// Most bonus points one leg can pay (legs.tres: clean 5000 + pace 3000 + threads
+    /// 3000 + heat 5000 + objective 2500), before the night factor.
+    pub leg_bonus_max_points: f64,
+    /// Journey bonus at the coast (legs.tres `journey_bonus_points`).
+    pub journey_bonus_points: f64,
+    /// Headroom on the score bound from the stats, as a fraction.
+    pub score_slack_pct: f64,
+    /// A run's `date` (UTC) is accepted from this long before that day starts (clients
+    /// with a fast clock)...
+    pub date_early_secs: u64,
+    /// ...until this long after it ends (a run finished near midnight, a retry after a
+    /// network failure).
+    pub date_late_secs: u64,
 }
 
 /// Production domain (owner, 2026-09-29).
@@ -379,6 +484,8 @@ impl Default for RateLimitsConfig {
             auth_burst: 10,
             account_per_minute: 120,
             account_burst: 30,
+            runs_per_hour: 30,
+            runs_burst: 10,
         }
     }
 }
@@ -424,6 +531,104 @@ impl Default for WsRateLimitsConfig {
             violation_burst: 100,
             notice_interval_ms: 1_000,
         }
+    }
+}
+
+impl Default for LeaderboardsConfig {
+    fn default() -> Self {
+        Self {
+            show_pending: true,
+            global_limit_default: 100,
+            global_limit_max: 100,
+            around_me_default: 10,
+            around_me_max: 50,
+            replay_top_n: 100,
+            cache_ttl_secs: 60,
+            cache_max_boards: 256,
+            crew_top_members: 4,
+            legacy_max_journey_score: 50_000_000,
+            legacy_max_distance_m: 2_000_000.0,
+        }
+    }
+}
+
+impl Default for RunsConfig {
+    fn default() -> Self {
+        Self {
+            min_build: 0,
+            supported_builds: Vec::new(),
+            max_score_per_minute: 200_000.0,
+            min_duration_s: 10.0,
+            max_duration_s: 6.0 * 3_600.0,
+            max_top_speed_kmh: 360.0,
+            distance_slack_pct: 5.0,
+            distance_slack_m: 200.0,
+            leg_min_length_m: 3_000.0,
+            legs_to_coast: 8,
+            lives: 2,
+            pass_points: 10.0,
+            close_pass_points: 30.0,
+            cut_points: 15.0,
+            thread_points: 50.0,
+            pass_multiplier_gain: 1.0,
+            close_pass_multiplier_gain: 3.0,
+            cut_multiplier_gain: 1.0,
+            thread_multiplier_gain: 5.0,
+            multiplier_start: 1.0,
+            speed_factor_max: 2.0,
+            night_factor: 2.0,
+            leg_bonus_max_points: 18_500.0,
+            journey_bonus_points: 50_000.0,
+            score_slack_pct: 1.0,
+            date_early_secs: 3_600,
+            date_late_secs: 6 * 3_600,
+        }
+    }
+}
+
+impl RunsConfig {
+    /// `supported_builds` parsed (validated at startup).
+    pub fn supported_build_numbers(&self) -> Vec<u32> {
+        self.supported_builds
+            .iter()
+            .filter_map(|b| b.trim().parse().ok())
+            .collect()
+    }
+
+    /// Whether runs from `build` are accepted.
+    pub fn build_supported(&self, build: u32) -> bool {
+        build >= self.min_build
+            && (self.supported_builds.is_empty() || self.supported_build_numbers().contains(&build))
+    }
+
+    /// `(name, value)` of every number that must be finite and non-negative.
+    fn numbers(&self) -> [(&'static str, f64); 21] {
+        [
+            ("max_score_per_minute", self.max_score_per_minute),
+            ("min_duration_s", self.min_duration_s),
+            ("max_duration_s", self.max_duration_s),
+            ("max_top_speed_kmh", self.max_top_speed_kmh),
+            ("distance_slack_pct", self.distance_slack_pct),
+            ("distance_slack_m", self.distance_slack_m),
+            ("leg_min_length_m", self.leg_min_length_m),
+            ("pass_points", self.pass_points),
+            ("close_pass_points", self.close_pass_points),
+            ("cut_points", self.cut_points),
+            ("thread_points", self.thread_points),
+            ("pass_multiplier_gain", self.pass_multiplier_gain),
+            (
+                "close_pass_multiplier_gain",
+                self.close_pass_multiplier_gain,
+            ),
+            ("cut_multiplier_gain", self.cut_multiplier_gain),
+            ("thread_multiplier_gain", self.thread_multiplier_gain),
+            ("multiplier_start", self.multiplier_start),
+            ("speed_factor_max", self.speed_factor_max),
+            ("night_factor", self.night_factor),
+            ("leg_bonus_max_points", self.leg_bonus_max_points),
+            ("journey_bonus_points", self.journey_bonus_points),
+            ("score_slack_pct", self.score_slack_pct),
+        ]
     }
 }
 
@@ -677,6 +882,8 @@ impl Config {
                 r.auth_burst,
                 r.account_per_minute,
                 r.account_burst,
+                r.runs_per_hour,
+                r.runs_burst,
             ]
             .contains(&0)
         {
@@ -701,10 +908,58 @@ impl Config {
                 ));
             }
         }
+        self.validate_leaderboards(&mut errs);
         if errs.is_empty() {
             Ok(())
         } else {
             Err(ConfigErrors(errs))
+        }
+    }
+
+    fn validate_leaderboards(&self, errs: &mut Vec<String>) {
+        let b = &self.leaderboards;
+        if b.global_limit_max == 0 || b.global_limit_default == 0 {
+            errs.push("leaderboards.global_limit_default and _max must be at least 1".into());
+        }
+        if b.global_limit_default > b.global_limit_max {
+            errs.push("leaderboards.global_limit_default must be at most global_limit_max".into());
+        }
+        if b.around_me_max == 0 || b.around_me_default > b.around_me_max {
+            errs.push(
+                "leaderboards.around_me_max must be at least 1 and around_me_default at most it"
+                    .into(),
+            );
+        }
+        if b.crew_top_members == 0 {
+            errs.push("leaderboards.crew_top_members must be at least 1".into());
+        }
+        if b.cache_max_boards == 0 {
+            errs.push("leaderboards.cache_max_boards must be at least 1".into());
+        }
+        if !(b.legacy_max_distance_m.is_finite() && b.legacy_max_distance_m >= 0.0) {
+            errs.push("leaderboards.legacy_max_distance_m must be a number >= 0".into());
+        }
+        let r = &self.runs;
+        for (name, v) in r.numbers() {
+            if !(v.is_finite() && v >= 0.0) {
+                errs.push(format!("runs.{name} must be a number >= 0"));
+            }
+        }
+        if !(r.min_duration_s > 0.0 && r.max_duration_s > r.min_duration_s) {
+            errs.push("runs.min_duration_s must be above 0 and below runs.max_duration_s".into());
+        }
+        if r.multiplier_start < 1.0 || r.speed_factor_max < 1.0 || r.night_factor < 1.0 {
+            errs.push(
+                "runs.multiplier_start, speed_factor_max and night_factor must be at least 1"
+                    .into(),
+            );
+        }
+        for build in &r.supported_builds {
+            if build.trim().parse::<u32>().is_err() {
+                errs.push(format!(
+                    "runs.supported_builds entry `{build}` must be a build number (0..=4294967295)"
+                ));
+            }
         }
     }
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE leaderboard_entries SET verification = ? WHERE run_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6526c0f4b19320f8a7f00327c8e987788f58fdb6a99a760da6a5249fb6b50d6a"
+}

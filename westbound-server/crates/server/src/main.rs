@@ -53,6 +53,16 @@ enum AdminCommand {
     Unban { account_id: i64 },
     /// Force-rename an account (name rules and filter apply; a new #tag if needed).
     Rename { account_id: i64, name: String },
+    /// Delete a run (and its replay); the entries it held fall back to the player's next
+    /// best run.
+    RemoveRun { run_id: i64 },
+    /// Delete one leaderboard entry: BOARD (loop, loop_crew, journey, daily, distance),
+    /// PERIOD (YYYY-MM, YYYY-Www, YYYY-MM-DD or all) and the account (crew on loop_crew).
+    RemoveEntry {
+        board: String,
+        period: String,
+        account_id: i64,
+    },
 }
 
 fn long_version() -> &'static str {
@@ -158,6 +168,14 @@ async fn admin_cmd(cfg: &Config, command: AdminCommand) -> anyhow::Result<()> {
         AdminCommand::Rename { account_id, name } => {
             admin::rename(&pool, account_id, &name, now).await
         }
+        AdminCommand::RemoveRun { run_id } => {
+            admin::remove_run(&pool, &cfg.leaderboards, run_id).await
+        }
+        AdminCommand::RemoveEntry {
+            board,
+            period,
+            account_id,
+        } => admin::remove_entry(&pool, &board, &period, account_id).await,
     };
     db::close(&pool).await;
     println!("{}", result?);
