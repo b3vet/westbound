@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="NetTuning" format=3]
+
+[ext_resource type="Script" path="res://src/core/tuning/net_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+server_url = "wss://westbound.sipsakrandevu.com/ws"
+ping_interval_s = 2.0
+dead_timeout_s = 8.0
+handshake_timeout_s = 10.0
+connect_timeout_s = 10.0
+tick_rate_hz = 20.0
+clock_samples = 8
+clock_slew_max_rate = 0.05
+clock_smoothing_s = 30.0
+clock_settle_smoothing_s = 1.0
+clock_snap_forward_ms = 250.0
+clock_max_rtt_ms = 2000.0
+ws_inbound_buffer_kb = 64
+ws_outbound_buffer_kb = 64
+ws_max_queued_packets = 256
