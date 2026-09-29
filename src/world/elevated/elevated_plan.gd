@@ -26,6 +26,13 @@ var biome_lookup: Callable
 var fallback_biome: BiomeDef
 ## Optional: no stretch may overlap a checkpoint landmark's or warning sign's zone.
 var clearance: LandmarkClearance
+## N3.2 (the loop): fixed stretches [zone_s0[i], zone_s1[i]) instead of the seeded cells
+## (the loop's elevated zone, LoopLayout.elevated_s0/_s1), repeating every
+## `zone_period_m` along unwrapped s (0 = once). Each rises over its def's ramp_m to its
+## height_m wherever the biome at s has an ElevatedDef. Empty = the seeded cells.
+var zone_s0 := PackedFloat64Array()
+var zone_s1 := PackedFloat64Array()
+var zone_period_m: float = 0.0
 
 
 func _init(seed_value: int, lookup: Callable = Callable(), fallback: BiomeDef = null) -> void:
@@ -45,10 +52,23 @@ func def_at(s: float) -> ElevatedDef:
 	return b.elevated if b != null else null
 
 
+## N3.2: fixed stretches (see zone_s0) repeating every `period_m` (0 = once), instead
+## of the seeded cells. Empty arrays go back to the cells.
+func set_zones(s0: PackedFloat64Array, s1: PackedFloat64Array, period_m: float) -> void:
+	zone_s0 = s0.duplicate()
+	zone_s1 = s1.duplicate()
+	zone_s1.resize(zone_s0.size())
+	zone_period_m = maxf(period_m, 0.0)
+
+
 ## Ground drop below the road at s (m, >= 0).
 func drop_at(s: float) -> float:
 	var def := def_at(s)
-	if def == null or def.cell_length_m <= 0.0:
+	if def == null:
+		return 0.0
+	if not zone_s0.is_empty():
+		return _zone_drop(s, def)
+	if def.cell_length_m <= 0.0:
 		return 0.0
 	var c := int(floor(s / def.cell_length_m))
 	var x := s - stretch_start(c, def)
@@ -58,6 +78,19 @@ func drop_at(s: float) -> float:
 	var ramp := maxf(def.ramp_m, 0.001)
 	var t := clampf(minf(x, length - x) / ramp, 0.0, 1.0)
 	return def.height_m * smoothstep(0.0, 1.0, t)
+
+
+## The drop of the fixed stretches (set_zones) at s. Allocation-free.
+func _zone_drop(s: float, def: ElevatedDef) -> float:
+	var r := fposmod(s, zone_period_m) if zone_period_m > 0.0 else s
+	var ramp := maxf(def.ramp_m, 0.001)
+	for i in zone_s0.size():
+		var x := r - zone_s0[i]
+		var length := zone_s1[i] - zone_s0[i]
+		if x > 0.0 and x < length:
+			var t := clampf(minf(x, length - x) / ramp, 0.0, 1.0)
+			return def.height_m * smoothstep(0.0, 1.0, t)
+	return 0.0
 
 
 ## True when s lies in a stretch (drop > 0).

@@ -12,6 +12,8 @@
 //! N9.1: the social API (friends and requests, blocks, persistent crews with roles and
 //! invite codes, reports), friends presence over HTTP and the WebSocket, the friends
 //! leaderboard view, crew tags on boards, and the moderation admin commands.
+//! N3.2: the loop map (`map`: `loop_v1.json` compiled in, validated, hashed; its hash is
+//! accepted by the gateway unless `gateway.map_hashes` overrides it).
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Architecture", "Server tech stack",
 //! "Resource budget and deployment"; docs/MULTIPLAYER_PLAN.md → N0, MP-D1.
 
@@ -28,6 +30,7 @@ pub mod gateway;
 pub mod healthcheck;
 pub mod http;
 pub mod leaderboards;
+pub mod map;
 pub mod metrics;
 pub mod msg_limits;
 pub mod names;

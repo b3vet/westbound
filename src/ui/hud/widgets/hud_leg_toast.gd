@@ -24,6 +24,12 @@ const TITLE := "LEG %d COMPLETE"
 const WORD_BANKED := "BANKED"
 const NEXT := "LEG %d — %s"
 const NEXT_PLAIN := "LEG %d"
+## N3.2 loop mode: sector gantries (a crossing's leg index is lap × sectors + gantry + 1;
+## crossing gantry k ends sector k, gantry 0 ends the lap).
+const TITLE_SECTOR := "SECTOR %d COMPLETE"
+const TITLE_LAP := "LAP %d COMPLETE"
+const NEXT_SECTOR := "SECTOR %d — %s"
+const NEXT_SECTOR_PLAIN := "SECTOR %d"
 ## Most items it lists (night, four leg bonuses, objective, journey, life).
 const MAX_ITEMS := 8
 
@@ -42,6 +48,8 @@ var _word := PackedStringArray()
 var _pts := PackedStringArray()
 var _role := PackedInt32Array()
 var _t: float = -1.0
+## N3.2: sector gantries per lap in loop mode (0 = legs, the journey).
+var loop_sectors: int = 0
 
 
 func _init() -> void:
@@ -53,7 +61,12 @@ func _init() -> void:
 
 ## A new crossing: clears the card and shows it (from transparent).
 func begin(leg_index: int) -> void:
-	_title = TITLE % leg_index
+	if loop_sectors > 0:
+		var gantry := posmod(leg_index - 1, loop_sectors)
+		var lap := floori(float(leg_index - 1) / float(loop_sectors))
+		_title = TITLE_LAP % (lap - 1) if gantry == 0 else TITLE_SECTOR % gantry
+	else:
+		_title = TITLE % leg_index
 	_banked = ""
 	_next = ""
 	_next_objective = ""
@@ -89,8 +102,13 @@ func set_banked(points: String) -> void:
 
 ## The next leg: "LEG 3 — FARMLAND" and its objective's text ("" = none).
 func set_next(leg_index: int, place: String, objective: String) -> void:
-	_next_short = NEXT_PLAIN % leg_index
-	_next = NEXT % [leg_index, place] if not place.is_empty() else _next_short
+	if loop_sectors > 0:
+		var sector := posmod(leg_index - 2, loop_sectors) + 1
+		_next_short = NEXT_SECTOR_PLAIN % sector
+		_next = NEXT_SECTOR % [sector, place] if not place.is_empty() else _next_short
+	else:
+		_next_short = NEXT_PLAIN % leg_index
+		_next = NEXT % [leg_index, place] if not place.is_empty() else _next_short
 	_next_objective = objective
 	_value_changed()
 

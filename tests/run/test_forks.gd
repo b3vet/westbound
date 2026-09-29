@@ -112,10 +112,10 @@ func test_the_run_has_forks_from_its_seed() -> void:
 	var r := _make()
 	check(r.forks.plan.count() >= t.legs.fork_count_min, "fork_count_min forks")
 	check(r.forks.active >= 0, "a fork is next")
-	var f := r.road.forks[0]
+	var f := (r.road as ProceduralRoadPath).forks[0]
 	eq(f.side, ForkPlan.LEFT, "the main road follows the left branch")
-	check(r.road.hold_at_forks, "the main road holds at unresolved forks")
-	near(r.road.length_generated(), minf(r.road.table_end(), f.split_s + f.hold_margin_m), 1e-6,
+	check((r.road as ProceduralRoadPath).hold_at_forks, "the main road holds at unresolved forks")
+	near(r.road.length_generated(), minf((r.road as ProceduralRoadPath).table_end(), f.split_s + f.hold_margin_m), 1e-6,
 		"nothing past the split is reported before the choice")
 
 
@@ -180,7 +180,7 @@ func test_fork_is_announced_at_one_km_with_both_biomes() -> void:
 func test_the_gore_nose_counts_as_a_hit() -> void:
 	var r := _make()
 	var i := r.forks.active
-	var f := r.road.forks[0]
+	var f := (r.road as ProceduralRoadPath).forks[0]
 	var split := r.forks.split_s(i)
 	var gore := r.forks.gore_line_d(f)
 	_to_fork(r, APPROACH_M, 0, gore)
