@@ -116,6 +116,16 @@ func world_velocity() -> Vector3:
 	return fwd * state.v + right * state.v_lat + Vector3.UP * (along * _sample.grade)
 
 
+## Shows or hides the drawn body (the CarVisual with the model, and the blob shadow),
+## for the cockpit camera (CameraRig, plan D11). View only: physics, placement and the
+## visual's tick carry on.
+func set_body_visible(on: bool) -> void:
+	if visual != null:
+		visual.visible = on
+	if shadow != null:
+		shadow.visible = on
+
+
 ## The road sample at state.s used for the last placement. Read-only.
 func road_sample() -> RoadSample:
 	return _sample
