@@ -121,7 +121,7 @@ Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p9
 | Milestone | Status |
 | --- | --- |
 | N0 Server foundation | ✅ **gate met on the real VPS** (owner, 2026-09-29): deployed on Coolify at `westbound.sipsakrandevu.com`, reachable, wss echo works from a phone. Image 3.6 MB; CI pushes `ghcr.io/b3vet/westbound-server:edge` |
-| N1 Accounts (device) | 🟡 N1.1 server in progress |
+| N1 Accounts (device) | 🟡 N1.1 server merged (device accounts, rotating refresh, names + filter, deletion, bans, rate limits); **owner: set `WB_AUTH__JWT_SECRET` and `WB_AUTH__DEVICE_SECRET_PEPPER` in Coolify before redeploying**; N1.2 client session next |
 | N2 Protocol & clock | 🟡 N2.1 protocol crate merged (87 golden vectors, frozen contract docs/PROTOCOL.md); N2.2 client codec + transports + clock merged (all vectors pass both sides; clock within ±5 ms) — **N2 done** except wiring the handshake into the server gateway (next) |
 | N3 Loop map | ⬜ (after Phase 6) |
 | N4 Networked traffic | ⬜ |
