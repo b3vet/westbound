@@ -33,6 +33,7 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | D10 | Drag steering shows a floating anchor ring and thumb dot | **Owner request (M2):** option to show a steering wheel that turns with the drag (visual only; the input math is unchanged). Setting `drag_visual` = ring or wheel | Owner, 2026-09-28 |
 | D11 | Cockpit camera "later", once cars have interiors; leg 8+ density 16 vehicles/km/lane with 60 active | **Owner request (M3):** an in-cabin camera now. A generic procedural cockpit (dash, A-pillars, roof edge, a wheel that turns with the steering) is drawn around a driver's-eye camera, and the car body is hidden in that mode. Per-car interiors replace it when the models have them (ART5). **Density:** the owner found leg 8 "not crowded enough, easily passable". The director's shortfall around the player (73–92% of target) gets fixed, and the late-leg density and the vehicle cap rise within the measured phone budget (0.10 ms per tick at 45 cars). The numbers stay in tuning data (WP4.8) | Owner, 2026-09-29 |
 | D12 | M3 gate: "zero impossible windows" over the 10,000 km soak | Gated on the lane counts in use (3 lanes: zero). The 3 windows found on 2-lane roads (the player cut in behind a vehicle under 100 km/h; the 2-lane right lane flows at 95 km/h) go to Phase 6, where 2-lane sections and `passability.gd` arrive | Orchestrator, M3 |
+| D13 | Retry: "a countdown" at run start and "Retry puts the player back on the road within 2 seconds" | The 3-2-1 countdown (with gyro calibration) runs at 0.5 s per step on a retry (`hud.retry_countdown_step_s`): driving again 1.5 s after RETRY. The first run keeps 1 s steps | Orchestrator, WP4.4 |
 
 New deviations get a row here before they are built.
 
@@ -295,8 +296,8 @@ Updated by the orchestrator at every merge.
 | 1 | M1 Road & look (+ Track A) | ✅ web playtest passed (owner); native thermal soak still open (D4) | ⏸ pause |
 | 2 | M2 Car, controls, cameras (+ Track B) | ✅ owner playtests (controls revised: D9, D10) | ⏸ pause |
 | 3 | M3 Traffic (+ Track C) | ✅ owner review passed ("traffic really good"); 10,024 km soak: 0 collisions and 0 rule violations; impossible windows 0 on 3 lanes (D12) | ⏸ pause |
-| 4 | M4 Scoring & lives | 🟡 started | continue |
-| 5 | M5 Sun loop & legs | ⬜ | continue |
+| 4 | M4 Scoring & lives | ✅ WP4.1–4.7 merged: run loop, crash cinematic, HUD & theme, screens, integration suite (858 tests), draw calls 85 → 70 with dev overlays, cockpit camera (D11). WP4.8 density in progress | continue |
+| 5 | M5 Sun loop & legs | ✅ sun drives the run and sky, night ×2, dawn, legs + objectives + toast, landmarks + warning signs, night lighting + manual high beams (D8); M5 gate test green. WP5.6 HUD polish in progress | continue |
 | 6 | M6 Director, biomes, journey | ⬜ | continue |
 | 7 | M7 Audio & feel | ⬜ | continue |
 | 8 | M8 Meta | ⬜ | continue |
