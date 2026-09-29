@@ -52,7 +52,7 @@ screens.countdown_hold.connect(hold_countdown)
 
 - **Numbers.** 3, 2 and 1 in Chakra Petch 700 at `font_countdown_px`, speed-tilted, with the HUD's outline and drop shadow and tabular digits. Each step punches in (from `countdown_punch_scale_pct`, back-eased, over `countdown_punch_s`). GO is in the accent. It holds for `countdown_go_hold_s`, fades over `countdown_go_fade_s`, then the screen hides.
 - **Info column.** Left-anchored at mid height, clear of the car and the HUD corners:
-    - LEG n OF 8, and the leg objective when there is one;
+    - LEG n OF 8 with the biome name, and the leg objective's HUD label (e.g. "5 CLOSE PASSES") when there is one (WP5.6);
     - in gyro mode, a card: TILT STEERING / HOLD YOUR PHONE / IN DRIVING POSITION, with one slanted segment lit per step. At GO it turns gold: CALIBRATED / NEUTRAL LOCKED.
 - **Gyro calibration.** docs/CONTROLS.md: "Neutral is captured during the 3-2-1 countdown". The screen emits `recalibrate` on every step, so the neutral follows the hold while the player settles in, and once more at GO, which locks it. The run forwards each to `PlayerInput.recalibrate_gyro()`. Gyro mode means `hub.effective_steering == GYRO`.
 - **Web motion permission (iOS).** With gyro chosen on the web and the permission not yet granted (`WebMotionSource.permission_state()` is `idle` or `armed`):
