@@ -32,6 +32,8 @@ const CAR_PATHS: Array[String] = [
 ]
 ## WP4.3's HUD: installed only if the scene exists (built in parallel).
 const HUD_SCENE_PATH := "res://src/ui/hud/hud.tscn"
+## WP4.4's in-run screens: countdown (gyro calibration), pause menu, crash hint, results.
+const SCREENS_SCENE := preload("res://src/ui/screens/run_screens.tscn")
 const DRIVE_SCENE := "res://src/dev/car_drive.tscn"
 const SANDBOX_SCENE := "res://src/traffic/dev/traffic_sandbox.tscn"
 ## The journey bonus kind (paid on the crossing that reaches the coast).
@@ -51,8 +53,6 @@ const PHYSICS_PRIORITY := 50
 ## Rolling start: lane and speed at the start line (car_drive's values).
 const START_LANE := 1
 const START_SPEED_KMH := 120.0   # lint: allow-number pending tuning (hud/legs)
-## One countdown step (hud.countdown_from steps).
-const COUNTDOWN_STEP_S := 1.0
 ## Traffic headlights on while the color script's headlight ramp is above this.
 const HEADLIGHTS_ON_RAMP := 0.3   # lint: allow-number pending tuning (sun)
 ## Crash: traffic within this distance (along s) of the player brakes (hit reaction).
@@ -64,7 +64,9 @@ const CRASH_BRAKE_RADIUS_M := 80.0   # lint: allow-number pending tuning (lives)
 @export var run_seed: int = 0
 @export var mode: StringName = RunContext.MODE_JOURNEY
 @export var car_index: int = 0
-## Off: the countdown waits for go() (WP4.4's countdown screen, gyro calibration).
+## Off: the countdown waits for go(). On (the game), the run counts hud.countdown_from
+## steps of hud.countdown_step_s (a retry: retry_countdown_step_s) and the countdown
+## screen shows them and calibrates the gyro; the screen can hold it (hold_countdown).
 @export var auto_countdown: bool = true
 ## Store the personal best in Save at run end.
 @export var record_best: bool = true
@@ -108,7 +110,8 @@ var feed := HudFeed.new()
 var adapter: RunEvents
 var time_scale: TimeScale
 var fx: PlayerFx
-var ui: RunUi
+## WP4.4's RunScreens (countdown, pause, crash hint, results): intents in, flow calls out.
+var screens: RunScreens
 ## WP4.3's Hud (null until src/ui/hud/hud.tscn exists).
 var hud: Node
 var dev: RunDevPanel
@@ -138,7 +141,7 @@ var _crash_controller := CrashController.new()
 var _countdown_ticks: int = 0
 var _countdown_step_ticks: int = 1
 var _countdown_shown: int = -1
-var _go_flash_s: float = 0.0
+var _countdown_held: bool = false
 var _crash_left_s: float = 0.0
 var _crash_by_sequence: bool = false
 var _pending_first_hit_fx: bool = false
@@ -177,7 +180,6 @@ func _ready() -> void:
 	process_physics_priority = PHYSICS_PRIORITY
 	tuning = Tuning.load_default()
 	_dt = tuning.vehicle.physics_dt()
-	_countdown_step_ticks = maxi(roundi(COUNTDOWN_STEP_S / _dt), 1)
 	events = ScoreEventBuffer.new(tuning.scoring.event_buffer_capacity * EVENT_SOURCES)
 	_base_seed = run_seed if run_seed != 0 else Rng.random_seed()
 
@@ -220,12 +222,7 @@ func _ready() -> void:
 	fx = PlayerFx.new()
 	fx.name = "PlayerFx"
 	add_child(fx)
-	ui = RunUi.new()
-	ui.name = "RunUi"
-	add_child(ui)
-	ui.retry_pressed.connect(retry)
-	ui.pause_pressed.connect(toggle_pause)
-	ui.resume_pressed.connect(resume)
+	_install_screens()
 	_build_headlight_lut()
 	_install_hud()
 	dev = RunDevPanel.new()
@@ -258,7 +255,6 @@ func _exit_tree() -> void:
 func retry() -> void:
 	if state == Game.PAUSED:
 		get_tree().paused = false
-		ui.show_paused(false)
 	if crash_sequence != null and crash_sequence.has_method(&"reset"):
 		crash_sequence.call(&"reset")
 	_start_run()
@@ -270,8 +266,13 @@ func go() -> void:
 		return
 	_enter(Game.RUNNING)
 	_countdown_ticks = 0
-	_go_flash_s = COUNTDOWN_STEP_S
 	Events.countdown_tick.emit(0)
+
+
+## The countdown screen holds the countdown (web + gyro: until the tap that grants the
+## motion permission) and lets it run again.
+func hold_countdown(on: bool) -> void:
+	_countdown_held = on
 
 
 func pause() -> void:
@@ -281,7 +282,7 @@ func pause() -> void:
 	state = Game.PAUSED
 	Game.pause()
 	get_tree().paused = true
-	ui.show_paused(true)
+	_sync_hud()
 
 
 func resume() -> void:
@@ -290,7 +291,7 @@ func resume() -> void:
 	get_tree().paused = false
 	state = _paused_from
 	Game.resume()
-	ui.show_paused(false)
+	_sync_hud()
 
 
 func toggle_pause() -> void:
@@ -378,7 +379,7 @@ func tick() -> void:
 
 
 func _countdown_tick() -> void:
-	if not auto_countdown:
+	if not auto_countdown or _countdown_held:
 		return
 	_countdown_ticks -= 1
 	if _countdown_ticks <= 0:
@@ -611,9 +612,8 @@ func _show_results() -> void:
 		Save.submit_best_score(mode, score)
 	last_results[&"personal_best"] = maxi(best, score)
 	last_results[&"new_best"] = new_best
-	Events.run_over.emit(last_results)
-	ui.show_hint("")
-	ui.show_results(last_results, best, new_best)
+	last_results[&"previous_best"] = best
+	Events.run_over.emit(last_results)   # the results screen opens on it
 
 
 # ---------------------------------------------------------------- Frame
@@ -638,15 +638,6 @@ func frame(real_dt: float) -> void:
 		if not _crash_by_sequence:
 			Events.crash_started.emit()   # CrashSequence emits its own
 			Events.slowmo_requested.emit(feel.slowmo_crash_scale, feel.slowmo_crash_s, TimeScale.REASON_CRASH)
-		if state == Game.CRASH:
-			ui.show_hint("TAP TO SKIP")
-	if _go_flash_s > 0.0:
-		_go_flash_s -= real_dt
-		ui.show_countdown(0 if _go_flash_s > 0.0 else -1)
-	elif state == Game.COUNTDOWN and auto_countdown:
-		ui.show_countdown(maxi(_countdown_shown, 1))
-	else:
-		ui.show_countdown(-1)
 	var s := car.state.s
 	sky.sky_t = sun.sky_t
 	biome_director.update_view(s)
@@ -656,7 +647,6 @@ func frame(real_dt: float) -> void:
 	sky.update_view(s)
 	traffic_view.update_view(s)
 	_fill_feed()
-	ui.update_readouts(feed, Settings.get_value(&"units") != &"mph")
 	_report_dev_stats()
 
 
@@ -738,7 +728,6 @@ func _start_run() -> void:
 	_pending_first_hit_fx = false
 	_pending_crash_fx = false
 	_crash_by_sequence = false
-	_go_flash_s = 0.0
 	_place_car(car_def, start_s, Units.kmh_to_mps(START_SPEED_KMH))
 	legs.plan_ahead(road, _plan_ahead_to(start_s))
 	_director_leg = leg_override if leg_override > 0 else legs.leg_index
@@ -768,18 +757,18 @@ func _start_run() -> void:
 	feed.lives = lives.lives
 	time_scale.restore()
 	fx.reset()
-	ui.show_paused(false)
-	ui.hide_results()
-	ui.show_hint("")
 	last_results = {}
 	sky.sky_t = sun.sky_t
 
+	# A retry counts faster: back driving inside hud.retry_max_s (Run end).
+	var step_s := tuning.hud.countdown_step_s if run_count <= 1 else tuning.hud.retry_countdown_step_s
+	_countdown_step_ticks = maxi(roundi(step_s / _dt), 1)
 	_countdown_ticks = tuning.hud.countdown_from * _countdown_step_ticks
 	_countdown_shown = tuning.hud.countdown_from
+	_countdown_held = false
 	_enter(Game.COUNTDOWN)
-	Events.run_started.emit(mode, current_seed)
+	Events.run_started.emit(mode, current_seed)   # the countdown screen prepares (and may hold)
 	Events.countdown_tick.emit(_countdown_shown)
-	ui.show_countdown(_countdown_shown)
 	_fill_feed()
 
 
@@ -834,9 +823,13 @@ func _enter(to: StringName) -> void:
 		Game.start_run(mode)
 	elif Game.state != to:
 		Game.change_state(to)
-	# The gameplay HUD steps aside for the crash cinematic and the results.
+	_sync_hud()
+
+
+## The gameplay HUD steps aside for the pause menu, the crash cinematic and the results.
+func _sync_hud() -> void:
 	if hud != null:
-		(hud as CanvasLayer).visible = to != Game.CRASH and to != Game.RESULTS
+		(hud as CanvasLayer).visible = state != Game.CRASH and state != Game.RESULTS and state != Game.PAUSED
 
 
 func _install_hud() -> void:
@@ -852,7 +845,20 @@ func _install_hud() -> void:
 				hud.connect(&"pause_pressed", toggle_pause)
 			if hud.has_signal(&"camera_pressed"):
 				hud.connect(&"camera_pressed", hub.request_camera_cycle)
-	ui.set_fallback_visible(hud == null)
+
+
+## The in-run screens: they emit intents, the run acts on them (CONTRACTS §14).
+func _install_screens() -> void:
+	screens = SCREENS_SCENE.instantiate() as RunScreens
+	screens.name = "RunScreens"
+	add_child(screens)
+	screens.bind(hub, feed)
+	screens.resume.connect(resume)
+	screens.recalibrate.connect(hub.recalibrate_gyro)
+	screens.retry.connect(retry)
+	screens.quit.connect(retry)   # no title screen until Phase 8: QUIT starts a fresh run
+	screens.skip.connect(skip)
+	screens.countdown_hold.connect(hold_countdown)
 
 
 ## Headlights by sky_t, the same ramp the sky shows (ColorScript.emissive_headlight),
@@ -984,7 +990,6 @@ func snap_setup(args: Dictionary) -> void:
 		fx.set_damaged(true)
 	if args.get("ghost", false):
 		fx.start_ghost(tuning.lives.ghost_period_s)
-	_go_flash_s = 0.0
 	rig.snap_to_target()
 
 
