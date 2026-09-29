@@ -258,7 +258,8 @@ func begin(road: RoadPath, s0: float, s1: float) -> void:
 			_tapers.append(f)
 		elif f.kind == RoadFeature.Kind.CHECKPOINT:
 			_checkpoints.append(f.s_start)
-		elif f.kind == RoadFeature.Kind.SIGN and f.tag == ProceduralRoadPath.SIGN_CHECKPOINT:
+		elif Landmarks.is_panel_sign(f):
+			# Warning and lane-ends panels (Landmarks): cliffs fall away around them.
 			_cp_signs.append(f.s_start)
 		elif f.kind == RoadFeature.Kind.TUNNEL and f.s_end > f.s_start:
 			_all_tunnels.append(f)

@@ -26,7 +26,9 @@ extends BiomeFeature
 ## the ground ribbon must lie below the sea on a sea slope's side.
 
 const MATERIAL_PATH := "res://assets/shaders/materials/water.tres"
-## Horizon shader parameter that receives the sea direction (horizon_biomes.gdshader).
+## Props sub-stream (feature_id): Roadside derives the same WaterPlan from it.
+const STREAM := &"water"
+## Horizon shader parameter that receives the sea direction (horizon.gdshader).
 const SEA_DIR_PARAM := &"sea_dir"
 const _PHASE_SALT := 0x5A17
 const SLOPE_SALT := 0xC11F
@@ -41,7 +43,7 @@ const LEVEL_SAMPLES := 9
 ## Probe spacing (in roadside steps) when looking ahead for water.
 const NEAREST_PROBE_STEPS := 4
 
-## Optional: the sky's horizon material (with horizon_biomes.gdshader); its `sea_dir`
+## Optional: the sky's horizon material (horizon.gdshader, SkyRig.horizon_material()); its `sea_dir`
 ## follows the water's side and the road heading ahead of the focus.
 var horizon_material: ShaderMaterial
 ## How far ahead of the focus the road heading sets the sea direction.
@@ -75,7 +77,7 @@ var _cols_def: WaterDef
 
 
 func feature_id() -> StringName:
-	return &"water"
+	return STREAM
 
 
 func step_m() -> float:
@@ -90,6 +92,10 @@ func _material() -> Material:
 	if _material_instance == null:
 		_material_instance = (load(MATERIAL_PATH) as ShaderMaterial).duplicate() as ShaderMaterial
 	return _material_instance
+
+
+func _reach_behind_for(b: BiomeDef) -> float:
+	return b.water.rebuild_step_m + b.water.level_smoothing_m if b.water != null else 0.0
 
 
 func _on_setup() -> void:
@@ -315,12 +321,23 @@ func _fixed_verts(def: WaterDef) -> int:
 ## Absolute sea level at s for a cliff coast: the road's elevation averaged over
 ## +-level_smoothing_m (LEVEL_SAMPLES samples), minus drop_m, and at least min_drop_m
 ## below the road at s. A pure function of s: continuous across windows and shifts.
+##
+## The road is generated to s + level_smoothing_m first (director rate; the table does
+## not depend on how far it goes), so the level never depends on how far the road
+## happened to be generated. Behind, the samples need the road kept from
+## s - level_smoothing_m (the run retains it: BiomeFeatures.reach_behind_m); anything
+## forgotten clamps to the first retained s.
 func sea_level_at(s: float, def: WaterDef) -> float:
+	if road.length_generated() < s + def.level_smoothing_m:
+		road.ensure_generated_to(s + def.level_smoothing_m)
 	var s_gen := road.length_generated()
+	var s_min := 0.0
+	if road is ProceduralRoadPath:
+		s_min = (road as ProceduralRoadPath).first_retained_s()
 	var sum := 0.0
 	for k in LEVEL_SAMPLES:
 		var t := float(k) / float(LEVEL_SAMPLES - 1) * 2.0 - 1.0
-		var sk := clampf(s + t * def.level_smoothing_m, 0.0, s_gen)
+		var sk := clampf(s + t * def.level_smoothing_m, s_min, s_gen)
 		road.sample_into(sk, _lvl)
 		sum += _lvl.pos_y
 	road.sample_into(minf(s, s_gen), _lvl)
@@ -336,7 +353,8 @@ func ground_drop_at(s: float, side: float) -> float:
 	var def := plan.def_at(s)
 	if def == null or def.drop_m <= 0.0 or signf(side) != float(signi(def.side)):
 		return 0.0
-	if plan.shore_offset_at(s) < 0.0:
+	# Continuous water (no river cells) is present wherever its def is.
+	if def.span_cell_m > 0.0 and plan.shore_offset_at(s) < 0.0:
 		return 0.0
 	road.sample_into(minf(s, road.length_generated()), _lvl)
 	return _lvl.pos_y - sea_level_at(s, def) + def.lift_m

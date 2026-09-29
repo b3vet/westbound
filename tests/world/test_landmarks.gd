@@ -175,6 +175,58 @@ func test_sign_text_matches_leg_and_distance() -> void:
 	eq(lm.atlas.dropped, 0, "every text region fits the atlas")
 
 
+## WP6.4c: a lane_ends SIGN (before a tunnel's lane drop) gets a pooled warning panel
+## on the right reading LANE ENDS / MERGE LEFT, and its zone is kept clear like a
+## checkpoint sign's.
+func test_lane_ends_sign_panel() -> void:
+	var road := _arc()
+	_add_checkpoint(road, LEG_M, 1, BiomeDef.LANDMARK_SIGN_GANTRY)
+	var sign_s := LEG_M + 1800.0
+	road.add_feature(RoadFeature.make(RoadFeature.Kind.SIGN, sign_s, sign_s, _t.road.lane_ends_sign_distance_m,
+		ProceduralRoadPath.SIGN_LANE_ENDS))
+	var origin := _origin()
+	var lm := _landmarks(road, origin)
+	_view(lm, road, origin, sign_s - 400.0)
+	var slot := lm.find_live(Landmarks.KIND_SIGN, sign_s)
+	if not check(slot != null, "the lane-ends sign is placed"):
+		return
+	eq(slot.lines, LandmarkText.lane_ends_sign(), "its text")
+	eq(slot.lines, PackedStringArray(["LANE ENDS", "MERGE LEFT"]))
+	for i in slot.regions.size():
+		eq(lm.atlas.region_text[slot.regions[i]], slot.lines[i], "atlas holds the line")
+		gt(lm.atlas.ink_share(slot.regions[i]), 0.02, "the line is drawn")
+	var d := road.guardrail_d(sign_s) + _lt.sign_setback_m
+	near(_abs(lm, slot, origin, Vector3.ZERO).distance_to(_expected_abs(road, sign_s, d, 0.0)), 0.0, POS_EPS,
+		"right of the guardrail")
+	var zones := PackedFloat64Array()
+	lm.clearance.zones_in(sign_s - 1.0, sign_s + 1.0, zones)
+	gt(zones.size(), 0, "its zone is kept clear")
+	eq(lm.dropped, 0)
+
+
+## Every lane_ends sign of the real journey road (canyon tunnels) gets its panel.
+func test_real_road_lane_ends_signs() -> void:
+	var road := ProceduralRoadPath.new(RunContext.new(SEED, RunContext.MODE_JOURNEY, _t))
+	var origin := _origin()
+	var director := _director(road, origin)
+	var lm := _landmarks(road, origin, director)
+	var end := LEG_M * 8.0
+	road.ensure_generated_to(end + 2000.0)
+	var feats: Array[RoadFeature] = []
+	road.features_in(0.0, end, feats)
+	var n := 0
+	for f in feats:
+		if f.kind != RoadFeature.Kind.SIGN or f.tag != ProceduralRoadPath.SIGN_LANE_ENDS:
+			continue
+		n += 1
+		_view(lm, road, origin, f.s_start - 300.0)
+		var slot := lm.find_live(Landmarks.KIND_SIGN, f.s_start)
+		if check(slot != null, "lane-ends sign at %.0f placed" % f.s_start):
+			eq(slot.lines, LandmarkText.lane_ends_sign())
+	gt(n, 0, "the journey has tunnels with lane drops")
+	eq(lm.dropped, 0, "the sign pool is big enough")
+
+
 func test_text_formatting() -> void:
 	eq(LandmarkText.distance(1000.0), "1 KM")
 	eq(LandmarkText.distance(500.0), "500 M")

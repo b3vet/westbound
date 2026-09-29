@@ -11,11 +11,13 @@ extends BiomeFeature
 ##   elevated.biome_director = director
 ##   elevated.clearance = landmark_clearance      # optional: no stretch at a landmark
 ##   elevated.setup(ctx, road, origin); elevated.update_view(player_s)
-##   elevated.plan.drop_at(s)                     # the ground ribbon's drop (road mesher)
+##   builder.set_ground_drop(elevated.ground_drop_at, ...)   # the ground ribbon's drop
 ##
 ## The road itself never moves (road space, traffic and scoring are untouched). The
 ## ground ribbon must follow `plan.drop_at(s)`: that is RoadChunkMesher's geometry
-## (GroundDropMesher is the hook; see docs/BIOMES.md).
+## (RoadBuilder.set_ground_drop -> GroundDropMesher; see docs/BIOMES.md).
+## `ground_drop_at` goes through the node, so the callable stays valid across setups
+## (retries build a new plan).
 
 const MATERIAL_PATH := "res://assets/shaders/materials/world.tres"
 ## Deck-edge strip lift over the road plane (above the dropped verge's old level).
@@ -54,6 +56,10 @@ func _material() -> Material:
 	return load(MATERIAL_PATH) as Material
 
 
+func _reach_behind_for(b: BiomeDef) -> float:
+	return b.elevated.rebuild_step_m if b.elevated != null else 0.0
+
+
 func _on_setup() -> void:
 	var lookup := Callable()
 	if biome_director != null:
@@ -67,6 +73,12 @@ func update_view(focus_s: float) -> void:
 		return
 	_focus_def = plan.def_at(focus_s)
 	super(focus_s)
+
+
+## The ground's drop below the road at s (m, >= 0): the road mesher hook
+## (RoadBuilder.set_ground_drop). 0 before setup.
+func ground_drop_at(s: float) -> float:
+	return plan.drop_at(s) if plan != null else 0.0
 
 
 # ---------------------------------------------------------------- Build

@@ -388,3 +388,41 @@ func test_blob_shadow_node_and_multimesh() -> void:
 	for i in 64:
 		multi.place(i, smp, 1.0 + 0.1 * i, 0.0, 4.5, 1.9, origin)
 	multi.hide_instance(3)
+
+
+## WP6.4c: set_ground_drop makes the mesher lower the ground ribbon (both sides by
+## drop_at, one side's field by field_drop_at); set after setup it rebuilds the live
+## chunks within the budget. Without it the ground stays at road level.
+func _drop_both(_s: float) -> float:
+	return 6.0
+
+
+func _drop_right_field(_s: float, side: float) -> float:
+	return 20.0 if side > 0.0 else 0.0
+
+
+func _lowest_ground(b: RoadBuilder, k: int, side: float) -> float:
+	var c := b.get_chunk(k)
+	var verts: PackedVector3Array = c.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var lowest := 0.0
+	for v in verts:
+		if v.x * side > 0.0:
+			lowest = minf(lowest, v.y)
+	return lowest
+
+
+func test_ground_drop_hook() -> void:
+	var road := StraightRoadPath.new(3, t)
+	var b := _make(road)
+	b.build_all_now(0.0)
+	check(not b.has_ground_drop(), "no hook: the plain mesher")
+	gt(_lowest_ground(b, 1, 1.0), -0.5, "ground at road level")
+	b.set_ground_drop(_drop_both, _drop_right_field)
+	check(b.has_ground_drop())
+	b.build_all_now(0.0)
+	near(_lowest_ground(b, 1, 1.0), -20.0, 0.01, "the right field below the sea")
+	near(_lowest_ground(b, 1, -1.0), -6.0, 0.01, "the left ground under the viaduct")
+	b.set_ground_drop(Callable(), Callable())
+	check(not b.has_ground_drop(), "cleared: the plain mesher again")
+	b.build_all_now(0.0)
+	gt(_lowest_ground(b, 1, 1.0), -0.5, "ground back at road level")

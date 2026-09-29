@@ -23,6 +23,21 @@
 // Mesh (built by src/sun/sky.gd): per layer a ring strip, farthest layer first in
 // index order (no depth writes: later triangles draw over earlier ones);
 // VERTEX = horizontal unit direction, UV.x = layer index, UV.y = 0 bottom / 1 top.
+//
+// Biome extensions (WP6.4b; one shader since WP6.4c: HorizonSetDef.apply_blend writes
+// these uniforms, all zero = the plain silhouettes above):
+//   - STYLE_ISLANDS: sparse humps on a flat sea horizon.
+//   - STYLE_HEADLANDS: broad capes with steep ends.
+//   - layer_land (per layer, -1..1): > 0 keeps the silhouette on the land side of
+//     `sea_dir` (world XZ toward the sea, set by WaterRibbon), < 0 on the sea side, with
+//     a soft boundary; |layer_land| < 1 fades the mask (crossfades).
+//   - layer_mist (per layer): the lower fraction of the card fades toward the fog color
+//     (valley fog lying between the ridges).
+//   - layer_windows (per layer): lit-window density on skylines at night
+//     (x wb_emissive_streetlamp; window_color is linear).
+// The bottom vertex of a column evaluates the silhouette only for a layer with mist or
+// windows (its fragments need the top), so plain layers cost what they always did.
+// Everything is linear math ending in wb_output(): identical on both renderers.
 shader_type spatial;
 render_mode unshaded, cull_disabled, blend_mix, depth_draw_never, fog_disabled, world_vertex_coords, shadows_disabled;
 
@@ -33,6 +48,8 @@ const float STYLE_HILLS = 1.0;
 const float STYLE_MESAS = 2.0;
 const float STYLE_MOUNTAINS = 3.0;
 const float STYLE_SKYLINE = 4.0;
+const float STYLE_ISLANDS = 5.0;
+const float STYLE_HEADLANDS = 6.0;
 
 // Per layer (x = layer 0 .. w = layer 3). Styles as above; biomes set them later.
 uniform vec4 layer_style = vec4(1.0, 2.0, 3.0, 3.0);
@@ -66,8 +83,24 @@ uniform float base_depth = 0.012;
 uniform float base_haze = 0.9;
 // Absolute world XZ of the floating origin (Sky sets it).
 uniform vec2 origin_xz = vec2(0.0);
+// WP6.4b extensions (see above).
+uniform vec4 layer_land = vec4(0.0);
+uniform vec4 layer_mist = vec4(0.0);
+uniform vec4 layer_windows = vec4(0.0);
+uniform vec2 sea_dir = vec2(0.0);
+// Half-width (in dot(dir, sea_dir)) of the land/sea boundary.
+uniform float sea_softness = 0.18;
+uniform vec3 window_color = vec3(1.0, 0.62, 0.3);
+// Window grid in radians (azimuth, elevation) and the lit share of a cell.
+uniform vec2 window_size = vec2(0.0034, 0.0026);
+uniform float window_fill = 0.55;
 
 varying vec3 v_color;
+varying vec3 v_fog;
+varying float v_elev;
+varying float v_top;
+varying float v_layer;
+varying vec2 v_az_seed;
 
 // Hash without sine: stable for large inputs and identical on every renderer.
 float hash12(vec2 p) {
@@ -112,8 +145,26 @@ float silhouette(float style, vec2 p, float seed) {
 		float tower = hash12(cell + seed);
 		float gap = step(0.25, hash12(cell * 1.31 + 7.0));
 		return (0.12 + 0.88 * tower * tower) * gap * cluster + 0.04;
+	} else if (style == STYLE_ISLANDS) {
+		// Sparse humps: only the peaks of the noise rise above the sea.
+		float n = fbm3(p);
+		return sqrt(max(n - 0.52, 0.0) / 0.48);
+	} else if (style == STYLE_HEADLANDS) {
+		// Broad capes with steep ends, a little relief on top.
+		float cape = smoothstep(0.35, 0.5, fbm3(p * 0.7));
+		return cape * (0.55 + 0.45 * fbm3(p * 2.5)) + 0.03;
 	}
 	return 0.0;
+}
+
+// Height multiplier of a land-only (land > 0) or sea-only (land < 0) layer; |land| < 1
+// fades the mask toward 1 (no mask).
+float land_mask(float land, vec3 flat_dir) {
+	if (land == 0.0 || dot(sea_dir, sea_dir) < 0.25) {
+		return 1.0;
+	}
+	float on_land = 1.0 - smoothstep(-sea_softness, sea_softness, dot(flat_dir.xz, sea_dir));
+	return mix(1.0, land > 0.0 ? on_land : 1.0 - on_land, min(abs(land), 1.0));
 }
 
 vec3 layer_tint(int layer) {
@@ -128,9 +179,12 @@ void vertex() {
 	float style = layer_style[layer];
 	float style_b = layer_style_b[layer];
 	vec3 flat_dir = normalize(vec3(VERTEX.x - NODE_POSITION_WORLD.x, 0.0, VERTEX.z - NODE_POSITION_WORLD.z));
-	float elev = -base_depth;
+	float top = -base_depth;
 	float heat = heat_shimmer * smoothstep(shimmer_sun_fade.x, shimmer_sun_fade.y, wb_sun_dir.y);
-	if (UV.y > 0.5 && (style != STYLE_NONE || style_b != STYLE_NONE)) {
+	// A mist or window layer also evaluates the top at the bottom vertex (its fragments
+	// need it); plain layers only at the top vertex.
+	bool needs_top = UV.y > 0.5 || layer_mist[layer] > 0.0 || layer_windows[layer] > 0.0;
+	if (needs_top && (style != STYLE_NONE || style_b != STYLE_NONE)) {
 		vec2 sample_xz = CAMERA_POSITION_WORLD.xz + origin_xz + flat_dir.xz * layer_distance_m[layer];
 		vec2 p = sample_xz / layer_feature_m[layer];
 		float h = silhouette(style, p, layer_seed[layer]) * layer_height_m[layer];
@@ -138,25 +192,51 @@ void vertex() {
 			float hb = silhouette(style_b, p, layer_seed[layer]) * layer_height_b_m[layer];
 			h = mix(h, hb, layer_mix);
 		}
-		elev = h / layer_distance_m[layer];
+		h *= land_mask(layer_land[layer], flat_dir);
+		top = h / layer_distance_m[layer];
 		if (heat > 0.0) {
 			float az = atan(flat_dir.x, -flat_dir.z);
 			float ripple = sin(az * shimmer_ripples + TIME * shimmer_speed)
 					* sin(az * shimmer_ripples_b - TIME * shimmer_speed * 0.61);
-			elev += heat * shimmer_layer_weight[layer] * shimmer_amplitude * ripple;
+			top += heat * shimmer_layer_weight[layer] * shimmer_amplitude * ripple;
 		}
 	}
+	float elev = UV.y > 0.5 ? top : -base_depth;
 	vec3 dir = normalize(vec3(flat_dir.x, elev, flat_dir.z));
 	VERTEX = CAMERA_POSITION_WORLD + dir * wb_fog_end * WB_SKY_RADIUS_FRAC;
 	vec3 c = layer_tint(layer);
+	v_fog = wb_fog_color_dir(dir);
 	// Haze at the base melts the card into the fog and the dome below the horizon.
-	c = mix(c, wb_fog_color_dir(dir), UV.y > 0.5 ? 0.0 : base_haze);
+	c = mix(c, v_fog, UV.y > 0.5 ? 0.0 : base_haze);
 	// Mirage: the hot air near the ground shows the sky, lifting the haze at the base.
 	c = mix(c, wb_sky_horizon.rgb, UV.y > 0.5 ? 0.0 : heat * shimmer_mirage * shimmer_layer_weight[layer]);
 	v_color = c + wb_sun_disc_color.rgb * wb_sun_halo(dir) * layer_glow[layer];
+	v_elev = elev;
+	v_top = top;
+	v_layer = float(layer);
+	v_az_seed = vec2(atan(flat_dir.x, -flat_dir.z), layer_seed[layer]);
 }
 
 void fragment() {
-	ALBEDO = wb_output(v_color);
+	int layer = int(v_layer + 0.5);
+	vec3 c = v_color;
+	float mist = layer_mist[layer];
+	if (mist > 0.0) {
+		// Low fog between the ridges: the lower `mist` of the card melts into the fog.
+		float up = clamp((v_elev + base_depth) / max(v_top + base_depth, 0.0001), 0.0, 1.0);
+		c = mix(c, v_fog, 1.0 - smoothstep(0.0, mist, up));
+	}
+	float wd = layer_windows[layer] * wb_emissive_streetlamp;
+	if (wd > 0.0 && v_elev > 0.0) {
+		vec2 g = vec2(v_az_seed.x / window_size.x, v_elev / window_size.y);
+		vec2 cell = floor(g);
+		vec2 f = fract(g);
+		float pane = step(0.2, f.x) * step(f.x, 0.8) * step(0.25, f.y) * step(f.y, 0.75);
+		float lit = step(1.0 - window_fill * wd, hash12(cell + v_az_seed.y));
+		// No windows in the top row of a tower (roofs).
+		float roof = 1.0 - step(v_top - window_size.y, v_elev);
+		c += window_color * (pane * lit * roof * wd);
+	}
+	ALBEDO = wb_output(c);
 	ALPHA = 1.0;
 }

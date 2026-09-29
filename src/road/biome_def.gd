@@ -106,6 +106,6 @@ func checkpoint_style(leg_index: int, style_seed: int) -> StringName:
 ## Low fog layers (valley): translucent cards beside the road. FogCards.
 @export var fog_cards: FogCardsDef
 ## The horizon extensions of this biome's set (`horizon_set`, over horizon_layer_style
-## / _height_m): sea-side masks, mist and skyline windows (horizon_biomes.gdshader).
+## / _height_m): sea-side masks, mist and skyline windows (horizon.gdshader).
 ## HorizonSetDef.apply_blend().
 @export var horizon_def: HorizonSetDef

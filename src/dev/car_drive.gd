@@ -44,6 +44,8 @@ var _director: BiomeDirector
 var _builder: RoadBuilder
 var _roadside: Roadside
 var _landmarks: Landmarks
+## WP6.4b's biome features (water, elevated stretches, fog cards), wired in WP6.4c.
+var _features: BiomeFeatures
 var _sky: SkyRig
 var _hub: PlayerInput
 var _rig: CameraRig
@@ -119,6 +121,11 @@ func _ready() -> void:
 	add_child(_landmarks)
 
 	_sky = $Sky
+	_features = BiomeFeatures.new()
+	_features.name = "BiomeFeatures"
+	_features.biome_director = _director
+	add_child(_features)
+	_features.bind(_builder, _sky)
 	_hub = $PlayerInput
 	_rig = $CameraRig
 	_hub.camera_cycle_requested.connect(_rig.cycle_mode)
@@ -132,6 +139,7 @@ func _ready() -> void:
 	_builder.setup(_ctx, _road, _origin)
 	_roadside.setup(_ctx, _road, _origin)
 	_landmarks.setup(_ctx, _road, _origin)
+	_features.setup(_ctx, _road, _origin)
 	_sky.setup(_ctx, _road, _origin)
 	_builder.build_all_now(0.0)
 
@@ -151,7 +159,8 @@ func _physics_process(_delta: float) -> void:
 	var st := _car.state
 	_road.ensure_generated_to(_view_ahead(st.s))
 	if st.s >= _next_forget_s:
-		_road.forget_before(st.s - _roadside.reach_behind_m() - _tuning.road.chunk_length_m)
+		_road.forget_before(st.s - maxf(_roadside.reach_behind_m(), _features.reach_behind_m())
+			- _tuning.road.chunk_length_m)
 		_next_forget_s = st.s + FORGET_EVERY_M
 	_traffic_tick(1.0 / float(Engine.physics_ticks_per_second))
 	var smp := _car.road_sample()
@@ -167,6 +176,7 @@ func _process(_delta: float) -> void:
 	_builder.update_view(st.s)
 	_roadside.update_view(st.s)
 	_landmarks.update_view(st.s)
+	_features.update_view(st.s)
 	_sky.update_view(st.s)
 	_traffic_view.update_view(st.s)
 	if not is_instance_valid(_headlights.car) or _headlights.car != _car:
@@ -290,6 +300,7 @@ func _setup_traffic() -> void:
 	_traffic_view = TrafficView.new()
 	_traffic_view.name = "TrafficView"
 	_traffic_view.headlight_pools = false   # HeadlightCones draws them
+	_traffic_view.biome_director = _director   # each car wears its biome's palette
 	add_child(_traffic_view)
 	_traffic_view.setup(_ctx, _road, _origin, _registry, _sim.state, _tdir.opposite.state)
 	for n: Node3D in [_headlights, _cones, _pools]:
@@ -297,9 +308,6 @@ func _setup_traffic() -> void:
 		add_child(n)
 		n.call(&"setup", _ctx, _road, _origin)
 	_cones.bind(_traffic_view, _sim.state, _tdir.opposite.state)
-	var biome := _director.current()
-	if biome != null and not biome.traffic_palette.is_empty():
-		_traffic_view.set_palette(biome.traffic_palette)
 
 
 ## One 120 Hz traffic tick after the car's physics (contract order: car, traffic,

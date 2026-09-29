@@ -312,7 +312,7 @@ func test_sea_direction_feeds_the_horizon() -> void:
 	var road := StraightRoadPath.new(3, _t.road)
 	var w := _ribbon(road, _origin(), _coast)
 	var mat := ShaderMaterial.new()
-	mat.shader = load(HorizonSetDef.SHADER_PATH) as Shader
+	mat.shader = load("res://assets/shaders/horizon.gdshader") as Shader
 	w.horizon_material = mat
 	w.update_view(800.0)
 	var dir: Vector2 = mat.get_shader_parameter(&"sea_dir")

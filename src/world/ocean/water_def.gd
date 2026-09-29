@@ -120,6 +120,14 @@ extends Resource
 @export var rebuild_step_m: float = 60.0
 
 
+## The side of the sun the road plan must hold beside this water (RoadPlanGen's
+## convention: +1 the road heads right of the sun, -1 left; 0 = free): a sea below the
+## road (`drop_m` > 0, the coast) keeps the sun on its own side, so the sun sinks into
+## the sea (-side: water on the right needs the sun right of the axis). Rivers: free.
+func road_sun_side() -> int:
+	return -signi(side) if drop_m > 0.0 else 0
+
+
 ## |d| offsets of the water columns from the waterline: 0, surf, then growing
 ## columns until width_m (the last is exactly width_m).
 func water_columns() -> PackedFloat64Array:

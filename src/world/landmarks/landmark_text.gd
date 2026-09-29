@@ -32,6 +32,11 @@ static func warning_sign(metres: float, next_leg: int, next_name: String) -> Pac
 	return PackedStringArray(["CHECKPOINT " + distance(metres), leg(next_leg, next_name)])
 
 
+## Lines of the lane-ends panel before a lane drop (the right lane ends: tunnels).
+static func lane_ends_sign() -> PackedStringArray:
+	return PackedStringArray(["LANE ENDS", "MERGE LEFT"])
+
+
 ## Lines of a checkpoint landmark (LandmarkBuilds line order per kind) at the end of
 ## leg `cp_leg`; the next checkpoint is `next_dist_m` further on.
 static func landmark(kind: StringName, cp_leg: int, next_name: String, next_dist_m: float) -> PackedStringArray:

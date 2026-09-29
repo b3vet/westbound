@@ -31,6 +31,19 @@ extends RefCounted
 ## [min, min + (max - min) / scale]. The bend sight clearance for BLIND_BEND is the
 ## biome's (cliffs). The number of draws never changes, and at scale 1 (or without a
 ## plan) every value is bit-identical to the plain generator.
+##
+## Sun side per leg (WP6.4c): a leg whose biome requires a side (BiomeRoadRules
+## .sun_side_for_leg: the coast keeps the sun over its sea) is honoured like this. Each
+## section first draws its straight, then looks for the first requiring leg within
+## straight + one bend + `sun_lookahead_m` (two forced sections: the shortest straight
+## and the longest bend, a preparing bend and the switch). Found on the other side: the
+## switch is forced now (shortest straight, then the usual switch, or the preparing bend
+## away from the sun first), so it ends before the leg starts; found on this side: the
+## scheduled switches wait. The road's first side is the required one when a requiring
+## leg starts within the start straight + sun_lookahead_m. The heading stays inside the
+## 15-30 deg band everywhere except inside the switch bends, as before, and only the
+## seeded draws decide: deterministic by seed and plan. Without requiring legs nothing
+## changes (bit-identical).
 
 ## Plan-view sight distance past an obstruction `m` inside the driving line on an
 ## arc of radius R (middle-ordinate rule): S^2 = 8 R m.
@@ -84,6 +97,11 @@ var _sign_distance: float
 var _bend_sight_sq_min: float
 var _bend_sight_factor: float
 var _bend_sight_clearance: float
+## Longest bend of any kind (normal, preparing, switch) incl. its transitions, and the
+## road a forced switch may need (two sections of the shortest straight + that bend).
+var _bend_max: float
+## How far past a section's straight and bend a requiring leg is looked for.
+var sun_lookahead_m: float = 0.0
 
 
 func _init(rng: Rng, t: RoadTuning) -> void:
@@ -111,6 +129,9 @@ func _init(rng: Rng, t: RoadTuning) -> void:
 	_bend_sight_clearance = t.bend_sight_clearance_m
 	_bend_sight_factor = MIDDLE_ORDINATE_FACTOR * _bend_sight_clearance
 	_bend_sight_sq_min = t.blind_sight_distance_m * t.blind_sight_distance_m
+	var arc_max := maxf(2.0 * _band_hi * _switch_radius, maxf(_band_hi - _band_lo, _defl_max) * _radius_max)
+	_bend_max = 2.0 * _ramp_max + arc_max
+	sun_lookahead_m = 2.0 * (_straight_min + _bend_max)
 	assert(_band_hi - _band_lo >= 2.0 * _defl_min, "sun band narrower than two minimum bends")
 	assert(_band_lo + _switch_ramp_margin < _band_hi, "switch transitions do not fit in the sun band")
 
@@ -167,6 +188,9 @@ static func drop_features_before(list: Array[RoadFeature], s: float) -> void:
 func _start() -> void:
 	_started = true
 	_side = 1.0 if _rng.chance(0.5) else -1.0
+	var need := _sun_side_ahead(0.0, _start_straight + sun_lookahead_m)
+	if need != 0:
+		_side = float(need)
 	_h = _side * _rng.float_range(_band_lo, _band_hi)
 	_next_switch_s = _rng.float_range(_switch_min, _switch_max)
 	_push(_start_straight, 0.0, 0.0, _h)
@@ -177,13 +201,19 @@ func _add_section() -> void:
 	var scale := biome_rules.curve_scale_at(end_s) if biome_rules != null else 1.0
 	if scale <= 0.0:
 		scale = 1.0
-	_push(_rng.float_range(_straight_min, _straight_max) / scale, 0.0, 0.0, _h)
+	var straight := _rng.float_range(_straight_min, _straight_max) / scale
+	# The sun side a leg ahead requires (0 = none within reach): switch now, or hold.
+	var need := _sun_side_ahead(end_s, end_s + straight + _bend_max + sun_lookahead_m)
+	var forced := need != 0 and float(need) != _side
+	if forced:
+		straight = _straight_min
+	_push(straight, 0.0, 0.0, _h)
 	var r_max := _radius_max
 	if scale > 1.0:
 		r_max = _radius_min + (_radius_max - _radius_min) / scale
 	var off := _side * _h   # current sun offset, in [band_lo, band_hi]
 	var ramp := _rng.float_range(_ramp_min, _ramp_max)
-	if end_s >= _next_switch_s:
+	if forced or (end_s >= _next_switch_s and need == 0):
 		if off >= _band_lo + _switch_ramp_margin:
 			_add_side_switch(ramp)
 			return
@@ -206,6 +236,18 @@ func _add_section() -> void:
 	var room := room_up if dir > 0.0 else room_down
 	var mag := _rng.float_range(_defl_min, minf(_defl_max, room))
 	_add_bend(_side * dir * mag, _rng.float_range(_radius_min, r_max), ramp)
+
+
+## The sun side required by the first leg overlapping [a, b] that requires one (0 when
+## none, or without biome rules).
+func _sun_side_ahead(a: float, b: float) -> int:
+	if biome_rules == null:
+		return 0
+	for k in range(biome_rules.leg_at(a), biome_rules.leg_at(b) + 1):
+		var need := biome_rules.sun_side_for_leg(k)
+		if need != 0:
+			return need
+	return 0
 
 
 func _add_side_switch(ramp: float) -> void:

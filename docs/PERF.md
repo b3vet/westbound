@@ -60,6 +60,37 @@ The owner's iPhone report showed 109 draw calls with 45 vehicles, against 77 her
 
 The Dev HUD's `draws` row now reads `total / budget  3d N`, so the next COPY report separates the 3D cost from overlays.
 
+## Biomes in the run (WP6.4c)
+
+**Setup.** The real run with the WP6.4b features wired (water, elevated stretches, fog cards), traffic at leg-8 density, chase cam at 150 km/h, seed `Run.SNAP_SEED`, 1361x720, render scale 0.75, Medium. The HUD, dev HUD and overlays are hidden (`--hud=false`), so *3D* is the whole count. Frozen frame, so the numbers repeat.
+
+```
+tools/drawcalls.sh src/run/run.tscn --set=leg_override:8 --cam=chase --speed_kmh=150 --leg=N --leg_s=M --hud=false
+```
+
+| Where | Leg, s into it | 3D draws | Triangles | Road | Roadside | Features | Landmarks | Traffic | Sky + car |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Farmland | 1, 600 m | 46 | 69k | 5 | 16 | 0 | 0 | 15 | 3 + 7 |
+| Desert | 2, 600 m | 42 | 82k | 6 | 11 | 0 | 0 | 15 | 3 + 7 |
+| Canyon | 4, 600 m | 40 | 69k | 6 | 8 | 0 | 0 | 16 | 3 + 7 |
+| City (elevated stretch) | 6, 600 m | 44 | 103k | 6 | 13 | 1 | 0 | 15 | 3 + 6 |
+| City | 7, 600 m | 44 | 104k | 5 | 14 | 1 | 0 | 15 | 3 + 6 |
+| Valley fog | 8, 1500 m | 47 | 100k | 5 | 16 | 1 | 0 | 15 | 3 + 7 |
+| Coast | 9, 1600 m | 40 | 81k | 5 | 9 | 1 | 1 | 15 | 3 + 6 |
+| Coast | 10, 600 m | 39 | 85k | 6 | 8 | 1 | 0 | 15 | 3 + 6 |
+| Canyon → city checkpoint | 6, −120 m | 46 | 86k | 5 | 16 | 0 | 0 | 15 | 3 + 7 |
+| City → valley checkpoint | 8, −120 m | 48 | 103k | 5 | 16 | 2 | 1 | 15 | 3 + 6 |
+| Valley → coast checkpoint | 9, −120 m | 44 | 82k | 6 | 10 | 2 | 1 | 15 | 3 + 7 |
+
+The --at=elevated view (the middle of the first full-height stretch in leg 6) is 46 3D draws and 104k triangles.
+
+- **Every biome stays at or under 48 3D draws** at leg-8 density, against a ~55 target. That leaves 50+ of the 100 budget for the HUD and the touch controls.
+- **Triangles:** at most about 105k (city), within 150k.
+- **Features:** 0 to 2 draw calls, one per feature with geometry. The city's viaduct and the coast's sea are 1 each. The valley has its fog cards, plus a river glimpse in some cells. At a checkpoint both biomes' features can show.
+- **Traffic:** 15 draws in every biome. The per-biome palettes (two banks in the one palette uniform) add none.
+
+**Chunk build cost with the ground-drop hook** (GroundDropMesher; desktop, 10 chunks of 200 m): a coast chunk is about 1.4x a plain one, and a city chunk about 1.5x. That is 3.5 to 5 ms against 2.5 to 3 ms per chunk, spread over frames at 12 rows per frame. The hooks are asked once per row and side, because an interval's end row is the next interval's start. The continuous sea skips the shoreline search.
+
 ## Tick cost: OppositeTraffic.step
 
 `tests/unit/test_opposite_traffic.gd::test_step_tick_budget`: leg 8, 19 vehicles, player at 200 km/h, desktop median.

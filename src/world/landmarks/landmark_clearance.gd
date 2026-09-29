@@ -23,6 +23,9 @@ extends RefCounted
 ## allocation) when a range is not covered or the biome plan changed; the queries only
 ## read the packed arrays.
 ##
+## Panel signs: checkpoint warnings and (WP6.4c) the lane-ends signs before a tunnel's
+## lane drop, both Landmarks.is_panel_sign.
+##
 ## Road tunnels (WP6.4a): every TUNNEL feature adds the zones of the road-built tunnel
 ## (LandmarkBuilds.road_tunnel_clearance_zones) as ZONE_TUNNEL. Queries take a mask of
 ## zone kinds (default all): canyon cliffs ask only for ZONE_LANDMARK, so their rock
@@ -211,7 +214,7 @@ func _refill(s_lo: float, s_hi: float, version: int) -> void:
 		var kind := ZONE_LANDMARK
 		if f.kind == RoadFeature.Kind.CHECKPOINT:
 			LandmarkBuilds.clearance_zones(style_for(f), LandmarkSection.at(road, anchor), tuning, _scratch)
-		elif f.kind == RoadFeature.Kind.SIGN and f.tag == ProceduralRoadPath.SIGN_CHECKPOINT:
+		elif Landmarks.is_panel_sign(f):
 			LandmarkBuilds.sign_clearance_zones(road.guardrail_d(anchor) + tuning.sign_setback_m, tuning, _scratch)
 		elif f.kind == RoadFeature.Kind.TUNNEL:
 			LandmarkBuilds.road_tunnel_clearance_zones(LandmarkSection.at(road, anchor), f.s_end - f.s_start, tuning,
