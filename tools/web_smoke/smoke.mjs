@@ -181,7 +181,8 @@ async function main() {
   }
 
   const server = await serve(root);
-  const url = `http://127.0.0.1:${server.address().port}/index.html`;
+  // ?server=off: the smoke test never creates accounts on the production server (N1.2).
+  const url = `http://127.0.0.1:${server.address().port}/index.html?server=off`;
   const failures = [];
   const consoleLines = [];
   let browser;

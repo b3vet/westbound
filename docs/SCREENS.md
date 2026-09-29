@@ -173,3 +173,8 @@ The preview is the real run (`run.tscn`) in the matching state, with the screen 
 - **Quick retry countdown.** The spec wants a 3-2-1 countdown (with gyro calibration) and also "Retry puts the player back on the road within 2 seconds". Retry reaches COUNTDOWN on the road in the same frame. The retry countdown runs at 0.5 s a step, so the player is driving 1.5 s after RETRY. The first run keeps 1 s steps.
 - **QUIT** starts a fresh run until the title screen exists (Phase 8).
 - **GARAGE** is disabled until Phase 8.
+
+
+## Account (N1.2)
+
+Pause → SETTINGS → ACCOUNT (shown only when an online session exists: web builds and release exports; native dev runs are offline unless `--server=`). The `ProfilePanel` shows `name#tag` and online status, rename with inline server errors, TRY AGAIN / NEW ACCOUNT when signed out or failed, "Sign in with Apple / Google — coming soon" (MP-D2) and DELETE ACCOUNT with a confirm step. See docs/NET_CLIENT.md.

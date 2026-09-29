@@ -146,9 +146,14 @@ func _exit_tree() -> void:
 func _ready() -> void:
 	if not _configured:
 		var t := NetTuning.load_default()
-		var url := resolve_base_url(t, NetJsBridge.new(), OS.get_cmdline_user_args())
+		var url := resolve_base_url(t, NetJsBridge.new(), OS.get_cmdline_user_args(),
+			OS.has_feature("web") or not OS.is_debug_build())
 		if url.is_empty():
 			configure_disabled(t)
+			# Online features off (native dev runs without --server=): don't claim
+			# `current`, so the game behaves as if no session exists.
+			if current == self:
+				current = null
 		else:
 			configure(NetHttpNode.new(self), platform_store(store_name(url, t)), t, null, url)
 	if auto_start:
@@ -531,7 +536,12 @@ func _set_status(s: Status) -> void:
 ## The API base: the web page's `?server=`, else a `--server=` user argument (the dev
 ## setting: the editor's run arguments or the command line), else the tuning. `off`
 ## gives "" (online features off). A bare origin gets /api/v1.
-static func resolve_base_url(t: NetTuning, bridge: NetJsBridge, args: PackedStringArray) -> String:
+## `default_online`: whether no explicit choice means the default server. The autoload
+## passes true only on web builds and release exports: native dev runs (tests, snaps,
+## soaks, the editor) stay offline unless `--server=` is given, so tools never create
+## accounts on the production server.
+static func resolve_base_url(t: NetTuning, bridge: NetJsBridge, args: PackedStringArray,
+		default_online: bool = true) -> String:
 	var v := ""
 	if bridge != null and bridge.available():
 		v = bridge.query_param(SERVER_PARAM)
@@ -540,7 +550,7 @@ static func resolve_base_url(t: NetTuning, bridge: NetJsBridge, args: PackedStri
 			if a.begins_with(SERVER_ARG):
 				v = a.substr(SERVER_ARG.length())
 	if v.strip_edges().is_empty():
-		return t.api_base_url
+		return t.api_base_url if default_online else ""
 	return normalize_server(v, t.api_base_url)
 
 

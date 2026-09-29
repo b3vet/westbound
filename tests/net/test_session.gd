@@ -425,6 +425,10 @@ func test_server_resolution() -> void:
 	eq(NetSession.resolve_base_url(tuning, null, PackedStringArray(["--server=https://x.test/api/v1/"])),
 			"https://x.test/api/v1")
 	eq(NetSession.resolve_base_url(tuning, null, PackedStringArray(["--server=off"])), "")
+	# Native dev runs (tests, snaps, soaks) stay offline unless a server is named.
+	eq(NetSession.resolve_base_url(tuning, null, none, false), "", "dev default: offline")
+	eq(NetSession.resolve_base_url(tuning, null, PackedStringArray(["--server=http://127.0.0.1:8080"]), false),
+			"http://127.0.0.1:8080/api/v1", "an explicit server still works in dev")
 	eq(NetSession.normalize_server("ftp://x", tuning.api_base_url), tuning.api_base_url, "bad scheme ignored")
 	var js := QueryBridge.new()
 	js.params["server"] = "http://localhost:8080"
