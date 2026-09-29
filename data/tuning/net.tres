@@ -5,6 +5,19 @@
 [resource]
 script = ExtResource("1_script")
 server_url = "wss://westbound.sipsakrandevu.com/ws"
+api_base_url = "https://westbound.sipsakrandevu.com/api/v1"
+api_timeout_s = 10.0
+api_max_retries = 3
+api_backoff_base_s = 0.5
+api_backoff_max_s = 8.0
+api_backoff_jitter = 0.25
+api_retry_after_max_s = 30.0
+api_retry_after_default_s = 5.0
+session_refresh_margin_s = 120.0
+session_retry_s = 15.0
+session_retry_max_s = 300.0
+display_name_min_chars = 3
+display_name_max_chars = 16
 ping_interval_s = 2.0
 dead_timeout_s = 8.0
 handshake_timeout_s = 10.0

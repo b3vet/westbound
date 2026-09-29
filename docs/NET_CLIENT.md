@@ -145,6 +145,7 @@ if client.is_ready():
   - `update_required`: "A new version of Westbound is out. Please update to play online."
   - `server_outdated`: "Westbound Online is being updated. Please try again in a few minutes."
   - `map_mismatch`: "Your map data is out of date. Please update Westbound to play online."
+  - `not_allowed` (fatal: the gateway keeps the newest login per account): "This account signed in on another device." (N1.2)
   - There are also texts for `auth_failed`, `banned`, `server_full`, `rate_limited`, `connect_failed`, `handshake_timeout`, `timeout` and `closed`, plus a generic fallback.
   - `needs_update(code)` is true for the "please update" family.
 - **Non-fatal Error:** `server_error` fires and the connection stays up.
@@ -237,4 +238,157 @@ The same run against the other paths (commands in docs/SERVER.md → "Realtime g
 
 **A client-side finding.** When a fatal `Error` and the close frame arrive in the same `WebSocketPeer.poll()`, Godot goes straight to `STATE_CLOSED` with `get_available_packet_count() == 0`, so the error is lost. `NetClient` then reports `closed` instead of, say, `update_required`. The server works around this by holding its close until the client has closed, up to `gateway.fatal_close_delay_ms`. `NetClient` closes as soon as it reads a fatal error, so it sees every error. `NetWsTransport.poll()` also reads packets only in `OPEN` or `CLOSING`, which is harmless given the engine behavior.
 
-`NetClient.user_message("not_allowed")` falls back to the generic text. The gateway uses a fatal `not_allowed` for "signed in on another device" (docs/SERVER.md → "Sessions"), which deserves its own message.
+## Accounts client (N1.2)
+
+WP N1.2: the device account, token refresh, the profile and the account panel. It implements [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Accounts and authentication and Client changes (`session.gd`, `api.gd`, the profile and account screen), with plan **MP-D2** (device accounts only). The server side is [`SERVER.md`](SERVER.md) → Accounts API.
+
+| File | Class | What it is |
+| --- | --- | --- |
+| `src/net/api.gd` | `NetApi` | HTTP client: JSON in and out, retries, 429, typed errors, bearer token, refresh-and-retry once |
+| `src/net/api_result.gd` | `NetApiResult` | The typed outcome of a call (`ok`, `status`, `error`, `data`, `retry_after_s`, `banned_until`, `next_rename_at`) |
+| `src/net/http_backend.gd`, `http_node.gd`, `http_response.gd` | `NetHttpBackend`, `NetHttpNode`, `NetHttpResponse` | The injectable transport: `request()` and `wait()` coroutines; the real one uses one `HTTPRequest` node per request |
+| `src/net/fake_accounts.gd` | `NetFakeAccounts` | An in-memory Accounts API behind the same interface (tests, the panel preview) |
+| `src/net/session.gd` | `NetSession` | The session Node (autoload candidate): state machine, storage, signals, rename, delete, logout |
+| `src/net/profile.gd` | `NetProfile` | `GET /me` as a typed object |
+| `src/net/session_store.gd`, `file_store.gd`, `web_store.gd`, `js_bridge.gd` | `NetSessionStore`, `NetFileStore`, `NetWebStore`, `NetJsBridge` | Storage per platform |
+| `src/ui/screens/profile_panel.gd` | `ProfilePanel` | The account panel (pause → SETTINGS → ACCOUNT) |
+| `src/ui/screens/dev/profile_preview.tscn` | | Snap scene for the panel |
+
+### NetApi
+
+```gdscript
+var api := NetApi.new(NetHttpNode.new(host_node), tuning, "https://westbound.sipsakrandevu.com/api/v1")
+api.bearer = func() -> String: return token          # NetSession wires these two
+api.refresh_access = session.refresh_for_api         # coroutine -> bool
+var r: NetApiResult = await api.get_me()
+```
+
+- Routes: `create_device()`, `device_login(id, secret)`, `refresh(rt)`, `logout(rt, all)`, `get_me()`, `patch_me(name)`, `delete_account()`, or `request(method, path, body, flags)` for later routes.
+- **Retries** (`api_max_retries`, 3): a network failure (no response, DNS, TLS, timeout) or a 5xx waits `api_backoff_base_s × 2^attempt` (0.5, 1, 2 s; capped at `api_backoff_max_s`, ± `api_backoff_jitter`). A 429 waits its `Retry-After` header (or `retry_after_secs`) when that is at most `api_retry_after_max_s` (30 s), otherwise the call returns `rate_limited` with `retry_after_s`. **Any other 4xx returns at once.** `logout` is one attempt (best effort).
+- **Errors:** `ok` false with `error` = the server's code (`invalid_name`, `rename_cooldown`, `banned`, ...) or a client code: `network`, `server_unavailable` (5xx), `bad_response` (not JSON), `offline` (no server). `is_transient()` is true for those four plus `rate_limited`.
+- **Ids:** account ids stay decimal Strings everywhere (`NetApiResult.as_id()` also turns a numeric id into its digits).
+- **Auth:** calls with `AUTH` send `Authorization: Bearer <token>`. On a 401 `token_expired` (also `token_revoked` or `invalid_token`: a "log out everywhere" killed it) the API calls `refresh_access` once and repeats the call once.
+- The timeout is `api_timeout_s` (10 s) per attempt. Tokens, secrets and bodies are never logged.
+
+### NetSession
+
+A Node (`process_mode` always, so requests finish under the pause menu). `NetSession.current` is the live one. Nothing in the single-player game waits for it: `start()` is a coroutine that nobody needs to await, every failure is a state, and nothing calls `push_error`.
+
+```
+IDLE --start()--> CONNECTING --> ONLINE | OFFLINE | BANNED | FAILED
+DISABLED (no server)     SIGNED_OUT (after logout() or delete_account())
+```
+
+| Launch finds | Does | Ends |
+| --- | --- | --- |
+| no account | `POST /auth/device`; stores `account_id`, `device_secret` (returned once), `refresh_token`, the profile | ONLINE |
+| an account | `POST /auth/refresh` (the rotated token is stored at once), then `GET /me` | ONLINE |
+| refresh rejected (`token_reused`, `token_revoked`, `token_expired`, `invalid_token`, any 400/401) | `POST /auth/device/login` with the stored secret | ONLINE |
+| secret refused (`invalid_credentials`) | nothing more: **the stored account is kept and never silently replaced**; the panel offers TRY AGAIN and NEW ACCOUNT (`create_new_account()`) | FAILED |
+| `403 banned` | `banned(until)` | BANNED |
+| no network, 5xx, a long 429 | keeps the cached profile; retries after `session_retry_s` (15 s), doubling to `session_retry_max_s` (300 s), or the 429's Retry-After | OFFLINE |
+| `signed_out` flag (after `logout()`) | nothing until SIGN IN (`retry()`) | SIGNED_OUT |
+
+- **While ONLINE:** the access token is refreshed `session_refresh_margin_s` (120 s) before it expires. A failed proactive refresh keeps the session online while the token lasts and tries again after `session_retry_s`. Renewal is single flight: concurrent 401s share one refresh (a refresh token is single use).
+- **API:** `access_token()` ("" unless ONLINE; for `NetClient.start()`), `fresh_access_token()` (renews first when near expiry), `ws_url()`, `profile`, `status`, `last_error`, `storage_ok`, `rename(name)`, `delete_account()`, `logout(all_devices)`, `retry()`, `create_new_account()`.
+- **Signals:** `signed_in(profile)`, `signed_out()`, `profile_changed(profile)`, `banned(until_unix)`, `status_changed(status)`.
+- **Deletion** (`DELETE /account`, allowed while banned when a token is still held) clears everything stored on the device. The next launch is a first launch.
+- **Logout** revokes the refresh family on the server and keeps the secret, so SIGN IN restores the same account.
+- **Player texts:** `NetSession.error_text(result, now)` maps every code to a short line (≤ about 50 characters, the panel does not wrap): `rename_cooldown` → "You can rename again in N days.", `banned` → "... suspended until YYYY-MM-DD.".
+
+**Server selection.** `NetTuning.api_base_url` (production) unless overridden for local dev:
+
+- web: `?server=http://127.0.0.1:8080` on the page URL (a bare origin gets `/api/v1`);
+- native / editor: the user argument `--server=http://127.0.0.1:8080` (Project Settings → Run → Main Run Args, or `-- --server=...` on the command line);
+- `server=off` disables online features (DISABLED).
+
+Credentials are stored **per server** (`NetSession.store_name()`): a `?server=` link can never send this device's production secret to another host.
+
+### Storage
+
+| Platform | Store | Where |
+| --- | --- | --- |
+| Web | `NetWebStore` | `localStorage["westbound.net.v1"]` (other servers: `westbound.net.v1.session_<hash>`) |
+| Native | `NetFileStore` | `user://net/session.dat`, `FileAccess.open_encrypted_with_pass` (AES-256) |
+
+- **Web:** every access goes through a small page helper that catches everything and answers with a tagged string, so Safari private mode (`QuotaExceededError` on write) or blocked storage (`SecurityError`) never throws into Godot. When a write fails the document stays in memory for this launch, `storage_ok` turns false and the panel says "Not saved on this device".
+- **Native:** the key is per install: SHA-256 of a random salt made on first use (`user://net/install.salt`) plus `OS.get_unique_id()` on phones, so a copied file does not open elsewhere. Writes go to a temporary file renamed over the old one. This is obfuscation, not protection from someone holding the unlocked device: **MP-D2 replaces `NetFileStore` with the iOS Keychain and Android Keystore plugins** behind the same `NetSessionStore` interface.
+- Nothing stored is ever printed.
+
+### Profile panel
+
+Pause → SETTINGS → **ACCOUNT** (the button sits left of DONE, and only shows when a `NetSession` exists; it reads SETTINGS while the panel is open). Apple requires account deletion to be reachable in the app; this is that path.
+
+- **Player card:** `name` + `#tag`, the status (ONLINE in the accent; SUSPENDED and ACCOUNT ERROR hot; CONNECTING, OFFLINE, SIGNED OUT muted) and one line saying what it means.
+- **Rename:** a text field (max `display_name_max_chars`), SAVE (Enter works too), and the server's answer inline in hot text; the hint line shows the rules or the cooldown. While the field has focus the run's `PlayerInput` stops reading keys (typing "P" must not unpause).
+- When not signed in: TRY AGAIN (SIGN IN after logout or deletion), plus NEW ACCOUNT when the stored account was refused.
+- **Link account:** SIGN IN WITH APPLE / GOOGLE, disabled, COMING SOON (MP-D2).
+- **Delete account:** DELETE ACCOUNT → the warning, DELETE FOREVER and CANCEL.
+- Every button and the field are at least `touch_target_px` (88) tall; buttons are `ScreenButton`s, so raw touch ids never index anything.
+
+```
+tools/snap.sh src/ui/screens/dev/profile_preview.tscn --sweep=net:online,error,confirm,offline,failed,banned,deleted
+tools/snap.sh src/ui/screens/dev/profile_preview.tscn --size=2496x1320 --text_scale=1.25 --net=error
+```
+
+### Tests
+
+| File | Covers |
+| --- | --- |
+| `tests/net/test_api.gd` | Parsing, ids as Strings, typed errors, network and 5xx backoff, no retry on 4xx, 429 Retry-After (header and body; long waits returned), bearer + one refresh-and-retry, and `NetHttpNode` round trips against an HTTP server in the test process |
+| `tests/net/test_session.gd` | First launch, resume by refresh, reuse → device login, every rejected refresh code, a refused secret surfaced, bans (launch and mid-session), rename success and every error mapped, delete (clears storage), logout, 401 renewal, proactive refresh, single-flight renewal, offline launch (does not block, backs off, recovers), server resolution |
+| `tests/net/test_session_storage.gd` | Native encrypted round trip (not plaintext, per-install key, atomic write, clear), the session resuming from the file, the web path through a mock JS bridge (round trip, per-server keys, private mode, blocked storage, garbage) |
+| `tests/net/test_session_profile_panel.gd` | The panel's states, rename errors inline, delete confirm, coming soon, touch targets, key muting, and the pause menu's ACCOUNT view |
+
+### Tuning (`data/tuning/net.tres`, N1.2 fields)
+
+| Field | Default | Spec |
+| --- | --- | --- |
+| `api_base_url` | `https://westbound.sipsakrandevu.com/api/v1` | MP plan (domain) |
+| `api_timeout_s` / `api_max_retries` | 10 / 3 | not in spec |
+| `api_backoff_base_s` / `api_backoff_max_s` / `api_backoff_jitter` | 0.5 / 8 / 0.25 | not in spec |
+| `api_retry_after_max_s` / `api_retry_after_default_s` | 30 / 5 | not in spec |
+| `session_refresh_margin_s` | 120 | not in spec (token is 1 h) |
+| `session_retry_s` / `session_retry_max_s` | 15 / 300 | not in spec |
+| `display_name_min_chars` / `display_name_max_chars` | 3 / 16 | Display names (3–16) |
+
+### Live session check
+
+`tests/net/live_session_check.gd` runs the session against a running server with a throwaway store (`user://live_session_check/`): create → resume → rename (+ cooldown and invalid name) → refresh-token reuse fallback → logout + sign in → a `NetClient` Hello on `ws_url()` with the session's token → delete (and device login refused afterwards). It refuses the production host.
+
+```sh
+# the server, from a scratch directory (DB in ./dev-data), on free ports
+cd westbound-server && cargo build -p server          # or CARGO_TARGET_DIR=... to build elsewhere
+cp westbound-server/config/dev.toml /tmp/wb/ && cd /tmp/wb
+WB_SERVER__ENV=dev WB_SERVER__BIND=127.0.0.1:18480 WB_METRICS__BIND=127.0.0.1:19490 \
+    <target>/debug/westbound-server --config dev.toml &
+# the check, from the repo
+tools/godot.sh --headless --path . --script res://tests/net/live_session_check.gd -- http://127.0.0.1:18480 [--name="Road Runner"] [--keep]
+```
+
+**Run for N1.2** against the server with the N2.3 gateway (`westbound-server` at `2d1cb38`, dev env), 2026-09-29:
+
+```
+server http://127.0.0.1:18480/api/v1
+create             ok    account 1 ChromePilot#5192
+stored             ok    id, secret and refresh token in user://live_session_check
+resume             ok    refresh + /me, same account ChromePilot#5192
+rotation           ok    a new refresh token was stored
+rename             ok    Road Runner#5192
+rename again       ok    rename_cooldown: You can rename again in 30 days.
+invalid name       ok    invalid_name: Use 3–16 letters, digits, spaces, _ - or .
+reuse fallback     ok    token_reused -> device login, same account
+logout + sign in   ok
+ws hello           ok    ws://127.0.0.1:18480/ws Welcome account 1
+delete             ok    204, local storage cleared
+deleted on server  ok    device login -> invalid_credentials
+LIVE_SESSION ok (0 failed)
+```
+
+The server logged `refresh token reuse detected; session family revoked` for the reuse step, as designed. A `SceneTree` script must `await process_frame` before its first request: the root is not in the tree during `_initialize`, and `NetHttpNode` answers "cannot connect" for a host outside the tree.
+
+### Wiring (next)
+
+- The orchestrator adds the autoload `NetSession` (`res://src/net/session.gd`). Until then the pause menu hides ACCOUNT, and nothing touches the network.
+- Once it is an autoload, the game signs in silently at launch. The web smoke test serves no API, so run it with `?server=off` or accept the failed request, or point it at a local server.
+- `NetClient.start(session.ws_url(), build, map_hash, await session.fresh_access_token())`; `test_session.gd::test_access_token_plugs_into_net_client` checks that the Hello carries the session's token, and that a fatal `not_allowed` (a newer login elsewhere) shows "This account signed in on another device."
