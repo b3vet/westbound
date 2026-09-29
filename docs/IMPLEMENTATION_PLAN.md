@@ -34,6 +34,7 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | D11 | Cockpit camera "later", once cars have interiors; leg 8+ density 16 vehicles/km/lane with 60 active | **Owner request (M3):** an in-cabin camera now. A generic procedural cockpit (dash, A-pillars, roof edge, a wheel that turns with the steering) is drawn around a driver's-eye camera, and the car body is hidden in that mode. Per-car interiors replace it when the models have them (ART5). **Density:** the owner found leg 8 "not crowded enough, easily passable". WP4.8: the director delivered only 67% of target at leg 8 (spawn gaps behind fast cars; IDM's own cruising gaps cap a lane at ~13–14/km). Now: a band top-up and a slow density gain, late-leg car-following headways ramping ×1.0 → ×0.8, leg-8 target **18** vehicles/km/lane (was 16), cap **90**. Measured in the −150/+600 m window around the player: leg 8 went from 10.7 to 16.3 (3 lanes) and 16.8 (4 lanes), +52–55%. Phone cost ≈ 0.14–0.21 ms per tick. A DEV "DENS" button scales density live for feel checks. All numbers in tuning | Owner, 2026-09-29 |
 | D12 | M3 gate: "zero impossible windows" over the 10,000 km soak | Gated on the lane counts in use (3 lanes: zero). The 3 windows found on 2-lane roads (the player cut in behind a vehicle under 100 km/h; the 2-lane right lane flows at 95 km/h) go to Phase 6, where 2-lane sections and `passability.gd` arrive. The D11 10,000 km soak found 1 window on 3 lanes (the bot's own lane change into a lane a commuter was legally merging into, 0.68 m clearance); it also goes to WP6.1 passability rather than redefining the gate after the result | Orchestrator, M3 / WP4.8 |
 | D13 | Retry: "a countdown" at run start and "Retry puts the player back on the road within 2 seconds" | The 3-2-1 countdown (with gyro calibration) runs at 0.5 s per step on a retry (`hud.retry_countdown_step_s`): driving again 1.5 s after RETRY. The first run keeps 1 s steps | Orchestrator, WP4.4 |
+| D14 | HUD: speed bottom-left, boost bottom-right | **Owner request (M4 playtest):** the speedometer sat exactly where the left thumb drags the steering. Speed, the minimum-speed bar and boost move to a compact bottom-centre cluster under the car, and HUD readouts stay out of tuned thumb zones (the lower outer corners) in every control layout | Owner, 2026-09-29 |
 
 New deviations get a row here before they are built.
 
@@ -304,6 +305,8 @@ Updated by the orchestrator at every merge.
 | 9 | M9 Hardening & release | ⬜ | final |
 
 ## 10. Open items for the owner
+
+- **Cockpit camera** (D11): works, but the owner wants improvements at some point (feel and look). Per-car interiors come with ART5.
 
 1. **Web playtest hosting:** GitHub Pages is enabled (owner, M1). Every push to this branch deploys the web build to `https://b3vet.github.io/westbound/`.
 2. **Android:** no device testing for now (D5 stands). Presets and CI builds are kept working.
