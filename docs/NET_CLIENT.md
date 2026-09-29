@@ -392,3 +392,140 @@ The server logged `refresh token reuse detected; session family revoked` for the
 - The orchestrator adds the autoload `NetSession` (`res://src/net/session.gd`). Until then the pause menu hides ACCOUNT, and nothing touches the network.
 - Once it is an autoload, the game signs in silently at launch. The web smoke test serves no API, so run it with `?server=off` or accept the failed request, or point it at a local server.
 - `NetClient.start(session.ws_url(), build, map_hash, await session.fresh_access_token())`; `test_session.gd::test_access_token_plugs_into_net_client` checks that the Hello carries the session's token, and that a fatal `not_allowed` (a newer login elsewhere) shows "This account signed in on another device."
+
+## Runs and leaderboards client (N7.2)
+
+WP N7.2: single-player run submission, the offline queue, the one-time legacy upload, the leaderboard reads, and report / block from a board entry. Spec: [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Leaderboards, Client changes → Leaderboards screen, Rooms → Moderation. Server side: [`SERVER.md`](SERVER.md) → Leaderboards & runs API, Social API. The screens are in [`SCREENS.md`](SCREENS.md) → Leaderboards (N7.2).
+
+| File | Class | What it is |
+| --- | --- | --- |
+| `src/net/runs_client.gd` | `NetRunsClient` | Node under the session: listens to `Events.run_over`, queues and submits runs, the legacy upload, owns a `NetBoards` |
+| `src/net/run_payload.gd` | `NetRunPayload` | The `POST /runs` body from the `run_over` results; UUIDs, UTC dates, the Daily date |
+| `src/net/run_submission.gd` | `NetRunSubmission` | One run on its way: state (QUEUED, SENDING, DONE, REJECTED, FAILED, EXPIRED), why it waits, the receipt |
+| `src/net/boards_client.gd` | `NetBoards` | `GET /boards/{board}` with a short cache, single flight per page; `POST /reports`, `POST /blocks` |
+| `src/net/board_page.gd` | `NetBoardPage` (+ `Entry`) | A board read as typed data (entries, `me`, markers, crew rows) |
+| `src/net/fake_boards.gd` | `NetFakeBoards` | `NetFakeAccounts` plus the boards, runs, reports and blocks routes (tests, the preview) |
+
+### Wiring
+
+- **The game's client.** `NetRunsClient.ensure()` attaches one to the game's session (the `Net` autoload, `auto_start`) the first time a screen needs it (the results screen's `_ready`, the pause menu). It is a child of the session (`/root/Net/RunsClient`), lives for the whole launch and listens to `Events.run_over` from then on. No session (native dev runs without `--server=`, `?server=off`): no client, no online line, no LEADERBOARDS button.
+- **Tests and previews** configure their own: `NetRunsClient.new().configure(session, store, tuning, clock)`, then bind it (`ResultsScreen.bind_runs()`, `PauseScreen.runs`, `LeaderboardsScreen.bind()`). Hooks: `unix_clock`, `local_bests`, `car_of`.
+- **Needs from the orchestrator (optional):** an autoload would make the client exist before any screen does; today the results screen creates it when the run scene loads, which is before any `run_over`.
+
+### Submission
+
+On `run_over` a **Journey or Daily Drive** run is submitted (`NetRunPayload.eligible`): Loop practice and any other mode stay local, and so does a scoreless crash at the start (score 0 and less than `runs_min_distance_m`), which could place on no board and would spend the 30-per-hour limit.
+
+1. A `NetRunSubmission` with a fresh UUID v4 idempotency key.
+2. The body is stored in the queue (its own document next to the session's: `user://net/runs[_<server hash>].dat`, or `localStorage["westbound.net.v1.runs…"]`) **before** anything is sent, so a closed app keeps the run.
+3. While the session is online the queue is sent in order, one request at a time (`POST /runs`, bearer).
+
+| Answer | Then |
+| --- | --- |
+| 201, or 200 `duplicate: true` | The receipt goes on the submission (run id, verification, `verifying`, `replay_required`, placements); the run leaves the queue. `rejected` + `build_unsupported` is UPDATE REQUIRED |
+| network, 5xx, 429 | Stays queued **with the same key**. Next try after `runs_retry_s` (20 s), doubling to `runs_retry_max_s` (600 s), or the 429's Retry-After when longer. NetApi's own retries (3, backoff; a 429 up to 30 s) come first |
+| 401 / not signed in / `banned` | Stays queued: the run is fine, the session is not. Coming back online (the session's `status_changed`) sends at once |
+| any other 4xx (`invalid_body`, 413, 415) | Dropped: the server will never take it (FAILED) |
+
+- A queued run remembers the account that played it: another account's runs wait for that account; a run queued before the first sign-in (no account yet) goes with the first account.
+- A run past the server's date window (the end of its UTC day + `runs_date_late_s`, 6 h) is dropped without a request (EXPIRED). The queue keeps at most `runs_queue_max` (50) runs.
+- `replay_required` / `verification: pending` shows as VERIFYING; the replay upload itself is N8.
+
+**Payload mapping** (`NetRunPayload.build`; docs/RUN.md → `run_over`):
+
+| Body field | From |
+| --- | --- |
+| `idempotency_key` | UUID v4 (`Crypto.generate_random_bytes`), one per run, kept through retries |
+| `mode` | `mode` (`journey` / `daily`) |
+| `seed` | `seed` as a decimal String (`String.num_int64`; 63-bit seeds lose nothing) |
+| `date` | Journey: the UTC date when `run_over` fired. Daily: the date whose `Rng.daily_seed` equals the seed (today or yesterday: a run that crosses midnight), else today |
+| `car` | `car` in the payload when run.gd adds it; until then the `PlayerCar` node's `CarDef.id` (`falcon_gt`), cleaned to `a–z 0–9 _ -` |
+| `client_build` | `NetTuning.client_build` (u32; bump per release) |
+| `score`, `legs_completed`, `best_chain`, `passes`, `close_passes`, `threads`, `cuts`, `hits` | the same keys, JSON integers (re-typed after the queue's JSON round trip) |
+| `distance_m`, `duration_s`, `best_multiplier`, `top_speed_kmh`, `night_time_s`, `journey_time_s`, `journey_distance_m` | the same keys (≥ 0; a non-finite value goes as 0) |
+| `coast_reached`, `journey_complete` | the same keys |
+| — | `personal_best`, `new_best`, `previous_best` and any other key are left out (the server refuses unknown fields) |
+
+### Legacy upload
+
+Once per account, the first time it is online: `POST /runs/legacy` with the local Journey best (`Save.best_score("journey")`). The save keeps no longest distance and Daily bests have no date (the server refuses them), so Journey is the only entry; with no best there is nothing to send. Accepted, `already_uploaded`, `over_cap` or any non-transient refusal marks it done for that account (in the queue's document); a network failure tries again at the next connection.
+
+### Leaderboards (`NetBoards`)
+
+- `fetch(board, period, view, force)`: `GET /boards/{board}?period=&view=&limit=` (`limit` = `boards_global_limit` 100 for `global`, `boards_around_me_limit` 10 for `around_me`, none for `friends`). `period` is `current` (the season, the week, today), `all`, or a date on Daily Drive.
+- `global` works signed out (the token, when there is one, adds `me`); `around_me` and `friends` need the session online and answer `not_signed_in` without a request.
+- Pages are cached for `boards_cache_s` (30 s; the server caches 60 s); failures are not cached. One request per page is out at a time. Pull to refresh forces a read at most every `boards_refresh_min_s`.
+- `report(account_id, reason, board, period, run_id)`: `POST /reports` with `reason` `cheating` or `offensive_name` and `context {"source": "leaderboard", board, period, run_id}`. `block(account_id)`: `POST /blocks`, then the cached friends views are dropped (the friendship goes with the block). Both answer through `action_done`.
+
+### Tests
+
+| File | Covers |
+| --- | --- |
+| `tests/net/test_runs_client.gd` | The body from the real `RunStats.results` has exactly the documented keys (integers as integers, the seed's digits, the date, car, build, UUID); the receipt; Daily's date across midnight; Loop and scoreless crashes not sent; the offline queue across a relaunch with the same key; a network failure then a duplicate answer; 429 Retry-After; `build_unsupported`; refused and expired runs dropped; another account's run kept; the legacy upload once (and `already_uploaded`, network failure, nothing to send) |
+| `tests/net/test_boards_client.gd` | The path of every board × period × view; parsing (markers, `me`, crew rows); signed out; cache, force and single flight; report and block bodies |
+| `tests/ui/test_leaderboards_screen.gd` | The screens (SCREENS.md → Leaderboards → Tests) |
+
+### Tuning (`data/tuning/net.tres`, N7.2 fields)
+
+| Field | Default | Spec |
+| --- | --- | --- |
+| `client_build` | 1 | the u32 build of `POST /runs` and `Hello` |
+| `runs_retry_s` / `runs_retry_max_s` | 20 / 600 | not in spec |
+| `runs_queue_max` | 50 | not in spec |
+| `runs_date_late_s` | 21600 | the server's `runs.date_late_secs` |
+| `runs_min_distance_m` | 500 | not in spec |
+| `boards_global_limit` / `boards_around_me_limit` | 100 / 10 | views: global top 100, around me |
+| `boards_cache_s` / `boards_refresh_min_s` | 30 / 3 | not in spec |
+| `boards_daily_days_back` | 14 | not in spec |
+| `boards_row_px`, `boards_tab_width_px`, `boards_back_width_px`, `boards_option_min_px`, `boards_title_px`, `boards_row_font_px`, `boards_chip_font_px`, `boards_pull_refresh_px`, `boards_tap_slop_px`, `boards_fling_decay`, `boards_reveal_s` | see the file | the screen (not in spec) |
+
+### Live check
+
+`tests/net/live_boards_check.tscn` runs three throwaway device accounts (memory stores) against a running server: renames, the legacy upload (and a second one: `already_uploaded`), a friendship and a crew, a Journey run each through `Events.run_over`, a Daily run on today's seed, a duplicate, a run queued while the network is down and sent later with its key, optionally an unsupported build, every view of the Journey board and the other boards, report and block. It is a scene (it needs the autoloads) and refuses the production host.
+
+```sh
+# the server (dev env: no secrets), from a scratch directory, on free ports; N7.2 used westbound-server at 10907bd
+CARGO_TARGET_DIR=$SCRATCH/target cargo build -p server             # in westbound-server/
+cp westbound-server/config/dev.toml $SCRATCH/run/ && cd $SCRATCH/run
+WB_SERVER__ENV=dev WB_SERVER__BIND=127.0.0.1:18480 WB_METRICS__BIND=127.0.0.1:19490 \
+    WB_RUNS__SUPPORTED_BUILDS=1 $SCRATCH/target/debug/westbound-server --config dev.toml &
+# the check, from the repo (--unsupported-build needs WB_RUNS__SUPPORTED_BUILDS without it)
+tools/godot.sh --headless --path . res://tests/net/live_boards_check.tscn -- http://127.0.0.1:18480 --unsupported-build=7
+# the screens on the same server: the game's own Net session and NetRunsClient.ensure()
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --server=http://127.0.0.1:18480 --screen=results --tag=live_results
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --server=http://127.0.0.1:18480 --from=results --view=global --tag=live_global
+```
+
+**Run for N7.2** (2026-09-29, fresh database):
+
+```
+server http://127.0.0.1:18480/api/v1
+account 1          ok    Road Runner#1295
+account 2          ok    Şahin 34#0386
+account 3          ok    Night Owl#5336
+legacy upload      ok    journey 77000 as a legacy entry
+legacy once        ok    a second upload: already_uploaded
+friends            ok    Road Runner#1295 + Şahin 34#0386
+crew               ok    NR created
+run 1              ok    run 2 pending: #1 THIS WEEK  ·  #1 ALL TIME  #1 DISTANCE NEW PB
+run 2              ok    run 3 pending: #1 THIS WEEK  ·  #1 ALL TIME  #2 DISTANCE NEW PB
+run 3              ok    run 4 pending: #3 THIS WEEK  ·  #3 ALL TIME  #3 DISTANCE NEW PB
+daily run          ok    run 5 pending: #1 TODAY  #2 DISTANCE NEW PB
+duplicate          ok    200 duplicate: true, run 2
+offline queued     ok    OFFLINE — WILL SUBMIT, key 96a191b7...
+offline sent       ok    same key, run 6 pending: #3 THIS WEEK  ·  #3 ALL TIME  #3 DISTANCE NEW PB
+unsupported build  ok    UPDATE REQUIRED: build_unsupported
+journey global     ok    2026-W40: #1 Şahin 34#0386 240,600 VERIFYING, #2 Road Runner#1295 [NR] 183,200 VERIFYING, #3 Night Owl#5336 122,900 VERIFYING
+journey around_me  ok    2026-W40: #1 Şahin 34#0386 240,600 VERIFYING, #2 Road Runner#1295 [NR] 183,200 VERIFYING, #3 Night Owl#5336 122,900 VERIFYING
+journey friends    ok    2026-W40: #1 Şahin 34#0386 240,600 VERIFYING, #2 Road Runner#1295 [NR] 183,200 VERIFYING
+journey all time   ok    3 entries, legacy marker replaced by a better run
+daily              ok    2026-09-29: 1 entries
+distance           ok    all: 3 entries
+loop               ok    2026-09: 0 entries
+loop_crew          ok    2026-09: 0 entries
+report             ok    201 report 1
+block              ok    Night Owl#5336 blocked
+LIVE_BOARDS ok (0 failed)
+```
+
+Every first run is a personal best on some all-time board, so the server asks for its replay and shows it as VERIFYING (`pending`) until N8 verifies it. The preview's live snaps then added a fourth (the preview's own `Net` account): its results read `#1 THIS WEEK · #1 ALL TIME / #4 DISTANCE`, and the Journey board showed the four drivers with the player's row highlighted and Road Runner's `NR` crew tag. The snap run's account files (`user://net/session_<hash>.dat`, `runs_<hash>.dat`) are per server; delete them after.

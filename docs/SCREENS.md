@@ -178,3 +178,75 @@ The preview is the real run (`run.tscn`) in the matching state, with the screen 
 ## Account (N1.2)
 
 Pause → SETTINGS → ACCOUNT (shown only when an online session exists: web builds and release exports; native dev runs are offline unless `--server=`). The `ProfilePanel` shows `name#tag` and online status, rename with inline server errors, TRY AGAIN / NEW ACCOUNT when signed out or failed, "Sign in with Apple / Google — coming soon" (MP-D2) and DELETE ACCOUNT with a confirm step. See docs/NET_CLIENT.md.
+
+## Leaderboards (N7.2)
+
+The online leaderboards, replacing the Game Center / Play Games boards (multiplayer handoff → Leaderboards, Client changes → Leaderboards screen). Data and requests: docs/NET_CLIENT.md → Runs and leaderboards client.
+
+| File | Class | Role |
+| --- | --- | --- |
+| `leaderboards_screen.gd` | `LeaderboardsScreen` | the screen (a `RunScreen`), opened over the pause menu or the results |
+| `leaderboards_list.gd` | `LeaderboardsList` | the list: pooled rows, drag / fling / wheel, pull to refresh, taps, the pinned own row |
+| `leaderboards_row.gd` | `LeaderboardsRow` | one custom-drawn row (one mesh + its texts) |
+| `results_online.gd` | `ResultsOnline` | the results' online panel (placements, NEW PB, VERIFYING, the waiting and refused states) |
+| `dev/leaderboards_preview.tscn` | | snap scene over the real run, on the in-memory boards server (or `--server=` a local one) |
+
+### Where it opens
+
+- **Pause:** LEADERBOARDS sits above QUIT in the menu column (the same size as the others). It shows only when an online session exists, like ACCOUNT.
+- **Results:** LEADERBOARDS at the bottom, on the side away from RETRY (bottom-left; bottom-right when left-handed). It opens on the run's board (Journey or Daily Drive) and obeys the results' tap guard.
+- `LeaderboardsScreen.attach(host, …)` builds it the first time only (a child of the host), and `open_over(host)` hides the host's widgets (its dim stays) until BACK or Esc brings them back. A new pause or new results close it. Hidden = `visible = false`: nothing draws in gameplay (`RunScreens.visible_item_count() == 0`), and nothing exists before the first open.
+
+### Layout
+
+- **Top row:** LEADERBOARDS (display face, speed-tilted), the period control, BACK at the right end.
+- **Periods:** Loop: SEASON / ALL TIME. Journey: THIS WEEK / ALL TIME. Loop crew: SEASON. Distance: ALL TIME. Daily Drive: a day stepper `<` TODAY `>` (YESTERDAY, then SEP 27 …, back `boards_daily_days_back` days; the middle button goes back to today).
+- **Tabs:** LOOP SEASON, LOOP CREW, JOURNEY, DAILY DRIVE, DISTANCE in a column on the left, each `touch_target_px` tall.
+- **List:** a panel on the right. Row: rank (the podium in gold), name + `#tag` (muted), the crew tag chip, the LEGACY (muted) or VERIFYING (accent) chip, the score (tabular; Distance in km or mi with the units setting). Crew rows on Loop crew show the crew's name and tag. The player's row is accent-filled with a gold score; when it is out of view (a rank past the top 100, or scrolled away) it is pinned at the bottom of the list. Long names end in an ellipsis.
+- **Bottom row:** the views TOP 100 / AROUND ME / FRIENDS on the thumb side (right; left when left-handed), the status line on the other side: "241 ON THIS BOARD", UPDATING..., PULL TO REFRESH / RELEASE TO REFRESH, REPORTED. THANKS., BLOCKED, OFFLINE (a cached page shown while the server can't be reached). The status line gives way when the buttons need its room (125% text with the row actions).
+- **Around me** centres the player's row.
+
+### Touch
+
+- The list reads the mouse events Godot emulates from touches (never a touch index). A press that moves less than `boards_tap_slop_px` is a tap; more scrolls, and the release flings (`boards_fling_decay`). The wheel scrolls a row.
+- **Pull to refresh:** at the top, the list follows half the finger; past `boards_pull_refresh_px` the status reads RELEASE TO REFRESH and letting go reads the page again.
+- **Report / block:** tapping another player's row selects it (accent edge) and puts REPORT CHEATING, REPORT NAME, BLOCK and CANCEL where the views were. BLOCK asks for a second tap (CONFIRM BLOCK). Your own row and crew rows take no actions. The answer shows in the status line (TOO MANY REPORTS TODAY for the server's daily limit). The full friends UI is N9.2.
+
+### States
+
+In the list's panel, centred: LOADING..., NO RUNS HERE YET, NO FRIENDS HERE YET, YOU'RE NOT ON THIS BOARD YET (around me without an entry), CREWS RANK HERE (the crew board has no friends view), NOT SIGNED IN (around me and friends need the account), OFFLINE with RETRY, COULDN'T LOAD with the server's reason, ONLINE IS OFF (no session).
+
+### Cost
+
+- **Rows are pooled:** about `list height / row height + 2` `LeaderboardsRow` controls (10 at 1280×720), rebound as the list scrolls; 100 entries never make 100 controls. A row is one canvas item (one `HudMesh` triangle array plus its texts) and redraws only when rebound to different content. The rows sit in a clipping child above the pinned row.
+- The screen is built on first use and hidden with `visible = false`.
+
+### Results → Online
+
+Under the tiles, with a Journey or Daily Drive run and an online session. The results never wait for it: they open at once and the panel follows the submission.
+
+| Submission | Shows |
+| --- | --- |
+| sending | SUBMITTING... |
+| queued: offline / 429 / signed out / suspended | OFFLINE — WILL SUBMIT / WILL SUBMIT SHORTLY / NOT SIGNED IN — WILL SUBMIT / ACCOUNT SUSPENDED (hot) |
+| done | "#12 THIS WEEK  ·  #340 ALL TIME" (Journey) or "#3 TODAY" (Daily; YESTERDAY or the date for a run across midnight), "#812 DISTANCE" under it, and the NEW PB (gold) and VERIFYING (accent) chips. It slides in (`boards_reveal_s`) and NEW PB punches when the answer arrives |
+| rejected `build_unsupported` | UPDATE REQUIRED (hot), "Update Westbound to post scores online." |
+| rejected (another check) | NOT RANKED, "This run didn't pass the server's checks." |
+| refused / too old | COULDN'T SUBMIT / TOO OLD TO SUBMIT |
+
+NEW PB is the server's word: the run improved the mode's all-time entry (Journey) or the day's (Daily Drive). The local NEW BEST badge and comparison line stay as they were.
+
+### Preview
+
+```
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --renderer=both --sweep=view:global,around_me
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --state=empty            # also offline, signin, loading
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --select=2 --hand=left --text_scale=1.25
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --board=daily --days_back=3 --size=1560x720
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --screen=results --result=pending   # also done, offline, update, sending
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --server=http://127.0.0.1:18480 --from=results   # a local server
+```
+
+### Tests
+
+`tests/ui/test_leaderboards_screen.gd`: opened from the pause menu by an iOS-id tap (built on first use, the menu steps aside, BACK and Esc bring it back, nothing drawn in gameplay, a new pause starts at the menu); no session: no buttons, ONLINE IS OFF; every tab, period, view and Daily day asking for the right URL; the own row pinned in the top 100 and highlighted and centred in around me; signed out: around me asks to sign in, global still reads; a small row pool scrolled by a touch drag and the wheel, rows not redrawn when unchanged; pull to refresh forcing a read; loading, empty (three kinds), crew friends, offline + RETRY, offline over a cached page; report cheating / name and block (with its confirm) from a row, not on your own row, the daily report limit; the results' placements arriving after the results opened (SUBMITTING... first, then the ranks, the chips and the slide-in), OFFLINE — WILL SUBMIT then UPDATE REQUIRED, none for Loop practice, and LEADERBOARDS from the results; text fit at both text sizes, both hands and the notched 1560×720 canvas (the top 100 with the longest name and markers, the row actions, around me pulled, a Daily date, offline, the results with every chip and with UPDATE REQUIRED).
