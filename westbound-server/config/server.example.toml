@@ -1,0 +1,68 @@
+# westbound-server configuration: every key with its default value.
+# Pass a file with `--config path` or `WB_CONFIG=path`; keys it leaves out keep
+# their defaults. Any key can be overridden from the environment as
+# WB_<SECTION>__<KEY> (double underscore), e.g. WB_LIMITS__MAX_CONNECTIONS=200.
+# Lists from the environment are comma-separated. Reference: docs/SERVER.md.
+
+[server]
+# Public listener: HTTP API, /ws, /.well-known/*. The TLS proxy forwards here.
+bind = "0.0.0.0:8080"
+# Public https origin clients reach through the TLS proxy (invite links from N9).
+public_origin = "https://westbound.sipsakrandevu.com"
+# tokio worker threads (spec: 2; design budget is 1 vCPU / 2 GB).
+worker_threads = 2
+# On SIGTERM, time for close frames and in-flight requests before exit.
+shutdown_grace_ms = 5000
+# N10: seconds of restart notice before shutting down. 0 = off.
+restart_notice_secs = 0
+
+[log]
+# tracing filter, e.g. "info" or "info,westbound_server=debug". RUST_LOG wins when set.
+level = "info"
+# "text" or "json".
+format = "text"
+
+[db]
+# SQLite file, WAL mode. Keep it on the persistent volume.
+path = "/data/westbound.db"
+max_connections = 4
+busy_timeout_ms = 5000
+migrate_on_start = true
+
+[limits]
+# Spec (Tuning reference): 16 KB inbound max, 64-frame outbound queue,
+# ping every 2 s, dead after 8 s of silence, caps 40 rooms / 400 connections.
+max_message_bytes = 16384
+outbound_queue_frames = 64
+ping_interval_ms = 2000
+dead_after_ms = 8000
+max_rooms = 40
+max_connections = 400
+
+[metrics]
+# Prometheus text at /metrics on its own listener. Loopback addresses only.
+enabled = true
+bind = "127.0.0.1:9090"
+
+[backup]
+# Nightly online backup (VACUUM INTO) to <dir>/westbound-YYYY-MM-DD.db.
+enabled = true
+dir = "/data/backups"
+# UTC, HH:MM.
+time_utc = "03:17"
+retention_days = 7
+
+[auth]
+# Access-token signing secret (used from N1). Set it from the environment
+# (WB_AUTH__JWT_SECRET), never in a committed file. At least 32 bytes when set.
+jwt_secret = ""
+
+[http]
+# CORS allow-list for /api/*: the production domain and the GitHub Pages web
+# build. "*" = any origin (local dev; auth is bearer tokens, no cookies).
+cors_allowed_origins = ["https://westbound.sipsakrandevu.com", "https://b3vet.github.io"]
+
+[deeplinks]
+# Directory with apple-app-site-association and assetlinks.json. Empty, or a
+# missing file, serves the built-in placeholder.
+dir = ""

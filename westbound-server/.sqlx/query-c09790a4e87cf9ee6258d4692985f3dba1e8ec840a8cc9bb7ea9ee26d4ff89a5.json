@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO admin_log (actor, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "c09790a4e87cf9ee6258d4692985f3dba1e8ec840a8cc9bb7ea9ee26d4ff89a5"
+}
