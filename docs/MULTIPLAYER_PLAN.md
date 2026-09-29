@@ -127,7 +127,7 @@ Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p9
 | N4 Networked traffic | ⬜ |
 | N5 Rooms & players | ⬜ |
 | N6 Multiplayer scoring | ⬜ |
-| N7 Leaderboards | ⬜ |
+| N7 Leaderboards | 🟡 N7.1 server merged (5 boards, periods, views, runs API with plausibility checks, legacy upload); N7.2 client UI + submission next |
 | N8 Replay verification | ⬜ |
 | N9 Social & public play | ⬜ |
 | N10 Hardening | ⬜ |
