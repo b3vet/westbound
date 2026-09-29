@@ -18,6 +18,7 @@ Plan for [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.m
 | MP-D1 | Caddy in front (TLS, web build, deep-link files); systemd unit; static musl binary on the VPS; nightly `.backup` script | The server ships as a Docker image (static musl binary in a minimal image) built by GitHub Actions and pushed to GHCR. Coolify runs it; **Coolify's proxy terminates TLS** and routes `/api/*` and `/ws` to the container. SQLite lives on a Coolify persistent volume; the nightly `.backup` runs inside the container (a scheduled task in the server, 7-day retention on the volume) plus Coolify's volume backups. Deep-link files (`apple-app-site-association`, `assetlinks.json`) are served by the server itself. The web build stays on GitHub Pages until the owner moves it. A `deploy/Caddyfile` is kept for local TLS testing and non-Coolify hosts | Owner decision: Coolify is already running on the VPS |
 | MP-D2 | N1: Apple / Google linking and sign-in, account-deletion Apple revocation, iOS Keychain / Android encrypted-storage plugins | N1 ships device accounts, tokens, refresh rotation, names, deletion. The server keeps the identity columns (`apple_sub`, `google_sub`) and the route shapes, returning "not enabled" until configured. On web the device secret lives in local storage; native builds use an encrypted `user://` file until the Keychain plugin lands | Owner decision: needs the Apple/Google developer setup |
 | MP-D3 | Loop sections: desert, canyon, coast, city, farmland | Same sections, built from the Phase 6 biomes (WP6.4a/b/c). The loop needs a closed road: the procedural road generator is open-ended, so N3 adds a loop-closing generator and editor tool | Implementation note, not a design change |
+| MP-D4 | Clock sync: offset from the lowest-RTT sample of the last 8, slewed smoothly | Same rule, plus smoothing: the estimate moves toward that sample with a 30 s time constant (1 s while the window fills), capped at 5 % correction speed; forward jumps above 250 ms apply at once. A pure lowest-RTT-of-8 estimate leaves ±12–15 ms error at 150 ± 30 ms RTT; with smoothing the worst error is 3.2–3.8 ms (spec target ±5 ms). All in `NetTuning` | N2.2 |
 
 New deviations get a row here before they are built.
 
@@ -121,7 +122,7 @@ Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p9
 | --- | --- |
 | N0 Server foundation | ✅ **gate met on the real VPS** (owner, 2026-09-29): deployed on Coolify at `westbound.sipsakrandevu.com`, reachable, wss echo works from a phone. Image 3.6 MB; CI pushes `ghcr.io/b3vet/westbound-server:edge` |
 | N1 Accounts (device) | 🟡 N1.1 server in progress |
-| N2 Protocol & clock | 🟡 N2.1 protocol crate merged (87 golden vectors, frozen contract docs/PROTOCOL.md); N2.2 client codec in progress |
+| N2 Protocol & clock | 🟡 N2.1 protocol crate merged (87 golden vectors, frozen contract docs/PROTOCOL.md); N2.2 client codec + transports + clock merged (all vectors pass both sides; clock within ±5 ms) — **N2 done** except wiring the handshake into the server gateway (next) |
 | N3 Loop map | ⬜ (after Phase 6) |
 | N4 Networked traffic | ⬜ |
 | N5 Rooms & players | ⬜ |
