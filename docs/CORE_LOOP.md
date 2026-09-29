@@ -109,3 +109,42 @@ The run's adapter emits the `Events` signal of the same name for each kind.
 | `ghost_started` | Lives | duration (s) |
 | `ghost_ended` | Lives | none |
 | `life_restored` | Lives | lives |
+| `objective_completed` | run.gd for LegObjectives (WP5.2) | `tag` = objective id, `points` = bonus paid |
+
+## Leg objectives (WP5.2)
+
+Spec: "Each leg shows one optional objective on entry, such as '5 close passes', 'thread twice' or 'no braking'. Completing it pays a bonus." `LegObjectives` (`src/core/leg_objectives.gd`) is pure, headless, deterministic by seed and allocation-free per tick. The numbers are `LegsTuning.objective_*`.
+
+| Id | HUD text | Rule | Completes |
+| --- | --- | --- | --- |
+| `close_passes` | 5 CLOSE PASSES | count scored `CLOSE_PASS` events (`objective_close_passes_count`) | at once |
+| `threads` | THREAD TWICE | count scored `THREAD` events (`objective_threads_count`) | at once |
+| `cuts` | 6 CUTS | count scored `CUT` events (`objective_cuts_count`) | at once |
+| `top_speed` | HIT 250 KM/H | the player's speed reaches `objective_top_speed_kmh` once | at once |
+| `slipstream` | 5 S OF SLIPSTREAM | seconds with `scoring.is_slipstreaming()` add up to `objective_slipstream_s` | at once |
+| `no_braking` | NO BRAKING | fails on brake input above `objective_brake_threshold` after the leg's first `objective_avoid_grace_s` | at the checkpoint |
+| `no_shoulder` | NO SHOULDER | fails on any wheel on the shoulder after the grace | at the checkpoint |
+
+- **Choice.** `reset(ctx)` derives `ctx.rng_events.derive(&"objectives")`. `start_leg(leg)` draws once per leg, uniformly from `objective_pool` minus the previous leg's objective (never twice in a row). Legs before `objective_first_leg` (1: every leg, including leg 1) get none and draw nothing. The same seed gives the same sequence. Draws from `rng_events` elsewhere never shift it. `force(id)` (dev, tests) replaces the current objective without drawing.
+- **Counting.** Only *scored* events count: nothing counts in the ghost period or on the shoulder, like the score itself.
+- **Paid exactly once.** `notify_scored()`, `step()` and `finish_leg()` each return true only on the tick the objective completes, once per leg. The run then calls `_pay_objective()`: `scoring.award_bonus(LegTracker.BONUS_OBJECTIVE, objective_bonus_points)` straight into the banked total (×2 at night, like every bonus) and pushes `objective_completed` (tag = id, points = what was paid).
+    - Counting, reaching and holding objectives are paid **when completed** ("Completing it pays a bonus"), so the reward lands on the moment.
+    - "No X" objectives can only be judged at the line: they are paid in crossing step 3, with the leg bonuses. A leg finished at night pays ×2.
+    - The crossing never pays an objective completed earlier. `crossing.objective_done` and `crossing.objective_points` (the summary's `objective_points`) record what was paid.
+- **LegTracker hooks** (additive): `complete_objective(points)` (mid-leg), `complete_crossing_objective(points)` (at the line, after `step()` started the next leg), `leg_start_s()`.
+- **Run wiring** (`run.gd`): the objective is drawn at the run start and after every crossing. Leg 1 is announced with `leg_started(1, biome, objective)` like the others. Scored kinds go to `notify_scored()` from `_forward_scoring`. `step(dt, car.input.brake, v, slipstream, shoulder)` runs at tick step 7, before the leg tracker. `trace_hash()` includes the objective state. The HUD feed gets `objective_progress`, `objective_target` and `objective_failed`.
+
+### Gate M5 test
+
+`tests/run/test_run_legs.gd::test_m5_day_night_dawn_across_legs` drives the real run with the weaving bot across five legs (teleporting to just before each checkpoint, and bringing the sunset forward by setting `sky_t`). It checks:
+
+- the warnings at 1 km, then 500 m, then the crossing
+- day bonuses ×1
+- an objective paid mid-leg by day and not again at the line
+- night, then the crossing (bonuses ×2, `at_night`), then the dawn (6 s), then morning, with `sky_t` at morning
+- a hit leg without a restore, then a clean leg restoring the life, capped at 2
+- a "no X" objective paid at the line
+- one objective bonus per `objective_completed`
+- the six `leg_started` objectives equal to the pure seeded sequence, never repeating back to back
+
+It takes about 1.5 s.

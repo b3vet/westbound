@@ -17,8 +17,10 @@ extends Node3D
 ##   5.   scoring.step; boost fill into the meter; sun nudges -> sun.lift, near misses
 ##        -> traffic_sim.notify_close_pass, threads / close passes -> leg tracker
 ##   6.   sun_clock.advance(dt, scoring.is_too_slow()); scoring.set_night; headlights
-##   7.   leg tracker (observe_multiplier, step); a crossing runs the spec's order:
-##        bank, sun lift or dawn, leg bonuses, clean-leg life, then set_night again
+##   7.   leg objective (LegObjectives.step: brake, speed, slipstream, shoulder), leg
+##        tracker (observe_multiplier, step); a crossing runs the spec's order: bank,
+##        sun lift or dawn, leg bonuses (+ a "no X" objective), clean-leg life, then
+##        set_night again, then the next leg's objective
 ## Every sim writes into one ScoreEventBuffer; RunEvents drains it once per frame.
 ## Slow motion, camera shake, the crash cue and screens react at frame rate.
 
@@ -95,6 +97,8 @@ var traffic_view: TrafficView
 var scoring: Scoring
 var sun: SunClock
 var legs: LegTracker
+## The leg objective (WP5.2): chosen at each leg start, judged per tick, paid once.
+var objectives: LegObjectives
 var hits: HitDetection
 var lives: Lives
 var stats := RunStats.new()
@@ -205,6 +209,7 @@ func _ready() -> void:
 	scoring = Scoring.new()
 	sun = SunClock.new(tuning.sun, tuning.legs)
 	legs = LegTracker.new(tuning.legs)
+	objectives = LegObjectives.new(tuning.legs)
 	hits = HitDetection.new(tuning.lives, tuning.traffic.max_active_vehicles)
 	lives = Lives.new(tuning.lives)
 	fx = PlayerFx.new()
@@ -420,7 +425,9 @@ func _sim_tick(dt: float) -> void:
 	sun.advance(dt, scoring.is_too_slow(), events)
 	scoring.set_night(sun.is_night())
 	_update_headlights()
-	# 7. legs and checkpoints.
+	# 7. the leg objective, legs and checkpoints.
+	if objectives.step(dt, car.input.brake, st.v, scoring.is_slipstreaming(), scoring.is_on_shoulder()):
+		legs.complete_objective(_pay_objective())
 	legs.observe_multiplier(dt, scoring.multiplier())
 	if legs.step(dt, st.s, sun.is_night(), events):
 		_dispatch_crossing()
@@ -449,8 +456,34 @@ func _forward_scoring(from: int, to: int) -> void:
 			sim.notify_close_pass(events.slot[i])
 		elif k == ScoreEvents.THREAD:
 			legs.notify_thread()
+			_objective_scored(k)
 		elif k == ScoreEvents.CLOSE_PASS:
 			legs.notify_close_pass()
+			_objective_scored(k)
+		elif k == ScoreEvents.CUT:
+			_objective_scored(k)
+
+
+## A scored kind the objective counts; a completion is paid at once.
+func _objective_scored(kind: StringName) -> void:
+	if objectives.notify_scored(kind):
+		legs.complete_objective(_pay_objective())
+
+
+## The objective bonus, straight into the banked total (x2 at night), and
+## objective_completed with the points actually paid. Called exactly once per completed
+## objective: LegObjectives reports each completion once. Returns the points.
+func _pay_objective() -> int:
+	var before := scoring.banked()
+	scoring.award_bonus(LegTracker.BONUS_OBJECTIVE, tuning.legs.objective_bonus_points, events)
+	var paid := scoring.banked() - before
+	events.push(LegObjectives.KIND_OBJECTIVE_COMPLETED, paid, 0.0, -1.0, -1, 0.0, objectives.current())
+	return paid
+
+
+## The leg's objective, drawn at its start (LegObjectives, seeded) and set on the tracker.
+func _start_leg_objective() -> void:
+	legs.set_objective(objectives.start_leg(legs.leg_index))
 
 
 ## The spec's crossing sequence (Legs and checkpoints, steps 1-4; 5 is the HUD toast).
@@ -460,8 +493,10 @@ func _dispatch_crossing() -> void:
 	sun.on_checkpoint(c.avg_speed_mps, events)
 	for i in c.bonus_count():
 		scoring.award_bonus(c.bonus_kind(i), c.bonus_base_points(i, tuning.legs), events)
-	if c.objective_done:
-		scoring.award_bonus(LegTracker.BONUS_OBJECTIVE, tuning.legs.objective_bonus_points, events)
+	# A "no X" objective is judged at the line and paid with the leg bonuses; the others
+	# were paid when completed (c.objective_done, c.objective_points), never again here.
+	if objectives.finish_leg():
+		legs.complete_crossing_objective(_pay_objective())
 	if c.coast:
 		scoring.award_bonus(BONUS_JOURNEY, tuning.legs.journey_bonus_points, events)
 	if c.clean:
@@ -469,6 +504,9 @@ func _dispatch_crossing() -> void:
 	# After the bonuses: a leg finished at night pays x2, then the dawn clears the night.
 	scoring.set_night(sun.is_night())
 	_update_headlights()
+	# The new leg's objective (leg_started is already in the buffer; the adapter reads
+	# the objective when it drains).
+	_start_leg_objective()
 
 
 func _update_headlights() -> void:
@@ -632,6 +670,9 @@ func _fill_feed() -> void:
 	feed.leg_index = legs.leg_index
 	feed.objective = legs.objective
 	feed.objective_done = legs.is_objective_done()
+	feed.objective_failed = objectives.is_failed()
+	feed.objective_progress = objectives.progress()
+	feed.objective_target = objectives.target()
 	feed.lives = lives.lives
 	feed.max_lives = lives.max_lives
 	feed.ghost = lives.is_ghost()
@@ -682,6 +723,10 @@ func _start_run() -> void:
 	legs.reset(start_s)
 	lives.reset()
 	events.reset()
+	objectives.reset(ctx)
+	_start_leg_objective()
+	# Leg 1 is announced like every other leg (its objective "on entry").
+	events.push(LegTracker.KIND_LEG_STARTED, 0, 0.0, -1.0, -1, float(legs.leg_index))
 	_force_pending = false
 	_pending_first_hit_fx = false
 	_pending_crash_fx = false
@@ -840,6 +885,7 @@ func trace_hash() -> int:
 	h = scoring.hash_into(h)
 	h = lives.hash_into(h)
 	h = legs.hash_into(h)
+	h = objectives.hash_into(h)
 	h = TraceHash.mix_float(h, sun.sky_t)
 	return stats.hash_into(h)
 
@@ -943,6 +989,8 @@ func _report_dev_stats() -> void:
 	DevStats.report(&"seed", current_seed)
 	DevStats.report(&"leg", legs.leg_index)
 	DevStats.report(&"director_leg", _director_leg)
+	DevStats.report(&"objective", legs.objective)
+	DevStats.report(&"objective_progress", objectives.progress())
 	DevStats.report(&"lives", lives.lives)
 	DevStats.report(&"hits", lives.hits)
 	DevStats.report(&"ghost", lives.is_ghost())

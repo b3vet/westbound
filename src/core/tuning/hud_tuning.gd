@@ -124,6 +124,25 @@ extends Resource
 @export var layout_grid_px: float = 46.0
 @export var spacing_grid_px: float = 8.0
 
+@export_group("Legs")
+## The leg toast (the checkpoint summary, leg_toast_s long) takes the event stack's
+## slot under the chain: the stack's width (x is informational), this tall, so it
+## never reaches the middle third. Canvas px at 100% text size.
+@export var leg_toast_size_px: Vector2 = Vector2(360.0, 128.0)
+## It fades in, holds, and fades out by the end of leg_toast_s.
+@export var leg_toast_in_s: float = 0.18
+@export var leg_toast_out_s: float = 0.45
+## Rows of bonuses the toast lists (they flow left to right, then wrap).
+@export var leg_toast_item_rows: int = 3
+## The leg objective chip, under the score panel (left-anchored, like the score).
+@export var objective_chip_size_px: Vector2 = Vector2(244.0, 50.0)
+## A new objective pops in (scale from this share of full size)...
+@export var objective_pop_s: float = 0.25
+@export var objective_pop_from_pct: float = 80.0
+## ...and a completed (gold, tick) or failed one holds, then fades out.
+@export var objective_end_hold_s: float = 2.0
+@export var objective_fade_s: float = 0.5
+
 
 ## The text-size setting clamped to the offered range (100%..125%).
 func clamp_text_scale(value: float) -> float:

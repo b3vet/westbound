@@ -11,7 +11,9 @@ extends Control
 ##   tools/snap.sh src/ui/hud/dev/hud_preview.tscn --state=idle --hand=left --throttle=manual
 ##   tools/snap.sh src/ui/hud/dev/hud_preview.tscn --size=2496x1320 --state=busy   # iPhone
 ##
-## snap_setup options: --state=idle|busy|too_slow|night|bank|dawn (default busy),
+## snap_setup options: --state=idle|busy|too_slow|night|bank|dawn|leg_toast|objective|warning
+## (default busy); leg_toast: --night=true|false (default true); objective: --done=true,
+## --failed=true;
 ## --hand=right|left, --throttle=auto|manual, --steering=drag|gyro, --controls_scale=<f>,
 ## --text_scale=1|1.25, --units=kmh|mph, --sky_t=<0..1> (default per state),
 ## --world=true (the 3D look preview behind instead of the flat background).
@@ -55,6 +57,10 @@ func _ready() -> void:
 	feed.sun_height = 0.62
 	feed.speed_mps = Units.kmh_to_mps(176.0)
 	feed.boost_fill = 0.35
+	feed.leg_index = 2
+	feed.objective = LegObjectives.CLOSE_PASSES
+	feed.objective_target = t.legs.objective_close_passes_count
+	feed.objective_progress = 1
 	hud.bind(feed)
 	_set_sky(sky_t)
 
@@ -85,7 +91,7 @@ func snap_setup(args: Dictionary) -> void:
 		_add_world()
 	Events.run_started.emit(&"journey", 1)
 	await get_tree().process_frame
-	_apply_state(state)
+	_apply_state(state, args)
 	# The HUD's own draw calls: the frame with it minus the frame without it.
 	await _frames(MEASURE_FRAMES)
 	var with_hud := Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
@@ -103,7 +109,7 @@ func _frames(n: int) -> void:
 		await RenderingServer.frame_post_draw
 
 
-func _apply_state(state: String) -> void:
+func _apply_state(state: String, args: Dictionary = {}) -> void:
 	var f := feed
 	f.lives = 2
 	f.ghost = false
@@ -172,6 +178,75 @@ func _apply_state(state: String) -> void:
 			f.boost_fill = 0.6
 			Events.chain_banked.emit(48_200, Events.REASON_CASH_OUT, f.banked + 48_200)
 			f.banked += 48_200
+		"leg_toast":
+			_leg_toast(bool(args.get("night", true)))
+		"objective":
+			f.speed_mps = Units.kmh_to_mps(226.0)
+			f.chain = 18_400
+			f.multiplier = 6.2
+			f.objective_progress = 3
+			Events.gear_shifted.emit(6)
+			_emit_scored(Events.CLOSE_PASS, 1200, 5.0)
+			_emit_scored(Events.CLOSE_PASS, 1450, 6.0)
+			if bool(args.get("done", false)):
+				f.objective_progress = f.objective_target
+				f.objective_done = true
+				_emit_scored(Events.CLOSE_PASS, 1600, 6.2)
+				Events.objective_completed.emit(f.objective, 2500)
+				Events.bonus_awarded.emit(LegTracker.BONUS_OBJECTIVE, 2500, f.banked + 2500)
+				f.banked += 2500
+			elif bool(args.get("failed", false)):
+				f.objective = LegObjectives.NO_BRAKING
+				f.objective_target = 0
+				f.objective_failed = true
+		"warning":
+			f.speed_mps = Units.kmh_to_mps(208.0)
+			f.chain = 9_600
+			f.multiplier = 4.1
+			f.checkpoint_distance_m = 500.0
+			Events.gear_shifted.emit(5)
+			Events.checkpoint_warning.emit(1000.0)
+			_emit_scored(Events.PASS, 410, 3.8)
+			_emit_scored(Events.CUT, 760, 4.0)
+			Events.checkpoint_warning.emit(500.0)
+
+
+## A night crossing of leg 2 into leg 3, in the run's event order: crossed, leg started,
+## banked, dawn, the leg bonuses (x2), the life.
+func _leg_toast(night: bool) -> void:
+	var f := feed
+	var k := 2 if night else 1
+	f.speed_mps = Units.kmh_to_mps(231.0)
+	f.chain = 0
+	f.multiplier = 5.2
+	f.boost_fill = 0.55
+	f.lives = 2
+	f.dawning = night
+	f.sun_height = 0.05 if night else 0.85
+	f.checkpoint_distance_m = 3480.0
+	f.leg_index = 3
+	f.objective = LegObjectives.THREADS
+	f.objective_target = 2
+	f.objective_progress = 0
+	f.objective_done = false
+	f.objective_failed = false
+	Events.gear_shifted.emit(6)
+	var summary := {
+		RunEvents.SUMMARY_LEG_INDEX: 2, RunEvents.SUMMARY_CLEAN: true, RunEvents.SUMMARY_PACE: true,
+		RunEvents.SUMMARY_THREADS: 3, RunEvents.SUMMARY_HEAT: false, RunEvents.SUMMARY_AT_NIGHT: night,
+		RunEvents.SUMMARY_OBJECTIVE: LegObjectives.CLOSE_PASSES, RunEvents.SUMMARY_OBJECTIVE_DONE: true,
+		RunEvents.SUMMARY_OBJECTIVE_POINTS: 2500 * k,
+	}
+	Events.checkpoint_crossed.emit(2, summary)
+	Events.leg_started.emit(3, &"farmland", LegObjectives.THREADS)
+	f.banked += 48_200
+	Events.chain_banked.emit(48_200, Events.REASON_CHECKPOINT, f.banked)
+	if night:
+		Events.dawn_started.emit(6.0)
+	for b: Array in [[LegTracker.BONUS_CLEAN, 5000], [LegTracker.BONUS_PACE, 3000], [LegTracker.BONUS_THREADS, 3000]]:
+		f.banked += int(b[1]) * k
+		Events.bonus_awarded.emit(b[0], int(b[1]) * k, f.banked)
+	Events.life_restored.emit(2)
 
 
 func _emit_scored(kind: StringName, points: int, mult: float) -> void:
@@ -214,6 +289,17 @@ func _cycle(delta: float) -> void:
 		if _event_i % 17 == 10:
 			f.lives = 2
 			Events.life_restored.emit(2)
+		if _event_i % 23 == 0:
+			f.leg_index += 1
+			f.objective_progress = 0
+			_leg_toast(_event_i % 2 == 0)
+		elif _event_i % 23 == 12:
+			Events.checkpoint_warning.emit(1000.0)
+		elif _event_i % 23 == 18:
+			Events.checkpoint_warning.emit(500.0)
+		elif _event_i % 5 == 0 and f.objective_target > 0 and not f.objective_done:
+			f.objective_progress += 1
+			f.objective_done = f.objective_progress >= f.objective_target
 
 
 func _set_sky(value: float) -> void:
