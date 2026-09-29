@@ -211,3 +211,8 @@ Plan D14 (owner, M4 playtest on an iPhone, one thumb per side): the speedometer 
 
     - `--zones=true` (`dev/thumb_zone_overlay.gd`): the zones filled, the pedals' clearance outlined, the safe area, the traffic area and the cluster's bounds.
     - `hud_run_snap.tscn` wraps the real run (`--cam`, `--sky_t`, `--speed_kmh`, ... pass through) with `--hand`, `--throttle`, `--steering`, `--controls_scale`, `--text_scale`, `--units`; `--thumb=true` rests a steering thumb in its zone, so the drag anchor shows where it landed.
+
+## Journey complete (WP6.5)
+
+`HudJourneyToast` (made by the Hud in `_ready`, `Root/JourneyToast`): on `Events.journey_complete`, a gold **JOURNEY COMPLETE** banner with "COASTAL HIGHWAY · JOURNEY BONUS +50,000" (the journey bonus from its `bonus_awarded`), centred over the leg toast's slot (`HudLayout.journey`, wider than it, above the middle third), for `journey_toast_s` (4.5 s): a fade and grow in, a hold, a fade out (modulate and scale only). It never takes touches and mutes the event stack while it shows; a new run dismisses it. Tests: `tests/ui/test_hud_journey.gd`.
+

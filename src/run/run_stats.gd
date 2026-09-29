@@ -17,6 +17,8 @@ extends RefCounted
 const KIND_HIT := &"hit"
 const KIND_CHECKPOINT_CROSSED := &"checkpoint_crossed"
 const KIND_COAST_REACHED := &"coast_reached"
+## WP6.5 (RunFinale.KIND_JOURNEY_COMPLETE).
+const KIND_JOURNEY_COMPLETE := &"journey_complete"
 
 ## Result keys (Events.run_over payload).
 const SCORE := &"score"
@@ -36,12 +38,19 @@ const MODE := &"mode"
 const PASSES := &"passes"
 const CUTS := &"cuts"
 const DURATION_S := &"duration_s"
+## WP6.5: "Journey complete" was recorded, and the run time / distance to it.
+const JOURNEY_COMPLETE := &"journey_complete"
+const JOURNEY_TIME_S := &"journey_time_s"
+const JOURNEY_DISTANCE_M := &"journey_distance_m"
 
 var start_s: float = 0.0
 var distance_m: float = 0.0
 var duration_s: float = 0.0
 var legs_completed: int = 0
 var coast_reached: bool = false
+var journey_complete: bool = false
+var journey_time_s: float = 0.0
+var journey_distance_m: float = 0.0
 var best_chain: int = 0
 var best_multiplier: float = 1.0
 ## Scored passes (pass + close pass), close passes, threads and cuts.
@@ -65,6 +74,9 @@ func reset(run_start_s: float = 0.0) -> void:
 	duration_s = 0.0
 	legs_completed = 0
 	coast_reached = false
+	journey_complete = false
+	journey_time_s = 0.0
+	journey_distance_m = 0.0
 	best_chain = 0
 	best_multiplier = 1.0
 	passes = 0
@@ -108,6 +120,10 @@ func consume(buf: ScoreEventBuffer, from: int, to: int) -> void:
 			legs_completed += 1
 		elif k == KIND_COAST_REACHED:
 			coast_reached = true
+		elif k == KIND_JOURNEY_COMPLETE and not journey_complete:
+			journey_complete = true
+			journey_time_s = duration_s
+			journey_distance_m = distance_m
 
 
 ## The Events.run_over payload (allocates; run end only).
@@ -129,6 +145,9 @@ func results(score: int, run_seed: int, run_mode: StringName) -> Dictionary:
 		PASSES: passes,
 		CUTS: cuts,
 		DURATION_S: duration_s,
+		JOURNEY_COMPLETE: journey_complete,
+		JOURNEY_TIME_S: journey_time_s,
+		JOURNEY_DISTANCE_M: journey_distance_m,
 	}
 
 
@@ -144,4 +163,5 @@ func hash_into(h: int) -> int:
 	h = TraceHash.mix_int(h, cuts)
 	h = TraceHash.mix_float(h, top_speed_mps)
 	h = TraceHash.mix_float(h, night_time_s)
+	h = TraceHash.mix_bool(h, journey_complete)
 	return TraceHash.mix_int(h, hits)

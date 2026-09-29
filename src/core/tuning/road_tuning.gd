@@ -122,6 +122,63 @@ extends Resource
 @export var tunnel_ridge_height_m: float = 20.0   # not in spec
 @export var tunnel_ridge_ramp_m: float = 45.0   # not in spec
 
+@export_group("Forks (WP6.5, docs/FORKS.md)")
+## The carriageway splits at the fork checkpoint's line (the split): the left lanes go
+## on as the left branch, the right lanes as the right branch. Before it the road holds
+## a straight approach so both branches share the reference line up to the split.
+@export var fork_approach_straight_m: float = 600.0   # not in spec: a readable Y ahead
+## Each branch turns this far away from the other (left branch left, right branch right)
+## in one bend right after the split, then runs straight (fork_straight_after_m).
+@export var fork_branch_deflection_deg: float = 7.0   # not in spec: stays inside the 15-30 deg sun band
+@export var fork_branch_radius_m: float = 1500.0   # not in spec: >= the minimum radius
+@export var fork_straight_after_m: float = 2400.0   # not in spec: no bend while the other branch is in sight
+## Both branches are drawn this far past the split before the choice (ForkView): at
+## least the longest view distance + prefetch + a chunk, so no world system builds
+## there first.
+@export var fork_draw_m: float = 1200.0   # not in spec
+## After the choice the other branch narrows to nothing over [draw + vanish_start,
+## + vanish_len] (it curves away and fades into the fog), and its ground hands over
+## to the taken branch's over fork_ground_blend_m.
+@export var fork_vanish_start_m: float = 0.0   # not in spec
+@export var fork_vanish_length_m: float = 450.0   # not in spec
+@export var fork_ground_blend_m: float = 300.0   # not in spec
+## Each branch widens back to its biome's lane count this far past the split.
+@export var fork_widen_after_m: float = 350.0   # not in spec
+@export var fork_widen_taper_m: float = 250.0   # not in spec
+## Gore-side shoulder and rail reach full width once the branches are this far apart.
+@export var fork_gore_full_gap_m: float = 8.0   # not in spec
+## The crash cushion on the gore nose at the split: across (centred on the lane line
+## between the two branches' lanes) and along the road.
+@export var fork_cushion_width_m: float = 1.2   # not in spec: a typical attenuator
+@export var fork_cushion_length_m: float = 6.0   # not in spec
+## The opposite carriageway veers away to the left before the split (the carriageways
+## separate), over [split - lead - length, split - lead], to `fork_veer_offset_m`, and
+## narrows to nothing over the last fork_veer_fade_frac of its veer; the taken branch's
+## comes back the same way from split + fork_rejoin_after_m.
+@export var fork_veer_offset_m: float = 220.0   # not in spec
+@export var fork_veer_length_m: float = 550.0   # not in spec
+@export var fork_veer_lead_m: float = 150.0   # not in spec
+@export var fork_veer_fade_frac: float = 0.35   # not in spec
+@export var fork_rejoin_after_m: float = 2100.0   # not in spec: after the other branch has vanished
+## Opposite traffic where its carriageway is not drawn is parked this far away (out of sight).
+@export var fork_opposite_hide_m: float = 5000.0   # not in spec
+## No roadside props, lamps or biome features on either side for this far past the split
+## (post-choice world systems would otherwise pop them in within view).
+@export var fork_quiet_after_m: float = 1000.0   # not in spec: >= longest view distance
+## The main path stops reporting road past split + this until the fork is resolved (so
+## no world system builds on a branch that may not be taken; the gantry fits).
+@export var fork_hold_margin_m: float = 40.0   # not in spec
+## After the choice the branch not taken sits this much lower (its ground always under
+## the taken branch's where they overlap; invisible at that distance).
+@export var fork_other_sink_m: float = 0.08   # not in spec
+## Traffic around an unresolved fork: the director spawns nothing in
+## [split - before, split + after]; a car still at split - guard or beyond is removed
+## (it would reach a branch the player may not take). The approach is quiet by the
+## time the player gets there.
+@export var fork_breather_before_m: float = 900.0   # not in spec
+@export var fork_breather_after_m: float = 1200.0   # not in spec
+@export var fork_traffic_guard_m: float = 60.0   # not in spec
+
 @export_group("Roadside rhythm")
 @export var light_pole_spacing_m: float = 50.0
 @export var reflector_post_spacing_m: float = 25.0

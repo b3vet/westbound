@@ -56,6 +56,8 @@ var biome_director: BiomeDirector
 var road: RoadPath
 var origin: FloatingOrigin
 var traffic: TrafficState
+## WP6.5: fork_announced names both branches' biomes (null: none).
+var forks: RunForks
 
 ## Signals emitted by the last drain() (tests, dev stats).
 var emitted_last: int = 0
@@ -143,6 +145,14 @@ func _emit(buf: ScoreEventBuffer, i: int) -> void:
 			Events.leg_started.emit(int(v), _biome_id(), legs.objective if legs != null else &"")
 		LegTracker.KIND_COAST_REACHED:
 			Events.coast_reached.emit()
+		RunForks.KIND_FORK_ANNOUNCED:
+			if forks == null:
+				return
+			Events.fork_announced.emit(forks.left_id(int(v)), forks.right_id(int(v)))
+		RunForks.KIND_FORK_TAKEN:
+			Events.fork_taken.emit(buf.tag[i])
+		RunFinale.KIND_JOURNEY_COMPLETE:
+			Events.journey_complete.emit()
 		LegObjectives.KIND_OBJECTIVE_COMPLETED:
 			Events.objective_completed.emit(buf.tag[i], buf.points[i])
 		TrafficSim.KIND_HORN:

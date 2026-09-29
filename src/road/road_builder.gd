@@ -41,6 +41,10 @@ extends Node3D
 ## (WaterRibbon.ground_drop_at: the coast's sea slope). Set it before setup (the run
 ## does); set later, it swaps the mesher and rebuilds every chunk within the budget.
 ##
+## Fork zones (WP6.5): `set_skip_range(lo, hi)` leaves [lo, hi) to the ForkView (both
+## branches past a split): a chunk overlapping it is clipped to the part outside (the
+## last row of a chunk clipped at `lo` reads its cross-section just before it, the trunk's).
+##
 ## Draw calls: one per visible chunk. Road surface, markings, reflectors, barrier,
 ## rails and ground ribbon are one surface (RoadChunkMesher.commit_merged): the road
 ## and world shaders are the same code, so merging them changes no pixel (WP4.6;
@@ -56,6 +60,8 @@ const UNLIMITED := 1 << 30
 const COLOR_COUNT := 8
 ## Props sub-stream seeding the cliff runs and facets.
 const CLIFF_STREAM := &"cliffs"
+## A chunk clipped at a fork split reads its last row's cross-section this far before it.
+const SPLIT_PROBE_M := 0.01   # lint: allow-number numeric offset, not tuning
 
 
 ## One pooled chunk.
@@ -130,6 +136,12 @@ var _manual_verge: Color
 var _manual_field: Color
 var _want := PackedColorArray()
 var _plan_version: int = -1
+## Fork zone left to the ForkView (none: lo = INF).
+var _skip_lo: float = INF
+var _skip_hi: float = -INF
+## The clipped range of the chunk last asked about (_chunk_range).
+var _cr0: float = 0.0
+var _cr1: float = 0.0
 
 
 func _init() -> void:
@@ -203,6 +215,21 @@ func set_ground_drop(drop_at: Callable, field_drop_at: Callable) -> void:
 	for c in _pool:
 		if c.index != FREE:
 			c.dirty = true
+
+
+## Leaves [lo, hi) to the ForkView (WP6.5). Set it before the builder reaches lo.
+func set_skip_range(lo: float, hi: float) -> void:
+	_skip_lo = lo
+	_skip_hi = hi
+
+
+func clear_skip_range() -> void:
+	_skip_lo = INF
+	_skip_hi = -INF
+
+
+func skip_range_lo() -> float:
+	return _skip_lo
 
 
 ## True when the ground-drop hook is set (the mesher is a GroundDropMesher).
@@ -298,27 +325,44 @@ func _update(focus_s: float, row_budget: int, build_budget: int) -> void:
 ## begins it. False when there is nothing to do.
 func _start_next(k_focus: int) -> bool:
 	for k in range(k_focus, _k_max + 1):
-		if _find(k) == null and _generated(k):
+		if _find(k) == null and _chunk_range(k) and _generated(k):
 			_begin(k, _acquire(), false)
 			return true
 	for k in range(k_focus - 1, _k_min - 1, -1):
-		if _find(k) == null and _generated(k):
+		if _find(k) == null and _chunk_range(k) and _generated(k):
 			_begin(k, _acquire(), false)
 			return true
 	for c in _pool:
 		if c.index != FREE and c.dirty:
 			c.dirty = false
-			_begin(c.index, c, true)
-			return true
+			if _chunk_range(c.index):
+				_begin(c.index, c, true)
+				return true
 	return false
 
 
 ## True when chunk k's range is generated (asks the road to generate it first).
 func _generated(k: int) -> bool:
-	var s1 := float(k + 1) * tuning.chunk_length_m
+	_chunk_range(k)
+	var s1 := _cr1
 	if s1 > road.length_generated():
 		road.ensure_generated_to(s1)
 	return s1 <= road.length_generated()
+
+
+## Chunk k's range outside the fork skip range into _cr0.._cr1; false when none is left.
+func _chunk_range(k: int) -> bool:
+	_cr0 = float(k) * tuning.chunk_length_m
+	_cr1 = _cr0 + tuning.chunk_length_m
+	if _cr1 <= _skip_lo or _cr0 >= _skip_hi:
+		return true
+	if _cr0 < _skip_lo:
+		_cr1 = _skip_lo
+		return true
+	if _cr1 > _skip_hi:
+		_cr0 = _skip_hi
+		return true
+	return false
 
 
 func _begin(k: int, c: Chunk, rebuild: bool) -> void:
@@ -337,7 +381,9 @@ func _begin(k: int, c: Chunk, rebuild: bool) -> void:
 	_mesher.biome_plan = biome_director.plan if biome_director != null else null
 	_pending_biome_a = _biome_at(s0)
 	_pending_biome_b = _biome_at(s0 + tuning.chunk_length_m)
-	_mesher.begin(road, s0, s0 + tuning.chunk_length_m)
+	_chunk_range(k)
+	_mesher.probe_end_before_m = SPLIT_PROBE_M if _cr1 == _skip_lo else 0.0
+	_mesher.begin(road, _cr0, _cr1)
 	_pending = c
 	_pending_k = k
 	_pending_rebuild = rebuild

@@ -51,6 +51,9 @@ const WORD_DAWN := "DAWN"
 const WORD_MORNING := "MORNING"
 const WORD_CHECKPOINT := "CHECKPOINT"
 const WORD_OBJECTIVE := "OBJECTIVE"
+## WP6.5: the JOURNEY COMPLETE banner's subtitle ("THE COAST · JOURNEY BONUS +50,000").
+const JOURNEY_SUB := "%s  ·  JOURNEY BONUS +%s"
+const JOURNEY_BIOME := &"coast"
 const UNIT_KM := "KM"
 const UNIT_M := "M"
 const UNIT_MI := "MI"
@@ -130,6 +133,9 @@ var _count_delay: float = 0.0
 @onready var _glitter: HudGlitter = $Root/Glitter
 @onready var _objective: HudObjective = $Root/Objective
 @onready var _toast: HudLegToast = $Root/LegToast
+## WP6.5: made in _ready (no scene change needed).
+var _journey := HudJourneyToast.new()
+var _journey_bonus: int = 0
 var _widgets: Array[HudWidget] = []
 
 
@@ -143,8 +149,11 @@ func _ready() -> void:
 	_theme = UiTheme.load_theme()
 	_root.theme = _theme
 	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_journey.name = "JourneyToast"
+	_journey.visible = false
+	_root.add_child(_journey)
 	_widgets = [_score, _sun, _chain, _mult, _stack, _lives, _min_speed, _speedo, _boost, _flyer, _glitter,
-			_objective, _toast]
+			_objective, _toast, _journey]
 	for w: HudWidget in [_chain, _mult, _stack, _flyer]:
 		w.use_tilt(TILT_SHADER, tuning.speed_tilt_rad())
 	_pause.glyph = HudButton.Glyph.PAUSE
@@ -380,6 +389,20 @@ func toast_visible() -> bool:
 	return _toast.visible
 
 
+## WP6.5: the JOURNEY COMPLETE banner is showing, and its lines.
+func journey_toast_visible() -> bool:
+	return _journey.visible
+
+
+func journey_toast_lines() -> PackedStringArray:
+	return PackedStringArray([_journey.title_text(), _journey.subtitle_text()]) if _journey.visible \
+		else PackedStringArray()
+
+
+func journey_toast_rect() -> Rect2:
+	return Rect2(_journey.position, _journey.size)
+
+
 func toast_lines() -> PackedStringArray:
 	return _toast.lines() if _toast.visible else PackedStringArray()
 
@@ -487,7 +510,7 @@ func _animate(dt: float) -> void:
 			w.animate(dt)
 	if _stack.muted:
 		_stack.animate(dt)   # the toast holds its slot: lines age unseen
-		if not _toast.showing():
+		if not _toast.showing() and not _journey.showing():
 			_stack.muted = false
 	if _count_t < 0.0:
 		return
@@ -529,6 +552,7 @@ func _connect_events(on: bool) -> void:
 		[Events.morning_reached, _on_morning],
 		[Events.settings_changed, _on_setting_changed],
 		[Events.high_beam_changed, _on_high_beam_changed],
+		[Events.journey_complete, _on_journey_complete],
 	]
 	for p in pairs:
 		var sig: Signal = p[0]
@@ -581,6 +605,8 @@ func _on_hesitated() -> void:
 
 
 func _on_bonus(kind: StringName, points: int, banked_total: int) -> void:
+	if kind == Run.BONUS_JOURNEY:
+		_journey_bonus = points
 	var word := String(kind).to_upper().replace("_", " ")
 	# The crossing's bonuses go to the toast (an objective bonus only if the summary says
 	# this leg's objective was done: a new leg's one completing in the same frame is not).
@@ -714,7 +740,18 @@ func _on_gear(gear: int) -> void:
 	_speedo.set_gear(gear)
 
 
+## WP6.5: the celebratory banner (non-blocking; the road goes on).
+func _on_journey_complete() -> void:
+	var place := biome_name(JOURNEY_BIOME)
+	var sub := JOURNEY_SUB % [place.to_upper(), HudFormat.thousands(_journey_bonus)] if _journey_bonus > 0 \
+		else place.to_upper()
+	_journey.show_complete(sub)
+	_stack.muted = true
+
+
 func _on_run_started(_mode: StringName, _seed: int) -> void:
+	_journey.dismiss()
+	_journey_bonus = 0
 	_stack.clear()
 	_stack.muted = false
 	_toast_collect = false
@@ -798,6 +835,7 @@ func _relayout() -> void:
 	_place(_boost, layout.boost)
 	_fit_objective()
 	_place(_toast, layout.toast)
+	_place(_journey, layout.journey)
 	_flyer.size = Vector2(layout.chain.size.x * 0.5, layout.chain.size.y)
 	_place(_glitter, full)
 

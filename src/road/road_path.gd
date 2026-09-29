@@ -123,6 +123,42 @@ func is_on_shoulder(d: float, s: float) -> bool:
 		or (d > lanes_right_edge_d(s) and d <= guardrail_d(s))
 
 
+# ---------------------------------------------------------------- Forks (WP6.5, docs/FORKS.md)
+# Defaults describe the plain mirrored road; ProceduralRoadPath overrides them around a
+# fork. Tick-safe unless noted.
+
+## How far the opposite carriageway sits beyond its mirrored place (m, >= 0: further
+## left, the carriageways separate).
+func opposite_offset_d(_s: float) -> float:
+	return 0.0
+
+
+## How much of the opposite carriageway exists at s (1 = all of it, 0 = none).
+func opposite_width_frac(_s: float) -> float:
+	return 1.0
+
+
+## True where the player's left side is a guardrail at median_barrier_d(s) (no median
+## barrier: the opposite carriageway is away).
+func median_is_rail(_s: float) -> bool:
+	return false
+
+
+## Height factor of the barriers and rails at s (1 = full; a vanishing fork branch).
+func rail_height_frac(_s: float) -> float:
+	return 1.0
+
+
+## The ground ribbon ends at these d on the right (<= the limit) and the left (>= it).
+## Director rate (the mesher).
+func ground_right_limit_d(_s: float) -> float:
+	return INF
+
+
+func ground_left_limit_d(_s: float) -> float:
+	return -INF
+
+
 # ---------------------------------------------------------------- Features and generation
 
 ## Appends every feature overlapping [s0, s1) to `out`, in increasing s_start.

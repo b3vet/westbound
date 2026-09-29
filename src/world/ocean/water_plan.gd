@@ -18,6 +18,9 @@ var props_seed: int = 0
 ## (s: float) -> BiomeDef. Null callable = every s is `fallback_biome`.
 var biome_lookup: Callable
 var fallback_biome: BiomeDef
+## WP6.5: [s0, s1) pairs with no water (fork spans: the branches and the veering
+## opposite carriageway cross the land beside the road). Set by the owner at setup.
+var dry := PackedFloat64Array()
 
 
 func _init(seed_value: int, lookup: Callable = Callable(), fallback: BiomeDef = null) -> void:
@@ -41,7 +44,7 @@ func def_at(s: float) -> WaterDef:
 ## Scenery line to the shore strip at s (>= 0), or NONE where there is no water.
 func shore_offset_at(s: float) -> float:
 	var def := def_at(s)
-	if def == null:
+	if def == null or is_dry(s):
 		return NONE
 	var edge := edge_distance(s, def)
 	if def.span_cell_m > 0.0:
@@ -57,6 +60,29 @@ func shore_offset_at(s: float) -> float:
 		var t := smoothstep(0.0, 1.0, clampf(edge / def.arrive_m, 0.0, 1.0))
 		off += def.arrive_offset_m * (1.0 - t)
 	return off
+
+
+## True inside a `dry` range (WP6.5 forks).
+func is_dry(s: float) -> bool:
+	for i in range(0, dry.size() - 1, 2):
+		if s >= dry[i] and s < dry[i + 1]:
+			return true
+	return false
+
+
+## Adds the spans of `road`'s forks (widened by the longest arrival sweep of `biomes`'
+## water) to `dry`.
+func add_fork_spans(road: RoadPath, biomes: Array[BiomeDef]) -> void:
+	var pr := road as ProceduralRoadPath
+	if pr == null:
+		return
+	var sweep_m := 0.0
+	for b in biomes:
+		if b != null and b.water != null:
+			sweep_m = maxf(sweep_m, b.water.arrive_m)
+	for f in pr.forks:
+		dry.append(f.span_start_s() - sweep_m)
+		dry.append(f.span_end_s() + sweep_m)
 
 
 ## Whether river cell `c` shows water (chance per cell, from the seed only).
