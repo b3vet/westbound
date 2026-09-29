@@ -102,12 +102,14 @@ Desktop container (Xeon @ 2.1 GHz, shared with other agents: numbers ±30%), `te
 
 | | 2 lanes | 3 lanes | 4 lanes |
 | --- | --- | --- | --- |
-| Player check (the bot, 10,000 km soak average) | 6.4 ms | 9.0 ms | 13.1 ms |
-| Player check at the cap (90 vehicles, bench) | | 6.7-6.9 ms | 8.0-9.8 ms |
-| Batch check at the cap, 3-4 probes (bench) | | 11-14 ms | 12 ms |
+| Player check (the bot, pre-merge 10,000 km soak average) | 6.4 ms | 9.0 ms | 13.1 ms |
+| Player check at the cap (90 vehicles, bench) | | 6.7-7.2 ms | 8.0-9.8 ms |
+| Batch check at the cap, 3-4 probes (bench) | | 11-17 ms | 11-20 ms |
 | Batch check, typical batch (no vehicle slower than 95 km/h) | < 0.3 ms | < 0.3 ms | < 0.3 ms |
-| Largest slice (one tick of the director does ≤ 2) | | 4.3-7.4 ms | 2.0-3.7 ms |
+| Largest slice (one tick of the director does ≤ 2) | | 4.3-7.4 ms | 2.0-4.8 ms |
 | Director per tick, averaged over the soak (checks included) | 57 µs | 62 µs | 80 µs |
+
+The final (post-WP6.2) soak ran with the container at load ~20 on 4 cores: its 14.7 ms average per bot check measures the contention, not the check. Lane-end closures cost nothing on a road without lane-count changes in the corridor (one lookup per 50 m).
 
 Where a player check goes (4 lanes, 40 vehicles copied, 18 obstacles): forward sim 45% (~1.2 µs per vehicle and step), backward search 35%, obstacle and relevance lists 20%.
 
@@ -139,7 +141,12 @@ Allocation-free per check after `_init` (`test_checks_allocate_nothing`); all st
 
 ## Soak
 
-docs/SOAK.md, *WP6.1*: 10,024 km, **0 impossible windows on 3 and 4 lanes** (the D11 3-lane window is gone), 0 contacts with the player, 0 rule violations; **4 windows on 2 lanes** (legs 6-8), all compressed lane-0 platoons below the minimum speed on a road whose other lane flows below it: a 2-lane traffic decision, below.
+docs/SOAK.md, *WP6.1* (before the WP6.2 merge) and *WP6.1 after the WP6.2 merge* (the final soak, 10,024 km):
+
+- **3 lanes:** 0 impossible windows (5,040 km).
+- **4 lanes:** 1 window (2,492 km). It is an oracle false positive: the oracle holds an accelerating motorbike platoon at constant speed, and the bot drove the window at 100 km/h without contact.
+- **2 lanes:** 4 windows (2,492 km), the D12 platoons: a 2-lane traffic decision, below.
+- **Gates and director:** 0 contacts of a normally driving player, 0 collisions and rule violations except one set-piece signal timing (WP6.2, not passability), and 0 unresolved director batches.
 
 ## Open / deviations
 

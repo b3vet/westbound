@@ -252,7 +252,7 @@ Justification: the spec's fairness rule "If the player cuts in front of a faster
 
 A first 252 km trial (4 shards) found 5 traffic and 4 player-induced windows on 2 lanes: the bot rode 0.3 m behind the car ahead (the search's relaxation allows any speed down to the minimum at once), and one leader braking left it without a path. The bot now keeps a 1.0 s headway in its path choice (`PassabilityBot.HEADWAY_S`, `Passability.extract_path(..., headway_s)`); the second 252 km trial had 0 windows and 0 contacts. The full soak below was run after that and not tuned on.
 
-### Results: the WP6.1 10,000 km soak
+### Results: the WP6.1 10,000 km soak (before the WP6.2 merge)
 
 `tools/soak.sh --km=10000 --shards=4`, the passability bot, the director checking every batch. The shards were killed twice by container restarts (after 274 and 336 runs); the missing runs were run again with `soak_main.gd --runs=...` into extra shard files and merged with `tools/soak.sh --merge`. 22 runs happened to be run twice, once before and once after merging the integration branch (WP6.4 biomes, road generation): **all 22 traces identical**, so the results hold for the merged tree.
 
@@ -317,3 +317,42 @@ A local experiment (not committed) forbidding vehicles with a desired speed belo
 | Set pieces | 324 peaks: 137 lost the chance roll, 173 missed (the bot too slow to meet a piece), 2 did not fit the road; **11 spawned** (9 truck walls, 2 rolling roadblocks), 3 started, 1 passed, 4 unmet, 2 timed out after starting (the lane-keeping bot stays behind the wall), the rest still live when their runs ended. 0 hard decelerations (neither piece asks for them; rule 4's exception is covered by `test_set_piece_source.gd`). |
 
 `soak_canyon_lane_drops` (2 × 28 km on the canyon road): 91 and 93 mandatory merges, every gate 0, offroad 0, one player-induced window. Cars that find no gap wait at the end of the lane (seen at 0-5 km/h in that window's snapshot, lane 2, 230-250 m ahead of the player).
+
+## WP6.1 after the WP6.2 merge (the final soak)
+
+WP6.2 changed the traffic (intensity waves, set pieces, lane drops), so the WP6.1 gate was run again on the merged tree, same seed (20260928) and `tools/soak.sh --km=10000 --shards=4`. The classification rule is unchanged (pre-registered above).
+
+**First run (soak b, merged tree).** 10,024 km: 3 lanes 0 windows, 4 lanes 1, 2 lanes 3, one window under the player cut-in rule, 2 rear-end contacts (none of a normally driving player), 1 signal violation. Replaying run 299 (the cut-in and one contact) found a passability bug. The bot lost its path mid-lane-change and froze astride two lanes. The next check snapped its start to the neighbouring grid positions and **exempted a fast car of the lane it had not entered** as a "follower" (vehicle 259, +26 km/h, 0.4 m behind), then drove into it. Fixes:
+
+- a start state exempts only followers that overlap the player's **actual** body;
+- the bot aborts a lost move to the lane holding its center instead of freezing.
+
+A test fails without the first fix.
+
+**Second run (soak c).** Also added TrafficSim's lateral anticipation of the player to the prediction. It produced a 3-lane window (run 112): the prediction had a lane-1 car braking for the player's move, the path then reversed the move, and the car never braked. That is an optimistic model error, so it was reverted: follower braking that depends on the path is not assumed.
+
+**Final run (soak d, commit 86bcc9d), the reported result:**
+
+| | |
+| --- | --- |
+| Distance | **10,024 km** in 358 runs (5,040 km on 3 lanes, 2,492 km on 2 lanes, 2,492 km on 4 lanes), 76.2 simulated hours, 5.2× real time per process (the container at load ~20 on 4 cores) |
+| Gates | collisions 0, unsignaled 0, no-ambush 0 (153,676 moves checked), decel 0 (min −6.00 m/s²), brake flags 0, rear-end of a normal player 0, offroad 0; **signal 1** (below); **impossible (traffic) 5** (below) |
+| Windows per lane count | **3 lanes: 0**, **4 lanes: 1**, **2 lanes: 4**; the cut-in rule classified none (0 player-induced) |
+| Contacts with the player | 1 episode (rear-end, not normal driving) |
+| Bot | 548,649 checks, 31 without a path (0.006%), never off the driving lanes (`player_offroad_ticks` 0) |
+| Director | 34,368 ranges checked (172 with set-piece vehicles), 13 failed checks, 10 re-rolls, 3 removals, **0 unresolved** |
+| Set pieces | 176 spawned, 81 started, 20 passed |
+
+The failures:
+
+- **2 lanes (runs 10, 18, 118, 258; legs 5-8): the D12 platoons.** "Slow wall" windows, the same situation as before the merge. Lane 0's compressed platoon runs at 95-98 km/h, and lane 1 flows at 82-88 km/h below the minimum speed. See the WP6.1 results above and docs/PASSABILITY.md *Open*: a 2-lane traffic decision.
+- **4 lanes (run 247, leg 8): an oracle false positive.**
+    - **The window:** the player is at 100 km/h in lane 0, 13 m behind a motorbike at 91 km/h, with lanes 1-2 busy.
+    - **Why the oracle flags it:** it assumes every vehicle ahead keeps its speed, so the bike is a wall.
+    - **What happened:** the bike's platoon (every vehicle in it desiring ≥ 140 km/h) was accelerating (91 → 97 km/h in 3 s). Passability's forward simulation (IDM) predicted that. Replay: the bot drove the whole window in lane 0 at exactly 100 km/h, with a path at every check and no contact.
+    - **Status:** it still counts under the pre-registered rule (not reclassified). It is evidence for making the oracle's traffic prediction model acceleration.
+- **Signal violation (run 113, t = 95.4 s): not WP6.1.** A set-piece truck (FLAG_SCRIPTED) began signalling while ticking at the far rate (FLAG_FAR), became near mid-signal, and moved after 0.983 s < 1.0 s. No passability check failed in that run, so the director did exactly what it does without passability. For WP6.2 / TrafficSim: the signal timer across the far → near tick change.
+- **Contact (run 99): the bot's own braking.** The search allows any speed down to the minimum at once (the spec's "anywhere from minimum speed to current speed plus acceleration", a relaxation). The bot drove a path that dropped from 117 to 100 km/h within one 0.25 s step, and a motorbike braking at −6 m/s² behind it touched it. Not normal driving (`rear_end_normal` 0).
+
+The canyon soak (lane drops, 2 × 28 km) on the merged tree: 0 windows, 0 contacts, 0 bot checks without a path, the player never off the driving lanes, 0 failed batch checks.
+
