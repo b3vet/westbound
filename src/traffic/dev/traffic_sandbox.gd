@@ -32,7 +32,8 @@ extends Node3D
 ##   WALL / BLOCK / WAVES (top right, second row; SetPieceControls, WP6.2): force a set
 ##           piece into the next ahead batch; show the intensity curve (IntensityPlot)
 ##   FAST xK / RACER (top right, third row; FastTrafficControls, WP6.6): scale the fast
-##           shares (aggressive + racer); spawn a racer behind the player
+##           shares (aggressive + racer); spawn a racer behind the player; ARR ON/OFF and
+##           ARRIVE: the director's racer arrivals from behind (WP6.7)
 ## Tap a vehicle to select it (all MOBIL terms in a side panel).
 ## Keys: Space pause, . step, N +1 s, [ ] time scale, V camera mode, B driver,
 ## X clear, 1-5 layers (IDM, MOBIL, BLINK, OCC, PASS), backtick dev HUD, C rig camera.
@@ -396,6 +397,8 @@ func reseed(seed_value: int) -> void:
 	overlay.bind(sim, road, origin, probe)
 	if bot != null:
 		bot.traffic = sim.state
+	if fast_controls != null:
+		fast_controls.apply_to(director)   # racer arrivals on / off (WP6.7)
 	_lc_ring_n = 0
 	_lc_sample()
 	_lc_next_t = sim_time + 1.0
@@ -667,6 +670,7 @@ func refresh_stats() -> void:
 		sim.stat_cancel_player, sim.stat_cancel_hesitant, sim.stat_cancel_unsafe])
 	lines.append("mean km/h" + lane_txt)
 	lines.append("speeds " + DevReport.traffic_line(sim))
+	lines.append("racers " + DevReport.racers_line(director))
 	lines.append("sim tick %.0f us avg 1 s (max %d)  frame %.1f ms" % [tick_avg,
 		DevStats.get_sim_tick_max_usec(), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0)])
 	lines.append("player %.0f km/h  lane %d  %s" % [Units.mps_to_kmh(p.v), road.lane_index_at(p.d, p.s),
@@ -689,6 +693,9 @@ func refresh_stats() -> void:
 	DevStats.report(&"sandbox_driver", DRIVER_NAMES[driver])
 	DevStats.report(&"sandbox_player_kmh", roundi(Units.mps_to_kmh(p.v)))
 	DevStats.report(&"sandbox_hits", hits)
+	DevStats.report(&"racers_passed_you", director.racers_passed_player)
+	DevStats.report(&"racers_overtaken", director.racers_overtaken)
+	DevStats.report(&"racer_arrivals", director.racer_arrivals)
 
 
 ## Completed lane changes per minute over the last LC_WINDOW_S sim seconds (or since
@@ -1006,7 +1013,7 @@ func snap_setup(args: Dictionary) -> void:
 		var ti := TAB_NAMES.find(String(args["tab"]).to_upper())
 		_tab = Tab.NONE
 		_open_tab(maxi(ti, 0) as Tab)
-	fast_controls.snap_run(args)   # racer=true, fast=K (WP6.6)
+	fast_controls.snap_run(args)   # racer=true, fast=K (WP6.6); arrival=true (WP6.7)
 	paused = not bool(args.get("run", false))
 	view.call(&"capture_tick")
 	rig.snap_to_target()

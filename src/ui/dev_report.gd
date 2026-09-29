@@ -55,6 +55,7 @@ static func compose(hud_rows: Array, scene_name: String) -> String:
 	lines.append(render_line(win))
 	lines.append("scene     %s" % scene_name)
 	lines.append("traffic   %s" % traffic_line(scene_traffic_sim()))
+	lines.append("racers    %s" % racers_line(scene_traffic_director()))
 	lines.append("-- hud")
 	for row: Array in hud_rows:
 		lines.append("%-9s %s" % [row[0], row[1]])
@@ -72,6 +73,25 @@ static func scene_traffic_sim() -> TrafficSim:
 	var tree := Engine.get_main_loop() as SceneTree
 	var scene: Node = tree.current_scene if tree != null else null
 	return scene.get(&"sim") as TrafficSim if scene != null else null
+
+
+## The current scene's TrafficDirector (its `director` property: the run, the traffic
+## sandbox), or null.
+static func scene_traffic_director() -> TrafficDirector:
+	var tree := Engine.get_main_loop() as SceneTree
+	var scene: Node = tree.current_scene if tree != null else null
+	return scene.get(&"director") as TrafficDirector if scene != null else null
+
+
+## Racers from behind (plan D17, WP6.7), this run: racers that passed the player and
+## that the player overtook, and the arrivals spawned behind the player (of them, how
+## many got past it).
+static func racers_line(director: TrafficDirector) -> String:
+	if director == null:
+		return "-"
+	return "passed you %d, you overtook %d, arrivals %d (%d passed you)%s" % [director.racers_passed_player,
+		director.racers_overtaken, director.racer_arrivals, director.arrivals_passed_player,
+		"" if director.racer_arrivals_enabled else ", arrivals off"]
 
 
 ## Live traffic speeds on the player's carriageway (plan D15, owner M5: "the traffic is

@@ -148,6 +148,31 @@ var _breather_s0 := PackedFloat64Array()
 var _breather_s1 := PackedFloat64Array()
 # ---- end WP6.5 hook
 
+# ---- WP6.7: racers from behind (plan D17). See _step_arrivals() and _step_passes().
+## Dev (the sandbox's ARR toggle) and tests: the arrival process on / off.
+var racer_arrivals_enabled: bool = true
+## Arrivals spawned; due arrivals that found no lane (each retry counts).
+var racer_arrivals: int = 0
+var racer_arrivals_waited: int = 0
+## Racers (the profile, wherever they spawned) that passed the player (behind -> ahead)
+## and that the player overtook (ahead -> behind), this run; arrivals (any profile)
+## that passed the player. DevStats / the dev report's COPY (DevReport.racers_line).
+var racers_passed_player: int = 0
+var racers_overtaken: int = 0
+var arrivals_passed_player: int = 0
+## The slot of the last arrival (tests, the sandbox's selection); -1 none.
+var last_arrival_slot: int = -1
+var _arr_rng: Rng
+var _arr_clock: float = 0.0   ## wave-weighted seconds until the next arrival is due (<= 0: due)
+var _arr_wait: float = 0.0    ## seconds until a due arrival that found no lane retries
+var _arr_rec := SpawnSource.Record.new()
+var _arr_vid := PackedInt32Array()    ## per slot: the vehicle_id of an arrival (0: none)
+var _pass_vid := PackedInt32Array()   ## per slot: the vehicle_id whose side is tracked
+var _pass_side := PackedInt32Array()  ## per slot: 1 ahead of the player, -1 behind, 0 alongside
+var _pass_clock: float = 0.0
+var _arr_slots := PackedInt32Array()  ## scratch: the slots in the lane being tried
+# ---- end WP6.7
+
 
 func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profiles: Array[DriverProfile],
 		types: Array[VehicleType], player_length_m: float, player_width_m: float) -> void:
@@ -175,6 +200,11 @@ func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profil
 	set_player_box(player_length_m, player_width_m)
 	_behind_debt.resize(traffic_tuning.lane_flow_speeds_from_right_kmh.size())
 	_behind_wait.resize(_behind_debt.size())
+	_arr_rng = run.rng_traffic.derive(&"racer_arrivals")
+	_arr_vid.resize(state.capacity)
+	_pass_vid.resize(state.capacity)
+	_pass_side.resize(state.capacity)
+	_arr_slots.resize(state.capacity)
 	_refresh_ctx(null)
 	opposite = OppositeTraffic.new(traffic_tuning, road, flow, ctx, run.rng_traffic.derive(&"opposite"), ahead_distance())
 
@@ -299,6 +329,7 @@ func reset(player: VehicleState) -> void:
 	peaks_missed = 0
 	peaks_unfit = 0
 	despawned_for_set_pieces = 0
+	_reset_arrivals()
 	_prefilling = true
 	_player_s = player.s
 	density_gain = 1.0
@@ -333,6 +364,11 @@ func step(dt: float, player: VehicleState) -> void:
 	if player.s + ahead_distance() >= _spawned_to:
 		_plan_ahead(player)
 	_step_behind(dt, player)
+	_step_arrivals(dt, player)
+	_pass_clock += dt
+	if _pass_clock >= director_tuning.racer_pass_check_interval_s:
+		_pass_clock = 0.0
+		_step_passes(player)
 	set_pieces.step(dt, player)
 	opposite.step(dt, player.s)
 
@@ -605,6 +641,232 @@ func _step_try_behind(lane: int, player: VehicleState, min_speed: float) -> bool
 		return false
 	spawned_behind += 1
 	return true
+
+
+# ---------------------------------------------------------------- Racers from behind (plan D17, WP6.7; per tick)
+
+## Owner decision (plan D17: "Yes, pass me at speed"): behind spawns (_step_behind) need
+## the player to be slower than the lane, so a player at 170-230 km/h never had anything
+## arrive from behind. Arrivals are a seeded process (its own stream) of fast cars that
+## come from behind on their OWN speed:
+##   - every racer_arrival_interval_s(leg) (a uniform draw, shorter in late legs) of
+##     clock, which runs at the wave's density multiplier where the player is and stops
+##     in wave breathers, near requested breathers (fork approaches, the finale) and
+##     near live set pieces (_arrival_window_open);
+##   - a racer (or an aggressive driver, racer_arrival_aggressive_pct, when that profile
+##     can be fast enough) whose desired speed is drawn at least
+##     racer_arrival_speed_margin_kmh above the player's;
+##   - out of view behind the player (spawn_behind_m, then closer down to
+##     racer_arrival_behind_min_m), in a lane the profile may use from behind, never one
+##     that feeds ordinary behind spawns right now (_try_arrival);
+##   - only where it gets past the player without braking hard (_arrival_fits: IDM's s*
+##     at its spawn speed, and a clear run to racer_arrival_pass_clear_m past the
+##     player); then the usual commit rules (cap, ghost zone, view, live gaps, breathers).
+## A due arrival that fits nowhere retries every racer_arrival_retry_s. Allocation-free.
+func _step_arrivals(dt: float, player: VehicleState) -> void:
+	if not racer_arrivals_enabled or _prefilling:
+		return
+	if _arr_wait > 0.0:
+		_arr_wait -= dt
+	if not _arrival_window_open(player):
+		return
+	if _arr_clock > 0.0:
+		_arr_clock -= dt * waves.mult_at(player.s)
+		return
+	if _arr_wait > 0.0:
+		return
+	if _try_arrival(player):
+		racer_arrivals += 1
+		_arr_clock = director_tuning.racer_arrival_interval_s(leg, _arr_rng.unit())
+	else:
+		racer_arrivals_waited += 1
+		_arr_wait = director_tuning.racer_arrival_retry_s
+
+
+## Dev (the sandbox's ARRIVE) and tests: the next arrival is due now (it still needs an
+## open window and a lane that fits).
+func force_racer_arrival() -> void:
+	_arr_clock = 0.0
+	_arr_wait = 0.0
+
+
+## Seconds (of wave-weighted clock) until the next arrival is due.
+func racer_arrival_due_in() -> float:
+	return maxf(_arr_clock, 0.0)
+
+
+## False in a wave breather at the player, or while a requested breather (WP6.5: a
+## fork's approach, the finale) or a live set piece's zone overlaps [spawn point, player
+## + racer_arrival_clear_ahead_m]. Allocation-free.
+func _arrival_window_open(player: VehicleState) -> bool:
+	if waves.phase_at(player.s) == IntensityWaves.Phase.BREATHER:
+		return false
+	var a := player.s - traffic_tuning.spawn_behind_m
+	var b := player.s + director_tuning.racer_arrival_clear_ahead_m
+	for k in _breather_s0.size():
+		if _breather_s0[k] < b and _breather_s1[k] > a:
+			return false
+	for inst in set_pieces.instances:
+		if inst.stage != SetPieceSource.Stage.FREE and inst.s_rear - inst.def.clear_behind_m < b \
+				and inst.s_front + inst.def.clear_ahead_m > a:
+			return false
+	return true
+
+
+## Draws one arrival and commits it at the first spawn point that fits: spawn_behind_m
+## behind the player, then racer_arrival_behind_step_m closer at a time down to
+## racer_arrival_behind_min_m (all far beyond the view volume), in each lane the profile
+## may use from behind, leftmost first, never a lane that feeds ordinary behind spawns
+## right now; lanes without the player first (see _step_arrivals).
+func _try_arrival(player: VehicleState) -> bool:
+	var dtun := director_tuning
+	var v_min := player.v + Units.kmh_to_mps(dtun.racer_arrival_speed_margin_kmh)
+	var p := flow.racer_profile()
+	var agg := flow.aggressive_profile()
+	if agg >= 0 and flow.top_speed(agg) > v_min \
+			and _arr_rng.unit() < Units.pct_to_frac(dtun.racer_arrival_aggressive_pct):
+		p = agg
+	if p < 0:
+		return false
+	_refresh_ctx(player)
+	if not flow.draw_arrival_into(ctx, _arr_rng, p, 0, v_min, _arr_rec):
+		return false
+	var lanes := road.lane_count(player.s)
+	var behind_lanes := maxi(mini(traffic_tuning.spawn_behind_lane_count, lanes - 1), 1)
+	var fed := player.v + Units.kmh_to_mps(traffic_tuning.spawn_behind_speed_margin_kmh)
+	var back_step := maxf(dtun.racer_arrival_behind_step_m, 1.0)
+	# Lanes without the player first (it passes at speed), then the player's; in each,
+	# the farthest spawn point first.
+	for with_player in 2:
+		for lane in mini(lanes, road.lane_count(player.s - traffic_tuning.spawn_behind_m)):
+			if (1 if _player_in_lane(player, lane) else 0) != with_player \
+					or not flow.arrival_lane_ok(p, lane, lanes, behind_lanes):
+				continue
+			if traffic_tuning.lane_flow_speed_mps(lane, lanes) > fed:
+				continue   # ordinary behind spawns feed this lane now (_step_behind)
+			var n := _collect_lane(lane, player.s - traffic_tuning.spawn_behind_m)
+			var back := traffic_tuning.spawn_behind_m
+			while back >= dtun.racer_arrival_behind_min_m:
+				_arr_rec.s = player.s - back
+				back -= back_step
+				if is_visible(_arr_rec.s, road.lane_center_d(lane, _arr_rec.s)):
+					rejected_visible += 1
+					continue
+				if _arrival_fits(lane, n, v_min, player) and _commit(_arr_rec, player):
+					last_arrival_slot = _last_slot
+					_arr_vid[_last_slot] = state.vehicle_id[_last_slot]
+					return true
+	return false
+
+
+## Collects into _arr_slots the live vehicles occupying `lane` at or ahead of `from_s`;
+## returns how many. Allocation-free.
+func _collect_lane(lane: int, from_s: float) -> int:
+	var n := 0
+	for i in state.capacity:
+		if state.active[i] == 1 and state.s[i] >= from_s and SpawnSources.occupies_lane(state, i, lane, road):
+			_arr_slots[n] = i
+			n += 1
+	return n
+
+
+## True when the drawn arrival (_arr_rec, s set) fits `lane`, whose vehicles ahead are
+## _arr_slots[0, n). Sets _arr_rec.lane and .v. Allocation-free.
+##   - The lane is open for spawns and clear of set pieces; Flow's neighbor check.
+##   - No hard braking at spawn: its speed is the highest in [v_min, v0] that keeps IDM's
+##     s* (closing speed included) to every vehicle ahead in the lane and to the player
+##     when the player is in it (Flow.max_speed_behind).
+##   - A clear run: holding that speed, it gets racer_arrival_pass_clear_m past the
+##     player (the player and the lane's traffic predicted at their own speeds) before
+##     any vehicle ahead in its lane slower than the player makes it slow below the
+##     player's speed (Flow.braking_spacing). So it reaches the player and gets by,
+##     instead of queueing out of view behind a car the player is passing. The player
+##     itself is no obstacle: coming up behind it the arrival brakes comfortably (IDM
+##     with the player as its leader) and pulls out with its blinker (MOBIL) to pass.
+func _arrival_fits(lane: int, n: int, v_min: float, player: VehicleState) -> bool:
+	var rec := _arr_rec
+	rec.lane = lane
+	rec.v = rec.v0
+	if not flow.lane_open_for_spawn(road, lane, rec.s):
+		return false
+	var p := rec.profile_id
+	var ln := flow.length_of(rec.type_id)
+	var v := rec.v0
+	for k in n:
+		var i := _arr_slots[k]
+		if state.s[i] >= rec.s:
+			v = minf(v, flow.max_speed_behind(p, ln, state.s[i] - rec.s, state.v[i], state.length[i]))
+	if _player_in_lane(player, lane):
+		v = minf(v, flow.max_speed_behind(p, ln, player.s - rec.s, player.v, flow.player_length_m))
+	if v < v_min:
+		return false
+	var t_pass := (player.s + director_tuning.racer_arrival_pass_clear_m - rec.s) / (v - player.v)
+	var at := rec.s + v * t_pass
+	for k in n:
+		var i := _arr_slots[k]
+		if state.s[i] < rec.s or state.v[i] >= player.v:
+			continue
+		if state.s[i] + state.v[i] * t_pass - at < flow.braking_spacing(p, ln, player.v, state.v[i], state.length[i]):
+			return false
+	rec.v = v
+	return flow.fits_between_neighbors_into(ctx, rec) and set_pieces.keeps_clear(rec)
+
+
+## True when the player's body overlaps `lane` (at the player's s).
+func _player_in_lane(player: VehicleState, lane: int) -> bool:
+	var half := (road.lane_width(player.s) + flow.player_width_m) * 0.5
+	return absf(player.d - road.lane_center_d(lane, player.s)) < half
+
+
+## Passes (DevStats, the soak, tests), every racer_pass_check_interval_s: every racer
+## and every arrival is tracked by vehicle_id on its side of the player (ahead / behind
+## by more than half the two lengths; alongside keeps the last side). A side change
+## counts once. Allocation-free.
+func _step_passes(player: VehicleState) -> void:
+	var racer := flow.racer_profile()
+	var pl := flow.player_length_m
+	for i in state.capacity:
+		if state.active[i] == 0:
+			continue
+		var vid := state.vehicle_id[i]
+		var arrival := _arr_vid[i] == vid
+		if state.profile_id[i] != racer and not arrival:
+			continue
+		var half := (state.length[i] + pl) * 0.5
+		var rel := state.s[i] - player.s
+		var side := 1 if rel > half else (-1 if rel < -half else 0)
+		if _pass_vid[i] != vid:
+			_pass_vid[i] = vid
+			_pass_side[i] = side
+			continue
+		var was := _pass_side[i]
+		if side == 0 or side == was:
+			continue
+		_pass_side[i] = side
+		if was == 0:
+			continue
+		if side > 0:
+			if state.profile_id[i] == racer:
+				racers_passed_player += 1
+			if arrival:
+				arrivals_passed_player += 1
+		elif state.profile_id[i] == racer:
+			racers_overtaken += 1
+
+
+func _reset_arrivals() -> void:
+	racer_arrivals = 0
+	racer_arrivals_waited = 0
+	racers_passed_player = 0
+	racers_overtaken = 0
+	arrivals_passed_player = 0
+	last_arrival_slot = -1
+	_arr_vid.fill(0)
+	_pass_vid.fill(0)
+	_pass_side.fill(0)
+	_pass_clock = 0.0
+	_arr_wait = 0.0
+	_arr_clock = director_tuning.racer_arrival_interval_s(leg, _arr_rng.unit())
 
 
 # ---------------------------------------------------------------- Commit rules

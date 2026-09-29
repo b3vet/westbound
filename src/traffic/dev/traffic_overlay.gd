@@ -38,8 +38,9 @@ const LINK_LIFT_M := 0.6
 const BOX_LIFT_M := 0.15
 const EVENT_SHOW_S := 1.5
 const SELECT_RADIUS_PX := 60.0
-## Below the sandbox's three top-right button rows (tabs, set pieces, fast traffic).
-const PANEL_TOP_PX := 196.0
+## Below the sandbox's four top-right button rows (tabs, set pieces, fast traffic, racer
+## arrivals).
+const PANEL_TOP_PX := 252.0
 const PANEL_MARGIN_PX := 16.0
 const ACCEL_WARN_MPS2 := 1.0
 ## Show the raw IDM acceleration next to the applied one when they differ this much.
