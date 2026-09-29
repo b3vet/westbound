@@ -69,8 +69,36 @@ extends Resource
 @export var objective_brake_threshold: float = 0.2   # not in spec
 @export var objective_bonus_points: int = 2500   # not in spec
 
+@export_group("Forks (WP6.5, docs/FORKS.md)")
+## "Some checkpoints split the road OutRun-style into two branches leading to different
+## biomes." How many of the journey's checkpoints fork (drawn per run seed: the Daily
+## Drive date gives everyone the same ones).
+@export var fork_count_min: int = 2   # not in spec: "some checkpoints"
+@export var fork_count_max: int = 3   # not in spec
+## Forks can sit at checkpoints fork_first_checkpoint .. legs_to_coast - 1 (the last
+## one leads to the coast, which is the destination, never a choice), at least this
+## many checkpoints apart.
+@export var fork_first_checkpoint: int = 1   # not in spec
+@export var fork_min_spacing_legs: int = 2   # not in spec: one fork's zone is gone before the next is planned
+
 @export_group("Journey")
 @export var journey_bonus_points: int = 50000   # not in spec
+## The finale plays this far past the coast's checkpoint (the ocean has opened by then).
+@export var finale_after_m: float = 900.0   # not in spec: past the water's arrival sweep
+## The traffic-free breather the finale asks the director for: no traffic within this
+## much before and after the car for the finale's whole distance (plus the swing).
+@export var finale_breather_before_m: float = 150.0   # not in spec
+@export var finale_breather_after_m: float = 1200.0   # not in spec: beyond the fog
+## The breather is requested this far before the finale point (so it is clear by then).
+@export var finale_breather_lead_m: float = 1500.0   # not in spec
+## Without a clear breather by then, the swing is skipped (the toast still shows).
+@export var finale_give_up_m: float = 1500.0   # not in spec
+## The car holds its lane and speed through the swing (input ignored): lateral error to
+## lateral speed, heading error and yaw rate to steer, speed error over a time constant.
+@export var finale_hold_lateral_gain: float = 2.5   # not in spec: 1/s
+@export var finale_hold_steer_gain: float = 40.0   # not in spec: steer per rad
+@export var finale_hold_rate_gain: float = 3.0   # not in spec: steer per rad/s
+@export var finale_hold_speed_time_s: float = 1.0   # not in spec
 
 
 ## The id of leg `leg`'s biome (1-based) in the default plan.

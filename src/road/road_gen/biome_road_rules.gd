@@ -24,6 +24,13 @@ extends RefCounted
 
 var plan: BiomePlan
 
+## Forks (WP6.5): over [s0, s1) the curve / crest / sight rules stay those of leg `leg`
+## (the fork's own leg), so the two branch paths draw the same profile while both are in
+## sight. Lane counts and tunnels are per leg as before.
+var _hold_s0 := PackedFloat64Array()
+var _hold_s1 := PackedFloat64Array()
+var _hold_leg := PackedInt32Array()
+
 var _curve := PackedFloat64Array()
 var _crest := PackedFloat64Array()
 var _tunnel := PackedFloat64Array()
@@ -51,20 +58,34 @@ func leg_at(s: float) -> int:
 	return plan.leg_at(s)
 
 
+## Keeps leg `leg`'s curve, crest and sight rules over [s0, s1) (see the header).
+func hold_rules(s0: float, s1: float, leg: int) -> void:
+	_hold_s0.append(s0)
+	_hold_s1.append(s1)
+	_hold_leg.append(leg)
+
+
 func curve_scale_at(s: float) -> float:
-	var i := _ensure(plan.leg_at(s))
+	var i := _ensure(_rules_leg(s))
 	return _curve[i]
 
 
 func crest_scale_at(s: float) -> float:
-	var i := _ensure(plan.leg_at(s))
+	var i := _ensure(_rules_leg(s))
 	return _crest[i]
 
 
 ## The leg's bend sight clearance, or `fallback_m` when its biome has none.
 func bend_sight_clearance_at(s: float, fallback_m: float) -> float:
-	var c := _clearance[_ensure(plan.leg_at(s))]
+	var c := _clearance[_ensure(_rules_leg(s))]
 	return c if c > 0.0 else fallback_m
+
+
+func _rules_leg(s: float) -> int:
+	for i in _hold_s0.size():
+		if s >= _hold_s0[i] and s < _hold_s1[i]:
+			return _hold_leg[i]
+	return plan.leg_at(s)
 
 
 ## Lane count of leg `leg`'s biome (clamped to RoadTuning's range).

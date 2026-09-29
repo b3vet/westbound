@@ -96,6 +96,8 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void:
 	var lookup := biome_director.biome_at if biome_director != null else Callable()
 	_ctx.water = WaterPlan.new(ctx.rng_props.derive(WaterRibbon.STREAM).get_seed(), lookup, fallback_biome) \
 		if clear_water else null
+	if _ctx.water != null and biome_director != null:
+		_ctx.water.add_fork_spans(road, biome_director.biomes())   # WP6.5: as the WaterRibbon's
 	_build_layers()
 	_max_cell_m = 0.0
 	for layer in layers:

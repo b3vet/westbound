@@ -26,6 +26,8 @@ extends RefCounted
 ## Panel signs: checkpoint warnings and (WP6.4c) the lane-ends signs before a tunnel's
 ## lane drop, both Landmarks.is_panel_sign.
 ##
+## Forks (WP6.5): every FORK feature adds ZONE_FORK zones (see the constant).
+##
 ## Road tunnels (WP6.4a): every TUNNEL feature adds the zones of the road-built tunnel
 ## (LandmarkBuilds.road_tunnel_clearance_zones) as ZONE_TUNNEL. Queries take a mask of
 ## zone kinds (default all): canyon cliffs ask only for ZONE_LANDMARK, so their rock
@@ -36,7 +38,13 @@ const DEFAULT_STYLE := BiomeDef.LANDMARK_SIGN_GANTRY
 ## Zone kinds (bit mask for the queries).
 const ZONE_LANDMARK := 1
 const ZONE_TUNNEL := 2
-const ZONE_ALL := ZONE_LANDMARK | ZONE_TUNNEL
+## WP6.5 forks: where the opposite carriageway veers away and back (the left side), both
+## sides for fork_quiet_after_m past the split (built only after the choice: no pop-in),
+## and the gore side while the other branch is there (docs/FORKS.md).
+const ZONE_FORK := 4
+const ZONE_ALL := ZONE_LANDMARK | ZONE_TUNNEL | ZONE_FORK
+## "Any height" and "any d" for fork zones.
+const _ANY_M := 1.0e9   # lint: allow-number sentinel extent, not tuning
 ## Yaws this close to 0 or PI use the mesh's box; others its footprint circle.
 const YAW_EPS := 1e-6   # lint: allow-number angle tolerance, not tuning
 
@@ -213,9 +221,13 @@ func _refill(s_lo: float, s_hi: float, version: int) -> void:
 		var anchor := f.s_start
 		var kind := ZONE_LANDMARK
 		if f.kind == RoadFeature.Kind.CHECKPOINT:
-			LandmarkBuilds.clearance_zones(style_for(f), LandmarkSection.at(road, anchor), tuning, _scratch)
+			LandmarkBuilds.clearance_zones(style_for(f), LandmarkSection.at(road, anchor - RoadBuilder.SPLIT_PROBE_M),
+				tuning, _scratch)
 		elif Landmarks.is_panel_sign(f):
 			LandmarkBuilds.sign_clearance_zones(road.guardrail_d(anchor) + tuning.sign_setback_m, tuning, _scratch)
+		elif f.kind == RoadFeature.Kind.FORK:
+			_add_fork_zones(f)
+			continue
 		elif f.kind == RoadFeature.Kind.TUNNEL:
 			LandmarkBuilds.road_tunnel_clearance_zones(LandmarkSection.at(road, anchor), f.s_end - f.s_start, tuning,
 				_scratch)
@@ -226,6 +238,24 @@ func _refill(s_lo: float, s_hi: float, version: int) -> void:
 			_add(anchor + _scratch[i] - tuning.clearance_margin_m, anchor + _scratch[i + 1] + tuning.clearance_margin_m,
 				_scratch[i + 2], _scratch[i + 3], _scratch[i + 4], kind)
 	_found.clear()
+
+
+func _add_fork_zones(feature: RoadFeature) -> void:
+	var pr := road as ProceduralRoadPath
+	if pr == null:
+		return
+	var fk := pr.fork_span_at(feature.value)
+	if fk == null:
+		return
+	var split := fk.split_s
+	var median := road.median_barrier_d(fk.veer_start_s())
+	_add(fk.veer_start_s(), split, -_ANY_M, -median, -_ANY_M, ZONE_FORK)
+	_add(split, split + fk.quiet_after_m, -_ANY_M, _ANY_M, -_ANY_M, ZONE_FORK)
+	if fk.side == ForkPlan.LEFT:
+		_add(split, fk.gore_end_s(), 0.0, _ANY_M, -_ANY_M, ZONE_FORK)
+	else:
+		_add(split, fk.gore_end_s(), -_ANY_M, 0.0, -_ANY_M, ZONE_FORK)
+	_add(split + fk.rejoin_after_m, fk.rejoin_end_s(), -_ANY_M, -median, -_ANY_M, ZONE_FORK)
 
 
 func _add(s0: float, s1: float, d0: float, d1: float, floor_m: float, kind: int) -> void:

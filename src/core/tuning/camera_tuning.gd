@@ -107,6 +107,18 @@ extends Resource
 
 @export_group("Scripted cameras")
 @export var finale_swing_s: float = 3.0   # journey finale wide swing onto the ocean
+## The finale swing (WP6.5, docs/FORKS.md → Coast finale): the camera leaves the chase
+## pose, swings out to the land side of the car (it turns this far around the car from
+## straight behind), at this distance and height, looking back at the car against the
+## sea and the low sun, holds, and comes back. The blend in and out each take
+## finale_swing_ease_frac of the swing.
+@export var finale_swing_angle_deg: float = 62.0   # not in spec
+@export var finale_swing_distance_m: float = 17.0   # not in spec
+@export var finale_swing_height_m: float = 4.0   # not in spec
+@export var finale_swing_look_height_m: float = 1.0   # not in spec
+## The look point leads the car along the road (the sea and the sun ahead of it).
+@export var finale_swing_look_ahead_m: float = 6.0   # not in spec
+@export var finale_swing_ease_frac: float = 0.3   # not in spec
 
 
 ## Index of `mode` in `modes`, or -1.

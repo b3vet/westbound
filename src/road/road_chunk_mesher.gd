@@ -53,6 +53,15 @@ extends RefCounted
 ## present in seeded runs (`cliff_seed`), rising and falling at run ends and cleared
 ## around checkpoints and their warning signs (CliffDef). No extra draw call.
 ##
+## Forks (WP6.5, docs/FORKS.md): the opposite carriageway follows the road's
+## opposite_offset_d / opposite_width_frac (it veers away and narrows to nothing; a grass
+## strip fills the widened median), the player's left side is a guardrail where
+## median_is_rail, barrier and rail heights follow rail_height_frac, the ground stops at
+## ground_right_limit_d / ground_left_limit_d, zero-length lane steps are exact (no
+## taper), and cliffs keep clear of every FORK span. `probe_end_before` (a chunk clipped
+## at a split) reads the last row's cross-section just before it. A plain road is
+## unchanged (every hook at its default gives the same vertices).
+##
 ## Allocation: arrays are reused. They are resized to the exact size of each build
 ## (Godot keeps power-of-two capacity, so steady-state builds reuse the buffers).
 
@@ -77,7 +86,9 @@ const LANE_STEP_BISECT := 24
 const BARRIER_PANELS := 5
 const RAIL_QUADS := 3
 const GROUND_QUADS := 2
-const WORLD_QUADS_PER_INTERVAL := BARRIER_PANELS + 2 * (RAIL_QUADS + GROUND_QUADS)
+## The widened median's grass strip (WP6.5; zero width on a plain road).
+const MEDIAN_GAP_QUADS := 1
+const WORLD_QUADS_PER_INTERVAL := BARRIER_PANELS + 2 * (RAIL_QUADS + GROUND_QUADS) + MEDIAN_GAP_QUADS
 const REFLECTOR_QUADS := 5
 const ROW_CAPACITY := 64
 ## Road tunnels, quads: per interval inside (per side: wall, central wall, roof, hill
@@ -115,6 +126,9 @@ var landmark_tuning: LandmarkTuning
 ## Build for commit_merged(): world indices continue after the road vertices. Set
 ## before begin().
 var merge_surfaces: bool = false
+## The last row's cross-section is read this far before it (a chunk that ends at a fork
+## split, where the branches' layout begins). 0 = at the row. Set before begin().
+var probe_end_before_m: float = 0.0
 
 # ---------------------------------------------------------------- Output (read after build)
 
@@ -176,6 +190,18 @@ var _all_tunnels: Array[RoadFeature] = []
 ## the faces each interval emits.
 var _row_cliff_r := PackedFloat64Array()
 var _row_cliff_l := PackedFloat64Array()
+## Forks (WP6.5): opposite offset and width, left rail (1/0), barrier height factor,
+## ground limits per row.
+var _row_h := PackedFloat64Array()
+var _row_ow := PackedFloat64Array()
+var _row_rail := PackedFloat64Array()
+var _row_hs := PackedFloat64Array()
+var _row_glr := PackedFloat64Array()
+var _row_gll := PackedFloat64Array()
+## Zero-length lane steps (exact) and fork spans (no cliffs) of this build.
+var _steps := PackedFloat64Array()
+var _fork_lo := PackedFloat64Array()
+var _fork_hi := PackedFloat64Array()
 var _row_cliff_def: Array[CliffDef] = []
 var _iv_cliff_def: Array[CliffDef] = []
 var _iv_cliff_sides := PackedInt32Array()
@@ -247,6 +273,9 @@ func begin(road: RoadPath, s0: float, s1: float) -> void:
 	_breaks.clear()
 	_checkpoints.clear()
 	_cp_signs.clear()
+	_steps.clear()
+	_fork_lo.clear()
+	_fork_hi.clear()
 	var hip := landmark_tuning.tunnel_hill_width_m
 	var pad := maxf(hip, _cliff_reach(s0, s1))
 	# A feature starting exactly at s1 must count here too: the boundary row is shared.
@@ -256,6 +285,11 @@ func begin(road: RoadPath, s0: float, s1: float) -> void:
 	for f in _features:
 		if f.kind == RoadFeature.Kind.LANE_COUNT_CHANGE and f.s_end > f.s_start:
 			_tapers.append(f)
+		elif f.kind == RoadFeature.Kind.LANE_COUNT_CHANGE:
+			_steps.append(f.s_start)
+		elif f.kind == RoadFeature.Kind.FORK:
+			_fork_lo.append(f.s_start)
+			_fork_hi.append(f.s_end)
 		elif f.kind == RoadFeature.Kind.CHECKPOINT:
 			_checkpoints.append(f.s_start)
 		elif Landmarks.is_panel_sign(f):
@@ -428,10 +462,13 @@ func lanes_right_edge_at(road: RoadPath, s: float) -> float:
 	_road = road
 	_features.clear()
 	_tapers.clear()
+	_steps.clear()
 	road.features_in(s - tuning.lane_taper_length_m, s + ROW_EPS_M, _features)
 	for f in _features:
 		if f.kind == RoadFeature.Kind.LANE_COUNT_CHANGE and f.s_end > f.s_start:
 			_tapers.append(f)
+		elif f.kind == RoadFeature.Kind.LANE_COUNT_CHANGE:
+			_steps.append(f.s_start)
 	var e := _edge_d(s)
 	_road = null
 	return e
@@ -500,6 +537,12 @@ func _ensure_row_capacity(n: int) -> void:
 	_row_rock_shade.resize(n)
 	_row_cliff_r.resize(n)
 	_row_cliff_l.resize(n)
+	_row_h.resize(n)
+	_row_ow.resize(n)
+	_row_rail.resize(n)
+	_row_hs.resize(n)
+	_row_glr.resize(n)
+	_row_gll.resize(n)
 
 
 func _fill_row(r: int) -> void:
@@ -509,6 +552,15 @@ func _fill_row(r: int) -> void:
 	_row_right[r] = _smp.right
 	_row_up[r] = _smp.up
 	_row_tangent[r] = _smp.tangent
+	# The cross-section (not the position) of a clipped chunk's last row, just before it.
+	if r == row_count - 1 and probe_end_before_m > 0.0:
+		s -= probe_end_before_m
+	_row_h[r] = _road.opposite_offset_d(s)
+	_row_ow[r] = _road.opposite_width_frac(s)
+	_row_rail[r] = 1.0 if _road.median_is_rail(s) else 0.0
+	_row_hs[r] = _road.rail_height_frac(s)
+	_row_glr[r] = _road.ground_right_limit_d(s)
+	_row_gll[r] = _road.ground_left_limit_d(s)
 	var w := _road.lane_width(s)
 	var left := _road.lanes_left_edge_d(s)
 	var road_edge := _road.lanes_right_edge_d(s)
@@ -558,6 +610,9 @@ func _find_lane_step(lo: float, hi: float, n_lo: int) -> float:
 
 
 func _covered_by_taper(s: float) -> bool:
+	for c in _steps:
+		if absf(s - c) <= TAPER_PROBE_M:
+			return true
 	for f in _tapers:
 		if s >= f.s_start - TAPER_PROBE_M and s <= f.s_end + TAPER_PROBE_M:
 			return true
@@ -581,7 +636,7 @@ func _compute_breakpoints() -> void:
 		var w := _row_width[r]
 		var edge := _row_edge[r]
 		var cap := edge - hwe
-		_bp[o] = _row_barrier[r]
+		_bp[o] = minf(_row_barrier[r], left - hwe)
 		_bp[o + 1] = left - hwe
 		_bp[o + 2] = minf(left + hwe, cap)
 		for k in range(1, n):
@@ -645,10 +700,13 @@ func _emit_reflectors() -> void:
 		var left := _road.lanes_left_edge_d(s)
 		var w := _road.lane_width(s)
 		var lines := _refl_lines[i]
+		var bf := _road.median_barrier_d(s)
+		var oh := _road.opposite_offset_d(s)
+		var ow := _road.opposite_width_frac(s)
 		for k in range(1, lines + 1):
 			var d := left + float(k) * w
 			for side in 2:
-				var c := p + rt * (d if side == 0 else -d)
+				var c := p + rt * (d if side == 0 else -(bf + oh + (d - bf) * ow))
 				var x0 := c - rt * hw
 				var x1 := c + rt * hw
 				var b00 := x0 - tg * hl
@@ -685,7 +743,6 @@ func _emit_road_interval(i: int) -> void:
 	var shoulder := _shaded(palette.shoulder, shade)
 	var line := _shaded(palette.line, shade)
 	for side in 2:
-		var sg := 1.0 if side == 0 else -1.0
 		for j in last + 1:
 			var col := asphalt
 			var uv := road_uv
@@ -700,10 +757,10 @@ func _emit_road_interval(i: int) -> void:
 						and _line_exists(k, _row_lanes[b], _row_width[b]):
 					col = line
 					uv = line_uv
-			var d0a := sg * _bp[oa + j]
-			var d1a := sg * _bp[oa + j + 1]
-			var d0b := sg * _bp[ob + j]
-			var d1b := sg * _bp[ob + j + 1]
+			var d0a := _side_d(a, side, _bp[oa + j])
+			var d1a := _side_d(a, side, _bp[oa + j + 1])
+			var d0b := _side_d(b, side, _bp[ob + j])
+			var d1b := _side_d(b, side, _bp[ob + j + 1])
 			_road_quad(pa + ra * d0a, pa + ra * d1a, pb + rb * d1b, pb + rb * d0b, up, col, uv)
 
 
@@ -721,7 +778,8 @@ func _emit_world_interval(i: int) -> void:
 	var barrier := _shaded(palette.barrier, shade)
 	var rail := _shaded(palette.guardrail, shade)
 
-	# Median barrier: base at the barrier faces, one slope break, flat top.
+	# Median barrier: base at the barrier faces, one slope break, flat top. Where the left
+	# side is a rail (a fork's right branch) it collapses onto the face (zero area).
 	var t := tuning
 	var ba := _row_barrier[a]
 	var bb := _row_barrier[b]
@@ -731,14 +789,27 @@ func _emit_world_interval(i: int) -> void:
 	var kwb := minf(t.median_barrier_kink_half_width_m, bb)
 	var twa := minf(t.median_barrier_top_half_width_m, kwa)
 	var twb := minf(t.median_barrier_top_half_width_m, kwb)
-	_profile_panel(pa, ra, ua, pb, rb, ub, -ba, 0.0, -bb, 0.0, -kwa, kh, -kwb, kh, 1.0, barrier, uv)
-	_profile_panel(pa, ra, ua, pb, rb, ub, -kwa, kh, -kwb, kh, -twa, hh, -twb, hh, 1.0, barrier, uv)
-	_profile_panel(pa, ra, ua, pb, rb, ub, -twa, hh, -twb, hh, twa, hh, twb, hh, 1.0, barrier, uv)
-	_profile_panel(pa, ra, ua, pb, rb, ub, twa, hh, twb, hh, kwa, kh, kwb, kh, 1.0, barrier, uv)
-	_profile_panel(pa, ra, ua, pb, rb, ub, kwa, kh, kwb, kh, ba, 0.0, bb, 0.0, 1.0, barrier, uv)
+	var ha := _row_hs[a] * (1.0 - _row_rail[a])
+	var hb := _row_hs[b] * (1.0 - _row_rail[b])
+	var la := ba if _row_rail[a] > 0.0 else -ba
+	var lb := bb if _row_rail[b] > 0.0 else -bb
+	var lka := ba if _row_rail[a] > 0.0 else -kwa
+	var lkb := bb if _row_rail[b] > 0.0 else -kwb
+	var lta := ba if _row_rail[a] > 0.0 else -twa
+	var ltb := bb if _row_rail[b] > 0.0 else -twb
+	var rka := ba if _row_rail[a] > 0.0 else kwa
+	var rkb := bb if _row_rail[b] > 0.0 else kwb
+	var rta := ba if _row_rail[a] > 0.0 else twa
+	var rtb := bb if _row_rail[b] > 0.0 else twb
+	_profile_panel(pa, ra, ua, pb, rb, ub, la, 0.0, lb, 0.0, lka, kh * ha, lkb, kh * hb, 1.0, barrier, uv)
+	_profile_panel(pa, ra, ua, pb, rb, ub, lka, kh * ha, lkb, kh * hb, lta, hh * ha, ltb, hh * hb, 1.0, barrier, uv)
+	_profile_panel(pa, ra, ua, pb, rb, ub, lta, hh * ha, ltb, hh * hb, rta, hh * ha, rtb, hh * hb, 1.0, barrier, uv)
+	_profile_panel(pa, ra, ua, pb, rb, ub, rta, hh * ha, rtb, hh * hb, rka, kh * ha, rkb, kh * hb, 1.0, barrier, uv)
+	_profile_panel(pa, ra, ua, pb, rb, ub, rka, kh * ha, rkb, kh * hb, ba, 0.0, bb, 0.0, 1.0, barrier, uv)
 
 	# Guardrail rails (a "<" W-beam pointing at the road, plus the back face) and the
-	# ground ribbon from the paved shoulder edge outward, per side.
+	# ground ribbon from the paved shoulder edge outward, per side. The opposite side
+	# follows the fork hooks (_side_d); a left rail stands on the barrier face.
 	var bot := t.guardrail_bottom_m
 	var top := t.guardrail_top_m
 	var mid := 0.5 * (bot + top)
@@ -748,27 +819,47 @@ func _emit_world_interval(i: int) -> void:
 	var outa := _row_outer[a]
 	var outb := _row_outer[b]
 	var far := t.ground_ribbon_width_m
+	var va := _shaded(_row_verge[a], shade)
+	var vb := _shaded(_row_verge[b], shade)
+	var fa := _shaded(_row_field[a], shade)
+	var fb := _shaded(_row_field[b], shade)
 	for side in 2:
 		var sg := 1.0 if side == 0 else -1.0
-		_profile_panel(pa, ra, ua, pb, rb, ub, sg * (ga + dep), bot, sg * (gb + dep), bot,
-				sg * ga, mid, sg * gb, mid, sg, rail, uv)
-		_profile_panel(pa, ra, ua, pb, rb, ub, sg * ga, mid, sg * gb, mid,
-				sg * (ga + dep), top, sg * (gb + dep), top, sg, rail, uv)
-		_profile_panel(pa, ra, ua, pb, rb, ub, sg * (ga + dep), top, sg * (gb + dep), top,
-				sg * (ga + dep), bot, sg * (gb + dep), bot, sg, rail, uv)
+		# Rail face and back (d), and its height factor, per row.
+		var fca := ga
+		var fcb := gb
+		var bka := ga + dep
+		var bkb := gb + dep
+		var rha := _row_hs[a]
+		var rhb := _row_hs[b]
+		if side == 1:
+			fca = _rail_face_left(a, ga)
+			fcb = _rail_face_left(b, gb)
+			bka = fca - dep
+			bkb = fcb - dep
+			rha = _row_hs[a] * (1.0 if _row_rail[a] > 0.0 else _row_ow[a])
+			rhb = _row_hs[b] * (1.0 if _row_rail[b] > 0.0 else _row_ow[b])
+		_profile_panel(pa, ra, ua, pb, rb, ub, bka, bot * rha, bkb, bot * rhb,
+				fca, mid * rha, fcb, mid * rhb, sg, rail, uv)
+		_profile_panel(pa, ra, ua, pb, rb, ub, fca, mid * rha, fcb, mid * rhb,
+				bka, top * rha, bkb, top * rhb, sg, rail, uv)
+		_profile_panel(pa, ra, ua, pb, rb, ub, bka, top * rha, bkb, top * rhb,
+				bka, bot * rha, bkb, bot * rhb, sg, rail, uv)
 		# Verge (clear zone) out to the scenery line, as the roadside layers use it.
-		var d0a := sg * outa
-		var d0b := sg * outb
-		var d1a := sg * maxf(ga + t.prop_clearance_m, outa)
-		var d1b := sg * maxf(gb + t.prop_clearance_m, outb)
-		var d2a := sg * (outa + far)
-		var d2b := sg * (outb + far)
-		var va := _shaded(_row_verge[a], shade)
-		var vb := _shaded(_row_verge[b], shade)
-		var fa := _shaded(_row_field[a], shade)
-		var fb := _shaded(_row_field[b], shade)
+		var d0a := _ground_d(a, side, outa, outa)
+		var d0b := _ground_d(b, side, outb, outb)
+		var d1a := _ground_d(a, side, maxf(ga + t.prop_clearance_m, outa), outa)
+		var d1b := _ground_d(b, side, maxf(gb + t.prop_clearance_m, outb), outb)
+		var d2a := _ground_d(a, side, outa + far, outa)
+		var d2b := _ground_d(b, side, outb + far, outb)
 		_world_quad_c(pa + ra * d0a, pa + ra * d1a, pb + rb * d1b, pb + rb * d0b, ua, va, va, vb, vb, uv)
 		_world_quad_c(pa + ra * d1a, pa + ra * d2a, pb + rb * d2b, pb + rb * d1b, ua, fa, fa, fb, fb, uv)
+	# The widened median's grass strip: barrier face to the (veered) opposite carriageway.
+	var m0a := _clamp_left(a, -ba)
+	var m0b := _clamp_left(b, -bb)
+	var m1a := _clamp_left(a, -(ba + _row_h[a])) if _row_rail[a] <= 0.0 else m0a
+	var m1b := _clamp_left(b, -(bb + _row_h[b])) if _row_rail[b] <= 0.0 else m0b
+	_world_quad_c(pa + ra * m0a, pa + ra * m1a, pb + rb * m1b, pb + rb * m0b, ua, va, va, vb, vb, uv)
 	match _iv_kind[i]:
 		INTERVAL_TUNNEL:
 			_emit_tunnel_interval(i)
@@ -776,6 +867,45 @@ func _emit_world_interval(i: int) -> void:
 			_emit_hip_interval(i)
 	if _iv_cliff_def[i] != null:
 		_emit_cliff_interval(i)
+
+
+## d of a cross-section point `x` (a player-side breakpoint, >= the barrier face) on
+## `side` of row r: the player's side as is, the opposite side mirrored beyond the
+## (veered) median and scaled by how much of it exists.
+func _side_d(r: int, side: int, x: float) -> float:
+	if side == 0:
+		return x
+	var ba := _row_barrier[r]
+	return -(ba + _row_h[r] + (x - ba) * _row_ow[r])
+
+
+## The left rail's road-facing d at row r: the opposite guardrail (mirrored), or the
+## barrier face where the left side is a rail.
+func _rail_face_left(r: int, g: float) -> float:
+	if _row_rail[r] > 0.0:
+		return _row_barrier[r]
+	return _side_d(r, 1, g)
+
+
+## A ground point `x` (player-side distance) on `side` of row r, within the row's ground
+## limits. `outer` is the paved edge the ground starts from.
+func _ground_d(r: int, side: int, x: float, outer: float) -> float:
+	if side == 0:
+		return minf(x, maxf(_row_glr[r], outer))
+	var d: float
+	if _row_rail[r] > 0.0:
+		d = _row_barrier[r] - _tuning_dep() - (x - outer)
+	else:
+		d = _side_d(r, 1, outer) - (x - outer)
+	return _clamp_left(r, d)
+
+
+func _clamp_left(r: int, d: float) -> float:
+	return maxf(d, _row_gll[r])
+
+
+func _tuning_dep() -> float:
+	return tuning.guardrail_depth_m
 
 
 # ---------------------------------------------------------------- Ground colours and road tunnels
@@ -1097,6 +1227,9 @@ func _cliff_factor(def: CliffDef, s: float, side: int) -> float:
 	if side == 0:
 		for g in _cp_signs:
 			k *= smoothstep(def.sign_clear_m, def.sign_clear_m + def.ramp_m, absf(s - g))
+	for fi in _fork_lo.size():
+		var out := maxf(_fork_lo[fi] - s, s - _fork_hi[fi])
+		k *= smoothstep(0.0, def.ramp_m, out)
 	return k
 
 

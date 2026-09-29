@@ -43,6 +43,14 @@ extends Node3D
 ##     while in cockpit mode and restored when leaving it or changing targets.
 ## Reduced motion (Settings `reduced_motion`) zeroes shake, roll, head sway and the FOV
 ## punch.
+##
+## Journey finale (WP6.5, spec Cameras → Scripted cameras: "a 3-second wide swing onto
+## the ocean at the coast"): start_finale(side) blends the camera from its mode's pose
+## to a wide pose out to `side` of the car (CameraTuning.finale_swing_*), looking back at
+## the car against the sea and the sun, holds, and blends back over finale_swing_s. The
+## springs keep following underneath, so the mode's pose is exactly restored. The run
+## starts it only in a traffic-free breather while the car holds its lane; reduced
+## motion refuses it (the run still shows the toast).
 
 ## Runs after the player car's physics tick (default priority 0).
 const PHYSICS_PRIORITY := 100
@@ -106,6 +114,10 @@ var _head := DampedSpring.new()
 var _head_xform := Transform3D.IDENTITY
 ## The target whose body this rig hid (restored on leaving cockpit or changing target).
 var _body_hidden_on: Node3D
+
+# Journey finale swing: time into it (-1 = off) and the side it swings to.
+var _finale_t: float = -1.0
+var _finale_side: float = -1.0
 
 
 func _ready() -> void:
@@ -216,6 +228,47 @@ func fov_punch(amount_deg: float, duration_s: float) -> void:
 	_punch_t = 0.0
 
 
+## Starts the journey finale's wide swing to `side` (+1: out to the car's right, -1:
+## its left). False, and nothing happens, with reduced motion or without a target.
+func start_finale(side: float) -> bool:
+	if _reduced_motion or not _has_target():
+		return false
+	_finale_t = 0.0
+	_finale_side = -1.0 if side < 0.0 else 1.0
+	if is_cockpit():
+		# The cockpit rides this node: hide it and show the car for the swing.
+		if _cockpit != null:
+			_cockpit.visible = false
+		_restore_body()
+	return true
+
+
+## Ends the swing now (a retry, a crash).
+func stop_finale() -> void:
+	if _finale_t < 0.0:
+		return
+	_finale_t = -1.0
+	_apply_cockpit_view()
+
+
+func is_finale_active() -> bool:
+	return _finale_t >= 0.0
+
+
+## Seconds into the swing (-1 when off).
+func finale_time_s() -> float:
+	return _finale_t
+
+
+## How far the camera is into the wide pose (0 = the mode's, 1 = the wide one).
+func finale_weight() -> float:
+	if _finale_t < 0.0:
+		return 0.0
+	var u := clampf(_finale_t / maxf(tuning.finale_swing_s, 1e-3), 0.0, 1.0)   # lint: allow-number divide guard
+	var e := clampf(tuning.finale_swing_ease_frac, 1e-3, 0.5)   # lint: allow-number divide guard
+	return smoothstep(0.0, e, u) * (1.0 - smoothstep(1.0 - e, 1.0, u))
+
+
 ## Places everything at its goal with no spring lag (spawn, mode change, retry).
 func snap_to_target() -> void:
 	if not _has_target():
@@ -238,6 +291,10 @@ func advance(dt: float) -> void:
 	_time_s += dt
 	_shake_t += dt
 	_punch_t += dt
+	if _finale_t >= 0.0:
+		_finale_t += dt
+		if _finale_t >= tuning.finale_swing_s:
+			stop_finale()
 	_update(dt, false)
 
 
@@ -514,6 +571,30 @@ func _update(dt: float, snap: bool) -> void:
 			+ punch_deg() * tuning.mode_punch_scale[mi]
 	_cam.fov = _fov_out
 	_apply_shake()
+	if _finale_t >= 0.0:
+		_apply_finale()
+
+
+## Blends the mode's camera pose (this node and the Camera3D) toward the finale's wide
+## pose by finale_weight().
+func _apply_finale() -> void:
+	var w := finale_weight()
+	if w <= 0.0:
+		return
+	var tp := _target.global_transform
+	var car := tp.origin
+	var h := heading_of(tp.basis, _heading.value)
+	var fwd := Vector3(sin(h), 0.0, -cos(h))
+	var right := Vector3(cos(h), 0.0, sin(h))
+	var a := deg_to_rad(tuning.finale_swing_angle_deg)
+	var r := tuning.finale_swing_distance_m
+	var eye := car - fwd * (r * cos(a)) + right * (_finale_side * r * sin(a)) + Vector3.UP * tuning.finale_swing_height_m
+	var look := car + fwd * tuning.finale_swing_look_ahead_m + Vector3.UP * tuning.finale_swing_look_height_m
+	var wide := Basis.looking_at(look - eye, Vector3.UP)
+	var cur := global_transform * _cam.transform
+	var q := cur.basis.orthonormalized().get_rotation_quaternion().slerp(wide.get_rotation_quaternion(), w)
+	global_transform = Transform3D(Basis(q), cur.origin.lerp(eye, w))
+	_cam.transform = Transform3D.IDENTITY
 
 
 func _pose_follow(anchor: Vector3, fwd: Vector3, right: Vector3, psi: float) -> void:

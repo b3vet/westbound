@@ -16,7 +16,8 @@ extends Node3D
 ## director fills from the biome whose leg ends there, else `default_style`) AT the
 ## checkpoint line, and
 ## each SIGN feature tagged ProceduralRoadPath.SIGN_CHECKPOINT a roadside panel on the
-## right. SIGN features tagged SIGN_LANE_ENDS (400 m before a tunnel's lane drop, WP6.4a)
+## right (WP6.5: before a fork, tag2 SIGN_FORK_TAG2, it names both branches' biomes, and
+## the fork checkpoint's gantry over the split does too). SIGN features tagged SIGN_LANE_ENDS (400 m before a tunnel's lane drop, WP6.4a)
 ## get the same pooled, retro-reflective panel reading "LANE ENDS / MERGE LEFT" (WP6.4c). Everything is pooled: every kind is built once at warm-up (per road
 ## cross-section) and drawn by `landmarks_per_kind_count` MeshInstance3Ds, signs by
 ## `sign_pool_count`; nothing is created after setup. One surface per instance, so a
@@ -339,8 +340,12 @@ func _place_landmark(slot: Slot, f: RoadFeature) -> void:
 	slot.node.custom_aabb = AABB(Vector3(lo.x - r, lo.y + tpl.min_y, lo.z - r),
 		Vector3(hi.x - lo.x + 2.0 * r, hi.y - lo.y + tpl.max_y - tpl.min_y, hi.z - lo.z + 2.0 * r))
 	slot.node.transform = Transform3D(Basis.IDENTITY, _origin.to_local(slot.anchor_x, slot.anchor_y, slot.anchor_z))
-	var next_name := _biome_name_at(cp + SAME_S_M)
-	_set_lines(slot, LandmarkText.landmark(slot.kind, slot.leg, next_name, _next_checkpoint_distance(cp)))
+	var fork := _fork_feature(cp)
+	if fork != null:
+		_set_lines(slot, LandmarkText.fork_landmark(slot.kind, slot.leg, _biome_name(fork.tag), _biome_name(fork.tag2)))
+	else:
+		var next_name := _biome_name_at(cp + SAME_S_M)
+		_set_lines(slot, LandmarkText.landmark(slot.kind, slot.leg, next_name, _next_checkpoint_distance(cp)))
 	_show(slot)
 
 
@@ -359,8 +364,11 @@ func _place_sign(slot: Slot, f: RoadFeature) -> void:
 	slot.station_count = 0
 	slot.node.transform = Transform3D(Basis(Vector3.UP, _sample.godot_yaw(0.0)),
 		_origin.to_local(slot.anchor_x, slot.anchor_y, slot.anchor_z))
+	var fork := _fork_feature(cp) if f.tag2 == ProceduralRoadPath.SIGN_FORK_TAG2 else null
 	if lane_ends:
 		_set_lines(slot, LandmarkText.lane_ends_sign())
+	elif fork != null:
+		_set_lines(slot, LandmarkText.fork_sign(f.value, _biome_name(fork.tag), _biome_name(fork.tag2)))
 	else:
 		_set_lines(slot, LandmarkText.warning_sign(f.value, slot.leg + 1, _biome_name_at(cp + SAME_S_M)))
 	_show(slot)
@@ -395,6 +403,19 @@ func _next_checkpoint_distance(cp: float) -> float:
 		if f.kind == RoadFeature.Kind.CHECKPOINT:
 			return f.s_start - cp
 	return _leg_length_m
+
+
+## WP6.5: the FORK feature whose split is at `cp` (from the window's query), or null.
+func _fork_feature(cp: float) -> RoadFeature:
+	for f in _features:
+		if f.kind == RoadFeature.Kind.FORK and absf(f.value - cp) < SAME_S_M:
+			return f
+	return null
+
+
+static func _biome_name(id: StringName) -> String:
+	var b := BiomePlan.load_biome(id)
+	return b.display_name if b != null else ""
 
 
 func _biome_name_at(s: float) -> String:
@@ -455,7 +476,8 @@ func _bind(slot: Slot, tpl: LandmarkTemplate) -> void:
 ## The build of `kind` for the road's cross-section at `s` (the warm-up build unless
 ## the lane count differs there: then built once and cached).
 func _template_at(kind: StringName, s: float) -> LandmarkTemplate:
-	return _build_template(kind, LandmarkSection.at(_road, s))
+	# Just before the line: a fork's split starts the branches' layout at it (WP6.5).
+	return _build_template(kind, LandmarkSection.at(_road, s - RoadBuilder.SPLIT_PROBE_M))
 
 
 func _build_template(kind: StringName, section: LandmarkSection) -> LandmarkTemplate:

@@ -43,6 +43,9 @@ var missing_ids: Array[StringName] = []
 var _legs: Array[BiomeDef] = []
 var _endless: BiomeDef
 var _candidates: Array[BiomeDef] = []
+## Fork checkpoints (WP6.5): checkpoint k -> how far after its line the look blend
+## window starts (the split is the line; nothing blends before the player picks).
+var _blend_after_line := {}
 
 
 func _init(leg_len_m: float, legs: Array[BiomeDef], endless_def: BiomeDef) -> void:
@@ -71,6 +74,28 @@ static func from_tuning(legs: LegsTuning) -> BiomePlan:
 		missing.append(legs.endless_biome_id)
 		endless = prev
 	var plan := BiomePlan.new(legs.leg_length_m(), list, endless)
+	plan.missing_ids = missing
+	return plan
+
+
+## A journey from explicit leg ids (WP6.5 forks: ForkPlan.route / look_route), then
+## `endless_id`; missing files fall back like from_tuning.
+static func from_ids(ids: Array[StringName], endless_id: StringName, leg_len_m: float) -> BiomePlan:
+	var list: Array[BiomeDef] = []
+	var missing: Array[StringName] = []
+	var prev: BiomeDef = null
+	for id in ids:
+		var b := load_biome(id)
+		if b == null:
+			missing.append(id)
+			b = prev if prev != null else load_biome(DEFAULT_ID)
+		list.append(b)
+		prev = b
+	var endless := load_biome(endless_id)
+	if endless == null:
+		missing.append(endless_id)
+		endless = prev
+	var plan := BiomePlan.new(leg_len_m, list, endless)
 	plan.missing_ids = missing
 	return plan
 
@@ -176,6 +201,34 @@ func _note(biome: BiomeDef) -> void:
 	version += 1
 
 
+## WP6.5: the look blend around checkpoint k starts at its line (a fork's split) instead
+## of `before_m` ahead of it: the window becomes [line, line + before + after].
+func set_blend_from_line(k: int, on: bool = true) -> void:
+	if on:
+		_blend_after_line[k] = true
+	else:
+		_blend_after_line.erase(k)
+	version += 1
+
+
+## Replaces every leg's biome from `ids` (WP6.5: a fork resolved; legs past the list keep
+## the endless biome). Legs whose biome does not change are untouched.
+func set_leg_ids(ids: Array[StringName]) -> void:
+	var changed := false
+	for i in ids.size():
+		var b := load_biome(ids[i])
+		if b == null:
+			continue
+		while _legs.size() <= i:
+			_legs.append(_endless)
+		if _legs[i] != b:
+			_legs[i] = b
+			add_candidate(b)
+			changed = true
+	if changed:
+		version += 1
+
+
 # ---------------------------------------------------------------- Road rules (generator rate)
 
 ## BiomeDef.curve_frequency_scale of the leg at s (1 = the generator's defaults).
@@ -212,6 +265,8 @@ func blend_into(s: float, before_m: float, after_m: float, out: Blend) -> void:
 	if k < 1:
 		return
 	var line := float(k) * leg_length_m
+	if _blend_after_line.has(k):
+		line += before_m
 	var a := biome_for_leg(k)
 	var b := biome_for_leg(k + 1)
 	if a == b or s < line - before_m or s > line + after_m:

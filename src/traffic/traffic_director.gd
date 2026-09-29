@@ -141,6 +141,13 @@ var _forced_tries: int = 0
 var _closing_floor: float
 var _err_smooth: float = 0.0   ## the density error, low-passed (_step_density)
 
+# ---- WP6.5 hook (forks, journey finale): traffic-free ranges. See request_breather().
+## Spawns refused because they fell in a requested breather.
+var rejected_breather: int = 0
+var _breather_s0 := PackedFloat64Array()
+var _breather_s1 := PackedFloat64Array()
+# ---- end WP6.5 hook
+
 
 func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profiles: Array[DriverProfile],
 		types: Array[VehicleType], player_length_m: float, player_width_m: float) -> void:
@@ -618,9 +625,37 @@ func overlaps_ghost_zone(s: float, d: float, length_m: float, width_m: float, pl
 		and d + width_m * 0.5 > player.d - ghost_half_width_m and d - width_m * 0.5 < player.d + ghost_half_width_m
 
 
+# ---- WP6.5 hook (forks, journey finale) --------------------------------------------
+
+## No spawn commits with s in [s0, s1) until clear_breathers() (WP6.5: an unresolved
+## fork's approach and the journey finale ask for a traffic-free window; the run removes
+## any car that still drives into it). Director rate.
+func request_breather(s0: float, s1: float) -> void:
+	_breather_s0.append(s0)
+	_breather_s1.append(s1)
+
+
+func clear_breathers() -> void:
+	_breather_s0.clear()
+	_breather_s1.clear()
+
+
+## True when s lies in a requested breather. Allocation-free.
+func in_breather(s: float) -> bool:
+	for i in _breather_s0.size():
+		if s >= _breather_s0[i] and s < _breather_s1[i]:
+			return true
+	return false
+
+# ---- end WP6.5 hook ----------------------------------------------------------------
+
+
 ## Every spawn goes through here: cap, ghost zone, no pop-in, the live-traffic gap,
 ## then the sim. Allocation-free.
 func _commit(rec: SpawnSource.Record, player: VehicleState) -> bool:
+	if in_breather(rec.s):   # WP6.5 hook
+		rejected_breather += 1
+		return false
 	if state.count >= traffic_tuning.max_active_vehicles or state.is_full():
 		rejected_cap += 1
 		return false

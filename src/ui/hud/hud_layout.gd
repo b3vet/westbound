@@ -55,6 +55,9 @@ var objective_anchor: float = 0.0
 ## shows): the stack's width, and as tall as leg_toast_size_px (never into the middle
 ## third). It overlaps the stack by design, so it is not in rects().
 var toast: Rect2 = Rect2()
+## WP6.5: the JOURNEY COMPLETE banner: centred over the toast's slot, wider than it
+## (within the safe area). Like the toast, not in rects().
+var journey: Rect2 = Rect2()
 
 ## The touch controls this layout avoids (canvas rects, not grown).
 var pedals: Array[Rect2] = []
@@ -105,6 +108,8 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	stack = Rect2(Vector2(chain.position.x, chain.end.y + gap),
 			Vector2(row.x, hud.event_line_height_px * ts * float(hud.event_stack_lines)))
 	toast = Rect2(stack.position, Vector2(stack.size.x, hud.leg_toast_size_px.y * ts))
+	var jw := minf(hud.journey_toast_size_px.x * ts, safe.size.x - m * 2.0)
+	journey = Rect2(Vector2(cx - jw * 0.5, toast.position.y), Vector2(jw, hud.journey_toast_size_px.y * ts))
 
 	_place_cluster()
 	objective = _place_objective(chip)

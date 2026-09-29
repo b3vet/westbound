@@ -96,6 +96,7 @@ func test_checkpoints_hand_over_to_the_next_biome() -> void:
 func test_run_road_follows_the_plan() -> void:
 	var r := _make()
 	var leg := t.legs.leg_length_m()
+	r.road.hold_at_forks = false   # WP6.5: the whole planned road, past unresolved forks
 	r.road.ensure_generated_to(leg * 5.0)
 	var all: Array[RoadFeature] = []
 	r.road.features_in(0.0, leg * 5.0, all)

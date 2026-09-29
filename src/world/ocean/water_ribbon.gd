@@ -103,6 +103,8 @@ func _on_setup() -> void:
 	if biome_director != null:
 		lookup = biome_director.biome_at
 	plan = WaterPlan.new(props_seed, lookup, fallback_biome)
+	if biome_director != null:
+		plan.add_fork_spans(road, biome_director.biomes())   # WP6.5: no water across a fork
 
 
 func update_view(focus_s: float) -> void:

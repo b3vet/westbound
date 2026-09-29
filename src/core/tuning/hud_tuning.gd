@@ -148,6 +148,16 @@ extends Resource
 @export var leg_toast_out_s: float = 0.45
 ## Rows of bonuses the toast lists (they flow left to right, then wrap).
 @export var leg_toast_item_rows: int = 3
+## WP6.5: the JOURNEY COMPLETE banner (Events.journey_complete): centred over the leg
+## toast's slot, this big (canvas px at 100% text; never wider than the safe area),
+## shown for journey_toast_s with a fade and grow in and a fade out. The title is the
+## event font scaled up.
+@export var journey_toast_size_px: Vector2 = Vector2(560.0, 112.0)   # not in spec
+@export var journey_toast_s: float = 4.5   # not in spec: longer than a leg toast, still non-blocking
+@export var journey_toast_in_s: float = 0.35   # not in spec
+@export var journey_toast_out_s: float = 0.8   # not in spec
+@export var journey_toast_grow_from: float = 0.8   # not in spec: scale at the start of the fade in
+@export var journey_toast_title_scale: float = 1.7   # not in spec
 ## The leg objective chip, under the score panel (left-anchored, like the score).
 @export var objective_chip_size_px: Vector2 = Vector2(244.0, 50.0)
 ## WP5.6: the chip grows to fit its text and progress up to this width (canvas px at
