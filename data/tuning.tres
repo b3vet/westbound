@@ -22,6 +22,7 @@
 [ext_resource type="Resource" path="res://data/tuning/night.tres" id="20_night"]
 [ext_resource type="Resource" path="res://data/tuning/net.tres" id="21_net"]
 [ext_resource type="Resource" path="res://data/tuning/loop.tres" id="22_loop"]
+[ext_resource type="Resource" path="res://data/tuning/audio.tres" id="23_audio"]
 
 [resource]
 script = ExtResource("1_script")
@@ -46,3 +47,4 @@ landmarks = ExtResource("19_landmarks")
 night = ExtResource("20_night")
 net = ExtResource("21_net")
 loop = ExtResource("22_loop")
+audio = ExtResource("23_audio")
