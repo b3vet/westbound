@@ -35,6 +35,8 @@ var hellos: Array[Dictionary] = []
 var pings: int = 0
 var errors_sent: PackedStringArray = []
 var decode_errors: PackedStringArray = []
+## Every lobby_command after the handshake (the social client's presence_subscribe).
+var lobby_commands: Array[Dictionary] = []
 
 
 func _init(link: NetLoopbackLink) -> void:
@@ -108,6 +110,8 @@ func _handle(m: Dictionary) -> void:
 		_:
 			if not established:
 				_reject("handshake_required", "Hello must be the first message.")
+			elif m["type"] == "lobby_command":
+				lobby_commands.append(m)
 
 
 func _pong(echo: int) -> Dictionary:

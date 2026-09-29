@@ -250,3 +250,33 @@ tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --server=http://127.0
 ### Tests
 
 `tests/ui/test_leaderboards_screen.gd`: opened from the pause menu by an iOS-id tap (built on first use, the menu steps aside, BACK and Esc bring it back, nothing drawn in gameplay, a new pause starts at the menu); no session: no buttons, ONLINE IS OFF; every tab, period, view and Daily day asking for the right URL; the own row pinned in the top 100 and highlighted and centred in around me; signed out: around me asks to sign in, global still reads; a small row pool scrolled by a touch drag and the wheel, rows not redrawn when unchanged; pull to refresh forcing a read; loading, empty (three kinds), crew friends, offline + RETRY, offline over a cached page; report cheating / name and block (with its confirm) from a row, not on your own row, the daily report limit; the results' placements arriving after the results opened (SUBMITTING... first, then the ranks, the chips and the slide-in), OFFLINE — WILL SUBMIT then UPDATE REQUIRED, none for Loop practice, and LEADERBOARDS from the results; text fit at both text sizes, both hands and the notched 1560×720 canvas (the top 100 with the longest name and markers, the row actions, around me pulled, a Daily date, offline, the results with every chip and with UPDATE REQUIRED).
+
+## Social (N9.2)
+
+Pause → SETTINGS → ACCOUNT → **FRIENDS** / **CREW**. The social screens sit inside the ACCOUNT panel as a tab row (ACCOUNT / FRIENDS / CREW, shown whenever a session exists) instead of a new pause-menu button, so the pause column (where N7.2 adds LEADERBOARDS) is untouched and `pause_screen.gd` has no N9.2 edit. The title stays ACCOUNT; the selected tab names the view. The tab row's right end holds PREV / NEXT and the page ("1/2") for the list below. Implementation and data flow: docs/NET_CLIENT.md → Social client.
+
+| File | Class | What it is |
+| --- | --- | --- |
+| `src/ui/screens/friends_panel.gd` | `FriendsPanel` | The friends list (requests, friends by presence, your requests; or the blocked list), ADD FRIEND, your code with COPY CODE, and a player's sheet |
+| `src/ui/screens/crew_panel.gd` | `CrewPanel` | CREATE A CREW / JOIN A CREW, or the crew card, invite code, LEAVE / DISBAND, members and a member's sheet |
+| `src/ui/screens/report_dialog.gd` | `ReportDialog` | The reusable report dialog (friends, crew, N7.2's boards, N5's room menu) |
+| `src/ui/screens/social_row.gd` | `SocialRow` | A list row: presence dot, `name` `#tag` `[CREW]`, a status line, up to two buttons |
+| `src/ui/screens/social_actions.gd` | `SocialActions` | An action sheet with confirm steps (the question in hot text, CONFIRM / CANCEL) |
+| `src/ui/screens/social_field.gd` | `SocialField` | Text field: on-screen keyboards (the web prompt), key muting |
+| `src/ui/screens/social_ui.gd` | `SocialUi` | Name fitting, button widths, field look, web clipboard / share / prompt |
+| `src/ui/screens/dev/social_preview.tscn` | | Snap scene |
+
+**Friends.** Left (58 %): `FRIENDS n/100 · k ONLINE`, then rows of touch-target height: requests waiting for you (WANTS TO BE FRIENDS, ACCEPT, MORE), friends in a room (gold dot, IN A ROOM, JOIN when the room has space), online (accent dot), offline (muted dot), then your requests (REQUEST SENT, CANCEL). JOIN is the N5 seam: disabled with SOON until `NetSocialClient.join_handler` is set. Right: ADD FRIEND (the code field + SEND; the answer in the note line, e.g. "No player with that code." whether unknown or blocked), YOUR FRIEND CODE with COPY CODE, and BLOCKED n (the blocked list with UNBLOCK; FRIENDS switches back). MORE opens the player's sheet in the right column: REMOVE FRIEND (or DECLINE for a request), BLOCK (both confirmed: "Remove X from your friends?", "Block X? They can't add or invite you."), REPORT, BACK. The FRIENDS tab's second line counts waiting requests ("1 NEW").
+
+**Crew.** Without one: CREATE A CREW (name, tag, CREATE; the filter's and the rules' answers in the hint line) and JOIN A CREW (invite code, JOIN). In one: the card (`[TAG] Name`, `n/16 MEMBERS · YOU: ROLE`, `SEASON 2026-09: #3 · 183,200` or NOT ON THE BOARD YET), INVITE CODE with COPY, SHARE (only where the browser has a share sheet) and NEW CODE (owner, officers), then LEAVE CREW and DISBAND (owner), each confirmed. Right: MEMBERS n/16, owner first, `OWNER · YOU` on your row; MORE on another member opens their sheet over the left column with only what your role may do (`NetCrew.allowed_actions`: MAKE OFFICER / MAKE MEMBER / MAKE OWNER / KICK, each confirmed) plus REPORT and BACK.
+
+**Report.** A faceted card over the tab's area: REPORT PLAYER, `name#tag`, the note line; the six reasons as option buttons (CHEATING, OFFENSIVE NAME, OFFENSIVE CREW, HARASSMENT, GRIEFING, OTHER); SEND REPORT → "Report for harassment?" with REPORT / BACK → "Report sent. Thank you." with DONE. A 429 shows "Report limit reached. Try again in 24 h." and keeps SEND off until the wait ends (also when reopened). Other screens: `add_child(dialog)`, `setup(style, tuning)`, `layout(area)`, `open_for(client, account_id, full_name, context)`, and hide their own content while it shows (`visibility_changed`).
+
+**Rules.** Every button and field is at least `touch_target_px` (88) tall; names that don't fit are shortened with "..." (never a question or an error: confirm questions shorten the name inside them). Everything is under the pause screen, so nothing draws during gameplay (`RunScreens.visible_item_count() == 0`). While a field has focus the run's `PlayerInput` stops reading keys. Text fields on a touch-screen web page open the browser's prompt (see docs/NET_CLIENT.md → On-screen keyboards).
+
+```
+tools/snap.sh src/ui/screens/dev/social_preview.tscn --renderer=both --sweep=social:friends,sheet,confirm,error,blocked,crew,member,crew_confirm,crew_none,crew_error,report,report_confirm,report_sent,report_limited
+tools/snap.sh src/ui/screens/dev/social_preview.tscn --size=2496x1320 --text_scale=1.25 --social=crew
+```
+
+**Tests:** `tests/ui/test_social_screens.gd` (tabs, rows and presence, the JOIN seam, add / accept / cancel with errors inline, remove / block confirms, the blocked list, paging, offline, report flow and rate limit, crew create / join errors, the role UI per role, crew confirms, copy, the web prompt, key muting, the pause-menu path and zero draw items when hidden) and `tests/ui/test_social_text_fit.gd` (every state with 16-W names and 24-W crew names, every note text shown whole, touch targets and safe area, both text sizes, both hands, 1280x720 and a notched 1560x720).

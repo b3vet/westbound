@@ -1,10 +1,11 @@
 class_name NetTuning
 extends Resource
 ## Client networking numbers: server URL, accounts API (N1.2), session, keepalive,
-## clock sync, WebSocket buffers. Spec: multiplayer handoff → Networking protocol
-## (Connection, Clock sync), Accounts and authentication, Tuning reference;
-## docs/PROTOCOL.md §1; docs/SERVER.md → Accounts API. Saved as data/tuning/net.tres.
-## WP N2.2, N1.2, N7.2 (runs and leaderboards).
+## clock sync, WebSocket buffers, runs and boards (N7.2), the social client (N9.2). Spec:
+## multiplayer handoff → Networking protocol (Connection, Clock sync), Accounts and
+## authentication, Tuning reference; docs/PROTOCOL.md §1; docs/SERVER.md → Accounts API.
+## Saved as data/tuning/net.tres.
+## WP N2.2, N1.2, N7.2 (runs and leaderboards), N9.2 (social).
 ## Until the orchestrator adds `Tuning.net`, load it with NetTuning.load_default().
 ##
 ## Protocol constants (frame cap, message cap, protocol version) are not tuning: they live
@@ -95,6 +96,27 @@ const PATH := "res://data/tuning/net.tres"
 ## The results screen's online line: slides and fades in over this long when the
 ## server's placements arrive.
 @export var boards_reveal_s: float = 0.3   # not in spec
+
+@export_group("Social")
+## Friends screen open without a live lobby WebSocket: GET /presence this often (WP N9.2).
+@export var social_presence_poll_s: float = 15.0   # not in spec
+## The friend code field: a name (16) + "#" + four digits.
+@export var friend_code_max_chars: int = 21
+## Crew names and tags (docs/SERVER.md → Social API → Crews: 3–24 and 2–4 characters).
+@export var crew_name_min_chars: int = 3
+@export var crew_name_max_chars: int = 24
+@export var crew_tag_min_chars: int = 2
+@export var crew_tag_max_chars: int = 4
+## Invite codes: the server's `social.crew_invite_code_len` range (6–16; default 8).
+@export var crew_code_min_chars: int = 6
+@export var crew_code_max_chars: int = 16
+## The Loop crew board's "around me" window for the crew screen's season standing.
+@export var crew_board_around: int = 1   # not in spec
+## How long a "Copied." note stays on the crew screen.
+@export var social_note_s: float = 3.0   # not in spec
+## Web on a touch screen: a tap on a text field opens the browser's text prompt (iOS
+## Safari does not open its keyboard for Godot's field). Off: the field as on desktop.
+@export var web_text_prompt: bool = true   # not in spec
 
 @export_group("Keepalive")
 ## Ping cadence until `Welcome` arrives; afterwards `Welcome.ping_interval_ms` wins when set.
