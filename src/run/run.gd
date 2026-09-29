@@ -49,16 +49,6 @@ const SNAP_SEED := 20260929
 ## After the physics car (tick) and before the camera rig (100).
 const PHYSICS_PRIORITY := 50
 
-# ---- pending tuning (not in any tuning file yet; see docs/RUN.md and the handoff) ----
-## Rolling start: lane and speed at the start line (car_drive's values).
-const START_LANE := 1
-const START_SPEED_KMH := 120.0   # lint: allow-number pending tuning (hud/legs)
-## Traffic headlights on while the color script's headlight ramp is above this.
-const HEADLIGHTS_ON_RAMP := 0.3   # lint: allow-number pending tuning (sun)
-## Crash: traffic within this distance (along s) of the player brakes (hit reaction).
-const CRASH_BRAKE_RADIUS_M := 80.0   # lint: allow-number pending tuning (lives)
-# ----
-
 ## The first run's seed; 0 = a random seed at boot (Journey). Retries derive theirs
 ## from it and the run counter (Rng.derive_seed), so a test that sets it replays.
 @export var run_seed: int = 0
@@ -589,12 +579,14 @@ func _start_crash_sequence() -> bool:
 
 
 ## Surrounding traffic brakes (TrafficSim.notify_hit: hard brake, hazards, a small
-## swerve away from the player). Crash only; allocation-free.
+## swerve away from the player) within lives.crash_brake_radius_m. Crash only;
+## allocation-free.
 func _brake_surrounding_traffic() -> void:
 	var ts := sim.state
 	var ps := car.state.s
+	var radius := tuning.lives.crash_brake_radius_m
 	for i in ts.capacity:
-		if ts.active[i] != 0 and absf(ts.s[i] - ps) <= CRASH_BRAKE_RADIUS_M:
+		if ts.active[i] != 0 and absf(ts.s[i] - ps) <= radius:
 			sim.notify_hit(i)
 
 
@@ -739,7 +731,7 @@ func _start_run() -> void:
 	_pending_first_hit_fx = false
 	_pending_crash_fx = false
 	_crash_by_sequence = false
-	_place_car(car_def, start_s, Units.kmh_to_mps(START_SPEED_KMH))
+	_place_car(car_def, start_s, tuning.legs.start_speed_mps())
 	legs.plan_ahead(road, _plan_ahead_to(start_s))
 	_director_leg = leg_override if leg_override > 0 else legs.leg_index
 	director.set_leg(_director_leg, start_s)
@@ -819,7 +811,7 @@ func _place_car(car_def: CarDef, s: float, v_mps: float) -> void:
 	if drive_controller == null:
 		drive_controller = PlayerController.new(hub)
 	car.controller = drive_controller
-	car.place_at(s, road.lane_center_d(START_LANE, s), v_mps)
+	car.place_at(s, road.lane_center_d(tuning.legs.start_lane, s), v_mps)
 	car.visual.visible = true
 	sim.set_player_body(car_def.length_m, car_def.width_m)
 	scoring.set_player_body(car_def.length_m, car_def.width_m)
@@ -872,16 +864,18 @@ func _install_screens() -> void:
 	screens.countdown_hold.connect(hold_countdown)
 
 
-## Headlights by sky_t, the same ramp the sky shows (ColorScript.emissive_headlight),
-## sampled once so the tick only indexes a table (deterministic, allocation-free).
+## Headlights by sky_t, the same ramp the sky shows (ColorScript.emissive_headlight,
+## on above sun.traffic_headlights_on_ramp), sampled once so the tick only indexes a
+## table (deterministic, allocation-free).
 func _build_headlight_lut() -> void:
 	_headlight_lut.resize(HEADLIGHT_LUT_SIZE)
 	var cs := sky.color_script if sky.color_script != null else ColorScript.load_default()
 	var key := ColorKey.new()
+	var on_above := tuning.sun.traffic_headlights_on_ramp
 	for i in HEADLIGHT_LUT_SIZE:
 		cs.sample_into((float(i) + 0.5) / float(HEADLIGHT_LUT_SIZE), key)
 		var ramp := key.emissive_headlight
-		_headlight_lut[i] = 1 if is_finite(ramp) and ramp > HEADLIGHTS_ON_RAMP else 0
+		_headlight_lut[i] = 1 if is_finite(ramp) and ramp > on_above else 0
 
 
 func _view_ahead(s: float) -> float:
@@ -918,10 +912,22 @@ func _plan_ahead_to(s: float) -> float:
 	return _view_ahead(s) + tuning.legs.leg_length_m()
 
 
+## The director's "no visible pop-in" test for behind spawns: is the road point (s, d)
+## inside the gameplay camera's view? It uses the camera's simulated pose (its
+## global_transform as the last physics tick left it) and its projection. Not
+## Camera3D.is_position_in_frustum(): outside a physics frame (manual ticks, tools) that
+## reads the render-interpolated pose, which depends on when the engine last drew a
+## frame, and made traffic (so the run) differ between identical runs (WP4.5 soak).
+## Inside a physics frame (the game) both give the same answer. Allocation-free.
 func _in_frustum(s: float, d: float) -> bool:
 	road.sample_into(s, _frustum_smp)
 	var p := _frustum_smp.local_point(d, origin.origin_x, origin.origin_y, origin.origin_z)
-	return rig.camera().is_position_in_frustum(p)
+	var cam := rig.camera()
+	var v := cam.global_transform.orthonormalized().affine_inverse() * p
+	if -v.z < cam.near or -v.z > cam.far:
+		return false
+	var clip := cam.get_camera_projection() * Vector4(v.x, v.y, v.z, 1.0)
+	return clip.w > 0.0 and absf(clip.x) <= clip.w and absf(clip.y) <= clip.w
 
 
 # ---------------------------------------------------------------- Determinism
@@ -951,12 +957,12 @@ func dev_reset_car() -> void:
 	hits.reset(car.state, sim.state)
 
 
-## Moves the car to `s` (lane START_LANE) at `v_mps` and respawns traffic around it
+## Moves the car to `s` (lane legs.start_lane) at `v_mps` and respawns traffic around it
 ## (snaps, tests, dev). The leg keeps counting from its start.
 func dev_teleport(s: float, v_mps: float) -> void:
 	road.ensure_generated_to(_view_ahead(s))
 	legs.plan_ahead(road, _plan_ahead_to(s))
-	car.place_at(s, road.lane_center_d(START_LANE, s), v_mps)
+	car.place_at(s, road.lane_center_d(tuning.legs.start_lane, s), v_mps)
 	var smp := road.sample(s)
 	origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
 	builder.build_all_now(s)
@@ -1000,7 +1006,7 @@ func snap_setup(args: Dictionary) -> void:
 	_start_run()
 	var s := float(args.get("s", 0.0))
 	if s > 0.0 or args.has("speed_kmh"):
-		dev_teleport(s, Units.kmh_to_mps(float(args.get("speed_kmh", START_SPEED_KMH))))
+		dev_teleport(s, Units.kmh_to_mps(float(args.get("speed_kmh", tuning.legs.start_speed_kmh))))
 	if args.has("sky_t"):
 		sun.sky_t = float(args["sky_t"])
 		var sun_t := tuning.sun
