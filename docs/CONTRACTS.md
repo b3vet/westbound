@@ -371,10 +371,20 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
     - Moved nodes call `reset_physics_interpolation()`.
 - **World system nodes** (road builder, roadside, sky, and so on) expose `setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void` and `update_view(focus_s: float) -> void`. The run calls `update_view` once per frame with the player's `s`.
 
+## 14. Run, HUD and screens (Phase 4)
+
+- **Run node:** `Run` (`src/run/run.gd` / `run.tscn`, WP4.1) owns one run: the world stack, the player car, traffic, the pure sims and their event buffers. It follows the §4 per-tick order and drains every buffer through `RunEvents` (`src/run/run_events.gd`), the Node adapter of §7, once per frame. `Game` state changes (COUNTDOWN → RUNNING → CRASH → RESULTS → COUNTDOWN on retry) are made only by the run.
+- **HUD feed:** `HudFeed` (`src/ui/hud_feed.gd`) holds the per-frame values with no event (speed, sun bar, checkpoint distance) plus snapshots of the evented ones. The run owns one, fills it in `_process`, and hands it to the HUD with `hud.bind(feed)`. The HUD reads the feed and listens to `Events`. It never writes gameplay state.
+- **HUD node:** `Hud` (`src/ui/hud/hud.gd` / `hud.tscn`, WP4.3) is a `CanvasLayer` with `bind(feed: HudFeed)`, and signals `pause_pressed()` and `camera_pressed()` that the run connects. It respects safe areas and stays clear of the controls overlay's pedal columns.
+- **Theme:** `src/ui/theme/theme.tres` (the spec's `ui/theme.tres`), with Chakra Petch under `assets/fonts/` (OFL, logged). Screens and the HUD use it. Colors live in the theme, and the accent follows `SkyRig.get_accent()`.
+- **Screens** (WP4.4) are `Control` scenes under `src/ui/screens/`. They emit intent signals (`resume`, `recalibrate`, `retry`, `quit`, `skip`) and the run acts on them.
+- **Crash** (WP4.2): `CrashSequence` (`src/run/crash_sequence.gd`) is a Node. `start(...)` hands the player and the hit car to pooled Jolt `RigidBody3D`s, requests slow motion, and drives an orbit camera. It emits `finished` when done or skipped (`skip()`). Its bodies return to the pool on `reset()`.
+
 ## Change log
 
 | Date | Change | Decision |
 | --- | --- | --- |
+| 2026-09-29 | §14 Run, HudFeed, Hud, theme path, screens, CrashSequence (Phase 4) | Orchestrator, pre-Phase 4 |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |
 | 2026-09-28 | §13 additive-effect parity rule, engine quirks, traffic model convention, Tuning.traffic_view (WP3.1) | Orchestrator merge review |
 | 2026-09-28 | §7 lives and leg-tracker kinds; SunClock, LegTracker, HitDetection, Lives per docs/CORE_LOOP.md (WP3.5) | Orchestrator merge review |
