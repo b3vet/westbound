@@ -290,3 +290,60 @@ func test_schedule_lane_count_in_any_order() -> void:
 	r.forget_before(8000.0)
 	expect_errors(1)
 	check(not r.schedule_lane_count(100.0, 2), "behind the retained road")
+
+
+# ---------------------------------------------------------------- Sun side (WP6.4c)
+
+## Coast legs keep the sun right of the axis (plan sun side -1), so it sinks into the
+## sea on the ocean's side (WaterDef.side +1), for every seed: the road switches sides
+## before leg 9 when it has to, stays in the 15-30 deg band all through the coast, and
+## the first legs still pick their side at random.
+func test_coast_legs_keep_the_sun_over_the_sea() -> void:
+	var plan := BiomePlan.from_tuning(_t.legs)
+	var coast_leg := _t.legs.legs_to_coast + 1
+	var coast := plan.biome_for_leg(coast_leg)
+	check(coast.water != null and coast.water.drop_m > 0.0, "the coast has a sea below the road")
+	eq(coast.water.road_sun_side(), -coast.water.side, "the sun on the sea's side")
+	eq(coast.water.road_sun_side(), -1, "sea on the right: the sun right of the axis")
+	var lo := deg_to_rad(_rt.sun_offset_min_deg) - 1e-9
+	var hi := deg_to_rad(_rt.sun_offset_max_deg) + 1e-9
+	var s0 := plan.leg_start_s(coast_leg)
+	var s1 := plan.leg_start_s(coast_leg + 4)
+	var start_sides := {}
+	for k in 24:
+		var r := _road(SEED + 31 * k, BiomePlan.from_tuning(_t.legs))
+		r.ensure_generated_to(s1)
+		start_sides[signf(r.heading_at(0.0))] = true
+		var s := s0
+		var bad := 0
+		while s <= s1:
+			var h := r.heading_at(s)
+			# Heading < 0 (left of due west): the sun on the right.
+			if not (h < 0.0 and -h >= lo and -h <= hi):
+				bad += 1
+			s += 10.0
+		eq(bad, 0, "seed %d: the coast legs hold the sun on the right, 15-30 deg off" % (SEED + 31 * k))
+	eq(start_sides.size(), 2, "leg 1 still picks either side")
+
+
+func test_sun_side_rule_is_deterministic_and_neutral_elsewhere() -> void:
+	var a := _road(SEED + 5, BiomePlan.from_tuning(_t.legs))
+	var b := _road(SEED + 5, BiomePlan.from_tuning(_t.legs))
+	var end := _leg * 12.0
+	a.ensure_generated_to(end)
+	# Generated in other steps: the same road.
+	var s := 0.0
+	while s < end:
+		s += 1733.0
+		b.ensure_generated_to(s)
+	eq(_trace(a, end), _trace(b, end), "same seed and plan: same road")
+	# A plan whose one biome requires a side starts on it (the preview's uniform coast).
+	var coast := BiomePlan.load_biome(_t.legs.endless_biome_id)
+	for k in 8:
+		var r := _road(SEED + k, BiomePlan.uniform(coast, _leg))
+		r.ensure_generated_to(_leg * 4.0)
+		lt(r.heading_at(0.0), 0.0, "seed %d: a coast-only road starts with the sun on the right" % (SEED + k))
+		lt(r.heading_at(_leg * 3.5), 0.0, "and keeps it")
+	# Rivers leave the side free.
+	var valley := BiomePlan.load_biome(&"valley_fog")
+	eq(valley.water.road_sun_side(), 0, "a river requires no side")

@@ -146,6 +146,19 @@ func biome_at(s: float) -> BiomeDef:
 	return fallback_biome
 
 
+## How far behind the focus this feature (and the road mesher hook it feeds) samples
+## the road, over every biome the run may show: the caller keeps the road generated
+## from focus - reach_behind_m() (the run's forget distance). Director rate.
+func reach_behind_m() -> float:
+	var m := 0.0
+	if biome_director != null:
+		for b in biome_director.biomes():
+			m = maxf(m, _reach_behind_for(b))
+	elif fallback_biome != null:
+		m = _reach_behind_for(fallback_biome)
+	return maxf(road_tuning.roadside_behind_m, road_tuning.chunk_keep_behind_m) + m
+
+
 ## One draw call while the mesh has geometry.
 func draw_calls() -> int:
 	return 1 if _mesh_instance != null and _mesh_instance.visible and _triangles > 0 else 0
@@ -197,6 +210,12 @@ func last_step_m() -> float:
 
 func _on_setup() -> void:
 	pass
+
+
+## Road reach behind a window's start for biome `b`'s data: its window step plus how far
+## back its build samples (0 when `b` has none of this feature).
+func _reach_behind_for(_b: BiomeDef) -> float:
+	return 0.0
 
 
 ## Starts a build of [s_lo, s_hi]; returns how many units `_emit` will be called for.

@@ -16,7 +16,8 @@ extends Node3D
 ## director fills from the biome whose leg ends there, else `default_style`) AT the
 ## checkpoint line, and
 ## each SIGN feature tagged ProceduralRoadPath.SIGN_CHECKPOINT a roadside panel on the
-## right. Everything is pooled: every kind is built once at warm-up (per road
+## right. SIGN features tagged SIGN_LANE_ENDS (400 m before a tunnel's lane drop, WP6.4a)
+## get the same pooled, retro-reflective panel reading "LANE ENDS / MERGE LEFT" (WP6.4c). Everything is pooled: every kind is built once at warm-up (per road
 ## cross-section) and drawn by `landmarks_per_kind_count` MeshInstance3Ds, signs by
 ## `sign_pool_count`; nothing is created after setup. One surface per instance, so a
 ## landmark and two signs in view cost 3 draw calls.
@@ -259,7 +260,7 @@ func _update_window(focus_s: float) -> void:
 				dropped += 1
 				continue
 			_place_landmark(slot, f)
-		elif f.kind == RoadFeature.Kind.SIGN and f.tag == ProceduralRoadPath.SIGN_CHECKPOINT:
+		elif f.kind == RoadFeature.Kind.SIGN and Landmarks.is_panel_sign(f):
 			var s := f.s_start
 			if s > hi or s < lo or find_live(KIND_SIGN, s) != null:
 				continue
@@ -269,6 +270,13 @@ func _update_window(focus_s: float) -> void:
 				continue
 			_place_sign(slot, f)
 	atlas.commit()
+
+
+## True for the SIGN features drawn as roadside panels: checkpoint warnings and lane
+## ends (LandmarkClearance keeps their zones clear the same way).
+static func is_panel_sign(f: RoadFeature) -> bool:
+	return f.kind == RoadFeature.Kind.SIGN \
+		and (f.tag == ProceduralRoadPath.SIGN_CHECKPOINT or f.tag == ProceduralRoadPath.SIGN_LANE_ENDS)
 
 
 func _first_sampleable_s() -> float:
@@ -341,7 +349,8 @@ func _place_sign(slot: Slot, f: RoadFeature) -> void:
 	slot.s = s
 	slot.distance_m = f.value
 	var cp := s + f.value
-	slot.leg = _leg_at_checkpoint(cp)
+	var lane_ends := f.tag == ProceduralRoadPath.SIGN_LANE_ENDS
+	slot.leg = 0 if lane_ends else _leg_at_checkpoint(cp)
 	_road.sample_into(s, _sample)
 	slot.d = _road.guardrail_d(s) + tuning.sign_setback_m
 	slot.anchor_x = _sample.pos_x + _sample.right.x * slot.d
@@ -350,7 +359,10 @@ func _place_sign(slot: Slot, f: RoadFeature) -> void:
 	slot.station_count = 0
 	slot.node.transform = Transform3D(Basis(Vector3.UP, _sample.godot_yaw(0.0)),
 		_origin.to_local(slot.anchor_x, slot.anchor_y, slot.anchor_z))
-	_set_lines(slot, LandmarkText.warning_sign(f.value, slot.leg + 1, _biome_name_at(cp + SAME_S_M)))
+	if lane_ends:
+		_set_lines(slot, LandmarkText.lane_ends_sign())
+	else:
+		_set_lines(slot, LandmarkText.warning_sign(f.value, slot.leg + 1, _biome_name_at(cp + SAME_S_M)))
 	_show(slot)
 
 

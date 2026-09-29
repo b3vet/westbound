@@ -60,6 +60,15 @@ func def_at(s: float) -> FogCardsDef:
 	return b.fog_cards if b != null else null
 
 
+## Banks reach a cell and length_factor_max cells back; their valley factor probes
+## valley_probe_m further.
+func _reach_behind_for(b: BiomeDef) -> float:
+	var d := b.fog_cards
+	if d == null:
+		return 0.0
+	return d.rebuild_step_m + d.cell_length_m * (d.length_factor_max + 1.0) + d.valley_probe_m
+
+
 func update_view(focus_s: float) -> void:
 	if road == null:
 		return
@@ -93,8 +102,16 @@ func valley_factor(s: float, def: FogCardsDef) -> float:
 	return lerpf(def.ridge_factor, 1.0, t)
 
 
+## Road elevation at s. The road is generated to s first (director rate; the table does
+## not depend on how far it goes), so a bank's opacity never depends on how far the
+## road happened to be generated; behind, the run keeps the road to reach_behind_m().
 func _elev(s: float) -> float:
-	road.sample_into(minf(s, road.length_generated()), _smp)
+	if s > road.length_generated():
+		road.ensure_generated_to(s)
+	var s_min := 0.0
+	if road is ProceduralRoadPath:
+		s_min = (road as ProceduralRoadPath).first_retained_s()
+	road.sample_into(clampf(s, s_min, road.length_generated()), _smp)
 	return _smp.pos_y
 
 

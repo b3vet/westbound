@@ -116,7 +116,8 @@ Spec: "World, road and visual direction" (Road: roadside rhythm; Color script: b
 | `src/road/biome_def.gd` (block `WP6.4b`) | `BiomeDef` | `water`, `elevated`, `fog_cards`, `horizon_def` (all optional) |
 | `src/world/biome_features/biome_feature.gd` | `BiomeFeature` | Base of the three feature nodes: windows in steps, background build of the next window, floating origin |
 | `src/world/biome_features/feature_mesh.gd` | `FeatureMesh` | Vertex arrays of one build |
-| `src/world/biome_features/ground_drop_mesher.gd` | `GroundDropMesher` | `RoadChunkMesher` with the ground ribbon lowered (the RoadBuilder hook) |
+| `src/world/biome_features/ground_drop_mesher.gd` | `GroundDropMesher` | `RoadChunkMesher` with the ground ribbon lowered (`RoadBuilder.set_ground_drop`, WP6.4c) |
+| `src/world/biome_features/biome_features.gd` | `BiomeFeatures` | WP6.4c: the run's three features and their hooks (below, "Wiring") |
 | `src/world/ocean/water_def.gd`, `water_plan.gd`, `water_ribbon.gd` | `WaterDef`, `WaterPlan`, `WaterRibbon` | Ocean / river data, shoreline plan, the node |
 | `src/world/elevated/elevated_def.gd`, `elevated_plan.gd`, `elevated_sections.gd` | `ElevatedDef`, `ElevatedPlan`, `ElevatedSections` | Elevated stretches data, plan (`drop_at`), the node |
 | `src/world/fog_cards/fog_cards_def.gd`, `fog_cards.gd` | `FogCardsDef`, `FogCards` | Low fog data, the node |
@@ -124,7 +125,7 @@ Spec: "World, road and visual direction" (Road: roadside rhythm; Color script: b
 | `assets/shaders/water.gdshader` (+ `materials/water.tres`) | | Faceted animated water, sky/sun reflection, sea-side land |
 | `assets/shaders/fog_card.gdshader` (+ `materials/fog_card.tres`) | | Alpha-blended mist cards |
 | `assets/shaders/world_windows.gdshader` (+ `materials/world_windows.tres`) | | `world.gdshader` plus lit windows (emissive class 4) |
-| `assets/shaders/horizon_biomes.gdshader` | | `horizon.gdshader` superset: islands, headlands, sea masks, mist, lit windows |
+| `assets/shaders/horizon.gdshader` | | The one horizon shader: since WP6.4c it also holds islands, headlands, sea masks, mist and lit windows (WP6.4b's `horizon_biomes.gdshader`, folded in) |
 | `tests/unit/test_biome_coast_city_valley.gd`, `tests/world/test_{ocean,elevated,fog_cards}.gd` | | Data, budgets, clear zone, plans, meshes, determinism, frame cost |
 | `tools/props/build_props_4_6.gd`, `biome_prop_builder.gd`, `palette_biomes_4_6.tres` | `BiomePropBuilder` | Prop generator, builder extras, the biome colors |
 | `assets/props/{coast,city,valley}/*.res` | | Generated props |
@@ -166,8 +167,8 @@ feature.update_view(player_s)         # once per frame
 - **Sea slope** (`drop_m` > 0, the coast): a road-level strip (`shore_offset_m`), then the land falls over `slope_run_m` in a craggy slope to the sea level (the road's elevation smoothed over ±`level_smoothing_m`, minus `drop_m`, at least `min_drop_m` below the road), then the beach, surf and sea, flat. A low chase camera sees water at road level only as a thin band at the horizon; below the road the ocean fills its side of the view.
 - **Islets:** sea stacks and a lighthouse islet (`islet_*` fields) are copied into the water mesh at the sea level: no extra draw call. Their lantern glows (the water shader takes the emissive class from UV2.x on land vertices).
 - **Shader:** every vertex bobs on its own phase; fragments take their triangle's flat normal from screen-space derivatives, light it with the shared sun, and reflect the shared sky (`wb_sky_color`) and two sun lobes (sparkles and the path) by Fresnel. `set_time()` fixes the wave clock (snaps, parity). A depth pull (`depth_pull_frac`) keeps the water above the ground ribbon at range.
-- **Horizon:** `water.horizon_material = <the sky's Horizon material>` feeds `sea_dir` (toward the sea, from the road heading 300 m ahead) to `horizon_biomes.gdshader`, so headlands stay on the land side and islands on the sea side.
-- **Side:** the coast's ocean is on the **right** (the player's carriageway: from the left the opposite carriageway hides it) and must be on the **sun's** side, so the sun sinks into the sea. The road plan picks the sun side at random per seed and keeps it 15–40 km, so the road generator must keep the sun right of the axis through coast legs (needs below). The preview picks such a seed.
+- **Horizon:** `water.horizon_material = SkyRig.horizon_material()` feeds `sea_dir` (toward the sea, from the road heading 300 m ahead) to `horizon.gdshader`, so headlands stay on the land side and islands on the sea side.
+- **Side:** the coast's ocean is on the **right** (the player's carriageway: from the left the opposite carriageway hides it) and must be on the **sun's** side, so the sun sinks into the sea. The road generator keeps it there (WP6.4c, "Sun side at the coast" below).
 - `ground_drop_at(s, side)`: how far the ground ribbon must go down on that side (below the sea), for the mesher hook.
 
 #### ElevatedSections (city)
@@ -180,7 +181,7 @@ Per (cell, side), a bank of `layer_count` horizontal translucent cards stacked a
 
 #### Horizon sets
 
-Each biome sets `horizon_layer_style` / `horizon_layer_height_m` (the director's crossfade, above) and a `horizon_def` (`HorizonSetDef`) with the extensions of `horizon_biomes.gdshader`, a superset of `horizon.gdshader` (same mesh, uniforms, styles 0–4, crossfade, heat shimmer and output):
+Each biome sets `horizon_layer_style` / `horizon_layer_height_m` (the director's crossfade, above) and a `horizon_def` (`HorizonSetDef`) with the biome extensions of `horizon.gdshader` (styles 5–6, per-layer land/sea masks, mist and windows):
 
 | Biome | Styles (near → far) | Extensions |
 | --- | --- | --- |
@@ -188,18 +189,76 @@ Each biome sets `horizon_layer_style` / `horizon_layer_height_m` (the director's
 | City (`city_skyline`) | skyline, skyline, hills, mountains | lit windows on both skylines at night (`layer_windows`) |
 | Valley (`valley_ridges`) | hills, hills, mountains, mountains | the lower part of every card in mist (`layer_mist`) |
 
-`HorizonSetDef.apply_blend(material, from_def, to_def, t)` switches the Horizon material to `horizon_biomes.gdshader` the first time a set is given and writes the extensions blended like the silhouettes (null = none). ISLANDS and HEADLANDS are drawn flat by the base shader, so without the switch the coast shows a clear sea horizon.
+`HorizonSetDef.apply_blend(material, from_def, to_def, t)` writes the extensions blended like the silhouettes (null = none) into the Sky's Horizon material; `BiomeDirector._push_look` calls it with the horizon crossfade (below). All extensions zero is exactly the plain silhouettes.
 
-### Wiring (needs, for the orchestrator)
+**One shader (WP6.4c).** WP6.4b added `horizon_biomes.gdshader` as a superset of `horizon.gdshader` and switched the material to it on the first set. Only one of them could ever be in use per run (the switch was one-way), and two copies of the silhouette, crossfade and shimmer code would drift. The extensions now live in `horizon.gdshader` (the Sky's `materials/horizon.tres`), and `horizon_biomes.gdshader` is gone. The extensions cost plain layers nothing: a column's bottom vertex evaluates the silhouette only for a layer with mist or windows (their fragments need the top), and the fragment's two branches are uniform-driven. `tests/unit/test_biome_coast_city_valley.gd` checks that there is one shader and that it carries the extension uniforms.
 
-1. **World nodes:** add `WaterRibbon`, `ElevatedSections` and `FogCards` to the run's world stack with the run's `BiomeDirector`: `setup(ctx, road, origin)` and `update_view(s)` per frame, like Roadside. `ElevatedSections.clearance` = the run's `LandmarkClearance` (landmark and road-tunnel zones), set before setup. Keep the road generated from `s − road.roadside_behind_m` to the window end (as for Roadside).
-2. **Ground hook:** RoadBuilder's mesher must be a `GroundDropMesher` (same constructor, plus `cliff_seed`) with `drop_at = elevated.plan.drop_at` and `field_drop_at = water.ground_drop_at`; set the features up before the builder's first build. Without it the city's viaducts stand on the ground and the coast's ground ribbon covers the sea. `src/road/dev/biome_preview.gd` shows it by swapping the builder's private `_mesher`; the builder should take a mesher (or the two callables).
-3. **Sky:** in `BiomeDirector._push_look`, after `set_horizon_blend`, call `HorizonSetDef.apply_blend(<the sky's Horizon material>, h.from.horizon_def, h.to.horizon_def, h.t)` (SkyRig should expose its Horizon material); and `water.horizon_material = <that material>` for the sea mask.
-4. **Sun side at the coast:** the road plan must keep the sun right of the axis (plan sun side −1; `WaterDef.side` +1) through the coast legs, switching before the first one if needed, so the sun sinks into the sea.
-5. **Roadside:** no common billboards on the water side where `WaterDef.drop_m` > 0 (they would stand over the sea slope). Biome props already stay on the land side.
-6. **Tunnels:** the coast has none (`tunnel_frequency_scale` 0: its hill would stand on the sea slope); the city (0.2) and the valley (0.3) use `rock_color` / `rock_shade_color` for the hill. Elevated stretches avoid tunnel zones through the clearance.
+### Wiring (WP6.4c)
+
+The needs WP6.4b left for the run, now in place. The run (`src/run/run.gd`) and the drive scene (`src/dev/car_drive.gd`) wire them the same way.
+
+```
+features := BiomeFeatures.new()           # _ready: makes WaterRibbon, ElevatedSections, FogCards once
+features.biome_director = biome_director
+features.bind(builder, sky)               # once: builder.set_ground_drop(...), the sea mask's material
+features.setup(ctx, road, origin)         # _start_run (every retry), before builder.build_all_now
+features.update_view(s)                   # frame(), after the landmarks
+road.forget_before(s - max(roadside.reach_behind_m(), features.reach_behind_m()) - chunk)
+traffic_view.biome_director = biome_director
+```
+
+1. **World nodes** (`BiomeFeatures`, `src/world/biome_features/biome_features.gd`). It owns the three feature nodes, made once. Each `setup` hands them the run's director and road. They keep their mesh node and material: no node churn on a retry, and a floating-origin shift only moves the mesh nodes, with no rebuild (`tests/unit/test_biome_wiring.gd`). `ElevatedSections.clearance` is a `LandmarkClearance` with the run's inputs (road, director, `LandmarkTuning`), which gives the same zones as the Roadside's and the Landmarks'. It is set up per run before the features. The road mesher queries it per row, and one shared with the Roadside would refill back and forth between the two windows.
+2. **Ground hook.** `RoadBuilder.set_ground_drop(drop_at, field_drop_at)` (before setup; later it swaps the mesher and rebuilds every chunk within the budget) makes the mesher a `GroundDropMesher`. The two callables are `ElevatedSections.ground_drop_at(s)` (it forwards to the plan) and `WaterRibbon.ground_drop_at(s, side)`. Both go through the nodes, so they stay valid when a retry builds new plans. `RoadBuilder.has_ground_drop()` reports it. The biome preview uses the same call; it no longer swaps the private mesher.
+3. **Sky.** `SkyRig.horizon_material()` returns the Horizon cards' own material. `BiomeDirector._push_look` calls `HorizonSetDef.apply_blend(sky.horizon_material(), from.horizon_def, to.horizon_def, t)` whenever the horizon crossfade moves, and at setup, which clears the extensions on a retry. `water.horizon_material` is the same material (set in `BiomeFeatures.setup`).
+4. **Road kept behind.** The sea level averages the road's elevation over ±`level_smoothing_m` (1.6 km), and fog banks probe the road's elevation `valley_probe_m` either side. Both used to clamp to the generated road, so their look could depend on how far the road had been generated or forgotten. Now they generate ahead as needed (director rate; the table does not depend on how far it goes). `BiomeFeatures.reach_behind_m()` (about 1.8 km with the coast in the plan) joins the Roadside's reach in the run's `forget_before`, so the road behind is still there.
+5. **Tunnels:** unchanged. The coast has none (`tunnel_frequency_scale` 0), and the city and valley use `rock_color` / `rock_shade_color` for the hill. Elevated stretches avoid tunnel zones through the clearance.
+
+### Sun side at the coast (WP6.4c)
+
+The coast's sea is on the right, so the sun must be right of the road's axis there: plan sun side −1, road heading left of due west. `WaterDef.road_sun_side()` gives the side a biome's water requires. It is `−side` for a sea below the road (`drop_m` > 0) and 0 for rivers. `BiomeRoadRules.sun_side_for_leg(k)` latches it per leg, in order.
+
+`RoadPlanGen` applies it as follows. Each section draws its straight, then looks for the first requiring leg within the straight, one bend and `sun_lookahead_m`. That lookahead is two forced sections: the shortest straight plus the longest bend of any kind, a preparing bend and the switch (about 6.5 km at the default tuning).
+
+- **Requirement on the other side:** the side switch is forced now. The straight is the shortest one, then comes the usual switch bend at `sun_side_switch_radius_m`. If the heading is too close to the zone for a clean switch, the usual preparing bend away from the sun comes first. The switch therefore ends before the leg starts.
+- **Requirement on this side:** the scheduled switches wait.
+- **Leg 1:** the road starts on the required side if a requiring leg starts within the start straight plus the lookahead (a coast-only preview road).
+
+Everywhere else the heading stays in the 15–30° band, as before. Only the switch bends cross it, the same geometry as a scheduled switch. The rule is deterministic by seed and plan, and a plan without requiring legs leaves the road bit-identical. Because the coast is endless, the road never switches sides again after leg 9. Tests: `tests/unit/test_road_biomes.gd` (24 seeds: every coast sample 15–30° with the sun on the right, leg 1 still either side, determinism, a coast-only road).
+
+**Flag (forks, WP6.5).** A leg's sun side is latched when the generator looks ahead to it, about `sun_lookahead_m` before the leg. That is earlier than its other road rules, which latch one leg ahead. A fork into an ocean biome must be planned before then; otherwise that leg keeps the side it had.
+
+### No props over the sea (WP6.4c)
+
+`Roadside` builds the same `WaterPlan` as the `WaterRibbon`: the props seed's `WaterRibbon.STREAM` and the director's biome lookup. `RoadsideContext.water_blocks(s, d_lo, d_hi)` is true for a footprint on the water's side that reaches past the road-level strip of a sea slope, or onto a river's water surface. River banks and land beyond a river are fine. Every placement helper (`_place`, `_place_on_grade`, `_place_segment`) skips such an instance after its Rng draws, like the landmark clearance, and counts it in `water_cleared`. So there are no billboards, gantries or fences over the coast's sea, and the land side keeps its billboards. It is allocation-free, and the shoreline is only computed for footprints reaching past the nearest it can be. Test: `test_biome_coast_city_valley.gd::test_no_props_over_the_sea`.
+
+### Traffic palette per biome (WP6.4c)
+
+Before, the run gave `TrafficView` the start biome's palette only. Now `TrafficView.biome_director` is set, and the 32 biome slots of the traffic shader's palette uniform hold two banks of 16 colours. A vehicle takes a bank the first time the view captures it (a new `vehicle_id` in the slot): the bank holding the biome at its s. A biome not yet loaded goes into the bank that does not hold the player's current biome. The vehicle keeps its bank for life.
+
+- Crossing a checkpoint repaints no car.
+- Cars that appear past the line wear the next biome's colours, and the cars already there keep theirs.
+- The uniform, the instance data layout (paint slot in `INSTANCE_CUSTOM.a`, as before) and the draw calls are unchanged.
+- A bank load (one per biome) is the only upload. Capture and render stay allocation-free.
+
+`set_palette` still sets bank 0 for views without a director. Test: `test_traffic_view.gd::test_per_biome_palettes_keep_each_cars_paint`. A car could only repaint if it lived through two biome changes, for example driving next to the player for a whole leg while the plan loads a third biome. The third biome's first car appears only near the next checkpoint, a leg later.
+
+### Lane-ends signs (WP6.4c)
+
+The `SIGN` features tagged `lane_ends` (`lane_ends_sign_distance_m`, 400 m, before a tunnel's lane drop) get a roadside panel from the landmark warning-sign pool (`Landmarks`: pooled, text atlas, retro-reflective). It stands where a checkpoint warning sign would, on the right, `sign_setback_m` past the guardrail, and reads **LANE ENDS / MERGE LEFT** (`LandmarkText.lane_ends_sign()`: the right lane ends, so traffic merges left). `Landmarks.is_panel_sign(f)` is the one test for "a SIGN drawn as a panel". `LandmarkClearance` keeps its zone clear and `RoadChunkMesher` pulls the canyon cliffs back around it, both as for checkpoint signs. The four pooled signs are enough: a lane-ends sign stands at least 650 m after a checkpoint and 150 m before the next one's first warning (`tests/world/test_landmarks.gd`: every lane-ends sign of the journey's first 8 legs placed, none dropped).
 
 ### Review and budget
+
+In the real run (WP6.4c; `--hud=false` hides the HUD, dev HUD and overlays, `--at=elevated` jumps to the middle of the next elevated stretch, `--at=lane_ends [--at_m=150]` stops before the next lane-ends sign):
+
+```
+tools/snap.sh src/run/run.tscn --renderer=both --leg=6 --at=elevated --hud=false --sweep=sky_t:0.38,0.5,0.58,0.72
+tools/snap.sh src/run/run.tscn --renderer=both --leg=8 --leg_s=1500 --hud=false --sweep=sky_t:0.38,0.5,0.58,0.72
+tools/snap.sh src/run/run.tscn --renderer=both --leg=9 --leg_s=1600 --hud=false --sweep=sky_t:0.38,0.5,0.58,0.72
+tools/snap.sh src/run/run.tscn --renderer=both --leg=9 --leg_s=-120 --hud=false --sweep=sky_t:0.38,0.5,0.58,0.72   # into the coast
+tools/snap.sh src/run/run.tscn --leg=4 --leg_s=0 --at=lane_ends --at_m=70 --hud=false --sky_t=0.72
+```
+
+The preview:
 
 ```
 tools/snap.sh src/road/dev/biome_preview.tscn --biome=coast --renderer=both --sweep=sky_t:0,0.38,0.5,0.58,0.66
@@ -209,7 +268,7 @@ tools/drawcalls.sh src/road/dev/biome_preview.tscn --biome=valley_fog --traffic=
 
 Options: `--biome`, `--seed`, `--s`, `--cam=chase|far|driver|high|side|sea|back` (chase and far are the game's rigs), `--sky_t`, `--tier`, `--traffic`, `--features`, `--ground_drop`, `--horizon`, `--lanes`, `--time`, `--night_lights`, `--label`.
 
-**Draw calls** (`tools/drawcalls.sh`, chase, Medium, no traffic, 3D only): farmland 26 (road 5, roadside 18, sky 3); coast 20 (water 1, road 5, roadside 11, sky 3); city 25 (elevated 1, road 6, roadside 15, sky 3); valley 27 (water 1, fog 1, road 5, roadside 17, sky 3). Roadside worst over 12 km at Medium (tests): coast 17 / 26k triangles, city 16 / 44k, valley 19 / 53k (share 25 / 60k). In the run (`tools/drawcalls.sh src/run/run.tscn --set=leg_override:N --cam=chase --speed_kmh=150`, traffic, features not yet wired): city leg 6 50 3D draw calls / 66k triangles, valley leg 8 48 / 69k (farmland leg 1: 47 / 75k above); the coast (leg 9, dev HUD) 37 3D. Wired, the features add one draw call each (two in the valley) and a few thousand triangles: every biome stays within farmland + 6 draw calls and under 150k triangles.
+**Draw calls** (`tools/drawcalls.sh`, chase, Medium, no traffic, 3D only): farmland 26 (road 5, roadside 18, sky 3); coast 20 (water 1, road 5, roadside 11, sky 3); city 25 (elevated 1, road 6, roadside 15, sky 3); valley 27 (water 1, fog 1, road 5, roadside 17, sky 3). Roadside worst over 12 km at Medium (tests): coast 17 / 26k triangles, city 16 / 44k, valley 19 / 53k (share 25 / 60k). In the run, wired (WP6.4c): see [PERF.md](PERF.md) → "Biomes in the run".
 
 **Parity** (`tools/parity.sh`, chase at sky_t 0 / 0.38 / 0.5 / 0.66 / 0.85 and high views): the coast (water, horizon) and the city (windows, horizon, elevated) pass everywhere in the gameplay view; the coast's water-dominated high view passes. Known residues, none from a new opaque shader:
 - the valley's chase view at sky_t 0 (p99.9 16): dense forest silhouettes against the bright morning fog on the unchanged `world.gdshader` (it stays 16 with the features and the horizon set turned off, `--features=false --horizon=false`);

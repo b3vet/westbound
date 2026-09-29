@@ -21,8 +21,10 @@ extends Node
 ##   silhouettes crossfade over horizon_blend_before_m / _after_m.
 ## - **Events:** `Events.biome_changed(id)` once at setup and whenever the focus
 ##   crosses into a different biome.
-## - **Sky:** pushes the blended tint offsets, horizon sets and heat shimmer to the
-##   SkyRig (`sky`, else the one in SkyRig.GROUP) when they change.
+## - **Sky:** pushes the blended tint offsets, horizon sets, heat shimmer and the horizon
+##   extensions (BiomeDef.horizon_def through HorizonSetDef.apply_blend into
+##   SkyRig.horizon_material(), WP6.4c) to the SkyRig (`sky`, else the one in
+##   SkyRig.GROUP) when they change.
 ##
 ## Checkpoint landmark styles (WP5.5, CONTRACTS §3: "the biome director fills the
 ## CHECKPOINT tag"): `checkpoint_style(leg, s)` is the style of the biome whose leg ends
@@ -256,6 +258,7 @@ func _push_look(s: float) -> void:
 		_pushed_h_t = h.t
 		sky.set_horizon_blend(h.from.horizon_layer_style, h.from.horizon_layer_height_m,
 			h.to.horizon_layer_style, h.to.horizon_layer_height_m, h.t)
+		HorizonSetDef.apply_blend(sky.horizon_material(), h.from.horizon_def, h.to.horizon_def, h.t)
 		var shimmer := lerpf(h.from.heat_shimmer, h.to.heat_shimmer, h.t)
 		if shimmer != _pushed_shimmer:
 			_pushed_shimmer = shimmer

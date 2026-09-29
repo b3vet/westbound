@@ -34,6 +34,13 @@ extends Node3D
 ## colors went stale (the plan changed: BiomeDirector.plan_version) rebuild within the
 ## frame budget. Road tunnels (TUNNEL features) are part of the chunk mesh.
 ##
+## Ground drop (WP6.4c): `set_ground_drop(drop_at, field_drop_at)` makes the mesher a
+## GroundDropMesher, which lowers the ground ribbon where a biome feature needs the land
+## below the road: `drop_at(s)` under both sides (ElevatedSections.ground_drop_at: the
+## city's viaducts) and `field_drop_at(s, side)` beyond the scenery line on one side
+## (WaterRibbon.ground_drop_at: the coast's sea slope). Set it before setup (the run
+## does); set later, it swaps the mesher and rebuilds every chunk within the budget.
+##
 ## Draw calls: one per visible chunk. Road surface, markings, reflectors, barrier,
 ## rails and ground ribbon are one surface (RoadChunkMesher.commit_merged): the road
 ## and world shaders are the same code, so merging them changes no pixel (WP4.6;
@@ -98,6 +105,11 @@ var shifts_applied: int = 0
 
 var _pool: Array[Chunk] = []
 var _mesher: RoadChunkMesher
+## Ground-drop hooks (set_ground_drop): (s) -> m and (s, side) -> m.
+var _drop_at: Callable
+var _field_drop_at: Callable
+var _landmark_tuning: LandmarkTuning
+var _cliff_seed: int = 0
 var _k_min: int = 0
 var _k_max: int = FREE
 var _view_m: float = 0.0
@@ -135,9 +147,9 @@ func setup(ctx: RunContext, road_path: RoadPath, floating_origin: FloatingOrigin
 	road = road_path
 	origin = floating_origin
 	var lt: Variant = t.get(&"landmarks")
-	_mesher = RoadChunkMesher.new(tuning, palette, lt as LandmarkTuning if lt is LandmarkTuning else null)
-	_mesher.merge_surfaces = true
-	_mesher.cliff_seed = ctx.rng_props.derive(CLIFF_STREAM).get_seed() if ctx != null else 0
+	_landmark_tuning = lt as LandmarkTuning if lt is LandmarkTuning else null
+	_cliff_seed = ctx.rng_props.derive(CLIFF_STREAM).get_seed() if ctx != null else 0
+	_make_mesher()
 	_plan_version = biome_director.plan_version if biome_director != null else -1
 	_cancel_pending()
 	for c in _pool:
@@ -174,6 +186,28 @@ func set_ground_colors(verge: Color, field: Color) -> void:
 ## Ground colors from a biome (convenience for set_ground_colors).
 func apply_biome(biome: BiomeDef) -> void:
 	set_ground_colors(biome.verge_color, biome.ground_color)
+
+
+## The ground-drop hook (see the header): `drop_at(s: float) -> float` lowers the verge
+## and field on both sides, `field_drop_at(s: float, side: float) -> float` the field on
+## side -1 / +1. Either may be an empty Callable; both empty = the plain mesher. Before
+## setup it only configures; after setup it swaps the mesher and marks every live chunk
+## dirty (rebuilt within the frame budget).
+func set_ground_drop(drop_at: Callable, field_drop_at: Callable) -> void:
+	_drop_at = drop_at
+	_field_drop_at = field_drop_at
+	if tuning == null:
+		return
+	_cancel_pending()
+	_make_mesher()
+	for c in _pool:
+		if c.index != FREE:
+			c.dirty = true
+
+
+## True when the ground-drop hook is set (the mesher is a GroundDropMesher).
+func has_ground_drop() -> bool:
+	return _mesher is GroundDropMesher
 
 
 # ---------------------------------------------------------------- Queries
@@ -334,6 +368,18 @@ func _commit_pending() -> void:
 	_pending = null
 	_pending_k = FREE
 	_pending_rebuild = false
+
+
+func _make_mesher() -> void:
+	if _drop_at.is_valid() or _field_drop_at.is_valid():
+		var gd := GroundDropMesher.new(tuning, palette, _landmark_tuning)
+		gd.drop_at = _drop_at
+		gd.field_drop_at = _field_drop_at
+		_mesher = gd
+	else:
+		_mesher = RoadChunkMesher.new(tuning, palette, _landmark_tuning)
+	_mesher.merge_surfaces = true
+	_mesher.cliff_seed = _cliff_seed
 
 
 func _cancel_pending() -> void:

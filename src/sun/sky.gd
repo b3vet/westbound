@@ -29,7 +29,9 @@ extends Node3D
 ## Biomes (WP6.4a, docs/BIOMES.md): BiomeDirector pushes the blended world tint offset
 ## (wb_biome_tint_offset), a fog tint offset (added here to the fog colour and the
 ## horizon tints), the horizon crossfade between two silhouette sets and the desert's
-## heat shimmer (horizon.gdshader).
+## heat shimmer (horizon.gdshader), and (WP6.4c) the biome horizon extensions
+## (HorizonSetDef: islands and headlands, sea-side masks, mist, lit windows) straight
+## into `horizon_material()`.
 ##
 ## The world-system API (§13): setup(ctx, road, origin) and update_view(focus_s).
 ## The sun clock (WP3.5) or the dev slider sets `sky_t`.
@@ -218,6 +220,13 @@ func heat_shimmer() -> float:
 
 func horizon_mix() -> float:
 	return _horizon_mix
+
+
+## The Horizon cards' own material (horizon.gdshader; this rig's copy, null before
+## _ready). BiomeDirector writes the biome extensions into it
+## (HorizonSetDef.apply_blend) and WaterRibbon the sea direction (WP6.4c).
+func horizon_material() -> ShaderMaterial:
+	return _horizon.material_override as ShaderMaterial if _horizon != null else null
 
 
 ## Player "fake light" (spec: Night lighting). `gain` scales the color script's

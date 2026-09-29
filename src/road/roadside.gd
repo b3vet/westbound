@@ -27,6 +27,10 @@ extends Node3D
 ## zones come from a LandmarkClearance built at setup from the road features, the
 ## biome director and LandmarkTuning (the same inputs as Landmarks), prepared for the
 ## window whenever it moves; each layer skips the instances that fall in one.
+##
+## Water (WP6.4c): no billboard, gantry or prop stands over the coast's sea slope or a
+## river's water on the water's side (RoadsideContext.water_blocks, from the same
+## WaterPlan as the WaterRibbon: the props seed's "water" stream and the biome lookup).
 
 const LIGHT_POLE_MESH := "res://assets/props/common/light_pole.res"
 const REFLECTOR_POST_MESH := "res://assets/props/common/reflector_post.res"
@@ -52,6 +56,8 @@ var clear_landmarks: bool = true
 var landmark_style_override: StringName = &""
 ## The zones in use (built at setup when clear_landmarks; null otherwise).
 var landmark_clearance: LandmarkClearance
+## Keep every prop off the biome water on its side (WP6.4c; false: as before).
+var clear_water: bool = true
 
 var layers: Array[RoadsideLayer] = []
 
@@ -86,6 +92,10 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void:
 		landmark_clearance.setup(road, lt as LandmarkTuning if lt is LandmarkTuning else LandmarkTuning.load_default(),
 			biome_director, landmark_style_override)
 	_ctx.clearance = landmark_clearance
+	# Nothing stands over the biome water (WP6.4c): the WaterRibbon's plan, same inputs.
+	var lookup := biome_director.biome_at if biome_director != null else Callable()
+	_ctx.water = WaterPlan.new(ctx.rng_props.derive(WaterRibbon.STREAM).get_seed(), lookup, fallback_biome) \
+		if clear_water else null
 	_build_layers()
 	_max_cell_m = 0.0
 	for layer in layers:

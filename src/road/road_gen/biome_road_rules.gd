@@ -12,6 +12,15 @@ extends RefCounted
 ## never change after that: a plan change (a fork) only reaches the road for legs the
 ## generator has not asked about yet, so the geometry already generated (and anything
 ## derived from it) stays valid. Legs are latched in order.
+##
+## Sun side (WP6.4c): `sun_side_for_leg(k)` is the side of the sun the plan must hold
+## through leg k (RoadPlanGen's convention: +1 the road heads right of the sun, so the
+## sun is on the left; -1 the sun is on the right; 0 free), from the leg's biome water
+## (WaterDef.road_sun_side: the coast keeps the sun over its sea). RoadPlanGen asks
+## further ahead than for the other rules (it must finish a side switch before the leg
+## starts: RoadPlanGen.sun_lookahead_m, about two legs), so this rule is latched on its
+## own, in order: a fork into an ocean biome must be planned before the road generates
+## past the leg's start minus that distance, or that leg keeps whatever side it had.
 
 var plan: BiomePlan
 
@@ -20,6 +29,7 @@ var _crest := PackedFloat64Array()
 var _tunnel := PackedFloat64Array()
 var _clearance := PackedFloat64Array()
 var _lanes := PackedInt32Array()
+var _sun_side := PackedInt32Array()
 var _lanes_default: int
 var _lanes_min: int
 var _lanes_max: int
@@ -64,6 +74,20 @@ func lanes_for_leg(leg: int) -> int:
 
 func tunnel_scale_for_leg(leg: int) -> float:
 	return _tunnel[_ensure(leg)]
+
+
+## The sun side leg `leg` requires (see the header): -1, +1 or 0 (free).
+func sun_side_for_leg(leg: int) -> int:
+	var k := maxi(leg, 1)
+	while _sun_side.size() < k:
+		var b := plan.biome_for_leg(_sun_side.size() + 1)
+		_sun_side.append(b.water.road_sun_side() if b != null and b.water != null else 0)
+	return _sun_side[k - 1]
+
+
+## Legs whose sun side is latched so far.
+func sun_latched_legs() -> int:
+	return _sun_side.size()
 
 
 ## Index of leg `leg` (1-based) in the latched arrays, latching up to it.

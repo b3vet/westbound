@@ -46,6 +46,8 @@ const HEADLIGHT_LUT_SIZE := 1024
 const FORGET_EVERY_M := 500.0
 ## Where --leg=N snaps start inside the leg (clear of the checkpoint's landmark).
 const SNAP_LEG_S_M := 600.0   # lint: allow-number dev snap position, not tuning
+## --at=lane_ends snaps stop this far before the sign.
+const SNAP_AT_M := 150.0   # lint: allow-number dev snap position, not tuning
 ## tools/snap.sh runs use this seed unless --seed is given.
 const SNAP_SEED := 20260929
 ## After the physics car (tick) and before the camera rig (100).
@@ -81,6 +83,8 @@ var biome_director: BiomeDirector
 var builder: RoadBuilder
 var roadside: Roadside
 var landmarks: Landmarks
+## WP6.4b's biome features (water, elevated stretches, fog cards), wired in WP6.4c.
+var features: BiomeFeatures
 var sky: SkyRig
 var hub: PlayerInput
 var rig: CameraRig
@@ -204,9 +208,18 @@ func _ready() -> void:
 	landmarks.name = "Landmarks"
 	landmarks.biome_director = biome_director
 	add_child(landmarks)
+	features = BiomeFeatures.new()
+	features.name = "BiomeFeatures"
+	features.biome_director = biome_director
+	add_child(features)
+	# The road mesher lowers its ground under viaducts and the sea slope; the water
+	# feeds the horizon's sea mask. Both hooks go through the nodes (valid on retry).
+	features.bind(builder, sky)
 	traffic_view = TrafficView.new()
 	traffic_view.name = "TrafficView"
 	traffic_view.headlight_pools = false   # HeadlightCones draws them
+	# Each new car wears the palette of the biome where it appears (WP6.4c).
+	traffic_view.biome_director = biome_director
 	add_child(traffic_view)
 	_add_night_lights()
 	registry = TrafficRegistry.load_default(tuning.traffic)
@@ -543,8 +556,14 @@ func _road_ahead() -> void:
 	road.ensure_generated_to(_view_ahead(s))
 	legs.plan_ahead(road, _plan_ahead_to(s))
 	if s >= _next_forget_s:
-		road.forget_before(s - roadside.reach_behind_m() - tuning.road.chunk_length_m)
+		road.forget_before(s - reach_behind_m() - tuning.road.chunk_length_m)
 		_next_forget_s = s + FORGET_EVERY_M
+
+
+## How far behind the car the world nodes sample the road (the roadside's cells, the
+## features' windows and the sea level's smoothing).
+func reach_behind_m() -> float:
+	return maxf(roadside.reach_behind_m(), features.reach_behind_m())
 
 
 # ---------------------------------------------------------------- Crash and results
@@ -643,6 +662,7 @@ func frame(real_dt: float) -> void:
 	builder.update_view(s)
 	roadside.update_view(s)
 	landmarks.update_view(s)
+	features.update_view(s)
 	sky.update_view(s)
 	traffic_view.update_view(s)
 	_update_night_lights(s)
@@ -698,6 +718,8 @@ func _start_run() -> void:
 	builder.setup(ctx, road, origin)
 	roadside.setup(ctx, road, origin)
 	landmarks.setup(ctx, road, origin)
+	# Before the builder's first build: its ground-drop hook reads the features' plans.
+	features.setup(ctx, road, origin)
 	sky.setup(ctx, road, origin)
 	builder.build_all_now(start_s)
 	_next_forget_s = start_s + FORGET_EVERY_M
@@ -708,9 +730,6 @@ func _start_run() -> void:
 		car_def.length_m, car_def.width_m)
 	director.set_fog_end(builder.view_distance_m())
 	traffic_view.setup(ctx, road, origin, registry, sim.state, director.opposite.state)
-	var biome := biome_director.current()
-	if biome != null and not biome.traffic_palette.is_empty():
-		traffic_view.set_palette(biome.traffic_palette)
 
 	headlights.setup(ctx, road, origin)
 	headlight_cones.setup(ctx, road, origin)
@@ -980,7 +999,10 @@ func open_drive_scene() -> void:
 
 ## Snap hook (tools/snap.sh): --state=countdown|running|results|paused, --sky_t=,
 ## --s=, --speed_kmh=, --car=0..2, --cam=, --damaged, --ghost, --high_beam, --seed= (default SNAP_SEED),
-## --leg=N (start --leg_s= metres into leg N, default 600: look at a biome; WP6.4a).
+## --leg=N (start --leg_s= metres into leg N, default 600: look at a biome; WP6.4a),
+## --at=elevated|lane_ends (WP6.4c: from there, the middle of the next elevated stretch,
+## or --at_m= metres, default 150, before the next lane-ends sign),
+## --hud=false (hide the HUD, the dev HUD and the touch overlay: clean look reviews).
 func snap_setup(args: Dictionary) -> void:
 	# Reproducible snaps: a fixed seed unless --seed is given.
 	if args.has("car"):
@@ -992,6 +1014,10 @@ func snap_setup(args: Dictionary) -> void:
 	var s := float(args.get("s", 0.0))
 	if args.has("leg"):
 		s = float(maxi(int(args["leg"]), 1) - 1) * tuning.legs.leg_length_m() + float(args.get("leg_s", SNAP_LEG_S_M))
+	if str(args.get("at", "")) == "elevated":
+		s = _snap_elevated_s(s)
+	elif str(args.get("at", "")) == "lane_ends":
+		s = _snap_sign_s(s, ProceduralRoadPath.SIGN_LANE_ENDS) - float(args.get("at_m", SNAP_AT_M))
 	if s > 0.0 or args.has("speed_kmh"):
 		dev_teleport(s, Units.kmh_to_mps(float(args.get("speed_kmh", tuning.legs.start_speed_kmh))))
 	if args.has("sky_t"):
@@ -1019,7 +1045,41 @@ func snap_setup(args: Dictionary) -> void:
 	if args.get("ghost", false):
 		fx.start_ghost(tuning.lives.ghost_period_s)
 	hub.set_high_beam(bool(args.get("high_beam", false)))
+	if not bool(args.get("hud", true)):
+		for n: Node in [hud, get_node_or_null(^"DevHud"), get_node_or_null(^"Overlay"), screens, dev.controls]:
+			if n != null:
+				n.set(&"visible", false)
 	rig.snap_to_target()
+
+
+## Dev (snaps): the first SIGN tagged `tag` from s on (within two legs), else s.
+func _snap_sign_s(from_s: float, tag: StringName) -> float:
+	var end := from_s + tuning.legs.leg_length_m() * 2.0
+	road.ensure_generated_to(end)
+	var found: Array[RoadFeature] = []
+	road.features_in(from_s, end, found)
+	for f in found:
+		if f.kind == RoadFeature.Kind.SIGN and f.tag == tag:
+			return f.s_start
+	return from_s
+
+
+## Dev (snaps): the middle of the first full-height elevated stretch from s on (within
+## two legs), else s.
+func _snap_elevated_s(from_s: float) -> float:
+	road.ensure_generated_to(from_s + tuning.legs.leg_length_m() * 2.0)
+	var plan := features.elevated.plan
+	var s := from_s
+	var end := from_s + tuning.legs.leg_length_m() * 2.0
+	while s < end:
+		var def := plan.def_at(s)
+		if def != null and plan.drop_at(s) >= def.height_m:
+			var a := s
+			while s < end and plan.drop_at(s) >= def.height_m:
+				s += def.row_step_m
+			return (a + s) * 0.5
+		s += def.row_step_m if def != null else tuning.road.chunk_length_m
+	return from_s
 
 
 func _report_dev_stats() -> void:

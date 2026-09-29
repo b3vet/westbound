@@ -18,8 +18,10 @@ extends Node3D
 ## --night_lights=<player fake-light gain, default 1>, --label=false (no text),
 ## --horizon=false (keep the sky's default horizon instead of the biome's set),
 ## --lanes=<n> (default: the biome's lane_count, scheduled from s = 100),
-## --ground_drop=false (keep the ground ribbon at road level: what the run shows until
-## RoadBuilder takes GroundDropMesher's hook; elevated stretches and sea cliffs need it).
+## --ground_drop=false (keep the ground ribbon at road level: no RoadBuilder
+## set_ground_drop hook; elevated stretches and sea cliffs need it).
+## The road generator keeps the sun on an ocean's side (WP6.4c), so any seed shows the
+## sun over the sea at the coast.
 ## Prints one "snap: biome_preview ..." line with the frame's draw calls/primitives
 ## and each part's share.
 
@@ -53,9 +55,6 @@ const SEA_CAM := [1, 3.2, 6.0, 90.0, 6.0]
 const SIDE_CAM_D_M := 80.0
 const SEA_LOOK_D_M := 220.0
 const DEFAULT_S_M := 2600.0
-## Water this wide is an ocean: the preview picks a seed with the sun on its side.
-const OCEAN_MIN_WIDTH_M := 500.0
-const SEED_SEARCH := 64
 
 var _args: Dictionary = {}
 var _built: bool = false
@@ -100,9 +99,6 @@ func _build() -> void:
 	var biome_id := String(_args.get("biome", "coast"))
 	_biome = load(BIOME_DIR + biome_id + ".tres") as BiomeDef
 	var seed_value := int(_args.get("seed", 20260928))
-	var probe_s := float(_args.get("s", DEFAULT_S_M))
-	if not _args.has("seed") and _biome.water != null and _biome.water.width_m >= OCEAN_MIN_WIDTH_M:
-		seed_value = _seed_with_sun_on_side(seed_value, probe_s, _biome.water.side)
 	_ctx = RunContext.new(seed_value, RunContext.MODE_JOURNEY, _tuning)
 	_road = ProceduralRoadPath.new(_ctx)
 	var lanes := int(_args.get("lanes", _biome.lane_count))
@@ -147,17 +143,11 @@ func _build() -> void:
 	_builder.biome_director = _director
 	_builder.view_distance_override_m = view_m
 	add_child(_builder)
+	if bool(_args.get("ground_drop", true)):
+		# The run's hook (BiomeFeatures.bind does the same).
+		_builder.set_ground_drop(_elevated.ground_drop_at if _elevated != null else Callable(),
+			_water.ground_drop_at if _water != null else Callable())
 	_builder.setup(_ctx, _road, _origin)
-	if (_elevated != null or _water != null) and bool(_args.get("ground_drop", true)):
-		var mesher := GroundDropMesher.new(_tuning.road, _builder.palette)
-		mesher.merge_surfaces = true
-		mesher.cliff_seed = _ctx.rng_props.derive(RoadBuilder.CLIFF_STREAM).get_seed()
-		if _elevated != null:
-			mesher.drop_at = _elevated.plan.drop_at
-		if _water != null:
-			mesher.field_drop_at = _water.ground_drop_at
-		# Dev-only: the hook RoadBuilder would take (docs/BIOMES.md).
-		_builder.set(&"_mesher", mesher)
 	_builder.build_all_now(_focus_s)
 
 	_roadside = Roadside.new()
@@ -181,16 +171,15 @@ func _build() -> void:
 	_sky.sky_t = float(_args.get("sky_t", _sky.sky_t))
 	add_child(_sky)
 	_sky.setup(_ctx, _road, _origin)
-	# The director pushes the biome's look (tints, horizon set) to the sky; the
-	# horizon extensions are what the run's director would add (docs/BIOMES.md).
+	# The director pushes the biome's look (tints, horizon set and its extensions) to
+	# the sky, as in the run.
 	_director.sky = _sky
 	_director.update_view(_focus_s)
-	var horizon_mat := (_sky.get_node(^"Horizon") as MeshInstance3D).material_override as ShaderMaterial
-	if bool(_args.get("horizon", true)):
-		HorizonSetDef.apply_blend(horizon_mat, _biome.horizon_def, _biome.horizon_def, 0.0)
-	else:
+	var horizon_mat := _sky.horizon_material()
+	if not bool(_args.get("horizon", true)):
 		_sky.set_horizon_blend(Vector4(1, 2, 3, 3), _sky.horizon_layer_height_m, Vector4(1, 2, 3, 3),
 			_sky.horizon_layer_height_m, 0.0)
+		HorizonSetDef.apply_blend(horizon_mat, null, null, 0.0)
 	if _water != null:
 		_water.horizon_material = horizon_mat
 		_water.set_time(float(_args.get("time", 0.0)))
@@ -233,20 +222,6 @@ func _make_features() -> void:
 		_fog = FogCards.new()
 		_fog.name = "FogCards"
 		_fog.biome_director = _director
-
-
-## The first seed from `from` whose road has the sun on `side` (-1 left, +1 right of
-## travel) at s: the ocean's side, so the sun sinks into the sea (docs/BIOMES.md;
-## the run needs the road generator to keep the sun there through coast legs).
-func _seed_with_sun_on_side(from: int, s: float, side: int) -> int:
-	for k in SEED_SEARCH:
-		var road := ProceduralRoadPath.new(RunContext.new(from + k, RunContext.MODE_JOURNEY, _tuning))
-		road.ensure_generated_to(s + 1.0)
-		# Road heading > 0 (right of due west) puts the sun on the left.
-		var sun_side := -1 if road.sample(s).heading > 0.0 else 1
-		if sun_side == signi(side):
-			return from + k
-	return from
 
 
 ## The first elevated stretch's middle in the city, else DEFAULT_S_M.

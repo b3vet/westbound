@@ -256,16 +256,75 @@ func _check_clearance(rs: Roadside, line: float, id: String) -> int:
 	return n
 
 
+## WP6.4c: no billboard, gantry or prop stands over the coast's sea (the water side,
+## beyond the road-level strip), while the land side keeps its billboards; with the
+## check off, billboards did stand there. Straight road at heading 0: d = x, s = -z.
+func test_no_props_over_the_sea() -> void:
+	var road := StraightRoadPath.new(3, _t.road)
+	var coast := _biome("coast")
+	var side := float(signi(coast.water.side))
+	var line := road.guardrail_d(0.0) + _t.road.prop_clearance_m
+	var ctx := RunContext.new(SEED, RunContext.MODE_JOURNEY, _t)
+	var plan := WaterPlan.new(ctx.rng_props.derive(WaterRibbon.STREAM).get_seed(), Callable(), coast)
+	var results := {}
+	for clear: bool in [true, false]:
+		var origin := _origin()
+		var rs := Roadside.new()
+		rs.fallback_biome = coast
+		rs.clear_water = clear
+		rs.view_distance_override_m = VIEW_M
+		tree.root.add_child(rs)
+		_nodes.append(rs)
+		rs.setup(ctx, road, origin)
+		var over := 0
+		var land_boards := 0
+		var skipped := 0
+		var s := 0.0
+		while s <= 12000.0:
+			var smp := road.sample(s)
+			origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+			rs.update_view(s)
+			if int(s) % 1500 == 0:
+				for layer in rs.layers:
+					for pool in layer.pools:
+						var verts := pool.mesh.get_faces()
+						for i in pool.count:
+							var xf := pool.get_transform(i)
+							var far := -INF
+							var reach := 0.0
+							for v in verts:
+								var w := xf * v
+								var d := layer.anchor_x + w.x
+								if d * side > far:
+									far = d * side
+									reach = -(layer.anchor_z + w.z)
+							if far > line + plan.shore_offset_at(reach) + POS_EPS:
+								over += 1
+							elif layer.id == &"billboard" and far < 0.0:
+								land_boards += 1
+			s += 250.0
+		for layer in rs.layers:
+			skipped += layer.water_cleared
+		results[clear] = [over, land_boards, skipped]
+	var on: Array = results[true]
+	var off: Array = results[false]
+	eq(on[0], 0, "nothing over the sea")
+	gt(on[1], 0, "billboards still stand on the land side")
+	gt(on[2], 0, "some placements were skipped for the sea")
+	gt(off[0], 0, "without the check, something stood over the sea (the test sees it)")
+
+
 # ---------------------------------------------------------------- Horizon sets
 
 func test_horizon_sets_apply_to_the_sky() -> void:
+	# One horizon shader (WP6.4c): the Sky's material carries the biome extensions.
 	var base_shader := load("res://assets/shaders/horizon.gdshader") as Shader
-	var ext_shader := load(HorizonSetDef.SHADER_PATH) as Shader
-	var ext_names := {}
-	for u: Dictionary in ext_shader.get_shader_uniform_list():
-		ext_names[u["name"]] = true
+	var names := {}
 	for u: Dictionary in base_shader.get_shader_uniform_list():
-		check(ext_names.has(u["name"]), "horizon_biomes keeps horizon.gdshader's uniform %s" % u["name"])
+		names[u["name"]] = true
+	for n: StringName in [&"layer_land", &"layer_mist", &"layer_windows", &"sea_dir", &"sea_softness", &"window_color"]:
+		check(names.has(String(n)), "horizon.gdshader has the extension uniform %s" % n)
+	check(not ResourceLoader.exists("res://assets/shaders/horizon_biomes.gdshader"), "a single horizon shader")
 	var farm := load(BiomeDirector.DEFAULT_BIOME_PATH) as BiomeDef
 	for id in BIOMES:
 		var b := _biome(id)
@@ -276,13 +335,13 @@ func test_horizon_sets_apply_to_the_sky() -> void:
 		var mat := (load("res://assets/shaders/materials/horizon.tres") as ShaderMaterial).duplicate() as ShaderMaterial
 		# Crossfading from farmland (no extensions) halfway into the biome.
 		HorizonSetDef.apply_blend(mat, farm.horizon_def, b.horizon_def, 0.5)
-		eq(mat.shader.resource_path, HorizonSetDef.SHADER_PATH, "%s switches the shader" % id)
+		eq(mat.shader, base_shader, "%s keeps the one horizon shader" % id)
 		eq(mat.render_priority, -98, "%s keeps the horizon's draw order" % id)
 		eq(mat.get_shader_parameter(&"layer_mist"), b.horizon_def.layer_mist * 0.5, "%s mist fades in" % id)
 		eq(mat.get_shader_parameter(&"layer_windows"), b.horizon_def.layer_windows * 0.5, "%s windows fade in" % id)
 	var plain := (load("res://assets/shaders/materials/horizon.tres") as ShaderMaterial).duplicate() as ShaderMaterial
 	HorizonSetDef.apply_blend(plain, null, null, 0.0)
-	eq(plain.shader.resource_path, "res://assets/shaders/horizon.gdshader", "no set, no switch")
+	eq(plain.get_shader_parameter(&"layer_mist"), Vector4.ZERO, "no set: no extensions")
 	var coast := _biome("coast")
 	eq(coast.horizon_def.layer_land.y, -1.0, "coast islands only over the sea")
 	eq(coast.horizon_def.layer_land.x, 1.0, "coast headlands only over the land")

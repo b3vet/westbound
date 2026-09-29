@@ -73,7 +73,8 @@ func edge_distance(s: float, def: WaterDef) -> float:
 	if reach <= 0.0 or not biome_lookup.is_valid():
 		return reach
 	var best := reach
-	for dir: float in [-1.0, 1.0]:
+	for side in 2:
+		var dir := -1.0 if side == 0 else 1.0
 		var step := reach / float(EDGE_PROBES)
 		var inside := 0.0
 		for k in range(1, EDGE_PROBES + 1):
