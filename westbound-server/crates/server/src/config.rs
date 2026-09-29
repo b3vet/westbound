@@ -63,6 +63,7 @@ pub struct Config {
     pub leaderboards: LeaderboardsConfig,
     pub runs: RunsConfig,
     pub social: SocialConfig,
+    pub replays: ReplaysConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -322,6 +323,40 @@ pub struct SocialConfig {
     pub report_context_max_bytes: u32,
 }
 
+/// Replay uploads, the verification queue and replay retention (N8.1; docs/SERVER.md →
+/// "Replays and verification"). Spec: "Leaderboards" (single-player runs, steps 3–5),
+/// "Resource budget" (the verifier: one job at a time, `nice 10`, 1 GB).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReplaysConfig {
+    /// Where uploaded replays live (`<dir>/<run_id>.wbr`; the verifier's result files go
+    /// to `<dir>/work/`). On the data volume.
+    pub dir: PathBuf,
+    /// Largest replay accepted (413 `body_too_large` above it). 4 MiB holds a 6-hour run.
+    pub max_bytes: u64,
+    /// The verifier command, one argv entry per item; each item may use `{replay}`,
+    /// `{out}`, `{run_id}`, `{seed}`, `{mode}`, `{build}`, `{claimed_score}` and
+    /// `{claimed_hits}`. Empty: no verifier (jobs wait as `pending`, runs stay
+    /// "verifying"). Env: comma-separated.
+    pub verifier_command: Vec<String>,
+    /// Run the queue worker inside `serve`. Off when a sidecar runs `verify-worker`
+    /// against the same database.
+    pub worker_enabled: bool,
+    /// A verifier run is killed after this long (the attempt fails).
+    pub job_timeout_secs: u64,
+    /// Attempts per job before it is `failed` (the run stays pending for an operator).
+    pub max_attempts: u32,
+    /// A failed attempt is retried after this long.
+    pub retry_delay_secs: u64,
+    /// The idle worker checks for jobs this often (an upload wakes it at once).
+    pub poll_interval_secs: u64,
+    /// Verified replays are kept while their run ranks within this on any board and
+    /// period (spec: "deleted after verification except for current top-100 entries").
+    pub keep_top_n: u32,
+    /// How often the retention sweep runs (and finds orphan files).
+    pub cleanup_interval_secs: u64,
+}
+
 /// Plausibility checks on single-player submissions (`POST /api/v1/runs`). Spec:
 /// "Leaderboards" → single-player runs. The scoring numbers mirror the game's
 /// `data/tuning/scoring.tres`, `legs.tres`, `lives.tres` and `vehicle.tres`; keep them
@@ -405,6 +440,9 @@ const MAX_WORKER_THREADS: usize = 64;
 const LOG_FORMATS: &[&str] = &["text", "json"];
 /// Crew invite codes: long enough not to be guessed under the rate limits, short enough to
 /// type.
+/// `replays.max_bytes` bounds: a header's worth, and 64 MiB.
+const MIN_REPLAY_BYTES: u64 = 1_024;
+const MAX_REPLAY_BYTES: u64 = 64 * 1024 * 1024;
 const MIN_INVITE_CODE_LEN: u32 = 6;
 const MAX_INVITE_CODE_LEN: u32 = 16;
 /// A report's `context` must fit in a request body.
@@ -586,6 +624,23 @@ impl Default for LeaderboardsConfig {
             crew_top_members: 4,
             legacy_max_journey_score: 50_000_000,
             legacy_max_distance_m: 2_000_000.0,
+        }
+    }
+}
+
+impl Default for ReplaysConfig {
+    fn default() -> Self {
+        Self {
+            dir: "/data/replays".into(),
+            max_bytes: 4 * 1024 * 1024,
+            verifier_command: Vec::new(),
+            worker_enabled: true,
+            job_timeout_secs: 1_800,
+            max_attempts: 3,
+            retry_delay_secs: 300,
+            poll_interval_secs: 30,
+            keep_top_n: 100,
+            cleanup_interval_secs: 3_600,
         }
     }
 }
@@ -965,6 +1020,7 @@ impl Config {
         }
         self.validate_leaderboards(&mut errs);
         self.validate_social(&mut errs);
+        self.validate_replays(&mut errs);
         if errs.is_empty() {
             Ok(())
         } else {
@@ -1015,6 +1071,32 @@ impl Config {
                 errs.push(format!(
                     "runs.supported_builds entry `{build}` must be a build number (0..=4294967295)"
                 ));
+            }
+        }
+    }
+
+    fn validate_replays(&self, errs: &mut Vec<String>) {
+        let r = &self.replays;
+        if r.dir.as_os_str().is_empty() {
+            errs.push("replays.dir must be set".into());
+        }
+        if r.max_bytes < MIN_REPLAY_BYTES || r.max_bytes > MAX_REPLAY_BYTES {
+            errs.push(format!(
+                "replays.max_bytes must be {MIN_REPLAY_BYTES}..={MAX_REPLAY_BYTES}"
+            ));
+        }
+        if r.verifier_command.iter().any(|a| a.is_empty()) {
+            errs.push("replays.verifier_command entries must not be empty".into());
+        }
+        for (name, v) in [
+            ("job_timeout_secs", r.job_timeout_secs),
+            ("poll_interval_secs", r.poll_interval_secs),
+            ("cleanup_interval_secs", r.cleanup_interval_secs),
+            ("max_attempts", u64::from(r.max_attempts)),
+            ("keep_top_n", u64::from(r.keep_top_n)),
+        ] {
+            if v == 0 {
+                errs.push(format!("replays.{name} must be at least 1"));
             }
         }
     }

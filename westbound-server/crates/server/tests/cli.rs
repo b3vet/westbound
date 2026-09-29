@@ -425,3 +425,63 @@ async fn admin_reports_and_crews() {
     );
     db::close(&pool).await;
 }
+
+#[tokio::test]
+async fn admin_replays_lists_and_requeues_jobs() {
+    use westbound_server::{accounts, db};
+    let dir = tempfile::tempdir().unwrap();
+    assert!(run(dir.path(), &["migrate"]).0);
+    let cfg = westbound_server::config::DbConfig {
+        path: dir.path().join("wb.db"),
+        ..Default::default()
+    };
+    let pool = db::connect(&cfg).await.unwrap();
+    let (ok, out, _) = run(dir.path(), &["admin", "replays"]);
+    assert!(ok && out.contains("no replays"), "{out}");
+    let mut conn = pool.acquire().await.unwrap();
+    let (id, _) = accounts::insert_device_account(&mut conn, "LoneWolf", &[0u8; 32], 1_000)
+        .await
+        .unwrap();
+    drop(conn);
+    for (run_id, status) in [(1, "failed"), (2, "pending"), (3, "done")] {
+        sqlx::query(
+            "INSERT INTO runs (id, account_id, mode, map_or_seed, date, score, distance_m,
+                               duration_s, verification, created_at)
+             VALUES (?, ?, 'journey', '7', '2026-09-29', 100, 1000, 60, 'pending', ?)",
+        )
+        .bind(run_id)
+        .bind(id)
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO replays (run_id, file_path, status, created_at, attempts, result)
+             VALUES (?, '/data/replays/x.wbr', ?, 1, 3, '{\"error\":\"timeout\"}')",
+        )
+        .bind(run_id)
+        .bind(status)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let (ok, out, err) = run(dir.path(), &["admin", "replays"]);
+    assert!(ok, "{err}");
+    assert!(
+        out.contains("failed 1") && out.contains("pending 1") && out.contains("done 1"),
+        "{out}"
+    );
+    assert!(out.contains("failed run 1 after 3 attempts"), "{out}");
+    let (ok, out, err) = run(dir.path(), &["admin", "replay-requeue"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("1 replay job(s) requeued"), "{out}");
+    let (status, attempts): (String, i64) =
+        sqlx::query_as("SELECT status, attempts FROM replays WHERE run_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), attempts), ("pending", 0));
+    let (ok, out, _) = run(dir.path(), &["admin", "replay-requeue", "3"]);
+    assert!(ok && out.contains("1 replay job(s)"), "{out}");
+    db::close(&pool).await;
+}

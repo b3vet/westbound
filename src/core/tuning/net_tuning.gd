@@ -1,11 +1,11 @@
 class_name NetTuning
 extends Resource
 ## Client networking numbers: server URL, accounts API (N1.2), session, keepalive,
-## clock sync, WebSocket buffers, runs and boards (N7.2), the social client (N9.2). Spec:
-## multiplayer handoff → Networking protocol (Connection, Clock sync), Accounts and
-## authentication, Tuning reference; docs/PROTOCOL.md §1; docs/SERVER.md → Accounts API.
-## Saved as data/tuning/net.tres.
-## WP N2.2, N1.2, N7.2 (runs and leaderboards), N9.2 (social).
+## clock sync, WebSocket buffers, runs and boards (N7.2), the social client (N9.2), replays
+## and the replay verifier (N8.1). Spec: multiplayer handoff → Networking protocol
+## (Connection, Clock sync), Accounts and authentication, Tuning reference;
+## docs/PROTOCOL.md §1; docs/SERVER.md → Accounts API. Saved as data/tuning/net.tres.
+## WP N2.2, N1.2, N7.2 (runs and leaderboards), N9.2 (social), N8.1 (replays).
 ## Until the orchestrator adds `Tuning.net`, load it with NetTuning.load_default().
 ##
 ## Protocol constants (frame cap, message cap, protocol version) are not tuning: they live
@@ -155,6 +155,49 @@ const PATH := "res://data/tuning/net.tres"
 @export var ws_outbound_buffer_kb: int = 64   # not in spec
 ## Queued packets per direction in WebSocketPeer.
 @export var ws_max_queued_packets: int = 256   # not in spec
+
+@export_group("Replays")
+## N8.1 (docs/REPLAY_FORMAT.md). The recorder samples the path and inputs every this many
+## 120 Hz physics ticks: 4 = the spec's 30 Hz. Discontinuities (a fork swap, the safety
+## net) and the run's last tick are always sampled.
+@export var replay_sample_ticks: int = 4
+## The traffic fingerprint goes into the replay every this many ticks (120 = once a
+## second): the verifier finds where its traffic diverged from the client's.
+@export var replay_fingerprint_ticks: int = 120   # not in spec
+## Room reserved up front for this much driving (grows by doubling after it).
+@export var replay_reserve_s: float = 900.0   # not in spec
+## Largest replay the client uploads (the server's `replays.max_bytes`, 4 MiB: a 6 h run).
+@export var replay_max_bytes: int = 4194304
+## Replays kept on the device waiting for their receipt or upload; the oldest is dropped.
+@export var replay_keep_max: int = 10   # not in spec
+
+@export_group("Replay verifier")
+## Accept when the recomputed score is within this of the claimed one (spec: 3 %).
+@export var verify_score_pct: float = 3.0
+## Physics limits: the path may use up to this multiple of the car's measured lateral
+## speed, lateral acceleration, yaw rate and longitudinal acceleration (task: x1.2).
+@export var verify_limit_factor: float = 1.2
+## Speed may exceed the boosted top speed by this much (quantization, overshoot).
+@export var verify_speed_margin_pct: float = 2.0   # not in spec
+## s and d between two samples must match the recorded velocities within this (a
+## teleport, or an edited path that keeps its speeds).
+@export var verify_path_tolerance_m: float = 0.25   # not in spec
+## A recomputed hit matches a logged one within this long; a recomputed hit the log
+## lacks is unreported.
+@export var verify_hit_match_s: float = 0.35   # not in spec
+## The client's scoring log must be reproduced this well (percent of scored events
+## matched one to one by kind within verify_hit_match_s) once either side has at least
+## verify_log_min_events: a replay from another world or a made-up log fails it.
+@export var verify_log_match_pct: float = 80.0   # not in spec
+@export var verify_log_min_events: int = 5   # not in spec
+## Boost without meter: the verifier's own meter may run this far below empty.
+@export var verify_boost_meter_slack: float = 0.1   # not in spec
+## Lateral speed / acceleration after a hit's deflection are not judged for this long.
+@export var verify_hit_grace_s: float = 0.5   # not in spec
+## The capability table: the car is driven through full-lock maneuvers at speeds this
+## far apart, for this long each (VerifierLimits).
+@export var verify_calibration_step_mps: float = 5.0   # not in spec
+@export var verify_calibration_s: float = 2.5   # not in spec
 
 
 func ping_interval_usec() -> int:

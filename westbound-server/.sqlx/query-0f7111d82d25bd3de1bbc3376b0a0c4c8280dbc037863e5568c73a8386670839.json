@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT status, size_bytes FROM replays WHERE run_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "status",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "size_bytes",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "size_bytes"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0f7111d82d25bd3de1bbc3376b0a0c4c8280dbc037863e5568c73a8386670839"
+}

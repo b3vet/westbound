@@ -107,7 +107,8 @@ func delete_account() -> NetApiResult:
 
 # ---------------------------------------------------------------- Core
 
-## One API call: `body` (a Dictionary, or null for none) is sent as JSON.
+## One API call: `body` (a Dictionary, or null for none) is sent as JSON; a
+## PackedByteArray is sent as is, `application/octet-stream` (the replay upload, N8.1).
 func request(method: int, path: String, body: Variant = null, flags: int = 0) -> NetApiResult:
 	if base_url.is_empty():
 		return NetApiResult.failure(0, NetApiResult.OFFLINE, "online features are off")
@@ -124,12 +125,15 @@ func request(method: int, path: String, body: Variant = null, flags: int = 0) ->
 
 func _send(method: int, path: String, body: Variant, flags: int) -> NetApiResult:
 	var url := base_url + path
-	var body_text := "" if body == null else JSON.stringify(body)
+	var raw := body is PackedByteArray
+	var body_text := "" if body == null or raw else JSON.stringify(body)
 	var max_retries := 0 if (flags & NO_RETRY) != 0 else maxi(tuning.api_max_retries, 0)
 	var attempt := 0
 	while true:
 		var headers := PackedStringArray(["Accept: application/json"])
-		if body != null:
+		if raw:
+			headers.append("Content-Type: application/octet-stream")
+		elif body != null:
 			headers.append("Content-Type: application/json")
 		if (flags & AUTH) != 0:
 			var token: String = bearer.call() if bearer.is_valid() else ""
@@ -138,8 +142,11 @@ func _send(method: int, path: String, body: Variant, flags: int) -> NetApiResult
 			headers.append("Authorization: Bearer " + token)
 		attempt += 1
 		attempts_sent += 1
-		var resp: NetHttpResponse = await backend.request(method, url, headers, body_text,
-				tuning.api_timeout_s)
+		var resp: NetHttpResponse
+		if raw:
+			resp = await backend.request_raw(method, url, headers, body as PackedByteArray, tuning.api_timeout_s)
+		else:
+			resp = await backend.request(method, url, headers, body_text, tuning.api_timeout_s)
 		var r := parse(resp, tuning)
 		r.attempts = attempt
 		if r.ok or attempt > max_retries:

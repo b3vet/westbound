@@ -29,6 +29,15 @@ const WAIT_RATE_LIMITED := "rate_limited"
 const WAIT_SIGN_IN := "sign_in"
 const WAIT_BANNED := "banned"
 
+## N8.1: where the run's replay is (docs/NET_CLIENT.md → Replays).
+const REPLAY_NONE := ""                 ## none recorded (or not kept)
+const REPLAY_STORED := "stored"         ## on the device, waiting for the receipt
+const REPLAY_QUEUED := "queued"         ## the receipt asked for it; waiting to upload
+const REPLAY_UPLOADING := "uploading"
+const REPLAY_UPLOADED := "uploaded"     ## the server has it (the run shows verifying)
+const REPLAY_NOT_NEEDED := "not_needed" ## the receipt needed none; deleted
+const REPLAY_REFUSED := "refused"       ## the server refused the upload; deleted
+
 const REASON_BUILD := "build_unsupported"
 const VERIFICATION_PENDING := "pending"
 const VERIFICATION_REJECTED := "rejected"
@@ -52,6 +61,8 @@ var replay_required: bool = false
 var duplicate: bool = false
 var reason: String = ""
 var placements: Array[Dictionary] = []
+## N8.1: one of REPLAY_*.
+var replay_state: String = REPLAY_NONE
 
 
 ## Takes a receipt (201, or 200 with `duplicate: true`).

@@ -41,6 +41,13 @@ N7.1 adds the leaderboards:
 
 See "Leaderboards & runs API".
 
+N8.1 adds replay verification (see "Replays and verification"):
+
+- the replay upload `POST /api/v1/runs/{run_id}/replay` (owner only, only when the receipt said `replay_required`, size-capped, idempotent);
+- the verification queue in `replays`: one verifier process at a time, with a timeout, retries and restart recovery; with no verifier configured (today's production) jobs wait and runs stay "verifying";
+- retention: replays are deleted after their verdict unless the run is in a current top 100;
+- `verify-worker` (the queue alone, for a sidecar) and `admin replays` / `admin replay-requeue`.
+
 N9.1 adds the account-level social layer:
 
 - friends with `name#1234` requests, a friends cap and blocking;
@@ -75,6 +82,7 @@ See "Social API".
 | `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files, read from `deeplinks.dir`, with built-in empty placeholders |
 | `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API" |
 | `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
+| `POST /api/v1/runs/{run_id}/replay` | public | The replay upload (binary body): see "Replays and verification" |
 | `/api/v1/friends*`, `/api/v1/blocks*`, `/api/v1/presence`, `/api/v1/crews*`, `/api/v1/reports` | public | Friends, blocks, presence, crews, reports: see "Social API" |
 | `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info` |
 
@@ -101,11 +109,14 @@ Subcommands:
 | `check-config` | Validates the config and prints the effective TOML with secrets redacted. Exits 2 on invalid config |
 | `backup <path>` | Writes a consistent online copy of the live database (`VACUUM INTO`) while the server runs. Refuses an existing file |
 | `healthcheck` | Probes `/api/v1/health` on the configured port on localhost. This is the image's `HEALTHCHECK` |
+| `verify-worker` | Runs the replay verification queue alone against the same database (a sidecar; the server then sets `replays.worker_enabled = false`). Needs `replays.verifier_command` |
 | `admin ban <id> <duration>` | Bans an account for `30m`, `12h`, `7d`, `2w`, or `perm`. See "Admin CLI" |
 | `admin unban <id>` | Lifts a ban |
 | `admin rename <id> <name>` | Force-renames an account |
 | `admin remove-run <run_id>` | Deletes a run and its replay; the entries it held fall back to the player's next best run |
 | `admin remove-entry <board> <period> <account_id>` | Deletes one leaderboard entry (crew id on `loop_crew`) |
+| `admin replays` | The replay queue: jobs per status, and the failed ones with their last error |
+| `admin replay-requeue [<run_id>]` | Puts every `failed` replay job (or that run's job) back to `pending` with fresh attempts |
 | `admin reports [--unhandled] [--limit N]` | Lists player reports, newest first (see "Social API → Admin commands") |
 | `admin report-handle <id>` | Marks a report handled |
 | `admin crew-rename <crew_id> [<name>] [--tag <tag>]` | Force-renames a crew and/or changes its tag |
@@ -123,6 +134,7 @@ Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` 
   - `0002` adds `accounts.token_version` and rebuilds `refresh_tokens` with its rotation state (`family`, `rotated_from`, `used_at`, `revoked_at`).
   - `0003` (N7.1) creates `runs`, `leaderboard_entries` and `replays` (see "Leaderboards & runs API → Tables").
   - `0004` (N9.1) creates `friends`, `blocks`, `crews`, `crew_members` and `reports` (see "Social API → Tables").
+  - `0005` (N8.1) turns `replays` into the verification queue (see "Replays and verification → Tables").
   - The other data-model tables (`shadow_contacts`) come with their milestones.
 
 Queries written with `sqlx::query!` are checked at compile time against `westbound-server/.sqlx/`, and CI builds with `SQLX_OFFLINE=true`. After you add or change a `query!`, or change the schema, regenerate that data:
@@ -605,7 +617,7 @@ Response **201** (also for a rejected run):
 ```
 
 - **`verification`:** `rejected` (a plausibility check failed; `reason` says which; stored for audit, never on a board), `pending` (a replay is required: shown as "verifying" until N8 checks it) or `unverified` (no replay needed).
-- **`replay_required`:** the run improves the player's entry on some board and period and either ranks within `leaderboards.replay_top_n` (100) there, or it is a personal best: an all-time period, or the day's Daily board. (Weekly and season boards reset, so a first run there is not a personal best.) The upload endpoint is N8's.
+- **`replay_required`:** the run improves the player's entry on some board and period and either ranks within `leaderboards.replay_top_n` (100) there, or it is a personal best: an all-time period, or the day's Daily board. (Weekly and season boards reset, so a first run there is not a personal best.) The client then uploads the replay: see "Replays and verification".
 - **`placements`:** each board and period the run feeds: Journey → the week, all-time and Distance; Daily → the date and Distance. `rank` is the player's rank there after the run (the run's own rank when it improved the entry). `on_board` is false for a `pending` run while `leaderboards.show_pending = false`.
 
 **Plausibility checks,** in this order; the first failure is the `reason`:
@@ -657,7 +669,7 @@ Response 200:
 ### Hooks for N6, N8 and N9
 
 - **N6, multiplayer runs:** `state.boards.record_multiplayer_run(&MultiplayerRun { account_id, map_id, room: Public | PrivateDefault | PrivateCustom, score, duration_s, distance_m, stats, car, client_build, ended_at, crew })`. It stores the run as `verified`. For a ranked room it writes Loop (the season of `ended_at`, and all-time), and with `crew: Some(CrewSnapshot { crew_id, member_ids })` the crew's Loop crew score: the sum of the best `crew_top_members` members' season entries, rewritten when it changes. It returns the run id, `ranked`, the placements and the new crew score.
-- **N8, replay verdicts:** `state.boards.set_run_verification(run_id, Accepted | Rejected)`. Accepted marks the run and its entries `verified` (and writes them if `show_pending` kept them off). Rejected marks the run `rejected` (`reject_reason = replay`) and rebuilds each entry it held from the player's next best eligible run. The `replays` table is ready (`run_id`, `file_path`, `status`, `result`, `created_at`); N8 adds the upload route, the queue and the files under `data/replays/`.
+- **N8, replay verdicts:** `state.boards.set_run_verification(run_id, Accepted | Rejected)`. Accepted marks the run and its entries `verified` (and writes them if `show_pending` kept them off). Rejected marks the run `rejected` (`reject_reason = replay`) and rebuilds each entry it held from the player's next best eligible run. N8.1's queue worker calls it (see "Replays and verification").
 - **N9, friends and crews (done in N9.1):** `social::friend_ids` feeds the friends view (`store::of_subjects`), `social::crew_of` the crew "me". Board reads fill `crew_tag` and the crew entries' name and tag. `leaderboards::recompute_crew` rewrites a crew's current-season sum when members join, leave, are kicked or delete their account. For N6: `social::crew_snapshot(conn, account_id)` builds the `CrewSnapshot` that `record_multiplayer_run` takes.
 
 ### Tables
@@ -669,7 +681,7 @@ Response 200:
   - `verification`, `reject_reason`, `legacy_board`, `idempotency_key`, `response` (the stored receipt), `created_at`.
   - Unique: `(account_id, idempotency_key)` and `(account_id, legacy_board)`.
 - `leaderboard_entries`: `(board, period_key, subject_id)` primary key, then `account_id` (NULL on `loop_crew`), `run_id`, `score`, `achieved_at`, `verification`, `run_date`. Indexed for ranking, by account (deletion) and by run (removal, verdicts).
-- `replays`: `run_id` (primary key), `file_path`, `status`, `result`, `created_at`.
+- `replays`: `run_id` (primary key), `file_path`, `status`, `result`, `created_at`; N8.1 adds the queue columns (see "Replays and verification → Tables").
 
 ### Configuration
 
@@ -702,6 +714,103 @@ Response 200:
 | `leg_bonus_max_points`, `journey_bonus_points` | `18500.0`, `50000.0` | Bonus bound per leg; the coast's bonus (`legs.tres`) |
 | `score_slack_pct` | `1.0` | Headroom on the score bound |
 | `date_early_secs` / `date_late_secs` | `3600` / `21600` | The submission window around a run's date |
+
+## Replays and verification
+
+WP N8.1, in `crates/server/src/replays/`: `mod.rs` (the upload), `format.rs` (the `.wbr` header), `routes.rs`, `worker.rs` (the queue), `retention.rs`. Spec: multiplayer handoff → "Leaderboards" (single-player runs, steps 3–5), "Resource budget" (the verifier: one job at a time, `nice 10`, 1 GB), "Data model" (`replays`). The file format and the verifier (Godot, headless): [`REPLAY_FORMAT.md`](REPLAY_FORMAT.md). The client: [`NET_CLIENT.md`](NET_CLIENT.md) → Replays. Tests: `tests/replays.rs`, `tests/cli.rs`.
+
+### `POST /api/v1/runs/{run_id}/replay` (bearer)
+
+The body is the `.wbr` file itself (`Content-Type: application/octet-stream`), with the run's id in its header (the client patches it in after the receipt). Rate-limited like run submissions (`rate_limits.runs_*` on top of the account limit). The body limit is `replays.max_bytes` (4 MiB), not the JSON routes' 4 KB.
+
+| Answer | When |
+| --- | --- |
+| **201** `{"run_id": "917", "status": "pending", "duplicate": false, "size_bytes": 51234}` | Stored as `<replays.dir>/917.wbr` with a `pending` job; the worker is woken |
+| **200** `duplicate: true` and the job's current `status` | The run already has a replay (a retry, a lost answer): nothing is stored again, the first file stays |
+| 401 `unauthorized` / `invalid_token` / ... | No or a bad bearer token |
+| 404 `unknown_run` | No such run (or not a decimal id) |
+| 403 `not_owner` | Another account's run |
+| 409 `replay_not_required` | The run's receipt did not say `replay_required`, or its verification is no longer `pending` (rejected by plausibility, already verified) |
+| 413 `body_too_large` | Over `replays.max_bytes` |
+| 400 `invalid_replay` | Not a replay: magic, version, lengths, compression, mode |
+| 400 `replay_mismatch` | A replay of another run: the header's run id, seed, mode, date or client build are not this run's |
+
+The file is written to a temporary name and renamed into place under the database's write lock, so two racing uploads store one file and one row.
+
+### The queue
+
+`replays` is the queue, one row per uploaded replay. One worker (inside `serve` when `replays.worker_enabled` and a `verifier_command` is set; or `westbound-server verify-worker` in a sidecar) runs **one job at a time**:
+
+1. Take the oldest `pending` job whose `not_before` has passed; mark it `running`, `attempts + 1`.
+2. Run `replays.verifier_command` with its placeholders filled in: `{replay}` (the file), `{out}` (`<dir>/work/<run_id>.json`), `{run_id}`, `{seed}`, `{mode}`, `{build}`, `{claimed_score}` (the run's score), `{claimed_hits}` (the run's `stats.hits`). Standard input is closed; the output is kept for the log. Past `job_timeout_secs` (30 min) the process is killed.
+3. Exit 0 with `{"accepted": true, ...}` in `{out}`, or exit 1 with `accepted: false`: the verdict. `state.boards.set_run_verification(run_id, Accepted | Rejected)`, the job becomes `done` with `verdict` and `result` (the verifier's JSON), a `replay verified` log line (run, verdict, reason, recomputed and claimed score, diff, unreported hits, violations, where traffic diverged, seconds), then retention.
+4. Anything else is a failed attempt (another exit status, a missing or contradicting result, a timeout, a missing file): the job goes back to `pending` after `retry_delay_secs` (5 min), or becomes `failed` after `max_attempts` (3). A `failed` job's run stays "verifying"; `admin replays` shows why and `admin replay-requeue` retries it.
+
+An upload wakes the worker at once; otherwise it looks every `poll_interval_secs` (30 s). On start, jobs a stopped worker left `running` go back to `pending` (the lost attempt counts). Exactly one worker may run against a database: either the in-server one or one `verify-worker`.
+
+**No verifier configured** (`verifier_command = []`, the default and today's production): the worker is not started (the log says so once at startup), uploads are stored, jobs stay `pending` and their runs stay `pending` ("verifying") on the boards. Configure a verifier later and the backlog is verified oldest first. Do not configure one in production before the determinism audit (N8.2): today honest replays of more than a few tens of seconds of dense traffic are rejected (REPLAY_FORMAT.md → Honest replays today).
+
+### Retention
+
+- **After a verdict:** a `done` job's file is deleted unless its run ranks within `keep_top_n` (100) on some board and period right now; a rejected run holds no entries, so its file always goes. The row stays with `file_deleted_at`.
+- **Every `cleanup_interval_secs` (1 h):** kept files are checked again (a run that fell out of every top 100 loses its file), and files in `replays.dir` and its `work/` older than an hour that no job needs are deleted (stray `.wbr`, temporary uploads, result files).
+- `pending`, `running` and `failed` jobs keep their files. Deleting a run (`admin remove-run`) or an account deletes its replays and files.
+
+### Tables
+
+`replays` (0003, queue columns from 0005):
+
+| Column | |
+| --- | --- |
+| `run_id` | primary key, the run (cascade on delete) |
+| `file_path` | `<replays.dir>/<run_id>.wbr` |
+| `status` | `pending`, `running`, `done`, `failed` |
+| `result` | the verifier's result JSON (`done`), or `{"error": ...}` (the last failed attempt) |
+| `created_at`, `size_bytes` | the upload |
+| `attempts`, `not_before`, `started_at`, `finished_at` | the queue |
+| `verdict` | `accepted` / `rejected` (`done`) |
+| `file_deleted_at` | retention let the file go |
+
+Index `replays_queue (status, not_before, created_at, run_id)` serves the worker's pick.
+
+### Configuration
+
+`[replays]` (env `WB_REPLAYS__<KEY>`; lists comma-separated):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `dir` | `/data/replays` | Replay files (on the data volume); results go to `<dir>/work/` |
+| `max_bytes` | `4194304` | Largest upload (a 6-hour run is about 2 MB; a 10-minute one about 50 KB) |
+| `verifier_command` | `[]` | The verifier argv with placeholders (above). Empty: no verifier |
+| `worker_enabled` | `true` | Run the worker inside `serve`; `false` when a `verify-worker` sidecar runs it |
+| `job_timeout_secs` | `1800` | A verifier run is killed after this long |
+| `max_attempts` / `retry_delay_secs` | `3` / `300` | Failed attempts before `failed`, and the wait between them |
+| `poll_interval_secs` | `30` | The idle worker's check (uploads wake it at once) |
+| `keep_top_n` | `100` | Verified replays of runs ranked within this keep their files |
+| `cleanup_interval_secs` | `3600` | The retention sweep |
+
+### Running the verifier (build parity, the 1 GB cap, Coolify)
+
+The verifier is a headless build of the **same game build** as the client whose runs it checks (spec: build parity): `tools/verifier/verify_replay.gd` run by that build's Godot binary and pack. It checks the replay's tuning hash against its own and answers "cannot verify" (exit 3, a failed attempt, never a verdict) when they differ. With several builds accepted (`runs.supported_builds`), keep one pack per build and let the command pick it: `--main-pack /verifier/{build}.pck`.
+
+Locally (from `westbound-server/`, with the editor binary):
+
+```sh
+WB_REPLAYS__VERIFIER_COMMAND='nice,-n,10,../tools/godot.sh,--headless,--path,..,--script,res://tools/verifier/verify_replay.gd,--,--replay={replay},--out={out},--seed={seed},--claimed-score={claimed_score},--claimed-hits={claimed_hits}' \
+    cargo run -p server -- --config config/dev.toml
+cargo test -p server --test replays -- --ignored end_to_end   # records a run with Godot, verifies it through a real server
+```
+
+The server image is distroless and static (no shell, no `nice`, no glibc), and a Godot export needs glibc, so the verifier cannot run inside today's image. Options for Coolify (MP-D1), none built yet:
+
+1. **Sidecar (recommended).** A second image, `westbound-verifier:<build>`: `debian:bookworm-slim` + the Godot Linux export template + the game's `.pck` per supported build + the `westbound-server` binary. In the Coolify compose it runs `westbound-server verify-worker` on the **same `/data` volume** (SQLite in WAL mode works across containers on one host), with `mem_limit: 1g` (the cgroup `memory.max`, the spec's systemd `MemoryMax`) and `cpus: 1`, and `WB_REPLAYS__VERIFIER_COMMAND=nice,-n,10,/verifier/westbound,--headless,--main-pack,/verifier/{build}.pck,--script,res://tools/verifier/verify_replay.gd,--,--server=off,--replay={replay},--out={out},--seed={seed},--claimed-score={claimed_score},--claimed-hits={claimed_hits}`. The server gets `WB_REPLAYS__WORKER_ENABLED=false`. The cap covers only the verifier; an OOM kill is a failed attempt, retried. Board caches in the server pick up verdicts within `leaderboards.cache_ttl_secs` (60 s), as with the admin CLI.
+2. **Same container.** Rebase the server image on `debian:bookworm-slim` with the template and packs, and let the in-server worker run `nice -n 10 prlimit --data=1073741824 ...`. One container to deploy, but the image grows from about 4 MB to about 100 MB, and the memory cap is either the whole container's (server and verifier together) or an rlimit (`--data`; `--as` would break Godot's address-space reservations).
+
+Measured on this dev box: a 4-minute replay verifies in 10–20 s and peaks at about 225 MB resident, so a 10-minute run takes under a minute and the 1 GB cap leaves room.
+
+### Tests
+
+`tests/replays.rs`: the upload (auth, not the owner, unknown run, stored once and idempotent with no temp files left, only when the receipt asked (a lower second run, a plausibility-rejected run), header checks (garbage, truncated, run id, seed, mode, date, build), the size cap and the large default); the queue with a stand-in verifier script: an accepted verdict (run and entries `verified`, the placeholders, a top-1 replay kept), a rejected one (off the board, file deleted), a verifier that runs over (killed at the timeout, retried after the delay, then `failed` with the run still verifying), a failed attempt retried (exit status and output tail in the error), a result that contradicts the exit status, restart recovery, the real server's worker running three jobs strictly one at a time and oldest first, the no-verifier mode; retention (top N keeps, a run pushed out loses its file, orphans older than an hour); account deletion; `end_to_end_with_the_godot_verifier` (`#[ignore]`, about 15 s: needs Godot). `tests/cli.rs`: `admin replays`, `admin replay-requeue`. `tests/config.rs` keeps `server.example.toml` equal to the defaults.
 
 ## Social API
 
@@ -923,6 +1032,7 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `ws_rate_limits.notice_interval_ms` | `WB_WS_RATE_LIMITS__NOTICE_INTERVAL_MS` | `1000` | At most one non-fatal `rate_limited` notice per interval |
 | `deeplinks.dir` | `WB_DEEPLINKS__DIR` | empty (image: `/data/well-known`) | Directory with `apple-app-site-association` and `assetlinks.json` |
 | `leaderboards.*`, `runs.*` | `WB_LEADERBOARDS__…`, `WB_RUNS__…` | see "Leaderboards & runs API → Configuration" | Views, cache, replay trigger, legacy caps; plausibility thresholds |
+| `replays.*` | `WB_REPLAYS__…` | see "Replays and verification → Configuration" | Replay files, size cap, the verifier command, the queue, retention |
 | `rate_limits.social_per_hour` / `_burst` | `WB_RATE_LIMITS__SOCIAL_PER_HOUR` / `__SOCIAL_BURST` | `60` / `20` | Social writes per account, on top of the account limit (see "Social API") |
 | `social.*` | `WB_SOCIAL__…` | see "Social API → Configuration" | Friend, request and block caps; crew size and invite codes; the report limit |
 

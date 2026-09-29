@@ -22,6 +22,18 @@ func _init(host_node: Node, tls_options: TLSOptions = null) -> void:
 
 func request(method: int, url: String, headers: PackedStringArray, body: String,
 		timeout_s: float) -> NetHttpResponse:
+	return await _send(method, url, headers, body, timeout_s)
+
+
+## A binary body (HTTPRequest.request_raw; the replay upload).
+func request_raw(method: int, url: String, headers: PackedStringArray, body: PackedByteArray,
+		timeout_s: float) -> NetHttpResponse:
+	return await _send(method, url, headers, body, timeout_s)
+
+
+## `body`: a String (HTTPRequest.request) or a PackedByteArray (request_raw).
+func _send(method: int, url: String, headers: PackedStringArray, body: Variant,
+		timeout_s: float) -> NetHttpResponse:
 	if host == null or not is_instance_valid(host) or not host.is_inside_tree():
 		return NetHttpResponse.failed(HTTPRequest.RESULT_CANT_CONNECT)
 	var req := HTTPRequest.new()
@@ -30,7 +42,11 @@ func request(method: int, url: String, headers: PackedStringArray, body: String,
 	if tls != null:
 		req.set_tls_options(tls)
 	host.add_child(req)
-	var err := req.request(url, headers, method as HTTPClient.Method, body)
+	var err: Error
+	if body is PackedByteArray:
+		err = req.request_raw(url, headers, method as HTTPClient.Method, body as PackedByteArray)
+	else:
+		err = req.request(url, headers, method as HTTPClient.Method, String(body))
 	if err != OK:
 		req.queue_free()
 		return NetHttpResponse.failed(HTTPRequest.RESULT_CANT_CONNECT)

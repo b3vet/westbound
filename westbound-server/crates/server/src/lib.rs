@@ -14,6 +14,9 @@
 //! leaderboard view, crew tags on boards, and the moderation admin commands.
 //! N3.2: the loop map (`map`: `loop_v1.json` compiled in, validated, hashed; its hash is
 //! accepted by the gateway unless `gateway.map_hashes` overrides it).
+//! N8.1: replay uploads (`POST /api/v1/runs/{run_id}/replay`), the verification queue
+//! (one verifier process at a time, timeouts, retries; none configured = jobs wait) and
+//! replay retention (top-N entries keep their files).
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Architecture", "Server tech stack",
 //! "Resource budget and deployment"; docs/MULTIPLAYER_PLAN.md → N0, MP-D1.
 
@@ -38,6 +41,7 @@ pub mod presence;
 pub mod profanity;
 pub mod profile;
 pub mod ratelimit;
+pub mod replays;
 pub mod runs;
 pub mod sessions;
 pub mod shutdown;

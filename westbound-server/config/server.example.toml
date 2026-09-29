@@ -239,3 +239,30 @@ crew_invite_code_len = 8
 # Reports per account per rolling 24 hours, and the largest report context (compact JSON).
 reports_per_day = 10
 report_context_max_bytes = 1024
+
+[replays]
+# Replay uploads and the verification queue (docs/SERVER.md → "Replays and verification").
+# Uploaded replays: <dir>/<run_id>.wbr; the verifier's result files go to <dir>/work/.
+dir = "/data/replays"
+# Largest replay accepted (4 MiB holds a 6-hour run; a 10-minute one is about 50 KB).
+max_bytes = 4194304
+# The verifier, one argv entry per item; placeholders {replay} {out} {run_id} {seed}
+# {mode} {build} {claimed_score} {claimed_hits}. Empty: no verifier, jobs wait as
+# pending and runs stay "verifying". Example (same container, docs/SERVER.md):
+# verifier_command = ["nice", "-n", "10", "/verifier/westbound-verifier", "--headless",
+#   "--main-pack", "/verifier/westbound.pck", "--script", "res://tools/verifier/verify_replay.gd",
+#   "--", "--server=off", "--replay={replay}", "--out={out}", "--seed={seed}",
+#   "--claimed-score={claimed_score}", "--claimed-hits={claimed_hits}"]
+verifier_command = []
+# Run the queue worker inside `serve` (false when a sidecar runs `verify-worker`).
+worker_enabled = true
+# One job at a time: killed after this long; this many attempts, this far apart.
+job_timeout_secs = 1800
+max_attempts = 3
+retry_delay_secs = 300
+# The idle worker looks for jobs this often (an upload wakes it at once).
+poll_interval_secs = 30
+# Verified replays are kept while their run ranks within this on any board and period.
+keep_top_n = 100
+# The retention sweep (and orphan files) runs this often.
+cleanup_interval_secs = 3600
