@@ -287,6 +287,7 @@ func _ready() -> void:
 		cs.auto_advance = false  # advanced from frame() with the real frame time
 		add_child(cs)
 		crash_sequence = cs
+	GameAudio.attach(self)   # WP7A: audio listens to Events and reads the run (the Audio autoload if present)
 
 	_start_run()
 	dev.setup(self)
