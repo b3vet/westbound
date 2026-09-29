@@ -133,7 +133,7 @@ Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p9
 
 ## 8. Open items for the owner
 
-1. **Domain** for the API, WebSocket and invite links (needed for TLS in Coolify, Universal Links and App Links).
+1. ~~Domain~~ **Decided:** `westbound.sipsakrandevu.com` for the API (`/api/v1/*`), the WebSocket (`/ws`), invite links (`/r/<code>`) and the deep-link files (owner, 2026-09-29).
 2. **VPS transfer allowance** (the spec budgets about 36 MB per player-hour).
-3. **GHCR access for Coolify:** the image is pushed to GHCR from this repo's Actions; Coolify needs pull access (public package, or a registry token).
+3. ~~GHCR access~~ **Done:** Coolify already has a GHCR registry token (the owner's other projects deploy from GHCR).
 4. Apple / Google developer setup when the iOS export happens (MP-D2).
