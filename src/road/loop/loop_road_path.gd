@@ -117,6 +117,19 @@ func signed_delta(a: float, b: float) -> float:
 	return wrap_s(b - a + _L * 0.5) - _L * 0.5
 
 
+## N3.2: the unwrapped s nearest `ref_s` (unwrapped) that lands on `wrapped` (any s,
+## taken modulo L): how a client that keeps counting s past L places a position that
+## arrives wrapped (the server's u32 mm s). Tick-safe.
+func unwrap_near(ref_s: float, wrapped: float) -> float:
+	return ref_s + signed_delta(ref_s, wrapped)
+
+
+## The period of the road (L): world systems that key on s (the elevated zone) repeat
+## with it. Tick-safe.
+func period_m() -> float:
+	return _L
+
+
 # ---------------------------------------------------------------- Reference line (tick rate)
 
 func sample_into(s: float, out: RoadSample) -> void:
@@ -257,7 +270,11 @@ func lane_flow_speed_mps(lane: int, lanes: int, s: float) -> float:
 ## The sections as a BiomePlan over `laps` laps (one leg per section, then the first
 ## section's biome): hand it to a BiomeDirector (`director.plan`) before its setup so the
 ## look, props and landmark styles follow the loop. Director rate.
+## `laps` <= 0 (N3.2): a periodic plan (leg k is section (k - 1) mod sections), valid
+## for any unwrapped s: what a session that drives lap after lap uses.
 func biome_plan(laps: int = 1) -> BiomePlan:
+	if laps <= 0:
+		return BiomePlan.repeating(layout.section_ids, layout.section_length_m)
 	var ids: Array[StringName] = []
 	for lap in maxi(laps, 1):
 		ids.append_array(layout.section_ids)

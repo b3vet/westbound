@@ -64,6 +64,8 @@ var emitted_last: int = 0
 
 var _buffers: Array[ScoreEventBuffer] = []
 var _last_multiplier: float = NAN
+## Last gear seen (-1 = none yet: the first frame sets it without an event).
+var _last_gear: int = -1
 var _last_chain: int = -1
 var _last_boosting: bool = false
 var _last_boost_fill: float = NAN
@@ -84,6 +86,7 @@ func clear_buffers() -> void:
 ## multiplier, chain and boost meter.
 func reset() -> void:
 	_last_multiplier = NAN
+	_last_gear = -1
 	_last_chain = -1
 	_last_boosting = false
 	_last_boost_fill = NAN
@@ -185,6 +188,11 @@ func _emit_changes() -> void:
 			Events.chain_changed.emit(c)
 			emitted_last += 1
 	if player != null:
+		if player.gear != _last_gear:
+			if _last_gear >= 0:
+				Events.gear_shifted.emit(player.gear)
+				emitted_last += 1
+			_last_gear = player.gear
 		if player.boost_active != _last_boosting:
 			_last_boosting = player.boost_active
 			if _last_boosting:

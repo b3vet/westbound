@@ -27,6 +27,7 @@ use crate::error::ApiError;
 use crate::gateway::GatewayPolicy;
 use crate::http::{self, DeepLinks};
 use crate::leaderboards::Leaderboards;
+use crate::map::ServerMap;
 use crate::metrics::Metrics;
 use crate::presence::PresenceHub;
 use crate::ratelimit::{RateLimiters, CLEANUP_INTERVAL};
@@ -62,6 +63,10 @@ pub struct AppState {
     /// Friends presence over the session registry (N9.1): subscriptions, pushes, and the
     /// N5 room seam (`presence.set_room`).
     pub presence: Arc<PresenceHub>,
+    /// The loop map (N3.2: `loop_v1`, compiled in, validated and hashed at startup) for
+    /// the room code (N4+). Its hash is accepted by the gateway unless
+    /// `gateway.map_hashes` overrides it.
+    pub map: Arc<ServerMap>,
 }
 
 impl AppState {
@@ -96,7 +101,8 @@ impl AppState {
         let auth = Arc::new(AuthKeys::from_config(&config));
         let metrics = Arc::new(Metrics::default());
         let rate_limiters = RateLimiters::new(&config, auth.clone(), metrics.clone());
-        let gateway = crate::gateway::policy(&config);
+        let map = crate::map::builtin().context("the built-in loop map")?;
+        let gateway = crate::gateway::policy(&config, &map);
         let sessions = Arc::new(Sessions::new(metrics.clone()));
         let presence = Arc::new(PresenceHub::new(sessions.clone()));
         let boards = Arc::new(Leaderboards::new(
@@ -119,6 +125,7 @@ impl AppState {
             tick_clock,
             boards,
             presence,
+            map,
         })
     }
 }

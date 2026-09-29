@@ -1,10 +1,11 @@
 class_name NetTuning
 extends Resource
 ## Client networking numbers: server URL, accounts API (N1.2), session, keepalive,
-## clock sync, WebSocket buffers. Spec: multiplayer handoff → Networking protocol
-## (Connection, Clock sync), Accounts and authentication, Tuning reference;
-## docs/PROTOCOL.md §1; docs/SERVER.md → Accounts API. Saved as data/tuning/net.tres.
-## WP N2.2, N1.2.
+## clock sync, WebSocket buffers, runs and boards (N7.2), the social client (N9.2). Spec:
+## multiplayer handoff → Networking protocol (Connection, Clock sync), Accounts and
+## authentication, Tuning reference; docs/PROTOCOL.md §1; docs/SERVER.md → Accounts API.
+## Saved as data/tuning/net.tres.
+## WP N2.2, N1.2, N7.2 (runs and leaderboards), N9.2 (social).
 ## Until the orchestrator adds `Tuning.net`, load it with NetTuning.load_default().
 ##
 ## Protocol constants (frame cap, message cap, protocol version) are not tuning: they live
@@ -45,6 +46,77 @@ const PATH := "res://data/tuning/net.tres"
 ## limits the text field and skips obviously short names.
 @export var display_name_min_chars: int = 3
 @export var display_name_max_chars: int = 16
+
+@export_group("Runs and leaderboards")
+## This build's number (u32), sent as `client_build` with every run submission and in the
+## WebSocket Hello. Bump it with every release: the server refuses builds it no longer
+## verifies (`build_unsupported`; docs/SERVER.md → POST /runs).
+@export var client_build: int = 1
+## A run that could not be sent (offline, server down, 429) is tried again after this
+## long, doubling up to the max; a 429's Retry-After wins when longer.
+@export var runs_retry_s: float = 20.0   # not in spec
+@export var runs_retry_max_s: float = 600.0   # not in spec
+## Most runs kept waiting on the device; the oldest is dropped past it.
+@export var runs_queue_max: int = 50   # not in spec
+## A queued run is dropped once the server would refuse its date: this long after the
+## end of the UTC day it was played (mirrors the server's `runs.date_late_secs`).
+@export var runs_date_late_s: float = 21600.0
+## A run that scored nothing and drove less than this is not submitted (a crash at the
+## start: it can place on no board, and it would spend the 30-per-hour submission limit).
+@export var runs_min_distance_m: float = 500.0   # not in spec
+## Board reads: the global top (the server's max) and "around me" ranks on each side.
+@export var boards_global_limit: int = 100
+@export var boards_around_me_limit: int = 10
+## A board page younger than this is shown from memory without asking the server again
+## (the server caches its tops for 60 s anyway).
+@export var boards_cache_s: float = 30.0   # not in spec
+## Pull to refresh asks the server again at most this often.
+@export var boards_refresh_min_s: float = 3.0   # not in spec
+## Daily Drive: how many previous days the date stepper reaches back.
+@export var boards_daily_days_back: int = 14   # not in spec
+
+@export_group("Leaderboards screen")
+## List row height and the tab column width, canvas px at 100% text size (touch targets
+## never shrink below hud.touch_target_px).
+@export var boards_row_px: float = 52.0   # not in spec
+@export var boards_tab_width_px: float = 250.0   # not in spec
+@export var boards_back_width_px: float = 190.0   # not in spec
+## Segmented choices (period, view): the narrowest option.
+@export var boards_option_min_px: float = 132.0   # not in spec
+## Type: the title (display face), row text and the small chips, canvas px at 100%.
+@export var boards_title_px: int = 40
+@export var boards_row_font_px: int = 20
+@export var boards_chip_font_px: int = 12
+## Pull to refresh: drag this far down at the top of the list, then let go.
+@export var boards_pull_refresh_px: float = 84.0   # not in spec
+## A press that moves less than this is a tap (selects a row), more is a scroll.
+@export var boards_tap_slop_px: float = 14.0   # not in spec
+## Fling: the list keeps its release speed and loses it at this rate (1/s).
+@export var boards_fling_decay: float = 5.0   # not in spec
+## The results screen's online line: slides and fades in over this long when the
+## server's placements arrive.
+@export var boards_reveal_s: float = 0.3   # not in spec
+
+@export_group("Social")
+## Friends screen open without a live lobby WebSocket: GET /presence this often (WP N9.2).
+@export var social_presence_poll_s: float = 15.0   # not in spec
+## The friend code field: a name (16) + "#" + four digits.
+@export var friend_code_max_chars: int = 21
+## Crew names and tags (docs/SERVER.md → Social API → Crews: 3–24 and 2–4 characters).
+@export var crew_name_min_chars: int = 3
+@export var crew_name_max_chars: int = 24
+@export var crew_tag_min_chars: int = 2
+@export var crew_tag_max_chars: int = 4
+## Invite codes: the server's `social.crew_invite_code_len` range (6–16; default 8).
+@export var crew_code_min_chars: int = 6
+@export var crew_code_max_chars: int = 16
+## The Loop crew board's "around me" window for the crew screen's season standing.
+@export var crew_board_around: int = 1   # not in spec
+## How long a "Copied." note stays on the crew screen.
+@export var social_note_s: float = 3.0   # not in spec
+## Web on a touch screen: a tap on a text field opens the browser's text prompt (iOS
+## Safari does not open its keyboard for Godot's field). Off: the field as on desktop.
+@export var web_text_prompt: bool = true   # not in spec
 
 @export_group("Keepalive")
 ## Ping cadence until `Welcome` arrives; afterwards `Welcome.ping_interval_ms` wins when set.

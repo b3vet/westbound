@@ -7,6 +7,7 @@ extends CanvasLayer
 ## CONTRACTS §14. docs/HUD.md.
 ##
 ##   hud.bind(feed)                  # the run's HudFeed; null = unbound (draws nothing new)
+##   hud.bind_loop(loop_feed)        # N3.2 loop mode: the room clock and sectors (null = off)
 ##   hud.pause_pressed / camera_pressed / high_beam_pressed
 ##
 ## Reads the per-frame values from the HudFeed and listens to `Events` for the
@@ -73,6 +74,10 @@ const CONTROL_SETTINGS: Array[StringName] = [&"steering_mode", &"throttle_mode",
 @export var auto_process: bool = true
 
 var feed: HudFeed
+## N3.2: the loop test mode's values (null or inactive: the journey HUD). The sun bar
+## becomes the room clock with the distance to the next sector, the leg toast names
+## sectors and laps.
+var loop_feed: HudLoopFeed
 var tuning: HudTuning
 var style := HudStyle.new()
 var layout := HudLayout.new()
@@ -199,6 +204,13 @@ func bind(f: HudFeed) -> void:
 		_max_lives = f.max_lives
 		if is_node_ready():
 			_read_feed()
+
+
+## N3.2: the loop mode's feed (null: the journey HUD again).
+func bind_loop(f: HudLoopFeed) -> void:
+	loop_feed = f
+	if is_node_ready() and feed != null:
+		_read_feed()
 
 
 ## Pins the canvas and safe rects (tests, previews); otherwise the viewport and the
@@ -349,6 +361,15 @@ func boost_lit() -> int:
 	return _boost.lit_segments()
 
 
+## N3.2: the top-centre plate shows the room clock (loop mode), and its countdown.
+func clock_shown() -> bool:
+	return _sun.is_clock()
+
+
+func clock_text() -> String:
+	return _sun.clock_text()
+
+
 func checkpoint_text() -> String:
 	return _sun.checkpoint_text()
 
@@ -439,9 +460,18 @@ func _read_feed() -> void:
 		_min_speed.set_state(absf(f.speed_mps) / maxf(f.min_speed_mps, EPS), f.too_slow,
 				HudFormat.speed_value(f.min_speed_mps, _miles))
 	_boost.set_fill(f.boost_fill, f.boosting)
-	_sun.set_sun(f.sun_height)
-	_sun.set_phase(f.night, f.dawning)
-	_sun.set_checkpoint(f.checkpoint_distance_m, _miles)
+	if loop_feed != null and loop_feed.active:
+		var lf := loop_feed
+		_toast.loop_sectors = lf.sectors
+		_sun.set_clock(true, lf.cycle_frac, lf.day_frac, lf.flip_in_s)
+		_sun.set_phase(lf.night, false)
+		_sun.set_checkpoint(lf.sector_distance_m, _miles)
+	else:
+		_toast.loop_sectors = 0
+		_sun.set_clock(false, 0.0, 1.0, 0.0)
+		_sun.set_sun(f.sun_height)
+		_sun.set_phase(f.night, f.dawning)
+		_sun.set_checkpoint(f.checkpoint_distance_m, _miles)
 	if not _lives.breaking() and not _lives.restoring():
 		_lives.set_lives(f.lives, f.max_lives)
 	_lives.set_ghost(f.ghost)

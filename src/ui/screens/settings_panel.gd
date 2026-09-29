@@ -11,11 +11,20 @@ extends Control
 ## elsewhere (the dev rows, the keyboard) shows at once. Only keys in Settings.DEFAULTS
 ## appear. Gyro (TILT) is disabled where the platform has no tilt
 ## (PlayerInput.is_gyro_supported()).
+##
+## WP7A: two pages, GAME (the rows above) and AUDIO (a volume row per bus: Master,
+## Music, SFX, Engine, UI, in AudioTuning.volume_steps, and the SOUND on/muted row),
+## switched by two tabs in the free span of the screen's header row (between the
+## siblings drawn there, e.g. the title and ACCOUNT / DONE). Only the shown page's rows
+## are visible and laid out.
 
 signal changed(key: StringName)
 
 const TEXT_GYRO := "TILT"
 const PCT_FMT := "%d%%"
+const PAGE_GAME := 0
+const PAGE_AUDIO := 1
+const PAGE_CAPTIONS: Array[String] = ["GAME", "AUDIO"]
 
 ## key, label, values, option labels ([] = percent labels from the values).
 var rows: Array[Row] = []
@@ -25,6 +34,11 @@ var tuning: HudTuning
 var hub: PlayerInput
 ## Settings writes made from this panel (tests).
 var writes: int = 0
+## The page shown (PAGE_GAME / PAGE_AUDIO) and its tabs.
+var page: int = PAGE_GAME
+var tabs: Array[ScreenButton] = []
+var _building_page: int = PAGE_GAME
+var _last_area := Rect2()
 
 
 class Row:
@@ -35,6 +49,7 @@ class Row:
 	var captions: PackedStringArray = []
 	var title: ScreenText
 	var buttons: Array[ScreenButton] = []
+	var page: int = 0
 
 
 func _init() -> void:
@@ -51,6 +66,16 @@ func build(t: HudTuning) -> void:
 		for b in r.buttons:
 			b.queue_free()
 	rows.clear()
+	for b in tabs:
+		b.queue_free()
+	tabs.clear()
+	for i in PAGE_CAPTIONS.size():
+		var tab := ScreenButton.make(PAGE_CAPTIONS[i], ScreenButton.Kind.OPTION, 20)
+		tab.name = "page_%d" % i
+		tab.pressed.connect(show_page.bind(i))
+		add_child(tab)
+		tabs.append(tab)
+	_building_page = PAGE_GAME
 	_add(&"steering_mode", "STEERING", [&"drag", &"gyro"], ["DRAG", TEXT_GYRO])
 	_add(&"throttle_mode", "THROTTLE", [&"auto", &"manual"], ["AUTO", "MANUAL"])
 	_add(&"left_handed", "HAND", [false, true], ["RIGHT", "LEFT"])
@@ -61,6 +86,12 @@ func build(t: HudTuning) -> void:
 	_add(&"text_scale", "TEXT SIZE", Array(t.text_scales), [])
 	_add(&"reduced_motion", "REDUCED MOTION", [false, true], ["OFF", "ON"])
 	_add(&"haptics", "HAPTICS", [true, false], ["ON", "OFF"])
+	_building_page = PAGE_AUDIO
+	var steps := Array(AudioTuning.resolve().volume_steps)
+	var labels: Array[String] = ["MASTER", "MUSIC", "EFFECTS", "ENGINE", "INTERFACE"]
+	for i in AudioBuses.VOLUME_KEYS.size():
+		_add(AudioBuses.VOLUME_KEYS[i], labels[i], steps, ["OFF"] if not steps.is_empty() and float(steps[0]) <= 0.0 else [])
+	_add(AudioBuses.MUTE_KEY, "SOUND", [false, true], ["ON", "MUTED"])
 	refresh()
 
 
@@ -70,6 +101,7 @@ func _add(key: StringName, label: String, values: Array, captions: Array) -> voi
 	var r := Row.new()
 	r.key = key
 	r.label = label
+	r.page = _building_page
 	r.values = values
 	for i in values.size():
 		if i < captions.size():
@@ -89,6 +121,8 @@ func _add(key: StringName, label: String, values: Array, captions: Array) -> voi
 
 func setup(s: HudStyle) -> void:
 	style = s
+	for b in tabs:
+		b.setup(s)
 	for r in rows:
 		r.title.setup(s)
 		for b in r.buttons:
@@ -134,7 +168,17 @@ func selected_index(key: StringName) -> int:
 	return -1
 
 
+## Shows a page (GAME / AUDIO) and lays it out again in the last area.
+func show_page(p: int) -> void:
+	page = clampi(p, PAGE_GAME, PAGE_CAPTIONS.size() - 1)
+	refresh()
+	if _last_area.size != Vector2.ZERO:
+		layout(_last_area)
+
+
 func refresh() -> void:
+	for i in tabs.size():
+		tabs[i].selected = i == page
 	for r in rows:
 		var current: Variant = Settings.get_value(r.key)
 		var best := _closest(r.values, current)
@@ -173,22 +217,35 @@ func _choose(r: Row, index: int) -> void:
 	changed.emit(r.key)
 
 
-## Lays the rows out in two columns inside `area` (panel-local px). Returns the height used.
+## Lays the shown page's rows out in two columns inside `area` (panel-local px) and
+## the page tabs in the header row above it. Returns the height used.
 func layout(area: Rect2) -> float:
 	if style == null or tuning == null:
 		return 0.0
+	_last_area = area
 	var g := tuning.spacing_grid_px
 	var col_gap := g * 2.0
 	var cols := 2
-	var per_col := ceili(float(rows.size()) / float(cols))
+	var shown := 0
+	for r in rows:
+		var on := r.page == page
+		r.title.visible = on
+		for b in r.buttons:
+			b.visible = on
+		if on:
+			shown += 1
+	var per_col := maxi(ceili(float(shown) / float(cols)), 1)
 	var cw := (area.size.x - col_gap * float(cols - 1)) / float(cols)
 	var rh := tuning.touch_target_px
 	var lw := tuning.settings_label_width_px * style.ts
-	for i in rows.size():
-		var r := rows[i]
+	var i := 0
+	for r in rows:
+		if r.page != page:
+			continue
 		@warning_ignore("integer_division")
 		var c := i / per_col
 		var k := i % per_col
+		i += 1
 		var x := area.position.x + float(c) * (cw + col_gap)
 		var y := area.position.y + float(k) * (rh + g)
 		var ts := r.title.get_combined_minimum_size()
@@ -200,4 +257,61 @@ func layout(area: Rect2) -> float:
 			var b := r.buttons[j]
 			b.position = Vector2(x + lw + float(j) * (bw + g), y)
 			b.size = Vector2(bw, rh)
+	_layout_tabs(area, rh, g)
 	return float(per_col) * rh + float(per_col - 1) * g
+
+
+## The tabs: centred in the widest free span of the header row (the band of height
+## `rh` ending 2 grid steps above `area`), clear of the visible siblings drawn there.
+func _layout_tabs(area: Rect2, rh: float, g: float) -> void:
+	if tabs.is_empty():
+		return
+	var band_y := area.position.y - g * 2.0 - rh
+	var lo := area.position.x
+	var hi := area.end.x
+	# Free spans between sibling controls in the band (panel and host share one space).
+	var best_lo := lo
+	var best_hi := lo
+	var cursor := lo
+	var edges := PackedFloat64Array()
+	var parent := get_parent()
+	if parent != null:
+		for n in parent.get_children():
+			var c := n as Control
+			if c == null or c == self or not c.visible:
+				continue
+			var rc := Rect2(c.position, c.size)
+			if rc.end.y <= band_y or rc.position.y >= band_y + rh or rc.size.x >= area.size.x:
+				continue
+			edges.append(rc.position.x)
+			edges.append(rc.end.x)
+	# Sort the obstacle spans by start (few items: insertion sort on pairs).
+	@warning_ignore("integer_division")
+	var spans := edges.size() / 2
+	for a in range(1, spans):
+		var j := a
+		while j > 0 and edges[(j - 1) * 2] > edges[j * 2]:
+			var s0 := edges[j * 2]
+			var s1 := edges[j * 2 + 1]
+			edges[j * 2] = edges[(j - 1) * 2]
+			edges[j * 2 + 1] = edges[(j - 1) * 2 + 1]
+			edges[(j - 1) * 2] = s0
+			edges[(j - 1) * 2 + 1] = s1
+			j -= 1
+	for a in spans:
+		var start := edges[a * 2] - g * 2.0
+		if start - cursor > best_hi - best_lo:
+			best_lo = cursor
+			best_hi = start
+		cursor = maxf(cursor, edges[a * 2 + 1] + g * 2.0)
+	if hi - cursor > best_hi - best_lo:
+		best_lo = cursor
+		best_hi = hi
+	var n_tabs := tabs.size()
+	var want := tuning.settings_label_width_px * style.ts
+	var tw := minf(want, (best_hi - best_lo - g * float(n_tabs - 1)) / float(n_tabs))
+	var total := tw * float(n_tabs) + g * float(n_tabs - 1)
+	var x0 := (best_lo + best_hi - total) * 0.5
+	for t in n_tabs:
+		tabs[t].position = Vector2(x0 + float(t) * (tw + g), band_y)
+		tabs[t].size = Vector2(tw, rh)

@@ -23,6 +23,11 @@ extends Node3D
 ##        set_night again, then the next leg's objective
 ## Every sim writes into one ScoreEventBuffer; RunEvents drains it once per frame.
 ## Slow motion, camera shake, the crash cue and screens react at frame rate.
+##
+## Loop test mode (N3.2, mode MODE_LOOP: `?mode=loop` on the web, `--mode=loop` or the
+## dev LOOP button natively): the multiplayer loop instead of the procedural road, s
+## unwrapped lap after lap, sectors as the legs, the room clock instead of the sun clock;
+## forks, the finale, the leg objectives and Chase the Sun are off. See RunLoop.
 
 const PLAYER_CAR_SCENE := preload("res://src/vehicle/player_car.tscn")
 const CAR_PATHS: Array[String] = [
@@ -59,6 +64,8 @@ const SNAP_FEATURE_LEGS := 8
 const SNAP_SEED := 20260929
 ## After the physics car (tick) and before the camera rig (100).
 const PHYSICS_PRIORITY := 50
+## N3.2: the loop test mode (RunLoop).
+const MODE_LOOP := &"loop"
 
 ## The first run's seed; 0 = a random seed at boot (Journey). Retries derive theirs
 ## from it and the run counter (Rng.derive_seed), so a test that sets it replays.
@@ -86,7 +93,10 @@ var tick_count: int = 0
 
 var tuning: Tuning
 var ctx: RunContext
-var road: ProceduralRoadPath
+## ProceduralRoadPath (the journey), or LoopRoadPath in loop mode (N3.2).
+var road: RoadPath
+## N3.2: the loop test mode's state (null outside loop mode).
+var loop: RunLoop
 var origin: FloatingOrigin
 var biome_director: BiomeDirector
 var builder: RoadBuilder
@@ -173,6 +183,7 @@ var _next_forget_s: float = 0.0
 var _resets: int = 0
 var _best_before: int = 0
 var _pending_journey_save: bool = false
+var _legs_for_loop: bool = false
 
 
 ## Full brake, wheel straight: the fallback crash (the car skids to a stop).
@@ -196,6 +207,9 @@ func _ready() -> void:
 			set_process(false)
 			get_tree().change_scene_to_file.call_deferred(DRIVE_SCENE if target == "drive" else SANDBOX_SCENE)
 			return
+	# N3.2: `?mode=loop` (web) or `--mode=loop` (native) opens the loop test mode.
+	if boot_param("mode") == String(MODE_LOOP):
+		mode = MODE_LOOP
 	process_physics_priority = PHYSICS_PRIORITY
 	tuning = Tuning.load_default()
 	_dt = tuning.vehicle.physics_dt()
@@ -273,12 +287,15 @@ func _ready() -> void:
 		cs.auto_advance = false  # advanced from frame() with the real frame time
 		add_child(cs)
 		crash_sequence = cs
+	GameAudio.attach(self)   # WP7A: audio listens to Events and reads the run (the Audio autoload if present)
 
 	_start_run()
 	dev.setup(self)
 	if manual_ticks:
 		set_physics_process(false)
 		set_process(false)
+	elif is_loop() and OS.has_feature("web"):
+		_apply_url_dev_args()
 
 
 func _exit_tree() -> void:
@@ -367,11 +384,33 @@ func force_hit(source: StringName = HitDetection.HIT_BARRIER, slot: int = -1, aw
 	_force_pending = true
 
 
-## Director leg: 0 follows the leg tracker (dev LEG button).
+## Director leg: 0 follows the leg tracker (dev LEG button; loop mode: the loop's leg).
 func set_leg_override(leg: int) -> void:
 	leg_override = maxi(leg, 0)
-	_director_leg = leg_override if leg_override > 0 else legs.leg_index
+	_director_leg = leg_override if leg_override > 0 else _auto_director_leg()
 	director.set_leg(_director_leg, car.state.s)
+
+
+## The dev DENS knob: the director's density scale (loop mode: times the loop's own).
+func set_dev_density_scale(x: float) -> void:
+	if loop != null:
+		if loop.dev_density_scale == x and director.density_scale == loop.density_scale(loop.section):
+			return
+		loop.dev_density_scale = x
+		director.set_density_scale(loop.density_scale(loop.section))
+	elif director.density_scale != x:
+		director.set_density_scale(x)
+
+
+## True in the loop test mode (N3.2).
+func is_loop() -> bool:
+	return mode == MODE_LOOP
+
+
+## Dev LOOP button: switches between the journey and the loop test mode (a new run).
+func dev_toggle_loop() -> void:
+	mode = RunContext.MODE_JOURNEY if is_loop() else MODE_LOOP
+	retry()
 
 
 # ---------------------------------------------------------------- Engine callbacks
@@ -433,12 +472,14 @@ func _sim_tick(dt: float) -> void:
 	var st := car.state
 	var from := events.size()
 	# The fork at the split (WP6.5): may swap the road's branch and move the car's d.
-	forks.tick(st)
+	if loop == null:
+		forks.tick(st)
 	# 3. traffic, the player as participant, then the director.
 	sim.step(dt, st, car.params, events)
 	director.step(dt, st)
-	forks.guard_traffic()
-	finale.tick(dt, st)
+	if loop == null:
+		forks.guard_traffic()
+		finale.tick(dt, st)
 	traffic_view.capture_tick()
 	# 4. collisions and hits.
 	lives.step(dt, st, events)
@@ -469,17 +510,20 @@ func _sim_tick(dt: float) -> void:
 	scoring.step(dt, st, sim.state, road, events)
 	st.boost_meter = minf(1.0, st.boost_meter + scoring.take_boost_fill())
 	_forward_scoring(score_from, events.size())
-	# 6. the sun clock.
-	sun.advance(dt, scoring.is_too_slow(), events)
+	# 6. the sun clock (loop mode: the room clock and the section).
+	if loop != null:
+		_loop_clock_tick(dt, st.s)
+	else:
+		sun.advance(dt, scoring.is_too_slow(), events)
 	scoring.set_night(sun.is_night())
 	_update_headlights()
-	# 7. the leg objective, legs and checkpoints.
-	if objectives.step(dt, car.input.brake, st.v, scoring.is_slipstreaming(), scoring.is_on_shoulder()):
+	# 7. the leg objective, legs and checkpoints (loop mode: sectors, no objective).
+	if loop == null and objectives.step(dt, car.input.brake, st.v, scoring.is_slipstreaming(), scoring.is_on_shoulder()):
 		legs.complete_objective(_pay_objective())
 	legs.observe_multiplier(dt, scoring.multiplier())
 	if legs.step(dt, st.s, sun.is_night(), events):
 		_dispatch_crossing()
-	if leg_override <= 0 and legs.leg_index != _director_leg:
+	if loop == null and leg_override <= 0 and legs.leg_index != _director_leg:
 		_director_leg = legs.leg_index
 		director.set_leg(_director_leg, st.s)
 		director.set_biome(biome_director.biome_at(st.s))
@@ -500,7 +544,8 @@ func _forward_scoring(from: int, to: int) -> void:
 	for i in range(from, to):
 		var k := events.kind[i]
 		if k == ScoringRuleSet.KIND_SUN_NUDGE:
-			sun.lift(events.value[i], events)
+			if loop == null:   # loop mode: no sun meter
+				sun.lift(events.value[i], events)
 		elif k == Scoring.KIND_NEAR_MISS:
 			sim.notify_close_pass(events.slot[i])
 		elif k == ScoreEvents.THREAD:
@@ -515,7 +560,7 @@ func _forward_scoring(from: int, to: int) -> void:
 
 ## A scored kind the objective counts; a completion is paid at once.
 func _objective_scored(kind: StringName) -> void:
-	if objectives.notify_scored(kind):
+	if loop == null and objectives.notify_scored(kind):
 		legs.complete_objective(_pay_objective())
 
 
@@ -536,9 +581,18 @@ func _start_leg_objective() -> void:
 
 
 ## The spec's crossing sequence (Legs and checkpoints, steps 1-4; 5 is the HUD toast).
+## Loop mode (a sector gantry, "Sectors replace checkpoints"): bank, the sector bonuses,
+## a clean sector's life; no sun lift or dawn, no objective, no journey.
 func _dispatch_crossing() -> void:
 	var c := legs.crossing
 	scoring.notify_checkpoint(events)
+	if loop != null:
+		for i in c.bonus_count():
+			scoring.award_bonus(c.bonus_kind(i), c.bonus_base_points(i, tuning.legs), events)
+		if c.clean:
+			lives.restore_life(events)
+		scoring.set_night(sun.is_night())
+		return
 	sun.on_checkpoint(c.avg_speed_mps, events)
 	for i in c.bonus_count():
 		scoring.award_bonus(c.bonus_kind(i), c.bonus_base_points(i, tuning.legs), events)
@@ -573,7 +627,8 @@ func _crash_tick(dt: float) -> void:
 	var st := car.state
 	sim.step(dt, st, car.params, events)
 	director.step(dt, st)
-	forks.guard_traffic()
+	if loop == null:
+		forks.guard_traffic()
 	traffic_view.capture_tick()
 	_safety_net()
 
@@ -592,7 +647,8 @@ func _road_ahead() -> void:
 	legs.plan_ahead(road, _plan_ahead_to(s))
 	if s >= _next_forget_s:
 		road.forget_before(s - reach_behind_m() - tuning.road.chunk_length_m)
-		forks.forget_before(s - reach_behind_m() - tuning.road.chunk_length_m)
+		if loop == null:
+			forks.forget_before(s - reach_behind_m() - tuning.road.chunk_length_m)
 		_next_forget_s = s + FORGET_EVERY_M
 
 
@@ -667,6 +723,7 @@ func _show_results() -> void:
 	last_results[&"personal_best"] = maxi(best, score)
 	last_results[&"new_best"] = new_best
 	last_results[&"previous_best"] = best
+	last_results[&"car"] = String(car.car.id) if car != null and car.car != null else ""   # N7.2 run submission
 	Events.run_over.emit(last_results)   # the results screen opens on it
 
 
@@ -741,6 +798,8 @@ func _fill_feed() -> void:
 	feed.chain = scoring.chain()
 	feed.multiplier = scoring.multiplier()
 	feed.distance_m = stats.distance_m
+	if loop != null:
+		loop.fill_feed(st.s, feed.checkpoint_distance_m)
 
 
 # ---------------------------------------------------------------- Run setup
@@ -751,9 +810,13 @@ func _start_run() -> void:
 	current_seed = _seed_for(run_count)
 	run_count += 1
 	tick_count = 0
-	ctx = RunContext.new(current_seed, mode, tuning)
-	road = ProceduralRoadPath.new(ctx)
-	forks.setup(self, forks_enabled)
+	if is_loop():
+		_setup_loop()
+	else:
+		loop = null
+		ctx = RunContext.new(current_seed, mode, tuning)
+		road = ProceduralRoadPath.new(ctx)
+		forks.setup(self, forks_enabled)
 	var start_s := start_s_m()
 	origin.setup(tuning.road.floating_origin_shift_km)
 	road.ensure_generated_to(_view_ahead(start_s))
@@ -766,6 +829,8 @@ func _start_run() -> void:
 	landmarks.setup(ctx, road, origin)
 	# Before the builder's first build: its ground-drop hook reads the features' plans.
 	features.setup(ctx, road, origin)
+	if loop != null:
+		loop.apply_features(features)
 	sky.setup(ctx, road, origin)
 	builder.build_all_now(start_s)
 	_next_forget_s = start_s + FORGET_EVERY_M
@@ -777,7 +842,8 @@ func _start_run() -> void:
 	director.set_fog_end(builder.view_distance_m())
 	director.events = events
 	director.set_biome(biome_director.current())
-	forks.start()
+	if loop == null:
+		forks.start()
 	director.checkpoint_style = biome_director.checkpoint_style   # WP6.3: toll gantries
 	traffic_view.setup(ctx, road, origin, registry, sim.state, director.opposite.state)
 	set_piece_view.setup(ctx, road, origin)
@@ -794,11 +860,18 @@ func _start_run() -> void:
 		(crash_sequence as CrashSequence).setup(ctx, registry)
 	scoring.reset(ctx)
 	sun.reset()
+	if (loop != null) != _legs_for_loop:
+		# Loop mode's legs (sectors) never reach the coast: its own LegsTuning copy.
+		_legs_for_loop = loop != null
+		legs = LegTracker.new(ctx.tuning.legs)
 	legs.reset(start_s)
 	lives.reset()
 	events.reset()
 	objectives.reset(ctx)
-	_start_leg_objective()
+	if loop != null:
+		legs.set_objective(&"")   # sectors have no objective
+	else:
+		_start_leg_objective()
 	# Leg 1 is announced like every other leg (its objective "on entry").
 	events.push(LegTracker.KIND_LEG_STARTED, 0, 0.0, -1.0, -1, float(legs.leg_index))
 	_force_pending = false
@@ -809,7 +882,11 @@ func _start_run() -> void:
 	_crash_by_sequence = false
 	_place_car(car_def, start_s, tuning.legs.start_speed_mps())
 	legs.plan_ahead(road, _plan_ahead_to(start_s))
-	_director_leg = leg_override if leg_override > 0 else legs.leg_index
+	_director_leg = leg_override if leg_override > 0 else _auto_director_leg()
+	if loop != null:
+		loop.bind_director(director, start_s)   # the loop's leg, density and flow speeds
+		sun.sky_t = loop.clock.sky_t()
+		sun.phase = SunClock.Phase.NIGHT if loop.night else SunClock.Phase.DAY
 	director.set_leg(_director_leg, start_s)
 	_headlights = false
 	sim.set_headlights(false)
@@ -829,7 +906,9 @@ func _start_run() -> void:
 	adapter.road = road
 	adapter.origin = origin
 	adapter.traffic = sim.state
-	adapter.forks = forks
+	adapter.forks = forks if loop == null else null
+	if hud != null and hud.has_method(&"bind_loop"):
+		hud.call(&"bind_loop", loop.feed if loop != null else null)
 
 	_best_before = Save.best_score(mode)
 	feed.reset()
@@ -854,9 +933,48 @@ func _start_run() -> void:
 
 ## Where the car waits for the countdown: the road starts at s = 0 (RoadBuilder's
 ## first chunk), so the run starts as far in as the roadside is kept behind the
-## player, and the chase camera never looks past the road's start.
+## player, and the chase camera never looks past the road's start. Loop mode: lap 1's
+## first spawn point (RunLoop.start_s: s = L + 150 m, so nothing ever builds at s < 0).
 func start_s_m() -> float:
+	if loop != null:
+		return loop.start_s()
 	return tuning.road.roadside_behind_m
+
+
+## N3.2: the loop test mode's run setup (instead of the procedural road and the forks):
+## the loop's tuning copy, road, periodic look plan and room clock.
+func _setup_loop() -> void:
+	if loop == null:
+		loop = RunLoop.new()
+		# The build's map hash (the web export smoke checks it against the committed one).
+		print("loop: %s map_hash=%s" % [MapInfo.LOOP_V1_ID, MapInfo.hash_hex()])
+	var t := loop.run_tuning(tuning)
+	ctx = RunContext.new(current_seed, mode, t)
+	if is_nan(loop.clock_start_unix_s):
+		# The room clock is UTC-derived: read once here (the Node layer), then advanced
+		# by the sim's dt, so the run replays from its start time.
+		loop.setup(t)
+		loop.clock.set_time(Time.get_unix_time_from_system())
+		loop.night = loop.clock.is_night()
+	else:
+		loop.setup(t)
+	road = loop.road
+	builder.clear_skip_range()
+	fork_view.end()
+	biome_director.plan = loop.biome_plan()
+	biome_director.apply_to_road = false
+
+
+## The director's leg without the dev override: the leg tracker's, or the loop's.
+func _auto_director_leg() -> int:
+	return loop.tuning.director_leg if loop != null else legs.leg_index
+
+
+## Loop mode, step 6: the room clock sets the sky and the night (x2), the sections the
+## traffic's flow speeds and density.
+func _loop_clock_tick(dt: float, s: float) -> void:
+	sun.sky_t = loop.tick(dt, s, events)
+	sun.phase = SunClock.Phase.NIGHT if loop.night else SunClock.Phase.DAY
 
 
 ## Seed of run k: the base seed first, then derived from it and the counter (Journey);
@@ -1002,7 +1120,7 @@ func trace_hash() -> int:
 	h = legs.hash_into(h)
 	h = objectives.hash_into(h)
 	h = TraceHash.mix_float(h, sun.sky_t)
-	h = forks.hash_into(h)
+	h = loop.hash_into(h) if loop != null else forks.hash_into(h)
 	h = TraceHash.mix_int(h, finale.phase)
 	return stats.hash_into(h)
 
@@ -1036,7 +1154,8 @@ func dev_reset_car() -> void:
 func dev_teleport(s: float, v_mps: float) -> void:
 	road.ensure_generated_to(_view_ahead(s))
 	# Forks jumped past take their left branch (and release the road's hold) first.
-	forks.sync(s)
+	if loop == null:
+		forks.sync(s)
 	legs.plan_ahead(road, _plan_ahead_to(s))
 	car.place_at(s, road.lane_center_d(tuning.legs.start_lane, s), v_mps)
 	var smp := road.sample(s)
@@ -1084,12 +1203,22 @@ func snap_setup(args: Dictionary) -> void:
 	# Reproducible snaps: a fixed seed unless --seed is given.
 	if args.has("car"):
 		car_index = int(args["car"]) % CAR_PATHS.size()
+	# N3.2: --mode=loop, --clock_min=<minutes into the room cycle> (the sky), --at=<place>.
+	if args.has("mode"):
+		mode = StringName(str(args["mode"]))
+	if is_loop():
+		if loop == null:
+			loop = RunLoop.new()
+		var epoch := loop.tuning.room_clock_epoch_unix_s
+		loop.clock_start_unix_s = epoch + Units.min_to_s(float(args.get("clock_min", 0.0)))
 	run_seed = int(args.get("seed", SNAP_SEED))
 	_base_seed = run_seed
 	run_count = 0
 	_start_run()
 	var s := float(args.get("s", 0.0))
-	if args.has("leg"):
+	if loop != null and args.has("at"):
+		s = loop.place_s(str(args["at"]))
+	elif args.has("leg"):
 		s = float(maxi(int(args["leg"]), 1) - 1) * tuning.legs.leg_length_m() + float(args.get("leg_s", SNAP_LEG_S_M))
 	if str(args.get("at", "")) == "elevated":
 		s = _snap_elevated_s(s)
@@ -1105,7 +1234,7 @@ func snap_setup(args: Dictionary) -> void:
 		finale.arm(coast)
 	if s > 0.0 or args.has("speed_kmh"):
 		dev_teleport(s, Units.kmh_to_mps(float(args.get("speed_kmh", tuning.legs.start_speed_kmh))))
-		if args.has("at"):
+		if args.has("at") or loop != null:
 			# The legs jumped over are not crossed (no sun lift: --sky_t holds).
 			legs.skip_to(s)
 	if args.has("lane"):
@@ -1318,10 +1447,51 @@ func _report_dev_stats() -> void:
 
 
 static func _url_scene() -> String:
+	return url_param("scene").to_lower()
+
+
+## The web page's `?key=value` (lower-case key; "" when absent or not on the web).
+static func url_param(key: String) -> String:
+	if not OS.has_feature("web"):
+		return ""
 	var query: Variant = JavaScriptBridge.eval("window.location.search", true)
 	if not (query is String):
 		return ""
 	for part: String in (query as String).trim_prefix("?").split("&"):
-		if part.begins_with("scene="):
-			return part.trim_prefix("scene=").to_lower()
+		if part.begins_with(key + "="):
+			return part.trim_prefix(key + "=").uri_decode()
 	return ""
+
+
+## A boot parameter: `?key=value` on the web, `--key=value` on the command line
+## (user arguments after `--`, or engine arguments Godot passes through).
+static func boot_param(key: String) -> String:
+	var v := url_param(key)
+	if not v.is_empty():
+		return v
+	var prefix := "--%s=" % key
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with(prefix):
+			return a.trim_prefix(prefix)
+	for a in OS.get_cmdline_args():
+		if a.begins_with(prefix):
+			return a.trim_prefix(prefix)
+	return ""
+
+
+## Loop mode on the web (dev and the export smoke): `&at=<place>` (RunLoop.place_s:
+## desert, tunnel, coast, bridge, city, farmland, seam, ... or metres), `&clock_min=<min
+## into the room cycle>`, `&bot=keep`, `&lane=`, `&speed_kmh=`, `&cam=`, `&hud=false` go
+## through snap_setup (a fresh run standing there). Nothing to do without them.
+func _apply_url_dev_args() -> void:
+	var args := {}
+	for key: String in ["at", "clock_min", "bot", "lane", "speed_kmh", "cam", "hud", "seed"]:
+		var v := url_param(key)
+		if not v.is_empty():
+			args[key] = v
+	if args.is_empty():
+		return
+	args["mode"] = String(MODE_LOOP)
+	if args.get("hud", "") == "false":
+		args["hud"] = false
+	snap_setup(args)

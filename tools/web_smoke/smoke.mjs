@@ -6,6 +6,11 @@
 //
 //   node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000]
 //        [--settle 3000] [--screenshot build/web_smoke.png] [--headed]
+//        [--query "server=off"] [--expect REGEX]...
+//
+// --query: the page's query string (default server=off; e.g. the loop test mode:
+// "mode=loop&server=off&at=city&bot=keep"). --expect: a console line must match
+// REGEX (repeatable; e.g. the loop map hash the build prints).
 //
 // Needs `npm ci` in tools/web_smoke once. Browser: Playwright's Chromium
 // (`npx playwright install chromium`), or CHROMIUM_PATH=/path/to/chrome.
@@ -24,6 +29,8 @@ function parseArgs(argv) {
     settle: 3000,
     screenshot: path.join(repoRoot, 'build', 'web_smoke.png'),
     headed: false,
+    query: 'server=off',
+    expect: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s, 2);
@@ -34,8 +41,10 @@ function parseArgs(argv) {
       case '--settle': opts.settle = Number(value()); break;
       case '--screenshot': opts.screenshot = path.resolve(value()); break;
       case '--headed': opts.headed = true; break;
+      case '--query': opts.query = value(); break;
+      case '--expect': opts.expect.push(new RegExp(value())); break;
       case '-h': case '--help':
-        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed]');
+        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]...');
         process.exit(0);
       default:
         console.error(`smoke: unknown argument ${argv[i]}`);
@@ -182,7 +191,8 @@ async function main() {
 
   const server = await serve(root);
   // ?server=off: the smoke test never creates accounts on the production server (N1.2).
-  const url = `http://127.0.0.1:${server.address().port}/index.html?server=off`;
+  if (!/(^|&)server=off(&|$)/.test(opts.query)) opts.query = `${opts.query}&server=off`.replace(/^&/, '');
+  const url = `http://127.0.0.1:${server.address().port}/index.html?${opts.query}`;
   const failures = [];
   const consoleLines = [];
   let browser;
@@ -277,6 +287,10 @@ async function main() {
       // A booted scene draws something besides the clear color (the title label
       // in M0). A flat image means the canvas never rendered.
       if (img.differingPct < 0.05) failures.push(`screenshot is a flat ${img.dominant}: nothing rendered`);
+      for (const re of opts.expect) {
+        if (!consoleLines.some((l) => re.test(l))) failures.push(`no console line matches ${re}`);
+        else console.log(`smoke: console matches ${re}`);
+      }
     } else {
       try {
         fs.mkdirSync(path.dirname(opts.screenshot), { recursive: true });

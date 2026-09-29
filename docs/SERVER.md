@@ -207,7 +207,7 @@ WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban 
 | `production` | empty | **none**: every `Hello` gets `map_mismatch`, and a warning is logged at start |
 | either | a list | exactly those |
 
-**N3** provides `loop_v1`'s hash. Add it with `WB_GATEWAY__MAP_HASHES=<hash>` in Coolify, or in `config/`. To keep an old client build working during a map update, list both hashes. Until N3, the owner can try the live check against production by setting `WB_GATEWAY__MAP_HASHES=0000000000000000000000000000000000000000000000000000000000000000` (the all-zero hash the tool sends by default) and removing it again afterwards.
+**Built-in map (N3.2):** `loop_v1.json` is compiled into the binary; its SHA-256 (`26a4e08b8e456ec56471c7d0626ab4ed760ba7579add6e4c279e9b3faa0dd296`) is accepted automatically when `gateway.map_hashes` is empty, and logged at startup. `WB_GATEWAY__MAP_HASHES=<hash>[,<hash>]` is an explicit override (a warning is logged if it leaves the built-in hash out). To keep an old client build working during a map update, list both hashes. Until N3, the owner can try the live check against production by setting `WB_GATEWAY__MAP_HASHES=0000000000000000000000000000000000000000000000000000000000000000` (the all-zero hash the tool sends by default) and removing it again afterwards.
 
 ### Clock (`Pong`)
 
@@ -913,7 +913,7 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `gateway.hello_timeout_ms` | `WB_GATEWAY__HELLO_TIMEOUT_MS` | `5000` | `Hello` must arrive within this (else `handshake_required`) |
 | `gateway.tick_rate_hz` | `WB_GATEWAY__TICK_RATE_HZ` | `20` | Tick rate in `Welcome` and of the `Pong` clock (spec: 20 Hz) |
 | `gateway.min_client_build` | `WB_GATEWAY__MIN_CLIENT_BUILD` | `0` | Older `Hello.client_build` gets `update_required` |
-| `gateway.map_hashes` | `WB_GATEWAY__MAP_HASHES` | empty | Accepted map hashes (64 hex each, comma-separated in the env). Empty: any in dev, none in production. N3 adds `loop_v1`'s |
+| `gateway.map_hashes` | `WB_GATEWAY__MAP_HASHES` | empty | Accepted map hashes (64 hex each, comma-separated in the env). Empty: any in dev; the built-in `loop_v1` hash in production (N3.2) |
 | `gateway.ban_recheck_ms` | `WB_GATEWAY__BAN_RECHECK_MS` | `30000` | Live sessions re-checked for bans, deletion and revoked tokens |
 | `gateway.fatal_close_delay_ms` | `WB_GATEWAY__FATAL_CLOSE_DELAY_MS` | `1000` | After a fatal `Error`, wait up to this for the client's close before closing |
 | `gateway.echo_enabled` | `WB_GATEWAY__ECHO_ENABLED` | `true` | Serve `/ws/echo` |
@@ -1016,7 +1016,7 @@ To restore:
 ## Verify a phone connects
 
 1. On the phone, open `https://westbound.sipsakrandevu.com/api/v1/health`. Expect `{"status":"ok",...,"db":"ok"}` over a valid certificate.
-2. On the phone, open `https://westbound.sipsakrandevu.com/api/v1/echo-check`. The page opens `wss://westbound.sipsakrandevu.com/ws/echo` and sends 1024 bytes. Then it sends a token-less `Hello` to `/ws` and shows **OK: echo over wss://.../ws/echo in N ms; gateway answered Error map_mismatch** (production has no map hash until N3; `auth_failed` once one is configured). Try it on Wi-Fi and on cellular.
+2. On the phone, open `https://westbound.sipsakrandevu.com/api/v1/echo-check`. The page opens `wss://westbound.sipsakrandevu.com/ws/echo` and sends 1024 bytes. Then it sends a token-less `Hello` to `/ws` and shows **OK: echo over wss://.../ws/echo in N ms; gateway answered Error map_mismatch** (`auth_failed`: the page sends no token; before N3.2 it was `map_mismatch`). Try it on Wi-Fi and on cellular.
 3. From a desktop, run the same echo with Godot's `WebSocketPeer` (no `--insecure` against the real certificate):
 
    ```sh
