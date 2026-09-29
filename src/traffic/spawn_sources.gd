@@ -97,6 +97,8 @@ class Flow:
 	var _p_types: Array[PackedInt32Array] = []   ## type ids that allow the profile
 	var _aggressive: int = -1
 	var _hesitant: int = -1
+	var _racer: int = -1   ## plan D15
+	var _p_left_lanes := PackedInt32Array()   ## spawn_left_lane_count (0 = any lane)
 	# Per type.
 	var _t_length := PackedFloat64Array()
 	var _t_width := PackedFloat64Array()
@@ -132,6 +134,10 @@ class Flow:
 				w = 0.0
 			if prof.id == tuning.spawn_hesitant_profile_id:
 				_hesitant = p
+			if prof.id == tuning.spawn_racer_profile_id:
+				_racer = p
+				w = 0.0
+			_p_left_lanes.append(prof.spawn_left_lane_count)
 			_p_weight.append(w)
 			var allowed := PackedInt32Array()
 			for t in types.size():
@@ -366,40 +372,65 @@ class Flow:
 		return true
 
 	## Draws one vehicle for `lane` of `lanes` into `rec` (everything but s): driver
-	## profile from the lane-conditioned mix (aggressive at ctx.aggressive_share wherever
-	## it may drive, Hesitant only if ctx.hesitant_allowed), desired speed within the
-	## profile's range and the lane's band, v = the lane flow speed, a vehicle type that
+	## profile from the lane-conditioned mix, desired speed within the profile's range
+	## and the lane's band (jittered), v = the lane flow speed, a vehicle type that
 	## allows the profile, a model variant and a palette color. False if nothing fits.
 	## Allocation-free; all randomness from `rng`.
+	##
+	## The mix (plan D15): the racer takes _racer_share(ctx) and the aggressive profile
+	## ctx.aggressive_share of every lane each may use; the others share the rest by
+	## their weights (Hesitant only if ctx.hesitant_allowed). A lane only the fast
+	## profiles fit (its flow is above every other profile's top speed) is all fast, in
+	## proportion to their shares.
 	func draw_into(ctx: SpawnSource.Context, rng: Rng, lane: int, lanes: int, min_speed: float, rec: SpawnSource.Record) -> bool:
 		var flow_v := tuning.lane_flow_speed_mps(lane, lanes)
 		var floor_v := maxf(flow_v - Units.kmh_to_mps(tuning.spawn_lane_speed_tolerance_kmh), min_speed)
 		var right_first := lanes - tuning.spawn_keep_right_lane_count
 		var others := 0.0
 		var aggressive_ok := false
+		var racer_ok := false
 		for p in _n:
 			_w[p] = 0.0
-			if not _eligible(ctx, p, lane, right_first, floor_v):
+			if not _eligible(ctx, p, lane, lanes, right_first, floor_v):
 				continue
 			if p == _aggressive:
 				aggressive_ok = true
+			elif p == _racer:
+				racer_ok = true
 			else:
 				_w[p] = _p_weight[p]
 				others += _w[p]
-		var share := clampf(ctx.aggressive_share, 0.0, 1.0) if aggressive_ok else 0.0
+		var agg := clampf(ctx.aggressive_share, 0.0, 1.0) if aggressive_ok else 0.0
+		var rac := clampf(_racer_share(ctx), 0.0, 1.0) if racer_ok else 0.0
+		if agg + rac > 1.0:
+			var k := 1.0 / (agg + rac)
+			agg *= k
+			rac *= k
 		if others <= 0.0:
-			if not aggressive_ok:
+			if not (aggressive_ok or racer_ok):
 				return false
-			share = 1.0
+			if agg + rac <= 0.0:
+				agg = 1.0 if aggressive_ok else 0.0
+				rac = 1.0 - agg
+			else:
+				var k := 1.0 / (agg + rac)
+				agg *= k
+				rac *= k
+		var fast := agg + rac
 		var r := rng.unit()
-		var p := _aggressive
-		if r >= share:
-			var x := (r - share) / (1.0 - share) * others
-			p = _pick(x)
+		var p := _racer
+		if r >= rac:
+			p = _aggressive
+			if r >= fast:
+				p = _pick((r - fast) / (1.0 - fast) * others)
 		rec.profile_id = p
 		rec.lane = lane
 		rec.d = NAN
 		rec.v0 = rng.float_range(maxf(_p_vmin[p], floor_v), _p_vmax[p])
+		var jitter := tuning.spawn_v0_jitter_frac()
+		if jitter > 0.0:
+			# Per-car jitter (plan D15): spreads a lane whose band clipped the profile's range.
+			rec.v0 = clampf(rec.v0 * (1.0 + jitter * (2.0 * rng.unit() - 1.0)), maxf(_p_vmin[p], min_speed), _p_vmax[p])
 		rec.v = flow_v
 		var allowed := _p_types[p]
 		var t := allowed[rng.int_range(0, allowed.size() - 1)]
@@ -410,8 +441,8 @@ class Flow:
 		rec.set_piece = &""
 		return true
 
-	func _eligible(ctx: SpawnSource.Context, p: int, lane: int, right_first: int, floor_v: float) -> bool:
-		if p != _aggressive and _p_weight[p] <= 0.0:
+	func _eligible(ctx: SpawnSource.Context, p: int, lane: int, lanes: int, right_first: int, floor_v: float) -> bool:
+		if p != _aggressive and p != _racer and _p_weight[p] <= 0.0:
 			return false
 		if _p_min_leg[p] > ctx.leg:
 			return false
@@ -421,7 +452,17 @@ class Flow:
 			return false
 		if _p_keep_right[p] == 1 and lane < right_first:
 			return false
+		# Fast-lane profiles (Racer): the leftmost N lanes, never the rightmost one.
+		if _p_left_lanes[p] > 0 and (lane >= _p_left_lanes[p] or lane >= lanes - 1):
+			return false
 		return not _p_types[p].is_empty()
+
+	## The racer's share on the context's leg (plan D15): DirectorTuning.racer_share_frac
+	## of the run's tuning; 0 without a racer profile or a run.
+	func _racer_share(ctx: SpawnSource.Context) -> float:
+		if _racer < 0 or ctx.run == null or ctx.run.tuning == null or ctx.run.tuning.director == null:
+			return 0.0
+		return ctx.run.tuning.director.racer_share_frac(ctx.leg)
 
 	## Profile whose cumulative weight covers x (x in [0, sum of _w)).
 	func _pick(x: float) -> int:

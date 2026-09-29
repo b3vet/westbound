@@ -11,6 +11,7 @@ extends WBTest
 const SEED := 620301
 const DT := 1.0 / 120.0
 const EPS := 1e-6
+const FORCE_ATTEMPTS := 2
 
 var tuning: Tuning
 var sc: TrafficScenario
@@ -74,13 +75,19 @@ func _run(seconds: float) -> void:
 
 
 ## Forces `id` and runs until it spawned; returns its instance.
+## A forced piece is dropped when no stretch within reach fits the live traffic; with
+## the faster traffic of plan D15 (WP6.6) that happens now and then (4 lanes): it is
+## forced again, up to FORCE_ATTEMPTS times.
 func _spawn(id: StringName) -> SetPieceSource.Instance:
-	check(dir.force_set_piece(id), "forced %s" % id)
-	for k in roundi(30.0 / DT):
-		_tick()
-		var inst := _running()
-		if inst != null:
-			return inst
+	for attempt in FORCE_ATTEMPTS:
+		var forced := dir.force_set_piece(id)
+		if attempt == 0:
+			check(forced, "forced %s" % id)
+		for k in roundi(30.0 / DT):
+			_tick()
+			var inst := _running()
+			if inst != null:
+				return inst
 	fail("%s never spawned" % id)
 	return null
 

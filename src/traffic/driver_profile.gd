@@ -3,8 +3,8 @@ extends Resource
 # lint: not-sim data schema; defaults are placeholders overwritten by data/driver_profiles/*.tres
 ## A driver personality: IDM and MOBIL parameters plus lane-change behavior.
 ## Spec: Traffic → IDM, MOBIL, Fairness rules 1 and 7, Driver types table.
-## Files: data/driver_profiles/<id>.tres (the eight profiles: cruiser, commuter,
-## aggressive, truck, bus, van, motorbike, hesitant). TrafficState.profile_id indexes
+## Files: data/driver_profiles/<id>.tres (the spec's eight profiles: cruiser, commuter,
+## aggressive, truck, bus, van, motorbike, hesitant; plus racer, plan D15). TrafficState.profile_id indexes
 ## the loaded list. Global rules still apply on top of a profile: the 6 m/s^2 clamp,
 ## the 0.5 s signal floor, the player b_safe and no-ambush (TrafficTuning).
 ## Defaults below are a standard "commuter" driver; IDM/MOBIL values are not in the
@@ -49,6 +49,9 @@ extends Resource
 @export_group("Director")
 ## First leg (1-based) on which this profile may spawn (Hesitant: 3).
 @export var min_leg: int = 1
+## Fast profiles that belong in the fast lanes (Racer, plan D15): Flow spawns them
+## only in the leftmost N lanes, and never in the rightmost (slow) lane. 0 = any lane.
+@export var spawn_left_lane_count: int = 0
 
 
 func desired_speed_min_mps() -> float:

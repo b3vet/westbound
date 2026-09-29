@@ -28,6 +28,7 @@ const PROFILE_COLORS: Array[Color] = [
 	Color("#58c2b4"),   # van
 	Color("#c05ad6"),   # motorbike
 	Color("#6cc86a"),   # hesitant
+	Color("#ff3fa4"),   # racer (plan D15)
 ]
 const OPPOSITE_COLOR := Color("#7a7f8c")
 const TAIL_OFF := Color("#4a1210")

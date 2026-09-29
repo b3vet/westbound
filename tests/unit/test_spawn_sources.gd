@@ -17,7 +17,14 @@ var tuning: Tuning
 
 func before_all() -> void:
 	reg = SpawnFixtureRegistry.new()
-	tuning = Tuning.load_default()
+	tuning = Tuning.load_default().duplicate() as Tuning
+	# The fixture registry has the spec's driver table, so its lanes keep the flow speeds
+	# and mix it was written for. Plan D15 (WP6.6) raised the real left-lane flows and
+	# added the racer; tests/unit/test_spawn_mix.gd covers the real data.
+	tuning.traffic = tuning.traffic.duplicate() as TrafficTuning
+	tuning.traffic.lane_flow_speeds_from_right_kmh = PackedFloat64Array([95.0, 115.0, 135.0, 150.0])
+	tuning.traffic.spawn_v0_jitter_pct = 0.0
+	tuning.traffic.spawn_profile_weights_pct = PackedFloat64Array([26.0, 34.0, 12.0, 4.0, 10.0, 4.0, 10.0])
 
 
 # ---------------------------------------------------------------- Helpers

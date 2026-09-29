@@ -20,7 +20,8 @@ extends Resource
 
 @export_group("Sim (model internals; not in spec, tuned in the traffic sandbox)")
 ## Leader/follower search horizon along the road. IDM interaction beyond it is ignored.
-@export var idm_lookahead_m: float = 400.0   # not in spec: covers s* at the largest closing speeds
+## Plan D15: 400 -> 560 m for the racer (250 km/h closing on an 80 km/h truck: s* = 537 m).
+@export var idm_lookahead_m: float = 560.0   # not in spec: covers s* at the largest closing speeds
 ## Gap floor in the IDM interaction term (avoids a division by zero on contact).
 @export var idm_gap_floor_m: float = 0.1   # not in spec: numerical floor
 ## Two lateral intervals closer than this count as the same path (leader search, gaps).
@@ -96,7 +97,9 @@ extends Resource
 @export_group("Lane discipline")
 ## Lane flow speeds, indexed from the RIGHTMOST lane (index 0 = slow lane).
 ## Lane i of n (0 = next to the median) uses entry [n - 1 - i]. Rises toward the left.
-@export var lane_flow_speeds_from_right_kmh: PackedFloat64Array = [95.0, 115.0, 135.0, 150.0]   # not in spec: only "rises toward the left"
+## Plan D15 (owner, M5): faster left lanes (was 95 / 115 / 135 / 150). The leftmost
+## lane of a 3-lane road flows at 165 km/h, so only the fast profiles fit it.
+@export var lane_flow_speeds_from_right_kmh: PackedFloat64Array = [95.0, 130.0, 165.0, 180.0]   # not in spec: only "rises toward the left"
 
 @export_group("Spawning")
 @export var spawn_ahead_m: float = 750.0
@@ -121,11 +124,18 @@ extends Resource
 @export var spawn_lane_speed_tolerance_kmh: float = 10.0   # not in spec: "slow profiles keep right"
 ## keep_right profiles spawn only in this many rightmost lanes.
 @export var spawn_keep_right_lane_count: int = 1   # not in spec: "keeps right"
-## Mix of the non-aggressive traffic (the aggressive share comes from DirectorTuning by
-## leg). Ids name DriverProfiles; a profile missing here never spawns from Flow.
+## Mix of the traffic that is neither aggressive nor racer (their shares come from
+## DirectorTuning by leg). Ids name DriverProfiles; a profile missing here never spawns from Flow.
 @export var spawn_profile_ids: Array[StringName] = [&"cruiser", &"commuter", &"truck", &"bus", &"van", &"motorbike", &"hesitant"]
 @export var spawn_profile_weights_pct: PackedFloat64Array = [26.0, 34.0, 12.0, 4.0, 10.0, 4.0, 10.0]   # not in spec
 @export var spawn_aggressive_profile_id: StringName = &"aggressive"
+## The fast "Racer" (plan D15): its share comes from DirectorTuning by leg, like the
+## aggressive share; it spawns only in its profile's spawn_left_lane_count left lanes.
+@export var spawn_racer_profile_id: StringName = &"racer"
+## Per-car desired-speed jitter (plan D15): after v0 is drawn in the lane's band, it is
+## moved by up to +-this % (kept inside the profile's range and above a behind spawn's
+## minimum speed), so a lane's cars don't all want the same speed.
+@export var spawn_v0_jitter_pct: float = 5.0   # not in spec
 ## Only from DirectorTuning.hesitant_first_leg (and the profile's own min_leg).
 @export var spawn_hesitant_profile_id: StringName = &"hesitant"
 ## Color-index range when the biome has no traffic palette.
@@ -192,6 +202,9 @@ extends Resource
 ## is at least this long (bumper to bumper; the player's car plus room either side).
 @export var metrics_gap_min_m: float = 15.0   # not in spec
 @export var metrics_sample_interval_s: float = 1.0   # not in spec
+## Speed bands of the live-traffic speed line (dev report / sandbox, plan D15): the
+## share of vehicles faster than each, in km/h.
+@export var dev_speed_bands_kmh: PackedFloat64Array = [150.0, 180.0, 200.0]   # not in spec
 
 
 func near_dt() -> float:
@@ -205,6 +218,10 @@ func far_dt() -> float:
 func lane_flow_speed_mps(lane: int, lane_count: int) -> float:
 	var i := clampi(lane_count - 1 - lane, 0, lane_flow_speeds_from_right_kmh.size() - 1)
 	return Units.kmh_to_mps(lane_flow_speeds_from_right_kmh[i])
+
+
+func spawn_v0_jitter_frac() -> float:
+	return Units.pct_to_frac(spawn_v0_jitter_pct)
 
 
 func hesitant_cancel_frac() -> float:
