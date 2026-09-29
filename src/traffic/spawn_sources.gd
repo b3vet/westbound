@@ -481,6 +481,76 @@ class Flow:
 			return ctx.biome.traffic_palette.size()
 		return maxi(tuning.spawn_palette_fallback_count, 1)
 
+	# ------------------------------------------------------------ Arrival records (plan D17, WP6.7; allocation-free)
+
+	## The racer / aggressive profile index (-1 when the registry has none).
+	func racer_profile() -> int:
+		return _racer
+
+	func aggressive_profile() -> int:
+		return _aggressive
+
+	## Top desired speed of profile `p` (m/s).
+	func top_speed(p: int) -> float:
+		return _p_vmax[p]
+
+	## True when profile `p` may arrive from behind in `lane` of `lanes`: a fast-lane
+	## profile (the racer) in its leftmost spawn_left_lane_count lanes, any other in the
+	## leftmost `behind_lanes`; never the rightmost lane, never a keep-right profile's
+	## lanes, and only when the profile has a vehicle type.
+	func arrival_lane_ok(p: int, lane: int, lanes: int, behind_lanes: int) -> bool:
+		if p < 0 or p >= _n or _p_types[p].is_empty() or lane >= lanes - 1:
+			return false
+		if _p_keep_right[p] == 1:
+			return false
+		var n := _p_left_lanes[p] if _p_left_lanes[p] > 0 else behind_lanes
+		return lane < n
+
+	## One arriving vehicle of profile `p` for `lane` into `rec` (everything but s and v):
+	## its desired speed drawn in the profile's range above `min_v0`, a type allowing the
+	## profile, a model variant and a palette color. False when the profile cannot be
+	## that fast or has no type. All randomness from `rng`.
+	func draw_arrival_into(ctx: SpawnSource.Context, rng: Rng, p: int, lane: int, min_v0: float,
+			rec: SpawnSource.Record) -> bool:
+		if p < 0 or p >= _n or _p_types[p].is_empty() or _p_vmax[p] <= min_v0:
+			return false
+		rec.profile_id = p
+		rec.lane = lane
+		rec.d = NAN
+		rec.v0 = rng.float_range(maxf(_p_vmin[p], min_v0), _p_vmax[p])
+		rec.v = rec.v0
+		var allowed := _p_types[p]
+		var t := allowed[rng.int_range(0, allowed.size() - 1)]
+		rec.type_id = t
+		rec.model_variant = rng.int_range(0, _t_variants[t] - 1) if _t_variants[t] > 1 else 0
+		rec.color_index = rng.int_range(0, _palette_count(ctx) - 1)
+		rec.flags = 0
+		rec.set_piece = &""
+		return true
+
+	## Center spacing a follower of profile `pf` (length lf) at `v_from` needs behind a
+	## leader at `vl` (length ll) to brake down to vl at its comfortable deceleration and
+	## end at its equilibrium gap: half the lengths + s0 + vl T + (v_from^2 - vl^2) / 2b.
+	## Beyond it the follower has not yet had to slow below v_from.
+	func braking_spacing(pf: int, lf: float, v_from: float, vl: float, ll: float) -> float:
+		var brake := maxf(0.0, v_from * v_from - vl * vl) / (2.0 * _p_b[pf])
+		return (lf + ll) * 0.5 + _p_s0[pf] + vl * _p_headway[pf] * headway_scale + brake
+
+	## The highest speed at which a follower of profile `pf` (length lf) keeps IDM's s*,
+	## closing term included, to a leader at `vl` (length ll) whose center is `spacing`
+	## ahead: the largest v with min_spacing(pf, v, lf, vl, ll) <= spacing. -1 when even a
+	## standing follower does not fit (spacing below half the lengths + s0).
+	func max_speed_behind(pf: int, lf: float, spacing: float, vl: float, ll: float) -> float:
+		var room := spacing - (lf + ll) * 0.5 - _p_s0[pf]
+		if room < 0.0:
+			return -1.0
+		# s0 + v T + v (v - vl) c <= spacing - lengths, c = 1 / (2 sqrt(a b)):
+		# c v^2 + (T - c vl) v - room <= 0; the larger root bounds v.
+		var c := 1.0 / (2.0 * sqrt(_p_a[pf] * _p_b[pf]))
+		var bq := _p_headway[pf] * headway_scale - c * vl
+		var c2 := 2.0 * c
+		return (-bq + sqrt(bq * bq + 2.0 * c2 * room)) / c2
+
 
 ## Daily Drive: Flow on a date-seeded stream. The date seeding lives in the run context
 ## (RunContext.daily -> run.rng_traffic), so everyone on the same UTC date gets the same

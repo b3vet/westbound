@@ -182,3 +182,56 @@ func wave_density_mult(intensity: float) -> float:
 
 func racer_share_frac(leg: int) -> float:
 	return Units.pct_to_frac(lerpf(racer_share_first_pct, racer_share_last_pct, leg_ramp(leg)))
+
+
+# ---------------------------------------------------------------- Racers from behind (plan D17, WP6.7)
+
+## Owner decision (plan D17: "Yes, pass me at speed"): behind spawns need the player to
+## be slower than a lane's flow, so a player at 170-230 km/h only ever met racers ahead.
+## Racer arrivals: a seeded process of fast cars (racers, and aggressive drivers when
+## theirs can be) spawned out of view behind the player whenever the arriving car's OWN
+## desired speed beats the player's by racer_arrival_speed_margin_kmh. They pass it
+## legally (IDM gaps at spawn, MOBIL with blinkers, no-ambush, rear-end prevention).
+## See docs/SPAWNING.md "Racers from behind (WP6.7)".
+@export_group("Racers from behind (plan D17, WP6.7; not in spec)")
+## Seconds between arrivals, drawn uniformly per arrival, ramped like the density from
+## leg 1 to leg 8. The clock runs at the wave's density multiplier where the player is
+## and stops in breathers (wave, fork and finale) and near set pieces.
+@export var racer_arrival_interval_first_min_s: float = 20.0   # not in spec
+@export var racer_arrival_interval_first_max_s: float = 40.0   # not in spec
+@export var racer_arrival_interval_last_min_s: float = 10.0   # not in spec
+@export var racer_arrival_interval_last_max_s: float = 20.0   # not in spec
+## An arrival's desired speed is drawn at least this far above the player's speed (and
+## its spawn speed never goes below it), so it always closes on the player.
+@export var racer_arrival_speed_margin_kmh: float = 15.0   # not in spec
+## Share of the arrivals drawn as aggressive drivers (when the profile's top speed beats
+## the player's by the margin; otherwise a racer arrives).
+@export var racer_arrival_aggressive_pct: float = 25.0   # not in spec
+## A due arrival that finds no lane (visible, the gaps don't fit, the lane is not clear
+## to the player) retries after this.
+@export var racer_arrival_retry_s: float = 0.5   # not in spec
+## Spawn points tried, farthest first: spawn_behind_m (TrafficTuning, ~150 m) behind the
+## player, then this much closer at a time down to racer_arrival_behind_min_m (every one
+## far beyond behind_spawn_view_margin_m, so out of view in every camera mode).
+@export var racer_arrival_behind_min_m: float = 90.0   # not in spec
+@export var racer_arrival_behind_step_m: float = 20.0   # not in spec
+## No arrival while a requested breather (fork approach, journey finale) or a live set
+## piece's zone lies within this far ahead of the player: a racer passing now would
+## reach it (the fork guard would remove it in view; it would drive into the piece).
+@export var racer_arrival_clear_ahead_m: float = 2000.0   # not in spec
+## A clear run: holding its spawn speed, the arrival must get this far past the player
+## (the player and the lane's traffic predicted at their speeds) before any slower car
+## in its lane makes it brake below the player's speed, so it passes instead of
+## queueing, out of view, behind a car the player is passing.
+@export var racer_arrival_pass_clear_m: float = 40.0   # not in spec
+## Racers passing the player / overtaken by it (DevStats, the dev report) are counted
+## this often (a dev counter; the side test has hysteresis).
+@export var racer_pass_check_interval_s: float = 0.1   # not in spec
+
+
+## Seconds to the next arrival on `leg` for a uniform draw `u` in [0, 1].
+func racer_arrival_interval_s(leg: int, u: float) -> float:
+	var k := leg_ramp(leg)
+	var lo := lerpf(racer_arrival_interval_first_min_s, racer_arrival_interval_last_min_s, k)
+	var hi := lerpf(racer_arrival_interval_first_max_s, racer_arrival_interval_last_max_s, k)
+	return lerpf(lo, hi, clampf(u, 0.0, 1.0))

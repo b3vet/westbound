@@ -48,6 +48,9 @@ const LC_TAGS: Array[String] = ["", "/signaling", "/moving"]
 const TIMEOUT_FACTOR := 3.0
 ## A collision this close to a live set piece counts as at the piece (collisions_at_pieces).
 const PIECE_MARGIN_M := 300.0
+## The owner's usual speeds (plan D17, WP6.7): the soak reports the bot's time there.
+const FAST_BOT_MIN_KMH := 170.0
+const FAST_BOT_MAX_KMH := 230.0
 
 var index: int
 var seed_value: int
@@ -108,6 +111,12 @@ var director_usec := 0
 ## Ticks at the vehicle cap, and the sum of active counts (mean active = sum / ticks).
 var ticks_at_cap := 0
 var active_sum := 0
+## Racers from behind (WP6.7): ticks with the bot at >= FAST_BOT_MIN_KMH, and within
+## [FAST_BOT_MIN_KMH, FAST_BOT_MAX_KMH] (the owner's usual 170-230 km/h).
+var ticks_fast := 0
+var ticks_170_230 := 0
+var _fast_lo := 0.0
+var _fast_hi := 0.0
 
 
 ## `run_legs` / `leg_m` <= 0 use TrafficTuning.soak_run_legs / LegsTuning's leg length.
@@ -169,6 +178,8 @@ func _init(run_index: int, base_seed: int, run_legs: int = -1, leg_m: float = -1
 	_hits.reset(bot.state, null)
 	_next_hash = tuning.traffic.trace_hash_interval_s
 	_next_window = tuning.traffic.soak_window_check_interval_s
+	_fast_lo = Units.kmh_to_mps(FAST_BOT_MIN_KMH)
+	_fast_hi = Units.kmh_to_mps(FAST_BOT_MAX_KMH)
 
 
 ## Runs until the bot has driven the run's distance (or the timeout).
@@ -220,6 +231,10 @@ func tick() -> void:
 	metrics.add_lane_changes(sim.stat_completed - _completed)
 	_completed = sim.stat_completed
 	peak_active = maxi(peak_active, sim.state.count)
+	if bot.state.v >= _fast_lo:
+		ticks_fast += 1
+		if bot.state.v <= _fast_hi:
+			ticks_170_230 += 1
 	time += DT
 	ticks += 1
 	if time >= _next_hash:
@@ -397,6 +412,10 @@ func result() -> Dictionary:
 		"set_pieces_ended_zone": director.set_pieces.ended_zone,
 		"set_pieces_ended_duration": director.set_pieces.ended_duration,
 		"set_pieces_ended_empty": director.set_pieces.ended_empty,
+		"racer_arrivals": director.racer_arrivals, "racer_arrivals_waited": director.racer_arrivals_waited,
+		"arrivals_passed_player": director.arrivals_passed_player,
+		"racers_passed_player": director.racers_passed_player, "racers_overtaken": director.racers_overtaken,
+		"ticks_fast": ticks_fast, "ticks_170_230": ticks_170_230,
 		"metrics_raw": metrics_raw(), "messages": Array(c.messages),
 	}
 

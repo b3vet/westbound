@@ -11,6 +11,13 @@ extends DriveControls
 ##            shared default is never touched)
 ##   RACER    spawns a racer behind the player, one lane left of it when there is one,
 ##            and selects it (MOBIL panel, labels)
+## and on the row below:
+##   ARR ON/OFF  the director's racer arrivals from behind (plan D17, WP6.7) on / off;
+##            kept across re-seeds
+##   ARRIVE   the next arrival is due now (it still needs a lane that fits); the arrival
+##            is selected when it spawns
+## The stats panel's "racers" line and the dev report's "racers" line
+## (DevReport.racers_line) count racers passing the player and overtaken by it.
 ## The stats panel's "speeds" line and the dev report's "traffic" line show the live
 ## speed distribution (DevReport.traffic_line). Also the snap hook (snap_run: racer=true).
 ##
@@ -27,13 +34,21 @@ const ROWS_ABOVE_H: Array[float] = [56.0, 48.0, 48.0]
 const SNAP_AHEAD_M := 6.0
 const SNAP_WAIT_S := 30.0
 const SNAP_STEP_TICKS := 6
+## Snap (arrival=true, WP6.7): run until the arrival is this far ahead of the player
+## (center to center: passing alongside), at most ARRIVAL_WAIT_S.
+const ARRIVAL_SNAP_AHEAD_M := 2.0
+const ARRIVAL_WAIT_S := 90.0
 const TICKS_PER_SECOND := 120
 
 ## The traffic sandbox (duck-typed: `sim`, `car`, `registry`, `tuning`, `traffic_seed`,
 ## `overlay`, reseed(), spawn_vehicle(), advance_ticks()).
 var sandbox: Node
 var fast_scale: float = 1.0
+## Racer arrivals (WP6.7) on the sandbox's director, re-applied after every re-seed.
+var arrivals_on: bool = true
 var _fast_button: Button
+var _arr_button: Button
+var _arrivals_seen: int = 0
 var _base_director: DirectorTuning
 
 
@@ -45,7 +60,46 @@ func _ready() -> void:
 	var row := ROWS_ABOVE_H.size()
 	_fast_button = add_button(Corner.TOP_RIGHT, row, "", BUTTON_SIZE, cycle_fast_scale, true)
 	add_button(Corner.TOP_RIGHT, row, "RACER", BUTTON_SIZE, func() -> void: spawn_racer(), true)
+	# Racer arrivals (WP6.7) on the row below, so the rows stay narrow on phones.
+	_arr_button = add_button(Corner.TOP_RIGHT, row + 1, "", BUTTON_SIZE, func() -> void: set_arrivals(not arrivals_on), true)
+	add_button(Corner.TOP_RIGHT, row + 1, "ARRIVE", BUTTON_SIZE, func() -> void: force_arrival(), true)
 	_refresh()
+
+
+func _process(_delta: float) -> void:
+	# Select a new arrival (the ARRIVE button, or the director's own process).
+	var dir := sandbox.get(&"director") as TrafficDirector
+	if dir == null or dir.racer_arrivals == _arrivals_seen:
+		return
+	_arrivals_seen = dir.racer_arrivals
+	var overlay := sandbox.get(&"overlay") as Node
+	if overlay != null and dir.last_arrival_slot >= 0:
+		overlay.set(&"selected_slot", dir.last_arrival_slot)
+
+
+## Racer arrivals from behind (WP6.7) on / off on the sandbox's director.
+func set_arrivals(on: bool) -> void:
+	arrivals_on = on
+	apply_to(sandbox.get(&"director") as TrafficDirector)
+	print("sandbox: racer arrivals %s" % ("on" if on else "off"))
+	_refresh()
+
+
+## The sandbox calls this for every new director (re-seed).
+func apply_to(dir: TrafficDirector) -> void:
+	if dir == null:
+		return
+	dir.racer_arrivals_enabled = arrivals_on
+	_arrivals_seen = dir.racer_arrivals
+
+
+## The director's next racer arrival is due now (turns arrivals on).
+func force_arrival() -> void:
+	if not arrivals_on:
+		set_arrivals(true)
+	var dir := sandbox.get(&"director") as TrafficDirector
+	if dir != null:
+		dir.force_racer_arrival()
 
 
 ## Next FAST_SCALES entry: scales the aggressive and racer shares and re-seeds.
@@ -96,14 +150,19 @@ func spawn_racer() -> int:
 
 func _refresh() -> void:
 	DriveControls.set_text(_fast_button, "FAST x%.1f" % fast_scale)
+	if _arr_button != null:
+		DriveControls.set_text(_arr_button, "ARR ON" if arrivals_on else "ARR OFF")
 
 
 ## Snap hook (the sandbox's snap_setup calls it after its warm-up): racer=true spawns a
 ## racer behind the player and runs until it is SNAP_AHEAD_M ahead (a racer passing);
-## fast=K sets the fast scale first.
+## fast=K sets the fast scale first; arrival=true: snap_arrival.
 func snap_run(args: Dictionary) -> void:
 	if args.has("fast"):
 		set_fast_scale(float(args["fast"]))
+	if bool(args.get("arrival", false)):
+		snap_arrival(args)
+		return
 	if not bool(args.get("racer", false)):
 		return
 	var slot := spawn_racer()
@@ -120,3 +179,42 @@ func snap_run(args: Dictionary) -> void:
 	print("snap: racer slot %d at %+.1f m, %.0f km/h (player %.0f km/h), after %.1f s" % [slot,
 		sim.state.s[slot] - st.s, Units.mps_to_kmh(sim.state.v[slot]), Units.mps_to_kmh(st.v),
 		float(ticks) / TICKS_PER_SECOND])
+
+
+## Snap (WP6.7): a racer arrival passing the player. The traffic near the player is
+## cleared (arrival_clear=false keeps it), the director's next arrival is made due
+## (again every second until one fits), and the sandbox runs until the arrival is
+## arrival_ahead_m (ARRIVAL_SNAP_AHEAD_M) ahead of the player, at most ARRIVAL_WAIT_S.
+## Use with driver=keep speed_kmh=200 (the player holding 200 km/h).
+func snap_arrival(args: Dictionary) -> void:
+	if bool(args.get("arrival_clear", true)):
+		sandbox.call(&"clear_traffic")
+	set_arrivals(true)
+	var dir := sandbox.get(&"director") as TrafficDirector
+	var sim := sandbox.get(&"sim") as TrafficSim
+	var st := (sandbox.get(&"car") as Node).get(&"state") as VehicleState
+	var ahead := float(args.get("arrival_ahead_m", ARRIVAL_SNAP_AHEAD_M))
+	var n0 := dir.racer_arrivals
+	var slot := -1
+	var vid := -1
+	var ticks := 0
+	while ticks < roundi(ARRIVAL_WAIT_S * TICKS_PER_SECOND):
+		if slot < 0 and ticks % TICKS_PER_SECOND == 0:
+			dir.force_racer_arrival()
+		sandbox.call(&"advance_ticks", SNAP_STEP_TICKS)
+		ticks += SNAP_STEP_TICKS
+		if slot < 0 and dir.racer_arrivals > n0:
+			slot = dir.last_arrival_slot
+			vid = sim.state.vehicle_id[slot]
+		if slot >= 0 and (sim.state.active[slot] == 0 or sim.state.vehicle_id[slot] != vid):
+			slot = -1   # gone (it should not): wait for the next
+			n0 = dir.racer_arrivals
+		elif slot >= 0 and sim.state.s[slot] - st.s >= ahead:
+			break
+	var overlay := sandbox.get(&"overlay") as Node
+	if slot >= 0 and overlay != null:
+		overlay.set(&"selected_slot", slot)
+	print("snap: arrival slot %d at %+.1f m, %.0f km/h (desired %.0f), player %.0f km/h, after %.1f s; %s" % [
+		slot, sim.state.s[slot] - st.s if slot >= 0 else NAN, Units.mps_to_kmh(sim.state.v[slot]) if slot >= 0 else NAN,
+		Units.mps_to_kmh(sim.state.v0[slot]) if slot >= 0 else NAN, Units.mps_to_kmh(st.v),
+		float(ticks) / TICKS_PER_SECOND, DevReport.racers_line(dir)])
