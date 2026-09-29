@@ -27,6 +27,13 @@ const SIDE_CLEAR_M := 1.0       ## required free length beside it in the target 
 ## to the left as soon as it is clear beside the bot, and weaving never picks it.
 const DROP_LOOK_M := 350.0
 
+## WP6.3: anything with closure_ahead(lane, s) (the TrafficSim): a lane closed within
+## DROP_LOOK_M ahead (road works, a merge zone's acceleration lane) is left for an open
+## neighbour (left first) as soon as it is clear beside the bot, and never picked;
+## so is a lane with a speed zone slower than the bot's target speed there or within
+## DROP_LOOK_M ahead (a toll's booth lane: the player takes the express lanes).
+var closures: Object
+
 var state := VehicleState.new()
 var mode: Mode
 var road: RoadPath
@@ -76,6 +83,18 @@ func set_weave(min_s: float, max_s: float) -> void:
 
 
 ## True while the bot's own lateral move runs.
+## WP6.3 tests: a lane change to the adjacent lane `to`, the car's own (LANE_CHANGE_S,
+## WEAVE mode moves it). Ignored while one runs.
+func change_lane(to: int) -> void:
+	if _lc_t >= 0.0 or to == lane or absi(to - lane) != 1:
+		return
+	_lc_t = 0.0
+	_from_d = state.d
+	_to_d = road.lane_center_d(to, state.s)
+	lane = to
+	lane_changes += 1
+
+
 func is_changing_lanes() -> bool:
 	return _lc_t >= 0.0
 
@@ -106,13 +125,18 @@ func update(dt: float, traffic: TrafficState) -> void:
 	state.accel_long = a
 	state.s += state.v * dt
 
-	if _lc_t < 0.0 and lane > 0 and lane >= road.lane_count(state.s + DROP_LOOK_M) and _side_clear(traffic, lane - 1):
-		if mode == Mode.WEAVE:
-			_lc_t = 0.0
-			_from_d = state.d
-			_to_d = road.lane_center_d(lane - 1, state.s)
-		lane -= 1
-		lane_changes += 1
+	if _lc_t < 0.0 and _lane_ends_ahead(lane):
+		var to := -1
+		for t: int in [lane - 1, lane + 1]:
+			if to < 0 and t >= 0 and t < road.lane_count(state.s) and not _lane_ends_ahead(t) and _side_clear(traffic, t):
+				to = t
+		if to >= 0:
+			if mode == Mode.WEAVE:
+				_lc_t = 0.0
+				_from_d = state.d
+				_to_d = road.lane_center_d(to, state.s)
+			lane = to
+			lane_changes += 1
 	if mode == Mode.WEAVE:
 		if _lc_t < 0.0 and _clock >= _next_weave:
 			_next_weave = _clock + _rng.float_range(weave_min_s, weave_max_s)
@@ -144,13 +168,27 @@ func _pick_lane(traffic: TrafficState) -> int:
 	if _rng.chance(0.5):
 		order = [lane + 1, lane - 1]
 	for t: int in order:
-		if t < 0 or t >= lanes or not _side_clear(traffic, t):
+		if t < 0 or t >= lanes or _lane_ends_ahead(t) or not _side_clear(traffic, t):
 			continue
 		var g := _free_ahead(traffic, t)
 		if g > best_gap or (best == lane and g > 30.0 and _rng.chance(0.5)):
 			best = t
 			best_gap = g
 	return best
+
+
+## Lane t ends (a lane drop) or is closed (WP6.3) within DROP_LOOK_M ahead.
+func _lane_ends_ahead(t: int) -> bool:
+	if t >= road.lane_count(state.s + DROP_LOOK_M):
+		return true
+	if closures == null:
+		return false
+	if float(closures.call(&"closure_ahead", t, state.s)) < DROP_LOOK_M:
+		return true
+	# WP6.3: a slow zone ahead in the lane (a toll's booth lane): take the express lanes.
+	return closures.has_method(&"speed_zone_count") and int(closures.call(&"speed_zone_count")) > 0 \
+		and minf(float(closures.call(&"speed_limit_at", t, state.s, 0)),
+			float(closures.call(&"speed_limit_at", t, state.s + DROP_LOOK_M, 0))) < v_target
 
 
 func _lane_hit(traffic: TrafficState, i: int, t: int) -> bool:

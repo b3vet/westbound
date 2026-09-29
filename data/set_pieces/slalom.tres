@@ -1,0 +1,29 @@
+[gd_resource type="Resource" script_class="SetPieceDef" format=3]
+
+[ext_resource type="Script" uid="uid://cc0n7yjgviyxv" path="res://src/traffic/set_piece_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"slalom"
+kind = 4
+display_name = "Slalom"
+warning = 0
+warning_sign_distances_m = PackedFloat64Array()
+length_m = 250.0
+min_leg = 1
+weight = 1.0
+min_lanes = 2
+profile_ids = Array[StringName]([&"commuter", &"cruiser"])
+profile_weights = PackedFloat64Array(2, 1)
+speed_kmh = 110.0
+start_distance_m = 50.0
+end_margin_m = 40.0
+duration_max_s = 60.0
+approach_max_s = 150.0
+clear_behind_m = 60.0
+clear_ahead_m = 80.0
+vehicles_min = 4
+vehicles_max = 5
+formation_gain_per_s = 0.2
+formation_limit_kmh = 8.0
+row_gap_m = 45.0

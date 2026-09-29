@@ -25,6 +25,8 @@ const COARSE_DT := 1.0 / 30.0
 ## start and smear more). With WP6.2's 125 % / 50 % these are the 1.8x and 1.4x it pinned.
 const MET_CONTRAST_SHARE := 0.53
 const BUILD_CONTRAST_SHARE := 0.67
+## The leg of the set-piece rule tests: the WP6.2 kinds only (truck wall, roadblock).
+const PIECE_LEG := 2
 
 var reg: SpawnFixtureRegistry
 var tuning: Tuning
@@ -410,7 +412,9 @@ func test_no_set_pieces_in_blind_windows_or_at_checkpoints() -> void:
 		for f in found:
 			if f.kind == RoadFeature.Kind.CHECKPOINT:
 				cps.append(f.s_start)
-		_rig(seed_value, r, 170.0, 4, _every_peak())
+		# Leg 2: WP6.2's short rolling pieces (truck wall, roadblock); WP6.3's longer
+		# formations and road-anchored pieces have their own tests (tests/traffic/).
+		_rig(seed_value, r, 170.0, PIECE_LEG, _every_peak())
 		var met := {}
 		while player.s < 6500.0:
 			_step(COARSE_DT)
@@ -448,7 +452,7 @@ func test_no_set_piece_the_player_would_not_meet() -> void:
 
 ## [spawned, peaks missed, ended unmet, started, still live] over 6 km of a straight road.
 func _drive_pieces(v_kmh: float) -> Array[int]:
-	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), v_kmh, 4, _every_peak())
+	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), v_kmh, PIECE_LEG, _every_peak())
 	while player.s < 6000.0:
 		_step(COARSE_DT)
 	var sp := dir.set_pieces

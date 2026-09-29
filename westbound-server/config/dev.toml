@@ -1,0 +1,18 @@
+# Local development: `cargo run -p server -- --config config/dev.toml` from
+# westbound-server/. Everything else keeps the defaults (config/server.example.toml).
+
+[server]
+bind = "127.0.0.1:8080"
+public_origin = "https://localhost:8443"
+
+[log]
+level = "info,westbound_server=debug"
+
+[db]
+path = "dev-data/westbound.db"
+
+[backup]
+dir = "dev-data/backups"
+
+[http]
+cors_allowed_origins = ["*"]

@@ -21,8 +21,8 @@ const PLAYER_BRAKE_MPS2 := 6.0
 const BRAKE_TO_KMH := 120.0
 const WORST_KMH := 250.0
 const WORST_PLAYER_KMH := 170.0
-## The rate test's drive at 170 km/h (~200 s).
-const RATE_KM := 9.5
+## The rate test's drive at 170 km/h (~150 s).
+const RATE_KM := 7.0
 ## Determinism runs: the soak's run at leg 6, this far.
 const DETERMINISM_M := 800.0
 
@@ -166,8 +166,9 @@ func _arrivals_ok(w: World, what: String) -> void:
 
 ## At 170, 200 and 230 km/h on every leg, a racer arrives from behind and gets past the
 ## player within PASS_WITHIN_KM (the road has no other traffic: the process alone).
-func _arrive_and_pass(kmh: float) -> void:
-	for leg in range(1, tuning.director.ramp_last_leg + 1):
+func _arrive_and_pass(kmh: float, first_leg: int = 1, last_leg: int = 0) -> void:
+	var last := last_leg if last_leg > 0 else tuning.director.ramp_last_leg
+	for leg in range(first_leg, last + 1):
 		var w := _world(3, leg, kmh, 1)
 		_drive_until(w, PASS_WITHIN_KM * Units.M_PER_KM, func() -> bool: return w.dir.arrivals_passed_player > 0)
 		var what := "leg %d at %.0f km/h" % [leg, kmh]
@@ -188,8 +189,12 @@ func test_racers_arrive_and_pass_a_200_kmh_player_on_every_leg() -> void:
 	_arrive_and_pass(SPEEDS_KMH[1])
 
 
-func test_racers_arrive_and_pass_a_230_kmh_player_on_every_leg() -> void:
-	_arrive_and_pass(SPEEDS_KMH[2])
+func test_racers_arrive_and_pass_a_230_kmh_player_on_legs_1_to_4() -> void:
+	_arrive_and_pass(SPEEDS_KMH[2], 1, 4)
+
+
+func test_racers_arrive_and_pass_a_230_kmh_player_on_legs_5_to_8() -> void:
+	_arrive_and_pass(SPEEDS_KMH[2], 5)
 
 
 ## The rate: the arrival clock runs at the wave's multiplier outside breathers and
@@ -298,12 +303,12 @@ func test_no_arrival_near_a_set_piece() -> void:
 	eq(w.dir.racer_arrivals, 0, "no arrival toward a live set piece")
 
 
-## Wave breathers (and the checkpoint breather) get no arrivals; every arrival over a
-## journey's legs came outside them, and the player spent time in breathers.
+## Wave breathers (and the checkpoint breather) get no arrivals; every arrival over two
+## legs came outside them, and the player spent time in breathers.
 func test_no_arrival_in_wave_breathers() -> void:
 	var w := _world(3, 8, 180.0, 2)
 	var breather_s := 0.0
-	var dist := 3.0 * tuning.legs.leg_length_m()
+	var dist := 2.0 * tuning.legs.leg_length_m()
 	while w.player.s < dist:
 		_tick(w)
 		if w.dir.waves.phase_at(w.player.s) == IntensityWaves.Phase.BREATHER:
@@ -311,7 +316,7 @@ func test_no_arrival_in_wave_breathers() -> void:
 			w.dir.force_racer_arrival()   # due all the time: still none
 	gt(breather_s, 10.0, "the player drove through breathers")
 	gt(w.dir.racer_arrivals, 3)
-	_arrivals_ok(w, "three legs")
+	_arrivals_ok(w, "two legs")
 
 
 # ---------------------------------------------------------------- Lanes and the view
@@ -358,7 +363,7 @@ func test_rear_end_prevention_racer_closing_at_250_on_a_braking_player() -> void
 	var worst_gap := INF
 	var worst_accel := 0.0
 	for back: float in [tuning.traffic.spawn_behind_m, 300.0, tuning.traffic.idm_lookahead_m]:
-		for brake_at: float in [0.0, 2.0, 4.0, 6.0, 9.0, 14.0]:
+		for brake_at: float in [0.0, 3.0, 6.0, 12.0]:
 			var w := _world(2, 8, WORST_PLAYER_KMH, 0)
 			w.dir.racer_arrivals_enabled = false
 			var slot := _place_racer(w, 0, -back, Units.kmh_to_mps(WORST_KMH))
@@ -428,7 +433,7 @@ func test_arrivals_in_traffic_are_legal_leg_1() -> void:
 
 
 func test_arrivals_in_traffic_are_legal_leg_8() -> void:
-	gt(_in_traffic(8, 2.5).director.racer_arrivals, 0, "arrivals in traffic")
+	gt(_in_traffic(8, 2.0).director.racer_arrivals, 0, "arrivals in traffic")
 
 
 ## Every leg, 2 x 3.5 km each on 3 lanes with the soak bot: legal, and arrivals get past

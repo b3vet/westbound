@@ -5,7 +5,7 @@ extends DriveControls
 ## of fast cars"). Spec: Traffic → Traffic sandbox (debug scene) ("spawn controls";
 ## "traffic quality gets tuned here"); Traffic → Driver types (+ Racer, plan D15).
 ##
-## Buttons, top right under the sandbox's tab bar and WP6.2's set-piece row:
+## Buttons, top right under the sandbox's tab bar and the set-piece rows:
 ##   FAST xK  scales the fast shares (aggressive and racer, DirectorTuning) by
 ##            FAST_SCALES; the sandbox re-seeds with a private copy of the tuning (the
 ##            shared default is never touched)
@@ -26,9 +26,9 @@ extends DriveControls
 
 const FAST_SCALES: Array[float] = [1.0, 1.5, 2.0, 0.0]
 const BUTTON_SIZE := Vector2(132.0, 48.0)
-## Rows above this one: the sandbox's tab bar (TrafficSandbox.TAB_BUTTON.y) and WP6.2's
-## set-piece row (SetPieceControls.BUTTON_SIZE.y).
-const ROWS_ABOVE_H: Array[float] = [56.0, 48.0]
+## Rows above this one: the sandbox's tab bar (TrafficSandbox.TAB_BUTTON.y) and the two
+## set-piece rows (SetPieceControls.BUTTON_SIZE.y; WP6.2, WP6.3).
+const ROWS_ABOVE_H: Array[float] = [56.0, 48.0, 48.0]
 ## Snap: run until the racer is this far ahead of the player (center to center), at most
 ## SNAP_WAIT_S.
 const SNAP_AHEAD_M := 6.0

@@ -1,0 +1,61 @@
+[gd_resource type="Resource" script_class="SetPieceLook" format=3]
+
+[ext_resource type="Script" path="res://src/world/set_pieces/set_piece_look.gd" id="1_look"]
+
+[resource]
+script = ExtResource("1_look")
+sign_width_m = 3.2
+sign_height_m = 1.8
+sign_bottom_m = 1.4
+sign_setback_m = 1.2
+sign_post_width_m = 0.12
+sign_depth_m = 0.08
+sign_border_m = 0.08
+sign_big_line_frac = 0.52
+works_sign_color = &"brand_orange"
+merge_sign_color = &"hazard_yellow"
+sign_border_color = &"ink"
+sign_ink_color = &"ink"
+post_color = &"steel"
+cone_height_m = 0.75
+cone_base_m = 0.42
+cone_top_m = 0.08
+cone_band_lo_frac = 0.45
+cone_band_hi_frac = 0.7
+cone_sides = 6
+cone_color = &"brand_orange"
+cone_band_color = &"white"
+max_cones = 160
+barrier_height_m = 0.9
+barrier_segment_m = 3.8
+barrier_gap_m = 0.2
+barrier_color = &"white"
+barrier_stripe_color = &"reflector_red"
+trailer_height_m = 0.9
+board_bottom_m = 1.6
+board_height_m = 1.5
+board_depth_m = 0.15
+board_color = &"ink"
+board_frame_color = &"hazard_yellow"
+trailer_color = &"brand_orange"
+arrow_color = &"reflector_amber"
+arrow_on_gain = 2.4
+arrow_off_gain = 0.12
+ramp_width_m = 4.6
+ramp_line_width_m = 0.15
+ramp_segment_m = 6.0
+rail_height_m = 0.75
+rail_depth_m = 0.3
+gore_stripe_every_m = 6.0
+gore_stripe_width_m = 0.5
+attenuator_length_m = 3.0
+attenuator_width_m = 0.9
+attenuator_height_m = 0.9
+attenuator_color = &"hazard_yellow"
+attenuator_stripe_color = &"ink"
+legend_before_m = 110.0
+legend_length_m = 9.0
+legend_width_frac = 0.7
+atlas_width_px = 1024
+atlas_height_px = 256
+lift_m = 0.08

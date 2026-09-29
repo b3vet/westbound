@@ -53,6 +53,10 @@ extends RoadPath
 ## player picked it). FORK features span each fork; checkpoint SIGNs before a fork carry
 ## tag2 SIGN_FORK_TAG2 and its CHECKPOINT the sign gantry style.
 ##
+## Set-piece road hooks (WP6.3, docs/SET_PIECES.md): the merge zone schedules its lanes
+## with schedule_lane_count() and opens the player-side guardrail over its ramp join
+## with add_rail_gap() (the mesher draws no rail there; the barrier stays in road space).
+##
 ## Determinism: curvature, heading, grade, elevation, lane counts and every feature
 ## come from Rng draws (PCG32, integer-exact) combined with + - * / only; branches
 ## never depend on sin/cos/atan/sqrt results (the one sqrt, in the crest constant,
@@ -117,6 +121,10 @@ var _latched_leg: int = 0
 var _tunnel_seed: int = 0
 
 var _forgotten_s: float = 0.0
+## Set-piece rail gaps (WP6.3), sorted by start: the player-side guardrail is not drawn
+## over [_rail_gap_s0[i], _rail_gap_s1[i]].
+var _rail_gap_s0 := PackedFloat64Array()
+var _rail_gap_s1 := PackedFloat64Array()
 ## Hazard signs are generated with their bend / crest, which starts this much later.
 var _sign_lookahead: float
 
@@ -209,6 +217,8 @@ func _restart() -> void:
 	_lane_features.clear()
 	_tunnel_features.clear()
 	_lane_signs.clear()
+	_rail_gap_s0.clear()
+	_rail_gap_s1.clear()
 	_latched_leg = 0
 	ensure_generated_to(gen_to)
 
@@ -617,6 +627,39 @@ func _sibling_rail_d(f: RoadFork, s: float) -> float:
 	return (qx * tz - qz * tx) / den
 
 
+# ---------------------------------------------------------------- Set-piece road hooks (WP6.3)
+
+## Opens the player-side guardrail over [s0, s1]: RoadChunkMesher draws no rail there
+## (the merge zone's ramp join; the set piece draws its own). guardrail_d() and every
+## barrier query are unchanged. Director rate; like schedule_lane_count, it must come
+## before the road there is built. False (ignored) before the retained road.
+func add_rail_gap(s0: float, s1: float) -> bool:
+	if s0 < _forgotten_s or s1 <= s0:
+		return false
+	var i := _rail_gap_s0.bsearch(s0, true)
+	_rail_gap_s0.insert(i, s0)
+	_rail_gap_s1.insert(i, s1)
+	return true
+
+
+## True when the player-side guardrail is open at s. Tick-safe (a few gaps at most).
+func rail_gap_at(s: float) -> bool:
+	for i in _rail_gap_s0.size():
+		if _rail_gap_s0[i] > s:
+			return false
+		if s <= _rail_gap_s1[i]:
+			return true
+	return false
+
+
+## Appends the start and end of every rail gap overlapping [s0, s1] to `out`.
+func rail_gap_ends_in(s0: float, s1: float, out: PackedFloat64Array) -> void:
+	for i in _rail_gap_s0.size():
+		if _rail_gap_s0[i] <= s1 and _rail_gap_s1[i] >= s0:
+			out.append(_rail_gap_s0[i])
+			out.append(_rail_gap_s1[i])
+
+
 # ---------------------------------------------------------------- Features
 
 ## Every feature overlapping [s0, s1), sorted by s_start (ties by kind). Only the
@@ -745,6 +788,12 @@ func forget_before(s: float) -> void:
 		_lane_change_count = _lane_change_count.slice(keep)
 		_lane_change_taper = _lane_change_taper.slice(keep)
 		_lane_features.assign(_lane_features.slice(keep))
+	var g := 0
+	while g < _rail_gap_s1.size() and _rail_gap_s1[g] < _forgotten_s:
+		g += 1
+	if g > 0:
+		_rail_gap_s0 = _rail_gap_s0.slice(g)
+		_rail_gap_s1 = _rail_gap_s1.slice(g)
 
 
 ## First s still sampleable after forget_before().

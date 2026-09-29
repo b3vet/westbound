@@ -37,10 +37,22 @@ extends RefCounted
 ## Flow): at each wave peak _schedule_set_piece() may put a set piece in the batch being
 ## planned, which then goes through the same commit path. Set-piece events go to
 ## `events` (the run's buffer).
+##
+## Road-anchored set pieces (WP6.3, docs/SET_PIECES.md): a peak whose pick is anchored
+## (merge zone, road works) gets its zone at the peak's middle on the road (a static zone
+## is met where it is), decided when that lies schedule_lead_min_m .. _max_m ahead, so
+## its road hooks, signs and cones exist before anything there is built or seen
+## (_schedule_anchored_peak). Feature-triggered pieces (tunnel squeeze at road tunnels,
+## toll gantry at toll-gantry checkpoints, checkpoint_style) are offered each matching
+## feature once, in the same lead window, with a seeded chance per feature
+## (_schedule_tied). Running anchored pieces get their vehicles planned in the batch the
+## meeting map puts them in (SetPieceSource.prepare_anchored), through the same commit.
 
 ## force_set_piece(): batches tried (the first one where the piece fits the road and
 ## rule 6 gets it) before the request is dropped.
 const FORCED_TRIES := 16
+## force_set_piece() of a feature-triggered piece (WP6.3): legs searched for its feature.
+const FORCED_SEARCH_LEGS := 3
 
 var run: RunContext
 var road: RoadPath
@@ -66,6 +78,10 @@ var events: ScoreEventBuffer:
 			set_pieces.events = buf
 ## Dev and tests: wave peaks may get set pieces.
 var set_pieces_enabled: bool = true
+## WP6.3: the landmark style of the checkpoint ending leg `leg_index` at `s`:
+## (leg_index: int, s: float) -> StringName (the run's BiomeDirector.checkpoint_style).
+## Unset: LandmarkClearance's default style.
+var checkpoint_style: Callable
 var opposite: OppositeTraffic
 ## Shared, reused planning context (refreshed before each plan).
 var ctx := SpawnSource.Context.new()
@@ -119,6 +135,8 @@ var peaks_no_chance: int = 0
 var peaks_no_kind: int = 0
 var peaks_missed: int = 0
 var peaks_unfit: int = 0
+## WP6.3: peaks whose piece would have been met while another live piece is still ahead.
+var peaks_busy: int = 0
 ## Live vehicles beyond the fog removed to make room for a set piece.
 var despawned_for_set_pieces: int = 0
 
@@ -140,6 +158,10 @@ var _forced: SetPieceDef    ## dev: the next batch gets this piece (force_set_pi
 var _forced_tries: int = 0
 var _closing_floor: float
 var _err_smooth: float = 0.0   ## the density error, low-passed (_step_density)
+## WP6.3: the last feature s each feature-triggered kind was offered (id -> s).
+var _tied_done: Dictionary = {}
+## WP6.3: seed of the per-feature chance draws (mixed with the feature's position).
+var _tied_seed: int = 0
 
 # ---- WP6.5 hook (forks, journey finale): traffic-free ranges. See request_breather().
 ## Spawns refused because they fell in a requested breather.
@@ -192,6 +214,8 @@ func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profil
 	if sim.has_method(&"closure_ahead"):
 		flow.lane_guard = sim
 	set_pieces = SetPieceSource.new(run, flow, sim, waves, run.rng_traffic.derive(SetPieceSource.STREAM))
+	set_pieces.road = road
+	_tied_seed = run.rng_traffic.derive(&"set_piece_features").get_seed()
 	source = set_pieces
 	_closing_floor = Units.kmh_to_mps(director_tuning.wave_min_closing_kmh)
 	_apply_headway()
@@ -328,6 +352,7 @@ func reset(player: VehicleState) -> void:
 	peaks_no_kind = 0
 	peaks_missed = 0
 	peaks_unfit = 0
+	peaks_busy = 0
 	despawned_for_set_pieces = 0
 	_reset_arrivals()
 	_prefilling = true
@@ -337,6 +362,7 @@ func reset(player: VehicleState) -> void:
 	_control_clock = 0.0
 	_err_smooth = 0.0
 	set_pieces.clear()
+	_tied_done.clear()
 	waves.reset(player.s, player.v)
 	waves.plan_to(road, player.s + director_tuning.wave_meet_lookahead_m)
 	_peak_done = -1
@@ -444,6 +470,7 @@ func _plan_ahead(player: VehicleState) -> void:
 		_batch_b = a + batch
 		_refresh_ctx(player)
 		_schedule_set_piece(a, a + batch, player)
+		_schedule_anchored(a, a + batch, player)
 		_clear_for_set_piece(a, a + batch, player)
 		_plan_range(a, a + batch, player)
 		set_pieces.bind_committed()
@@ -637,6 +664,8 @@ func _step_try_behind(lane: int, player: VehicleState, min_speed: float) -> bool
 	_refresh_ctx(player)
 	if not flow.plan_single(ctx, s, lane, min_speed, _behind_rec):
 		return false
+	if not set_pieces.spawn_speed_ok(_behind_rec):   # WP6.3: not into a toll's booth lane
+		return false
 	if not _commit(_behind_rec, player):
 		return false
 	spawned_behind += 1
@@ -696,8 +725,9 @@ func racer_arrival_due_in() -> float:
 
 
 ## False in a wave breather at the player, or while a requested breather (WP6.5: a
-## fork's approach, the finale) or a live set piece's zone overlaps [spawn point, player
-## + racer_arrival_clear_ahead_m]. Allocation-free.
+## fork's approach, the finale) or a live set piece's zone (a road-anchored piece's zone
+## on the road, WP6.3) overlaps [spawn point, player + racer_arrival_clear_ahead_m].
+## Allocation-free.
 func _arrival_window_open(player: VehicleState) -> bool:
 	if waves.phase_at(player.s) == IntensityWaves.Phase.BREATHER:
 		return false
@@ -707,8 +737,13 @@ func _arrival_window_open(player: VehicleState) -> bool:
 		if _breather_s0[k] < b and _breather_s1[k] > a:
 			return false
 	for inst in set_pieces.instances:
-		if inst.stage != SetPieceSource.Stage.FREE and inst.s_rear - inst.def.clear_behind_m < b \
-				and inst.s_front + inst.def.clear_ahead_m > a:
+		if inst.stage == SetPieceSource.Stage.FREE:
+			continue
+		if inst.is_anchored():
+			# WP6.3: a zone fixed on the road (merge zone, road works, tunnel, toll).
+			if inst.zone_s0 < b and inst.zone_s1 > a:
+				return false
+		elif inst.s_rear - inst.def.clear_behind_m < b and inst.s_front + inst.def.clear_ahead_m > a:
 			return false
 	return true
 
@@ -772,7 +807,8 @@ func _collect_lane(lane: int, from_s: float) -> int:
 
 ## True when the drawn arrival (_arr_rec, s set) fits `lane`, whose vehicles ahead are
 ## _arr_slots[0, n). Sets _arr_rec.lane and .v. Allocation-free.
-##   - The lane is open for spawns and clear of set pieces; Flow's neighbor check.
+##   - The lane is open for spawns and clear of set pieces (and of a toll's speed zone,
+##     WP6.3); Flow's neighbor check.
 ##   - No hard braking at spawn: its speed is the highest in [v_min, v0] that keeps IDM's
 ##     s* (closing speed included) to every vehicle ahead in the lane and to the player
 ##     when the player is in it (Flow.max_speed_behind).
@@ -809,7 +845,8 @@ func _arrival_fits(lane: int, n: int, v_min: float, player: VehicleState) -> boo
 		if state.s[i] + state.v[i] * t_pass - at < flow.braking_spacing(p, ln, player.v, state.v[i], state.length[i]):
 			return false
 	rec.v = v
-	return flow.fits_between_neighbors_into(ctx, rec) and set_pieces.keeps_clear(rec)
+	return flow.fits_between_neighbors_into(ctx, rec) and set_pieces.keeps_clear(rec) \
+		and set_pieces.spawn_speed_ok(rec)
 
 
 ## True when the player's body overlaps `lane` (at the player's s).
@@ -1002,11 +1039,11 @@ func _refresh_ctx(player: VehicleState) -> void:
 ##     change, tunnel or fork on the road it drives until it ends.
 ## Then SetPieceSource.schedule() and ctx.set_pieces_allowed for this batch.
 func _schedule_set_piece(a: float, b: float, player: VehicleState) -> void:
-	if not set_pieces_enabled or source != set_pieces or _prefilling or not set_pieces.can_schedule():
+	if not set_pieces_enabled or source != set_pieces or _prefilling or set_pieces.active_count() >= SetPieceSource.MAX_INSTANCES:
 		return
 	var lanes := road.lane_count(a)
 	if _forced != null:
-		_schedule_forced(a, b, lanes)
+		_schedule_forced(a, b, lanes, player)
 		return
 	var k := waves.next_peak(player.s, _peak_done)
 	if k < 0:
@@ -1023,6 +1060,9 @@ func _schedule_set_piece(a: float, b: float, player: VehicleState) -> void:
 		return
 	var x0 := waves.seg_x0[k]
 	var x1 := waves.seg_x1[k]
+	if def.anchored:
+		_schedule_anchored_peak(def, id, x0, x1, player)
+		return
 	var v := def.speed_mps(set_pieces.min_speed_mps)
 	var pace := waves.pace
 	if pace <= v + _closing_floor:
@@ -1042,7 +1082,143 @@ func _schedule_set_piece(a: float, b: float, player: VehicleState) -> void:
 	if not _set_piece_fits(def, v, s_req, lanes):
 		peaks_unfit += 1
 		return
+	var x_meet := waves.meet_x(v, s_req)
+	if not set_pieces.can_schedule_at(minf(SetPieceSource.first_notice_s(def, x_meet), x_meet),
+			waves.meet_x(v, s_req + def.length_m) + def.end_margin_m):
+		peaks_busy += 1   # another live piece is still ahead of the player there
+		return
 	set_pieces.schedule(def, s_req, lanes, v)
+
+
+## WP6.3: a peak picked a road-anchored kind. Its zone goes where the player meets the
+## peak's middle, on the road itself (a static zone is met where it is), shifted so the
+## piece's interesting part (zone_meet_m in) is there. Decided once the zone start is
+## within the kind's schedule_lead_max_m (else wait); too close (under
+## schedule_lead_min_m) it is placed at the minimum lead while still met in the peak.
+func _schedule_anchored_peak(def: SetPieceDef, id: int, x0: float, x1: float, player: VehicleState) -> void:
+	var s0 := (x0 + x1) * 0.5 - def.zone_meet_m
+	if s0 - player.s > def.schedule_lead_max_m:
+		return   # a later batch
+	_peak_handled(id)
+	s0 = maxf(s0, player.s + def.schedule_lead_min_m)
+	if s0 + def.zone_meet_m > x1:
+		peaks_missed += 1   # the peak is too close for the road hooks
+		return
+	if _place_zone(def, s0, player) == null:
+		peaks_unfit += 1
+
+
+## Lays a road-anchored `def` out with its zone at s0 (or up to a batch further, in
+## placement steps, where it fits: fits_zone, a free live slot), or returns null.
+func _place_zone(def: SetPieceDef, s0: float, _player: VehicleState) -> SetPieceSource.Instance:
+	road.ensure_generated_to(s0 + def.length_m + director_tuning.spawn_batch_length_m * 2.0)
+	var step_m := director_tuning.set_piece_placement_step_m
+	var s := s0
+	while s < s0 + director_tuning.spawn_batch_length_m:
+		var lanes := road.lane_count(s)
+		var v := def.speed_mps(set_pieces.min_speed_mps)
+		var s1 := s + _zone_span(def)
+		if set_pieces.fits_zone(def, s, s1, lanes) and not _zone_in_breather(def, s, s1) \
+				and set_pieces.can_schedule_at(minf(SetPieceSource.first_notice_s(def, s), s), s1 + def.end_margin_m):
+			return set_pieces.schedule_zone(def, s, lanes, v)
+		s += step_m
+	return null
+
+
+## The zone length a road-anchored `def` may need at most (for the fit before layout).
+static func _zone_span(def: SetPieceDef) -> float:
+	match def.kind:
+		SetPieceDef.Kind.ROAD_WORKS:
+			return def.works_taper_m * float(maxi(def.lanes_closed_max, 1)) + def.works_length_max_m + def.works_end_taper_m
+		SetPieceDef.Kind.MERGE_ZONE:
+			return def.ramp_join_taper_m + def.accel_lane_m + def.lane_end_taper_m
+		SetPieceDef.Kind.TOLL_GANTRY:
+			return def.booth_before_m + def.booth_after_m
+	return def.length_m
+
+
+## WP6.3, each batch: feature-triggered pieces (road tunnels, toll-gantry checkpoints)
+## for features now in their lead window, then the vehicles of running anchored pieces.
+func _schedule_anchored(a: float, b: float, player: VehicleState) -> void:
+	if set_pieces_enabled and source == set_pieces and not _prefilling and _forced == null:
+		for id: StringName in set_pieces.defs:
+			var def: SetPieceDef = set_pieces.defs[id]
+			if def.trigger != SetPieceDef.Trigger.PEAK and set_pieces.tied_allowed(def, leg, biome):
+				_schedule_tied(def, player, false)
+	set_pieces.prepare_anchored(a, b)
+
+
+## Offers `def` the next matching feature (a TUNNEL of at least tunnel_min_length_m; a
+## CHECKPOINT whose landmark style is def.checkpoint_style) whose zone start is within
+## the lead window (with `forced`: the first one at least schedule_lead_min_m ahead,
+## searched FORCED_SEARCH_LEGS legs on). Each feature is offered once, with a seeded
+## chance (feature_chance_pct, drawn from the feature's position). Returns the instance.
+func _schedule_tied(def: SetPieceDef, player: VehicleState, forced: bool) -> SetPieceSource.Instance:
+	var lo := player.s + def.schedule_lead_min_m
+	var hi := player.s + def.schedule_lead_max_m
+	if forced:
+		hi = lo + run.tuning.legs.leg_length_m() * float(FORCED_SEARCH_LEGS)
+	road.ensure_generated_to(hi + def.booth_before_m + def.length_m)
+	var found: Array[RoadFeature] = []
+	road.features_in(lo, hi + def.booth_before_m, found)
+	var done: float = _tied_done.get(def.id, -INF)
+	for f in found:
+		var s0 := _tied_zone_start(def, f)
+		if is_nan(s0) or s0 <= done or s0 < lo or s0 > hi:
+			continue
+		_tied_done[def.id] = s0
+		if not forced:
+			var rng := Rng.new(TraceHash.mix_int(_tied_seed, roundi(s0)))
+			if not rng.chance(Units.pct_to_frac(def.feature_chance_pct)):
+				continue
+		var lanes := road.lane_count(s0 + 1.0) if def.trigger == SetPieceDef.Trigger.TUNNEL else road.lane_count(s0)
+		var s1 := s0 + _tied_span(def, f)
+		if not set_pieces.fits_zone(def, s0, s1, lanes) or _zone_in_breather(def, s0, s1) \
+				or not set_pieces.can_schedule_at(minf(SetPieceSource.first_notice_s(def, s0), s0), s1 + def.end_margin_m):
+			peaks_unfit += 1
+			continue
+		return set_pieces.schedule_zone(def, s0, lanes, def.speed_mps(set_pieces.min_speed_mps))
+	return null
+
+
+## Where a feature-triggered piece's zone starts at feature `f` (NAN: not its feature).
+func _tied_zone_start(def: SetPieceDef, f: RoadFeature) -> float:
+	match def.trigger:
+		SetPieceDef.Trigger.TUNNEL:
+			if f.kind == RoadFeature.Kind.TUNNEL and f.s_end - f.s_start >= def.tunnel_min_length_m:
+				return f.s_start
+		SetPieceDef.Trigger.CHECKPOINT:
+			if f.kind == RoadFeature.Kind.CHECKPOINT and _style_of(f) == def.checkpoint_style:
+				return f.s_start - def.booth_before_m
+	return NAN
+
+
+## True when a zone [s0, s1] (and its signs) overlaps a traffic-free breather the run
+## asked for (WP6.5: fork approaches, the journey finale): no set piece there.
+func _zone_in_breather(def: SetPieceDef, s0: float, s1: float) -> bool:
+	var a := minf(SetPieceSource.first_notice_s(def, s0), s0)
+	for i in _breather_s0.size():
+		if s1 + def.end_margin_m >= _breather_s0[i] and a < _breather_s1[i]:
+			return true
+	return false
+
+
+static func _tied_span(def: SetPieceDef, f: RoadFeature) -> float:
+	if def.trigger == SetPieceDef.Trigger.TUNNEL:
+		return f.s_end - f.s_start
+	return def.booth_before_m + def.booth_after_m
+
+
+## The landmark style of a CHECKPOINT feature: its tag, else checkpoint_style(leg, s),
+## else LandmarkClearance's default.
+func _style_of(f: RoadFeature) -> StringName:
+	if f.tag != &"":
+		return f.tag
+	if checkpoint_style.is_valid():
+		var st: StringName = checkpoint_style.call(int(f.value), f.s_start)
+		if st != &"":
+			return st
+	return LandmarkClearance.DEFAULT_STYLE
 
 
 ## A set piece scheduled into [a, b) gets its footprint (clear_behind_m .. clear_ahead_m
@@ -1052,12 +1228,9 @@ func _schedule_set_piece(a: float, b: float, player: VehicleState) -> void:
 ## line no ahead spawn may cross, so the removal is as invisible as a spawn there).
 ## (The piece's lanes are not known before it is laid out: all of them count then.)
 func _clear_for_set_piece(a: float, b: float, player: VehicleState) -> void:
-	if not set_pieces.has_pending_in(a, b):
+	var inst := set_pieces.planning_in(a, b)
+	if inst == null:
 		return
-	var inst: SetPieceSource.Instance = null
-	for x in set_pieces.instances:
-		if x.stage == SetPieceSource.Stage.SCHEDULED and x.s_rear >= a and x.s_rear < b:
-			inst = x
 	var lo := inst.s_rear - inst.def.clear_behind_m
 	var hi := inst.s_front + inst.def.clear_ahead_m
 	var hidden := player.s + min_ahead_m()
@@ -1077,11 +1250,20 @@ func _peak_handled(id: int) -> void:
 	peaks_seen += 1
 
 
-func _schedule_forced(a: float, b: float, lanes: int) -> void:
+func _schedule_forced(a: float, b: float, lanes: int, player: VehicleState) -> void:
 	var def := _forced
 	var v := def.speed_mps(set_pieces.min_speed_mps)
 	_forced_tries -= 1
-	if lanes >= def.min_lanes and _set_piece_fits(def, v, a, lanes):
+	if def.trigger != SetPieceDef.Trigger.PEAK:
+		# WP6.3: the next matching feature at least the lead ahead.
+		_forced = null
+		_schedule_tied(def, player, true)
+		return
+	if def.anchored:
+		if _place_zone(def, player.s + def.schedule_lead_min_m, player) != null or _forced_tries <= 0:
+			_forced = null
+		return
+	if SetPieceSource.fits_lanes(def, lanes) and _set_piece_fits(def, v, a, lanes):
 		_forced = null
 		set_pieces.schedule(def, minf(a, b), lanes, v)
 	elif _forced_tries <= 0:

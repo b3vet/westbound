@@ -1,0 +1,214 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "lobby_event",
+  "type_id": 67,
+  "vectors": [
+    {
+      "name": "party_state",
+      "message": {
+        "code": "PARTY9",
+        "kind": "party_state",
+        "leader": "42",
+        "members": [
+          {
+            "account_id": "42",
+            "display_name": "Dusty",
+            "name_tag": 1234
+          },
+          {
+            "account_id": "77",
+            "display_name": "Zoë",
+            "name_tag": 7
+          },
+          {
+            "account_id": "78",
+            "display_name": "東京ドリフト",
+            "name_tag": 0
+          }
+        ],
+        "type": "lobby_event"
+      },
+      "hex": "434d0000065041525459392a00000000000000032a00000000000000054475737479d2044d00000000000000045a6fc3ab07004e0000000000000012e69db1e4baace38389e383aae38395e383880000"
+    },
+    {
+      "name": "party_state_full",
+      "message": {
+        "code": "ZZZZZZ",
+        "kind": "party_state",
+        "leader": "1000",
+        "members": [
+          {
+            "account_id": "1000",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1001",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1002",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1003",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1004",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1005",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1006",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1007",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1008",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1009",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1010",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1011",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1012",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1013",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1014",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          },
+          {
+            "account_id": "1015",
+            "display_name": "🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨🚗💨",
+            "name_tag": 9999
+          }
+        ],
+        "type": "lobby_event"
+      },
+      "hex": "43c10400065a5a5a5a5a5ae80300000000000010e80300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27e90300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27ea0300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27eb0300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27ec0300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27ed0300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27ee0300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27ef0300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27f00300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27f10300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27f20300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27f30300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27f40300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27f50300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27f60300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27f70300000000000040f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a8f09f9a97f09f92a80f27"
+    },
+    {
+      "name": "party_left",
+      "message": {
+        "kind": "party_left",
+        "reason": "disbanded",
+        "type": "lobby_event"
+      },
+      "hex": "4302000102"
+    },
+    {
+      "name": "party_invite",
+      "message": {
+        "code": "PARTY9",
+        "from": {
+          "account_id": "42",
+          "display_name": "Dusty",
+          "name_tag": 1234
+        },
+        "kind": "party_invite",
+        "type": "lobby_event"
+      },
+      "hex": "431800022a00000000000000054475737479d20406504152545939"
+    },
+    {
+      "name": "presence",
+      "message": {
+        "friends": [
+          {
+            "account_id": "77",
+            "joinable": true,
+            "room_id": 12,
+            "status": "in_room"
+          },
+          {
+            "account_id": "78",
+            "joinable": false,
+            "room_id": 0,
+            "status": "offline"
+          }
+        ],
+        "kind": "presence",
+        "type": "lobby_event"
+      },
+      "hex": "431e0003024d00000000000000020c000000014e00000000000000000000000000"
+    },
+    {
+      "name": "presence_empty",
+      "message": {
+        "friends": [],
+        "kind": "presence",
+        "type": "lobby_event"
+      },
+      "hex": "4302000300"
+    },
+    {
+      "name": "room_list",
+      "message": {
+        "kind": "room_list",
+        "rooms": [
+          {
+            "density": "normal",
+            "max_players": 8,
+            "night": true,
+            "players": 7,
+            "room_id": 12
+          },
+          {
+            "density": "light",
+            "max_players": 1,
+            "night": false,
+            "players": 0,
+            "room_id": 4294967295
+          }
+        ],
+        "type": "lobby_event"
+      },
+      "hex": "43120004020c00000007080101ffffffff00010000"
+    },
+    {
+      "name": "room_left",
+      "message": {
+        "kind": "room_left",
+        "reason": "kicked",
+        "type": "lobby_event"
+      },
+      "hex": "4302000501"
+    }
+  ]
+}

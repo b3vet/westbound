@@ -1,0 +1,140 @@
+# Westbound Online: implementation plan
+
+Plan for [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.md) (the multiplayer spec; it extends [`WESTBOUND HANDOFF.md`](../WESTBOUND%20HANDOFF.md)). Same process as the single-player plan ([`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md)): orchestrator + up to 5 parallel agents in worktrees, work packages (WPs) with owned paths, tests first, merge gate, handoff notes, deviations flagged.
+
+## 1. Kickoff decisions (owner, 2026-09-29)
+
+| Topic | Decision |
+| --- | --- |
+| Sequencing | **Parallel tracks.** The server track (N0–N10) runs alongside single-player Phases 7–9, sharing the agent slots. N0–N2 need nothing from the game and start at once. N3+ start once Phase 6 (traffic/biomes) has closed, because the server ports that traffic |
+| Deployment | **Coolify on the owner's VPS, Docker images.** GitHub Actions builds the server image and pushes it to GHCR; Coolify pulls and runs it. Everything is tested locally first (Docker, a local TLS proxy, bots) |
+| Gates | **No milestone waits.** The owner playtests in parallel; every push keeps the single-player game and the web build working |
+| Accounts | **Device accounts only for now.** Apple / Google linking, sign-in and the native secure-storage plugins are deferred until the iOS export is set up (MP-D2) |
+
+## 2. Deviations from the multiplayer spec (flagged)
+
+| # | Spec says | Plan does | Why |
+| --- | --- | --- | --- |
+| MP-D1 | Caddy in front (TLS, web build, deep-link files); systemd unit; static musl binary on the VPS; nightly `.backup` script | The server ships as a Docker image (static musl binary in a minimal image) built by GitHub Actions and pushed to GHCR. Coolify runs it; **Coolify's proxy terminates TLS** and routes `/api/*` and `/ws` to the container. SQLite lives on a Coolify persistent volume; the nightly `.backup` runs inside the container (a scheduled task in the server, 7-day retention on the volume) plus Coolify's volume backups. Deep-link files (`apple-app-site-association`, `assetlinks.json`) are served by the server itself. The web build stays on GitHub Pages until the owner moves it. A `deploy/Caddyfile` is kept for local TLS testing and non-Coolify hosts | Owner decision: Coolify is already running on the VPS |
+| MP-D2 | N1: Apple / Google linking and sign-in, account-deletion Apple revocation, iOS Keychain / Android encrypted-storage plugins | N1 ships device accounts, tokens, refresh rotation, names, deletion. The server keeps the identity columns (`apple_sub`, `google_sub`) and the route shapes, returning "not enabled" until configured. On web the device secret lives in local storage; native builds use an encrypted `user://` file until the Keychain plugin lands | Owner decision: needs the Apple/Google developer setup |
+| MP-D3 | Loop sections: desert, canyon, coast, city, farmland | Same sections, built from the Phase 6 biomes (WP6.4a/b/c). The loop needs a closed road: the procedural road generator is open-ended, so N3 adds a loop-closing generator and editor tool | Implementation note, not a design change |
+| MP-D4 | Clock sync: offset from the lowest-RTT sample of the last 8, slewed smoothly | Same rule, plus smoothing: the estimate moves toward that sample with a 30 s time constant (1 s while the window fills), capped at 5 % correction speed; forward jumps above 250 ms apply at once. A pure lowest-RTT-of-8 estimate leaves ±12–15 ms error at 150 ± 30 ms RTT; with smoothing the worst error is 3.2–3.8 ms (spec target ±5 ms). All in `NetTuning` | N2.2 |
+
+New deviations get a row here before they are built.
+
+## 3. Repository layout
+
+- `westbound-server/`: the Cargo workspace from the spec (`crates/{protocol,sim,server,bots}`, `migrations/`, `data/`, `deploy/`). Built and tested by `cargo` in CI.
+- `src/net/`: the Godot client module from the spec (`transport`, `ws_transport`, `codec`, `clock`, `session`, `api`, `lobby`, `room_client`, `remote_player`, `network_traffic_source`, `traffic_corrector`, `score_client`, `replay_recorder`).
+- `tools/server_data/`: Godot headless exporters that write `westbound-server/data/` (driver profiles, loop road-space file, parity vectors). CI checks the committed data is up to date ("data shared with the client comes from the client").
+- `.github/workflows/server.yml`: `cargo fmt --check`, `clippy -D warnings`, `cargo test`, golden-vector check on both sides, Docker build; pushes to GHCR on this branch.
+
+**Orchestrator-owned shared files (MP):** `westbound-server/Cargo.toml` (workspace members, shared dependency versions), `westbound-server/crates/protocol/src/messages.rs` after N2 freezes it, `.github/workflows/*`, this plan, plus the single-player shared files.
+
+## 4. Merge gate (MP WPs)
+
+1. `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace` green.
+2. Godot side: `tools/test.sh` ALL PASSED, `tools/lint`, and `tools/check_warnings.sh` printing `0 with warnings`.
+3. Golden vectors pass on both sides once N2 exists.
+4. `sim` stays pure (no I/O, clocks or globals) and deterministic, with a trace-hash test for each seeded system.
+5. Resource checks where the WP touches them: tick p99, memory, bytes per player (N4+).
+6. The single-player game and web build keep working (web smoke PASS).
+
+## 5. Phases
+
+Milestone names follow the spec (N0–N10). None of them pause for the owner.
+
+### N0 Server foundation
+
+| WP | Scope |
+| --- | --- |
+| N0.1 Server skeleton | Workspace; axum server: `/api/v1/health`, `/ws` echo, config (file + env), tracing, `/metrics` (Prometheus text, localhost only), SQLite (WAL) with sqlx migrations and offline query data, clap admin subcommands (`migrate`, `serve`), graceful shutdown; tests |
+| N0.2 Image & CI | Multi-stage Dockerfile (musl static binary, minimal runtime image, non-root, healthcheck, `/data` volume); `docker-compose.yml` for Coolify and local runs; a local TLS proxy config (`deploy/Caddyfile`, self-signed) for wss testing; `server.yml` workflow (fmt, clippy, test, build, push `ghcr.io/<owner>/westbound-server` on this branch); `docs/SERVER.md` runbook for Coolify (image, env, volume, domain, health check) |
+
+**Done when:** the image runs locally, a Godot headless client (or the web build in Chromium) connects over `wss://` through the local TLS proxy and echoes, and CI pushes the image. On the owner's side, Coolify deploys it and a phone connects.
+
+### N1 Accounts (device only, MP-D2)
+
+| WP | Scope |
+| --- | --- |
+| N1.1 Server accounts | `POST /api/v1/auth/device`, JWT (1 h) + rotating refresh (30 d) + device secret (hash only stored), `POST /auth/refresh`, `GET/PATCH /me` (display name `name#1234`, 3–16 chars, profanity filter with a normalized word list, rename every 30 days), `DELETE /api/v1/account`, bans; per-IP and per-account rate limits (`tower_governor`); Apple/Google route shapes returning "not enabled"; tests |
+| N1.2 Client session | `src/net/session.gd` (device account, secure-ish storage per platform, token refresh), `src/net/api.gd` (HTTPRequest wrapper, retries, errors), a minimal profile panel (name, rename, delete account) behind the dev menu; headless tests against a local server |
+
+### N2 Protocol and clock
+
+| WP | Scope |
+| --- | --- |
+| N2.1 Protocol crate | Every message in the spec with its quantization, the `[u8 type][u16 len][payload]` framing, validation (sizes, ranges), and golden vectors (JSON + bytes) written to `westbound-server/crates/protocol/vectors/`; the handshake (`Hello`/`Welcome`/`Error`, version and map hash), keepalive, and the WebSocket gateway wired to it; fuzz tests for the decoder |
+| N2.2 Client codec & clock | `src/net/transport.gd`, `ws_transport.gd`, `codec.gd` (every golden vector encodes/decodes byte-identically), `clock.gd` (8 samples, lowest RTT, slewing, `server_now()`; converges within ±5 ms on a simulated link), handshake client; tests |
+
+**The protocol freezes after N2** (changes need an orchestrator decision and a vector update).
+
+### N3 Loop map (after Phase 6)
+
+| WP | Scope |
+| --- | --- |
+| N3.1 Loop generator & editor | A closed-loop road generator (fixed seed, about 25 km, sections desert → canyon → coast → city → farmland, lanes 3/4/2-in-tunnel, two ramp pairs, 6 sector gantries, sun constraint relaxed for the loop), an editor tool to hand-tune it, and an export of the client scene data plus `loop_v1` road-space JSON (version and content hash) |
+| N3.2 Wrap-around & server map | Client chunk streaming with `s` wrapping modulo L (road builder, roadside, biome features, floating origin, traffic view); a "loop test" single-player mode; server map loading, wrapped signed-difference math, and the hash check on join |
+
+### N4 Networked traffic
+
+| WP | Scope |
+| --- | --- |
+| N4.1 Rust traffic sim | `sim` crate: IDM, MOBIL, driver profiles (exported from Godot), lane discipline, keep-right, ramps and density upkeep (light/normal/rush), the player as participant, no-ambush against predicted players, 1.0 s minimum signal time; parity vectors with the GDScript models (≤ 1e-9); a one-hour loop soak (0 collisions, stable density, signals ≥ 1.0 s) |
+| N4.2 Server traffic streaming | Room-side traffic: area of interest (−300/+900 m), `TrafficSpawn/Despawn/Intent/Correction`, correction schedule (5 Hz within 100 m, ≥ 1 Hz otherwise), one frame per tick per client, bytes budget |
+| N4.3 Client network traffic | `network_traffic_source.gd` (a SpawnSource; client director and MOBIL off), local IDM at `server_now`, `traffic_corrector.gd` (history, blend rules, late intents), sandbox network overlays, dev HUD network metrics |
+| N4.4 Bots & delay layer | `bots` crate: scripted drivers, in-process delay/jitter/loss layer, metrics (correction sizes, late intents); acceptance at 150 ms RTT / ±30 ms / 2 % loss |
+
+### N5 Rooms and players
+
+Room tasks (one tokio task each, bounded channels, 20 Hz); private rooms with codes and host rules; `PlayerState` relay and plausibility checks; remote players (100 ms interpolation, 250 ms extrapolation, ghosting, nametags); spawning in a traffic gap near the crew; crash-out respawn; rejoin crew; reconnect with a 15 s seat hold; the loop strip; the room clock (32 min cycle, UTC-derived for public rooms, host options for private ones) replacing the sun bar in rooms.
+
+### N6 Multiplayer scoring
+
+`sim::scoring` port (parity with GDScript scoring), claims and verification (timing ±300 ms, clearance +0.35 m), official score and `ScoreSync` easing, hit cross-check (overlap > 0.3 m for 2+ ticks), sectors with bonuses and clean-sector restore, crew proximity (+0.25× per crewmate within 30 m, cap ×2), trains, session crew total, night ×2 from the room clock; client `score_client.gd` and HUD (crew indicator, train counter); bots reach > 99 % claim acceptance.
+
+### N7 Leaderboards
+
+Boards and seasons (Loop, Loop crew, Journey, Daily Drive, Distance; global / around me / friends); multiplayer runs written automatically; `POST /api/v1/runs` with plausibility checks; legacy personal-best upload; leaderboard UI replacing the Game Center / Play boards (achievements stay).
+
+### N8 Replay verification
+
+Replay recorder (30 Hz path, inputs, event log); **determinism audit of the single-player sim** (seeded RNG only; no `pow`/`sin`/`cos`/`exp` in sim paths; fixed tick; no iteration-order dependence); a headless Godot verifier image (a second Docker image, one job at a time, `nice 10`, 1 GB memory cap) keyed by build id; the verification queue in SQLite; "verifying" UI state; honest replays 100 % accepted, tampered replays rejected.
+
+### N9 Social and public play
+
+Friends (name#1234 codes, requests), presence, parties, persistent crews (tag, roles, invite code), public rooms (normal density, UTC clock), Quick Join (fits the whole party), room browser with ping, quick chat (presets, horn, emotes, mute), report and block, moderation admin CLI, deep-link invites (`/r/<code>`, served deep-link files).
+
+### N10 Hardening
+
+Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p99 < 5 ms, < 300 MB, ≤ 10 KB/s per player), shadow collision logging and admin stats, full admin CLI, rate-limit review, backups, graceful restart with the 60 s notice and auto-reconnect, metrics.
+
+## 6. Waves
+
+- **Now (alongside Phase 6's tail):** N0.1, N0.2, N2.1 (the protocol crate can start on the workspace skeleton the orchestrator lays down first).
+- **Next:** N1.1, N1.2, N2.2.
+- **After Phase 6 closes:** N3 → N4 → N5 → N6 (the critical path), with N7 and N9's account-side pieces (friends, crews) in parallel once N1 is in, and N8's determinism audit in parallel with single-player Phase 7.
+- **Last:** N10.
+
+## 7. Status tracker
+
+| Milestone | Status |
+| --- | --- |
+| N0 Server foundation | ✅ **gate met on the real VPS** (owner, 2026-09-29): deployed on Coolify at `westbound.sipsakrandevu.com`, reachable, wss echo works from a phone. Image 3.6 MB; CI pushes `ghcr.io/b3vet/westbound-server:edge` |
+| N1 Accounts (device) | 🟡 N1.1 server in progress |
+| N2 Protocol & clock | 🟡 N2.1 protocol crate merged (87 golden vectors, frozen contract docs/PROTOCOL.md); N2.2 client codec + transports + clock merged (all vectors pass both sides; clock within ±5 ms) — **N2 done** except wiring the handshake into the server gateway (next) |
+| N3 Loop map | ⬜ (after Phase 6) |
+| N4 Networked traffic | ⬜ |
+| N5 Rooms & players | ⬜ |
+| N6 Multiplayer scoring | ⬜ |
+| N7 Leaderboards | ⬜ |
+| N8 Replay verification | ⬜ |
+| N9 Social & public play | ⬜ |
+| N10 Hardening | ⬜ |
+
+## 8. Open items for the owner
+
+1. ~~Domain~~ **Decided:** `westbound.sipsakrandevu.com` for the API (`/api/v1/*`), the WebSocket (`/ws`), invite links (`/r/<code>`) and the deep-link files (owner, 2026-09-29).
+2. **VPS transfer allowance** (the spec budgets about 36 MB per player-hour).
+3. ~~GHCR access~~ **Done:** Coolify already has a GHCR registry token (the owner's other projects deploy from GHCR).
+4. Apple / Google developer setup when the iOS export happens (MP-D2).

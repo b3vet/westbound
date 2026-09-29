@@ -1,0 +1,45 @@
+[gd_resource type="Resource" script_class="SetPieceDef" format=3]
+
+[ext_resource type="Script" uid="uid://cc0n7yjgviyxv" path="res://src/traffic/set_piece_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"merge_zone"
+kind = 2
+display_name = "Merge zone"
+warning = 4
+warning_sign_distances_m = PackedFloat64Array(500, 250)
+length_m = 680.0
+drops_right_lane = true
+min_leg = 1
+weight = 1.0
+min_lanes = 2
+profile_ids = Array[StringName]([&"commuter", &"cruiser", &"van"])
+profile_weights = PackedFloat64Array(3, 2, 1)
+speed_kmh = 105.0
+start_distance_m = 50.0
+end_margin_m = 40.0
+duration_max_s = 90.0
+approach_max_s = 150.0
+clear_behind_m = 40.0
+clear_ahead_m = 40.0
+anchored = true
+trigger = 0
+schedule_lead_min_m = 1400.0
+schedule_lead_max_m = 2200.0
+max_lanes = 3
+zone_meet_m = 200.0
+vehicles_min = 2
+vehicles_max = 4
+vehicle_extra_gap_m = 8.0
+ramp_length_m = 220.0
+ramp_gap_m = 0.6
+ramp_slope = 0.06
+ramp_curve_per_m = 0.0003
+ramp_join_taper_m = 40.0
+accel_lane_m = 520.0
+lane_end_taper_m = 120.0
+ramp_speed_kmh = 60.0
+ramp_min_speed_kmh = 20.0
+ramp_goal_frac = 0.2
+ramp_go_s = 12.0
