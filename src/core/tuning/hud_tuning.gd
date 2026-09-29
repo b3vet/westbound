@@ -97,6 +97,9 @@ extends Resource
 @export var panel_padding_px: float = 12.0
 @export var sun_track_px: float = 6.0
 @export var sun_marker_px: float = 7.0
+## N3.2 clock mode (the room clock): the day's share of the track, gold at this opacity
+## (the night's share is the accent).
+@export var sun_clock_day_alpha: float = 0.35   # not in spec
 @export var speed_bar_height_px: float = 14.0
 @export var boost_bar_height_px: float = 20.0
 @export var segment_gap_px: float = 3.0

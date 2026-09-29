@@ -8,6 +8,13 @@ extends RefCounted
 ## called at placement (director rate), never per frame.
 
 const DASH := " — "
+## N3.2, the loop: sector gantries instead of checkpoints (a CHECKPOINT's value is
+## lap × sectors + gantry + 1; the stretch from gantry g is sector g + 1).
+const START_FINISH := "START / FINISH"
+const GANTRY := "GANTRY "
+const FINISH := "FINISH "
+const NEXT_GANTRY := "NEXT GANTRY "
+const SECTOR := "SECTOR"
 
 
 ## "1 KM", "3.5 KM", "500 M" (the world's signs are metric).
@@ -78,3 +85,41 @@ static func fork_landmark(kind: StringName, cp_leg: int, left_name: String, righ
 		BiomeDef.LANDMARK_TUNNEL_PORTAL:
 			return PackedStringArray(["CHECKPOINT", names])
 	return PackedStringArray()
+
+
+# ---------------------------------------------------------------- The loop (N3.2)
+
+## The gantry index (0 = start / finish) of a loop CHECKPOINT value.
+static func loop_gantry(value: int, sectors: int) -> int:
+	return posmod(value - 1, maxi(sectors, 1))
+
+
+## "SECTOR 2 — CANYON PASS": the sector that starts at gantry `gantry`.
+static func sector(gantry: int, biome_name: String) -> String:
+	var n := "SECTOR %d" % (gantry + 1)
+	if biome_name.strip_edges() == "":
+		return n
+	return n + DASH + biome_name.strip_edges().to_upper()
+
+
+## Lines of a loop gantry's landmark (LandmarkBuilds line order per kind): the gantry of
+## CHECKPOINT value `value`, the sector it starts and the distance to the next gantry.
+static func loop_landmark(kind: StringName, value: int, sectors: int, next_name: String,
+		next_dist_m: float) -> PackedStringArray:
+	var g := loop_gantry(value, sectors)
+	var next := sector(g, next_name)
+	match kind:
+		BiomeDef.LANDMARK_TOLL_GANTRY:
+			return PackedStringArray(["EXPRESS", START_FINISH if g == 0 else SECTOR, next])
+		BiomeDef.LANDMARK_SIGN_GANTRY:
+			return PackedStringArray([next, NEXT_GANTRY + distance(next_dist_m), START_FINISH if g == 0 else SECTOR])
+		BiomeDef.LANDMARK_TUNNEL_PORTAL:
+			return PackedStringArray([START_FINISH if g == 0 else SECTOR, next])
+	return PackedStringArray()
+
+
+## Lines of the roadside sign `metres` before loop gantry value `value`: GANTRY 1 KM (or
+## FINISH 1 KM before the start / finish line) / the sector it starts.
+static func loop_warning_sign(metres: float, value: int, sectors: int, next_name: String) -> PackedStringArray:
+	var g := loop_gantry(value, sectors)
+	return PackedStringArray([(FINISH if g == 0 else GANTRY) + distance(metres), sector(g, next_name)])

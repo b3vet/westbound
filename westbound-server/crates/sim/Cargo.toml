@@ -6,3 +6,6 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Parsing the loop map's road-space file (`map::LoopMap::from_json`): pure, no I/O.
+serde.workspace = true
+serde_json.workspace = true

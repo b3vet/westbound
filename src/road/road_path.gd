@@ -181,3 +181,9 @@ func ensure_generated_to(_s: float) -> void:
 ## Allows dropping road data before `s` (behind the player). Optional.
 func forget_before(_s: float) -> void:
 	pass
+
+
+## N3.2: the road's period (m) when it is a closed loop (LoopRoadPath: L; positions,
+## lanes and features repeat every period along unwrapped s), 0 for an open road.
+func period_m() -> float:
+	return 0.0

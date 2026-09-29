@@ -35,6 +35,10 @@ class Blend:
 
 
 var leg_length_m: float = 1.0
+## N3.2 (the loop): > 0 = the legs repeat with this period (leg k is leg
+## ((k - 1) mod period_legs) + 1 of the list, forever; the endless biome is never used).
+## 0 = the journey: the list, then the endless biome.
+var period_legs: int = 0
 ## Moves on every change of the plan.
 var version: int = 0
 ## Ids asked for whose data file does not exist (they fell back to the leg before).
@@ -100,6 +104,14 @@ static func from_ids(ids: Array[StringName], endless_id: StringName, leg_len_m: 
 	return plan
 
 
+## A plan that repeats `ids` forever (N3.2: the loop's sections, one leg each, lap after
+## lap): leg k is ids[(k - 1) mod ids.size()]. Missing files fall back like from_ids.
+static func repeating(ids: Array[StringName], leg_len_m: float) -> BiomePlan:
+	var plan := from_ids(ids, ids[0] if not ids.is_empty() else DEFAULT_ID, leg_len_m)
+	plan.period_legs = ids.size()
+	return plan
+
+
 ## One biome everywhere (tests, previews, the sandbox).
 static func uniform(biome: BiomeDef, leg_len_m: float) -> BiomePlan:
 	var none: Array[BiomeDef] = []
@@ -128,6 +140,8 @@ func leg_start_s(leg: int) -> float:
 
 func biome_for_leg(leg: int) -> BiomeDef:
 	var i := maxi(leg, 1) - 1
+	if period_legs > 0 and period_legs <= _legs.size():
+		i = i % period_legs
 	if i < _legs.size():
 		return _legs[i]
 	return _endless

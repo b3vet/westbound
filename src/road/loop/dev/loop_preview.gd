@@ -7,7 +7,8 @@ extends Node3D
 ## Stack: LoopRoadPath (data/maps/loop_v1.tres), FloatingOrigin, BiomeDirector with the
 ## loop's sections as its plan (LoopRoadPath.biome_plan), RoadBuilder, Roadside, Landmarks
 ## (the sector gantries), BiomeFeatures (sea, elevated city, fog), SkyRig. Streaming with
-## wrap-around is N3.2's; this builds one view.
+## wrap-around is N3.2's (the run's loop test mode); this builds one view with the same
+## periodic plan and elevated zone.
 ##
 ##   tools/snap.sh src/road/loop/dev/loop_preview.tscn --at=bridge --cam=chase --sky_t=0.62
 ##   tools/snap.sh src/road/loop/dev/loop_preview.tscn --sweep=at:start,canyon,bridge,city,farmland
@@ -124,7 +125,7 @@ func _build() -> void:
 
 	_director = BiomeDirector.new()
 	_director.name = "BiomeDirector"
-	_director.plan = road.biome_plan(lap + 2)
+	_director.plan = road.biome_plan(0)   # N3.2: periodic, any lap
 	_director.apply_to_road = false
 	add_child(_director)
 	_builder = RoadBuilder.new()
@@ -158,6 +159,8 @@ func _build() -> void:
 	_roadside.setup(_ctx, road, _origin)
 	_landmarks.setup(_ctx, road, _origin)
 	_features.setup(_ctx, road, _origin)
+	# N3.2: the loop's elevated zone (as in the loop test mode), not the seeded cells.
+	_features.elevated.plan.set_zones(road.layout.elevated_s0, road.layout.elevated_s1, road.length())
 	_sky.setup(_ctx, road, _origin)
 	_director.sky = _sky
 	_builder.build_all_now(focus_s)

@@ -15,7 +15,8 @@ extends Node
 ##   row 1: STEER, THR, MIRROR
 ##   row 2: CAR, RECAL, RESET (car back into a lane), RETRY (a new run now)
 ##   row 3: RING/WHEEL, SIZE, LIVES
-##   row 4: LEG (auto or a fixed director leg), SANDBOX, DRIVE (the M3 drive scene)
+##   row 4: LEG (auto or a fixed director leg), SANDBOX, DRIVE (the M3 drive scene), LOOP
+##          (N3.2: the loop test mode on / off, a new run)
 ##   row 5: DENS (runtime traffic density scale, plan D11: x1.0 / x1.25 / x1.5 / x0.75)
 ## The panel reports the director's effective density around the player, its target,
 ## the scale and the director's planning gain to DevStats (&"density",
@@ -55,6 +56,7 @@ var _size_button: Button
 var _lives_button: Button
 var _leg_button: Button
 var _density_button: Button
+var _loop_button: Button
 var _density_index: int = 0
 ## The director the scale was last applied to (a retry builds a new one).
 var _scaled_director: TrafficDirector
@@ -84,6 +86,7 @@ func setup(owner_run: Run) -> void:
 	_leg_button = controls.add_button(c, 4, "LEG AUTO", BUTTON, _next_leg, true)
 	controls.add_button(c, 4, "SANDBOX", BUTTON, run.open_sandbox, true)
 	controls.add_button(c, 4, "DRIVE", BUTTON, run.open_drive_scene, true)
+	_loop_button = controls.add_button(c, 4, "LOOP", BUTTON, _toggle_loop, true)
 	_density_button = controls.add_button(c, 5, "DENS x1.0", BUTTON, _next_density, true)
 	add_child(controls)
 	Events.camera_mode_changed.connect(func(_m: StringName) -> void: refresh())
@@ -131,6 +134,7 @@ func refresh() -> void:
 	DriveControls.set_text(_lives_button, "LIVES INF" if run.infinite_lives else "LIVES %d" % run.lives.max_lives)
 	DriveControls.set_text(_leg_button, "LEG AUTO" if run.leg_override <= 0 else "LEG %d" % run.leg_override)
 	DriveControls.set_text(_density_button, "DENS x%.2f" % density_scale())
+	DriveControls.set_text(_loop_button, "JOURNEY" if run.is_loop() else "LOOP")
 
 
 ## The runtime density scale the DENS button selects.
@@ -145,8 +149,7 @@ func _process(delta: float) -> void:
 		return
 	if _scaled_director != run.director:
 		_scaled_director = run.director
-		if _scaled_director.density_scale != density_scale():
-			_scaled_director.set_density_scale(density_scale())
+		run.set_dev_density_scale(density_scale())
 	_density_clock -= delta
 	if _density_clock > 0.0 or run.car == null:
 		return
@@ -216,7 +219,13 @@ func _next_density() -> void:
 	_density_index = (_density_index + 1) % DENSITY_SCALES.size()
 	if run.director != null:
 		_scaled_director = run.director
-		_scaled_director.set_density_scale(density_scale())
+		run.set_dev_density_scale(density_scale())
+	refresh()
+
+
+## N3.2: the loop test mode on / off (a new run).
+func _toggle_loop() -> void:
+	run.dev_toggle_loop()
 	refresh()
 
 
