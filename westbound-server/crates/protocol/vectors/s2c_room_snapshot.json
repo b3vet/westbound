@@ -1,0 +1,108 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "room_snapshot",
+  "type_id": 68,
+  "vectors": [
+    {
+      "name": "private_room",
+      "message": {
+        "clock": {
+          "cycle_len_ms": 1920000,
+          "cycle_ms": 1000000,
+          "day_len_ms": 1320000
+        },
+        "code": "ABC234",
+        "crews": [
+          {
+            "color": 3,
+            "crew_slot": 0,
+            "session_total": 250000
+          }
+        ],
+        "members": [
+          {
+            "crew_slot": 0,
+            "crew_tag": "WB",
+            "flags": {
+              "disconnected": false,
+              "host": true
+            },
+            "identity": {
+              "account_id": "42",
+              "display_name": "Dusty",
+              "name_tag": 1234
+            },
+            "player_id": 0
+          },
+          {
+            "crew_slot": 0,
+            "crew_tag": "",
+            "flags": {
+              "disconnected": false,
+              "host": false
+            },
+            "identity": {
+              "account_id": "77",
+              "display_name": "Zoë",
+              "name_tag": 7
+            },
+            "player_id": 1
+          }
+        ],
+        "room_id": 12,
+        "settings": {
+          "density": "rush",
+          "fixed_cycle_ms": 1140000,
+          "max_players": 8,
+          "time_mode": "fixed",
+          "visibility": "private"
+        },
+        "tick": 123456,
+        "type": "room_snapshot",
+        "you": 1
+      },
+      "hex": "4458000c00000006414243323334000802012065110040e2010040420f00004c1d004024140001000200002a00000000000000054475737479d204025742000101004d00000000000000045a6fc3ab070000000001000390d00300"
+    },
+    {
+      "name": "public_room",
+      "message": {
+        "clock": {
+          "cycle_len_ms": 1920000,
+          "cycle_ms": 1919999,
+          "day_len_ms": 1320000
+        },
+        "code": "MNPQRS",
+        "crews": [],
+        "members": [
+          {
+            "crew_slot": 15,
+            "crew_tag": "ÄÖÜ!",
+            "flags": {
+              "disconnected": true,
+              "host": false
+            },
+            "identity": {
+              "account_id": "5",
+              "display_name": "Solo",
+              "name_tag": 1
+            },
+            "player_id": 0
+          }
+        ],
+        "room_id": 99,
+        "settings": {
+          "density": "normal",
+          "fixed_cycle_ms": 0,
+          "max_players": 8,
+          "time_mode": "cycle",
+          "visibility": "public"
+        },
+        "tick": 0,
+        "type": "room_snapshot",
+        "you": 0
+      },
+      "hex": "44420063000000064d4e50515253010801000000000000000000ff4b1d00004c1d00402414000000010000050000000000000004536f6c6f010007c384c396c39c210f0200"
+    }
+  ]
+}

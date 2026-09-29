@@ -1,0 +1,38 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "server_notice",
+  "type_id": 79,
+  "vectors": [
+    {
+      "name": "restart",
+      "message": {
+        "kind": "restart",
+        "seconds": 60,
+        "text": "Server restarting in 60 seconds.",
+        "type": "server_notice"
+      },
+      "hex": "4f2400013c00205365727665722072657374617274696e6720696e203630207365636f6e64732e"
+    },
+    {
+      "name": "info_empty",
+      "message": {
+        "kind": "info",
+        "seconds": 0,
+        "text": "",
+        "type": "server_notice"
+      },
+      "hex": "4f040000000000"
+    },
+    {
+      "name": "maintenance_max",
+      "message": {
+        "kind": "maintenance",
+        "seconds": 65535,
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "type": "server_notice"
+      },
+      "hex": "4f030102ffffff787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "protocol_version": 1,
+  "direction": "client_to_server",
+  "type": "ping",
+  "type_id": 2,
+  "vectors": [
+    {
+      "name": "typical",
+      "message": {
+        "client_time_ms": 5000123,
+        "type": "ping"
+      },
+      "hex": "020400bb4b4c00"
+    },
+    {
+      "name": "max",
+      "message": {
+        "client_time_ms": 4294967295,
+        "type": "ping"
+      },
+      "hex": "020400ffffffff"
+    }
+  ]
+}

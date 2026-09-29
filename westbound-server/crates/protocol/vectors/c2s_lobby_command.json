@@ -1,0 +1,137 @@
+{
+  "protocol_version": 1,
+  "direction": "client_to_server",
+  "type": "lobby_command",
+  "type_id": 3,
+  "vectors": [
+    {
+      "name": "party_create",
+      "message": {
+        "kind": "party_create",
+        "type": "lobby_command"
+      },
+      "hex": "03010000"
+    },
+    {
+      "name": "party_invite",
+      "message": {
+        "account_id": "9007199254740993",
+        "kind": "party_invite",
+        "type": "lobby_command"
+      },
+      "hex": "030900010100000000002000"
+    },
+    {
+      "name": "party_join",
+      "message": {
+        "code": "K7QX2M",
+        "kind": "party_join",
+        "type": "lobby_command"
+      },
+      "hex": "03080002064b375158324d"
+    },
+    {
+      "name": "party_leave",
+      "message": {
+        "kind": "party_leave",
+        "type": "lobby_command"
+      },
+      "hex": "03010003"
+    },
+    {
+      "name": "party_kick_max_account",
+      "message": {
+        "account_id": "9223372036854775807",
+        "kind": "party_kick",
+        "type": "lobby_command"
+      },
+      "hex": "03090004ffffffffffffff7f"
+    },
+    {
+      "name": "presence_subscribe",
+      "message": {
+        "enabled": true,
+        "kind": "presence_subscribe",
+        "type": "lobby_command"
+      },
+      "hex": "0302000501"
+    },
+    {
+      "name": "presence_unsubscribe",
+      "message": {
+        "enabled": false,
+        "kind": "presence_subscribe",
+        "type": "lobby_command"
+      },
+      "hex": "0302000500"
+    },
+    {
+      "name": "room_create",
+      "message": {
+        "density": "rush",
+        "fixed_cycle_ms": 1140000,
+        "kind": "room_create",
+        "max_players": 8,
+        "time_mode": "fixed",
+        "type": "lobby_command",
+        "visibility": "private"
+      },
+      "hex": "030900060008020120651100"
+    },
+    {
+      "name": "room_create_night_16",
+      "message": {
+        "density": "light",
+        "fixed_cycle_ms": 4294967295,
+        "kind": "room_create",
+        "max_players": 16,
+        "time_mode": "night",
+        "type": "lobby_command",
+        "visibility": "private"
+      },
+      "hex": "0309000600100002ffffffff"
+    },
+    {
+      "name": "room_join_code",
+      "message": {
+        "code": "ABC234",
+        "kind": "room_join_code",
+        "type": "lobby_command"
+      },
+      "hex": "0308000706414243323334"
+    },
+    {
+      "name": "room_join_id",
+      "message": {
+        "kind": "room_join_id",
+        "room_id": 77,
+        "type": "lobby_command"
+      },
+      "hex": "030500084d000000"
+    },
+    {
+      "name": "room_leave",
+      "message": {
+        "kind": "room_leave",
+        "type": "lobby_command"
+      },
+      "hex": "03010009"
+    },
+    {
+      "name": "quick_join",
+      "message": {
+        "kind": "quick_join",
+        "type": "lobby_command"
+      },
+      "hex": "0301000a"
+    },
+    {
+      "name": "room_browse",
+      "message": {
+        "kind": "room_browse",
+        "type": "lobby_command"
+      },
+      "hex": "0301000b"
+    }
+  ]
+}

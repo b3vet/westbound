@@ -1,0 +1,206 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "player_states",
+  "type_id": 69,
+  "vectors": [
+    {
+      "name": "typical",
+      "message": {
+        "players": [
+          {
+            "player_id": 1,
+            "state": {
+              "d_cm": -175,
+              "flags": {
+                "boost": true,
+                "brake": false,
+                "ghost": false,
+                "headlights": true
+              },
+              "heading_e4": 873,
+              "lat_vel_cms": -42,
+              "run_state": "driving",
+              "s_mm": 12354678,
+              "speed_cms": 6944,
+              "steer_e4": -1250,
+              "tick": 123456,
+              "yaw_rate_mrad_s": 118
+            }
+          },
+          {
+            "player_id": 2,
+            "state": {
+              "d_cm": -175,
+              "flags": {
+                "boost": true,
+                "brake": false,
+                "ghost": false,
+                "headlights": true
+              },
+              "heading_e4": 873,
+              "lat_vel_cms": -42,
+              "run_state": "driving",
+              "s_mm": 12363678,
+              "speed_cms": 6944,
+              "steer_e4": -1250,
+              "tick": 123456,
+              "yaw_rate_mrad_s": 118
+            }
+          },
+          {
+            "player_id": 3,
+            "state": {
+              "d_cm": -175,
+              "flags": {
+                "boost": true,
+                "brake": false,
+                "ghost": false,
+                "headlights": true
+              },
+              "heading_e4": 873,
+              "lat_vel_cms": -42,
+              "run_state": "driving",
+              "s_mm": 12372678,
+              "speed_cms": 6944,
+              "steer_e4": -1250,
+              "tick": 123456,
+              "yaw_rate_mrad_s": 118
+            }
+          },
+          {
+            "player_id": 4,
+            "state": {
+              "d_cm": -175,
+              "flags": {
+                "boost": true,
+                "brake": false,
+                "ghost": false,
+                "headlights": true
+              },
+              "heading_e4": 873,
+              "lat_vel_cms": -42,
+              "run_state": "driving",
+              "s_mm": 12381678,
+              "speed_cms": 6944,
+              "steer_e4": -1250,
+              "tick": 123456,
+              "yaw_rate_mrad_s": 118
+            }
+          },
+          {
+            "player_id": 5,
+            "state": {
+              "d_cm": -175,
+              "flags": {
+                "boost": true,
+                "brake": false,
+                "ghost": false,
+                "headlights": true
+              },
+              "heading_e4": 873,
+              "lat_vel_cms": -42,
+              "run_state": "driving",
+              "s_mm": 12390678,
+              "speed_cms": 6944,
+              "steer_e4": -1250,
+              "tick": 123456,
+              "yaw_rate_mrad_s": 118
+            }
+          },
+          {
+            "player_id": 6,
+            "state": {
+              "d_cm": -175,
+              "flags": {
+                "boost": true,
+                "brake": false,
+                "ghost": false,
+                "headlights": true
+              },
+              "heading_e4": 873,
+              "lat_vel_cms": -42,
+              "run_state": "driving",
+              "s_mm": 12399678,
+              "speed_cms": 6944,
+              "steer_e4": -1250,
+              "tick": 123456,
+              "yaw_rate_mrad_s": 118
+            }
+          },
+          {
+            "player_id": 7,
+            "state": {
+              "d_cm": -175,
+              "flags": {
+                "boost": true,
+                "brake": false,
+                "ghost": false,
+                "headlights": true
+              },
+              "heading_e4": 873,
+              "lat_vel_cms": -42,
+              "run_state": "driving",
+              "s_mm": 12408678,
+              "speed_cms": 6944,
+              "steer_e4": -1250,
+              "tick": 123456,
+              "yaw_rate_mrad_s": 118
+            }
+          }
+        ],
+        "type": "player_states"
+      },
+      "hex": "45a90007010040e201007684bc0051ff6903201bd6ff76001efb0602020040e201009ea7bc0051ff6903201bd6ff76001efb0602030040e20100c6cabc0051ff6903201bd6ff76001efb0602040040e20100eeedbc0051ff6903201bd6ff76001efb0602050040e201001611bd0051ff6903201bd6ff76001efb0602060040e201003e34bd0051ff6903201bd6ff76001efb0602070040e201006657bd0051ff6903201bd6ff76001efb0602"
+    },
+    {
+      "name": "edges",
+      "message": {
+        "players": [
+          {
+            "player_id": 0,
+            "state": {
+              "d_cm": -10000,
+              "flags": {
+                "boost": false,
+                "brake": false,
+                "ghost": false,
+                "headlights": false
+              },
+              "heading_e4": -31416,
+              "lat_vel_cms": -32767,
+              "run_state": "not_running",
+              "s_mm": 0,
+              "speed_cms": 0,
+              "steer_e4": -10000,
+              "tick": 0,
+              "yaw_rate_mrad_s": -32767
+            }
+          },
+          {
+            "player_id": 65535,
+            "state": {
+              "d_cm": 10000,
+              "flags": {
+                "boost": true,
+                "brake": true,
+                "ghost": true,
+                "headlights": true
+              },
+              "heading_e4": 31416,
+              "lat_vel_cms": 32767,
+              "run_state": "crashed",
+              "s_mm": 4294967295,
+              "speed_cms": 20000,
+              "steer_e4": 10000,
+              "tick": 4294967295,
+              "yaw_rate_mrad_s": 32767
+            }
+          }
+        ],
+        "type": "player_states"
+      },
+      "hex": "4531000200000000000000000000f0d84885000001800180f0d80000ffffffffffffffffffff1027b87a204eff7fff7f10270f03"
+    }
+  ]
+}
