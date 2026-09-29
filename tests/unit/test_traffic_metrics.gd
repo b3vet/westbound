@@ -37,7 +37,7 @@ func test_metrics_pipeline_on_a_short_run() -> void:
 			finite(float(m[k]), k)
 	gt(float(m["gaps_per_km"]), 0.0)
 	gt(float(m["lane_changes_per_vehicle_min"]), 0.0)
-	eq(float(m["set_pieces_per_leg"]), 0.0, "no set pieces yet (WP6.3)")
+	ge(float(m["set_pieces_per_leg"]), 0.0, "set pieces per leg (WP6.2: wave peaks get set pieces)")
 	var lanes := int(cur["config"]["lanes"])
 	for l in lanes:
 		var flow := t.traffic.lane_flow_speed_mps(l, lanes) / Units.kmh_to_mps(1.0)
@@ -96,7 +96,9 @@ func test_metric_definitions_on_a_known_layout() -> void:
 	near(float(d["mean_speed_kmh_lane_0"]), 32.0 * 3.6, 1e-6)
 	near(float(d["mean_speed_kmh_lane_1"]), 20.0 * 3.6, 1e-6)
 	near(float(d["lane_changes_per_vehicle_min"]), 2.0 / (4.0 * dt / 60.0), 1e-9)
-	eq(float(d["set_pieces_per_leg"]), 0.0, "no set pieces yet (WP6.3)")
+	eq(float(d["set_pieces_per_leg"]), 0.0, "no set pieces added")
+	m.add_legs(1, 3)
+	near(float(m.to_dict()["set_pieces_per_leg"]), 1.5, 1e-9, "3 set pieces over 2 legs")
 
 
 ## D7 input: leg-8 density at cap 60 and cap 90 on 3 and 4 lanes (3 seeds each): the

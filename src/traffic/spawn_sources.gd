@@ -1,6 +1,7 @@
 class_name SpawnSources
 extends RefCounted
-## Built-in SpawnSources: Flow (the default) and Daily (Flow seeded by date).
+## Built-in SpawnSources: Flow (the default) and Daily (Flow seeded by date). The third
+## built-in, SetPiece, is SetPieceSource (set_piece_source.gd): it wraps Flow / Daily.
 ## Spec: Traffic → Spawning and the opposite carriageway ("at their lane's flow speed,
 ## with IDM-consistent gaps"); Traffic director (Flow, Daily, difficulty by leg);
 ## Fairness rule 7 (lane discipline: flow speeds rise to the left, slow profiles keep
@@ -72,6 +73,15 @@ class Flow:
 	## TrafficSim.set_headway_scale (plan D11: late legs drive closer). Set by the
 	## director from DirectorTuning.headway_scale(leg).
 	var headway_scale: float = 1.0
+	## Intensity waves and blind caps (WP6.2): when set, each lane and position is planned
+	## at ctx.density_per_km_lane x shaper.density_mult(lane flow speed, s) /
+	## shaper.ref_mult (_plan_lane), so the density the player meets follows
+	## the director's wave in every lane (the meeting map, IntensityWaves). Null: flat at
+	## ctx.density_per_km_lane.
+	var shaper: IntensityWaves
+	## Lane closures (WP6.2): a sim with closure_ahead(lane, s) -> float (TrafficSim);
+	## null = only the road's lane counts and edges (lane_open_for_spawn).
+	var lane_guard: Object
 
 	var _n: int = 0
 	# Per profile, SI.
@@ -133,6 +143,13 @@ class Flow:
 	func source_id() -> StringName:
 		return &"flow"
 
+	## Index of the profile with this id in `profiles` (-1 when absent).
+	func profile_index(id: StringName) -> int:
+		for p in _n:
+			if profiles[p].id == id:
+				return p
+		return -1
+
 	func length_of(type_id: int) -> float:
 		return _t_length[type_id]
 
@@ -159,12 +176,22 @@ class Flow:
 			_plan_lane(ctx, lane, lanes, s_from, s_to, spacing, out_spawns)
 
 	## One lane as a renewal process: each vehicle sits its minimum IDM spacing plus a
-	## uniform extra (mean = the target spacing) ahead of the previous one. Live traffic
-	## occupying the lane (occupies_lane: its lane, a lane change into it, a lane split
-	## over it) acts as renewal points, so the lane keeps its density and every new
-	## vehicle keeps s* to both neighbors.
+	## uniform extra (mean = the target spacing, 1000 / density) ahead of the previous
+	## one. Live traffic occupying the lane (occupies_lane: its lane, a lane change into
+	## it, a lane split over it) acts as renewal points, so the lane keeps its density
+	## and every new vehicle keeps s* to both neighbors.
+	##
+	## With a shaper (intensity waves, WP6.2) each spacing is the wave's where the next
+	## vehicle will be (1000 / (ctx density x density_mult / ref_mult), taken half a
+	## spacing on from the last one), and a vehicle goes between two live ones only where
+	## the wave is at least shaper.fill_min_mult(): traffic of earlier batches that
+	## drove into this one keeps its gaps in breathers and blind windows (the batches
+	## planned over them do not fill them up), while builds and peaks are kept full as
+	## IDM stretches their lanes. Where the wave asks for more than s* allows (late-leg
+	## peaks), IDM's s* wins.
 	func _plan_lane(ctx: SpawnSource.Context, lane: int, lanes: int, s_from: float, s_to: float,
 			spacing: float, out: Array[SpawnSource.Record]) -> void:
+		var shaped := shaper != null and shaper.ref_mult > 0.0
 		var ts := ctx.traffic
 		var live := _live_in_lane(ts, lane, ctx.road)
 		var k := 0
@@ -181,12 +208,19 @@ class Flow:
 			prev_v = ts.v[j]
 			prev_p = ts.profile_id[j]
 			k += 1
+		var v_lane := tuning.lane_flow_speed_mps(lane, lanes)
+		var flat := spacing
 		var first := true
 		var rec := SpawnSource.Record.new()
 		while true:
 			if not draw_into(ctx, ctx.rng, lane, lanes, 0.0, rec):
 				return
 			var ln := _t_length[rec.type_id]
+			if shaped:
+				var at := prev_s if has_prev and prev_s > s_from else s_from
+				spacing = _shaped_spacing(v_lane, at + _shaped_spacing(v_lane, at, flat) * 0.5, flat)
+				if is_inf(spacing):
+					return
 			var c := s_from + ctx.rng.unit() * spacing
 			if has_prev:
 				var m := min_spacing(prev_p, prev_v, prev_len, rec.v, ln)
@@ -198,7 +232,10 @@ class Flow:
 			first = false
 			if k < live.size():
 				var j := live[k]
-				if ts.s[j] - c < min_spacing(rec.profile_id, rec.v, ln, ts.v[j], ts.length[j]):
+				var fits := ts.s[j] - c >= min_spacing(rec.profile_id, rec.v, ln, ts.v[j], ts.length[j])
+				if fits and shaped:
+					fits = shaper.density_mult(v_lane, c) >= shaper.fill_min_mult()
+				if not fits:
 					# Doesn't fit before the next live vehicle: renew from it instead.
 					has_prev = true
 					prev_s = ts.s[j]
@@ -212,11 +249,34 @@ class Flow:
 			prev_len = ln
 			prev_v = rec.v
 			prev_p = rec.profile_id
-			if lane >= ctx.road.lane_count(c):
-				continue   # the lane has ended here (taper): keep the rhythm, place nothing
+			if not lane_open_for_spawn(ctx.road, lane, c):
+				continue   # the lane ends or closes here (taper): keep the rhythm, place nothing
 			rec.s = c
 			out.append(rec)
 			rec = SpawnSource.Record.new()
+
+	## Target spacing at s for a lane at v_lane: `flat` (the context density's) x
+	## ref_mult / density_mult (the shaper's wave and blind caps there). INF: no traffic.
+	func _shaped_spacing(v_lane: float, s: float, flat: float) -> float:
+		var m := shaper.density_mult(v_lane, s)
+		return flat * shaper.ref_mult / m if m > 0.0 else INF
+
+	## True when a vehicle may spawn at s in `lane` (WP6.2, lane closures): the lane
+	## exists there and merge_spawn_clear_m on (a lane that won't exist when the vehicle
+	## gets there is not used), the road's right edge is not cutting into it (a taper),
+	## and the sim knows no closure of it within merge_spawn_clear_m ahead.
+	## Allocation-free.
+	func lane_open_for_spawn(road: RoadPath, lane: int, s: float) -> bool:
+		var clear := tuning.merge_spawn_clear_m
+		if lane >= road.lane_count(s) or lane >= road.lane_count(s + clear):
+			return false
+		# Inside a taper the right edge cuts into the lane (the sim's closures cover the
+		# taper exactly; this half-lane test also covers roads fed to a guard-less Flow).
+		if road.lanes_right_edge_d(s) - road.lane_center_d(lane, s) < road.lane_width(s) * 0.5 * 0.5:
+			return false
+		if lane_guard != null and float(lane_guard.call(&"closure_ahead", lane, s)) < clear:
+			return false
+		return true
 
 	## Live slots occupying `lane` (SpawnSources.occupies_lane), sorted by s.
 	func _live_in_lane(ts: TrafficState, lane: int, road: RoadPath) -> Array[int]:
@@ -236,7 +296,7 @@ class Flow:
 	## Allocation-free; draws from ctx.rng.
 	func plan_single(ctx: SpawnSource.Context, s: float, lane: int, min_speed: float, rec: SpawnSource.Record) -> bool:
 		var lanes := ctx.road.lane_count(s)
-		if lane >= lanes:
+		if lane >= lanes or not lane_open_for_spawn(ctx.road, lane, s):
 			return false
 		if not draw_into(ctx, ctx.rng, lane, lanes, min_speed, rec):
 			return false
@@ -283,6 +343,27 @@ class Flow:
 		return absf(ctx.player.d - ctx.road.lane_center_d(lane, s)) < half
 
 	# ------------------------------------------------------------ Vehicle draw (allocation-free)
+
+	## One vehicle of profile `p` for `lane` into `rec` (everything but s): v0 drawn in the
+	## profile's range, v = v0, a type allowing the profile, a model variant, a palette
+	## color, no flags. For set pieces (their own mix). False if the profile has no type.
+	## Allocation-free; all randomness from `rng`.
+	func draw_profile_into(ctx: SpawnSource.Context, rng: Rng, p: int, lane: int, rec: SpawnSource.Record) -> bool:
+		if p < 0 or p >= _n or _p_types[p].is_empty():
+			return false
+		rec.profile_id = p
+		rec.lane = lane
+		rec.d = NAN
+		rec.v0 = rng.float_range(_p_vmin[p], _p_vmax[p])
+		rec.v = rec.v0
+		var allowed := _p_types[p]
+		var t := allowed[rng.int_range(0, allowed.size() - 1)]
+		rec.type_id = t
+		rec.model_variant = rng.int_range(0, _t_variants[t] - 1) if _t_variants[t] > 1 else 0
+		rec.color_index = rng.int_range(0, _palette_count(ctx) - 1)
+		rec.flags = 0
+		rec.set_piece = &""
+		return true
 
 	## Draws one vehicle for `lane` of `lanes` into `rec` (everything but s): driver
 	## profile from the lane-conditioned mix (aggressive at ctx.aggressive_share wherever

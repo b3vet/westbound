@@ -104,7 +104,7 @@ func update(dt: float, traffic: TrafficState) -> void:
 	_clock += dt
 	if mode == Mode.WEAVE and _clock >= _next_weave:
 		_next_weave = _clock + _rng.float_range(weave_min_s, weave_max_s)
-		target_lane = _rng.int_range(0, road.lane_count(state.s) - 1)
+		target_lane = _rng.int_range(0, _lanes_ahead() - 1)
 	if _tick % _ticks_per_step == 0:
 		_on_step_boundary(traffic)
 	_tick += 1
@@ -168,7 +168,7 @@ func _replan(traffic: TrafficState) -> void:
 			pair = passability.state_pair(_x)
 			stage = passability.state_stage(_x)
 	var ok := passability.check_player(traffic, state, params, road, result, pos, pair, stage)
-	var d_pref := road.lane_center_d(clampi(target_lane, 0, road.lane_count(state.s) - 1), state.s)
+	var d_pref := road.lane_center_d(clampi(target_lane, 0, _lanes_ahead() - 1), state.s)
 	if ok:
 		ok = passability.extract_path(result, result.path_state[0], state.s, v_target, d_pref, state.v, HEADWAY_S)
 	check_usec += Time.get_ticks_usec() - t0
@@ -205,3 +205,9 @@ func _follow(dt: float, traffic: TrafficState) -> void:
 	a = clampf(a, -BRAKE, IDM_A)
 	state.v = maxf(0.0, state.v + a * dt)
 	state.s += state.v * dt
+
+
+## Lanes here and DROP_LOOK_M ahead, the fewer (WP6.2 lane drops: an ending lane is
+## neither picked nor preferred; the check itself keeps the path out of it).
+func _lanes_ahead() -> int:
+	return mini(road.lane_count(state.s), road.lane_count(state.s + DROP_LOOK_M))

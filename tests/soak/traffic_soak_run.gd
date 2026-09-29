@@ -23,7 +23,11 @@ extends RefCounted
 ##   - every soak_window_check_interval_s: the ImpossibleWindowChecker;
 ##   - every trace_hash_interval_s: the trace hash of all vehicle states (both
 ##     carriageways) and the player;
-##   - TrafficMetrics throughout.
+##   - TrafficMetrics throughout; set pieces per leg (WP6.2) from the director's
+##     SetPieceSource (pieces that got vehicles, counted in the leg they spawned);
+##   - set-piece warnings (the director writes them to the run's event buffer) go to the
+##     rule checker, which allows a deceleration beyond the clamp only to a set piece
+##     warned >= 300 m ahead (rule 4).
 ##
 ##   var r := TrafficSoakRun.new(index, base_seed)
 ##   r.run_to_end()                 # or r.advance(seconds)
@@ -90,6 +94,9 @@ var impossible_checks := 0
 var impossible_windows := 0
 var impossible_player_induced := 0
 var impossible_player_cut_in := 0
+## Ticks with the player's body outside the driving lanes (a lane that ended: WP6.2 lane
+## drops), the rule checker's tolerance. Reported, not gated (the player's own driving).
+var player_offroad_ticks := 0
 var window_examples: Array[Dictionary] = []
 
 var _bot_rng: Rng
@@ -107,6 +114,7 @@ var _in_window := false
 var _completed := 0
 var _max_time := 0.0
 var _fixed_leg := 0
+var _set_pieces_counted := 0
 ## Wall time spent in TrafficSim.step / TrafficDirector.step (tick cost, D7).
 var sim_usec := 0
 var director_usec := 0
@@ -117,8 +125,10 @@ var active_sum := 0
 
 ## `run_legs` / `leg_m` <= 0 use TrafficTuning.soak_run_legs / LegsTuning's leg length.
 ## `fixed_leg` > 0 drives every leg at that leg's density and mix (D7 reference runs).
+## `biome` (WP6.2): the road follows that biome everywhere (BiomePlan.uniform: its lane
+## count, curves, crests and tunnels with their lane drops), e.g. the canyon soak.
 func _init(run_index: int, base_seed: int, run_legs: int = -1, leg_m: float = -1.0, base: Tuning = null,
-		fixed_leg: int = 0, which_bot: int = BOT_PASSABILITY) -> void:
+		fixed_leg: int = 0, biome: BiomeDef = null, which_bot: int = BOT_PASSABILITY) -> void:
 	index = run_index
 	bot_kind = which_bot
 	_fixed_leg = fixed_leg
@@ -135,6 +145,9 @@ func _init(run_index: int, base_seed: int, run_legs: int = -1, leg_m: float = -1
 	run_m = leg_length_m * float(legs)
 	_max_time = TIMEOUT_FACTOR * run_m / Units.kmh_to_mps(tuning.traffic.soak_bot_min_kmh)
 	road = ProceduralRoadPath.new(ctx)
+	if biome != null:
+		road.set_biome_plan(BiomePlan.uniform(biome, tuning.legs.leg_length_m()))
+		lanes = road.lane_count(0.0)
 	registry = TrafficRegistry.load_default(tuning.traffic)
 	car = _car(run_index)
 	params = _params_for(car, tuning)
@@ -152,8 +165,10 @@ func _init(run_index: int, base_seed: int, run_legs: int = -1, leg_m: float = -1
 	sim = TrafficSim.new(ctx, road, registry)
 	sim.set_player_body(car.length_m, car.width_m)
 	director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types, car.length_m, car.width_m)
+	director.events = events
 	director.set_player_params(params)
 	checker = TrafficRuleChecker.new(tuning, registry, road, car.length_m, car.width_m)
+	checker.set_piece_of = director.set_pieces.instance_of
 	windows = ImpossibleWindowChecker.new(tuning, registry, car)
 	metrics = TrafficMetrics.new(tuning)
 	events = ScoreEventBuffer.new(tuning.scoring.event_buffer_capacity)
@@ -189,12 +204,17 @@ func tick() -> void:
 	sim.step(DT, bot.state, null, events)
 	var u1 := Time.get_ticks_usec()
 	checker.observe(time, sim.state, bot.state)
+	if bot.state.d + bot.width_m * 0.5 > road.lanes_right_edge_d(bot.state.s) + TrafficRuleChecker.OFFROAD_TOL_M:
+		player_offroad_ticks += 1
 	for slot in checker.contacts_started:
 		sim.notify_hit(slot)
 	var u2 := Time.get_ticks_usec()
 	director.step(DT, bot.state)
 	director_usec += Time.get_ticks_usec() - u2
 	sim_usec += u1 - u0
+	for k in events.size():
+		if events.kind[k] == SetPieceSource.KIND_WARNING:
+			checker.note_set_piece_warning(events.points[k], sim.state, bot.state)
 	active_sum += sim.state.count
 	if sim.state.count >= tuning.traffic.max_active_vehicles:
 		ticks_at_cap += 1
@@ -217,6 +237,7 @@ func tick() -> void:
 		_check_window()
 	if bot.state.s >= float(leg) * leg_length_m:
 		if leg >= legs:
+			_count_set_pieces()
 			finished = true
 		else:
 			_start_leg(leg + 1)
@@ -240,8 +261,15 @@ func _start_leg(k: int) -> void:
 		legs_weaving += 1
 	else:
 		bot.keep_lane()
+	_count_set_pieces()
 	metrics.add_legs(1)
 	road.forget_before(bot.state.s - t.despawn_behind_m - director.ahead_distance())
+
+
+## Set pieces spawned since the last call go to the metrics (set_pieces_per_leg).
+func _count_set_pieces() -> void:
+	metrics.set_pieces += director.set_pieces.spawned - _set_pieces_counted
+	_set_pieces_counted = director.set_pieces.spawned
 
 
 func _check_window() -> void:
@@ -321,12 +349,13 @@ func result() -> Dictionary:
 		"ambush_violations": c.ambush_violations, "lane_moves_checked": c.lane_moves_checked,
 		"collision_ticks": c.collisions, "collision_pairs": c.collision_pairs,
 		"decel_violations": c.decel_violations, "brake_flag_violations": c.brake_flag_violations,
+		"offroad_violations": c.offroad_violations, "merges": sim.stat_merges,
 		"min_accel": c.min_accel,
 		"player_contact_ticks": c.player_contacts, "contact_episodes": c.contact_episodes,
 		"rear_end_episodes": c.rear_end_episodes, "rear_end_normal": c.rear_end_normal,
 		"window_checks": window_checks, "impossible_checks": impossible_checks,
 		"impossible_windows": impossible_windows, "impossible_player_induced": impossible_player_induced,
-		"impossible_player_cut_in": impossible_player_cut_in,
+		"impossible_player_cut_in": impossible_player_cut_in, "player_offroad_ticks": player_offroad_ticks,
 		"impossible_traffic": impossible_windows - impossible_player_induced - impossible_player_cut_in,
 		"bot": "passability" if pbot != null else "weave",
 		"bot_checks": pbot.checks if pbot != null else 0,
@@ -345,6 +374,16 @@ func result() -> Dictionary:
 		"sim_signals": sim.stat_signals, "sim_moves": sim.stat_moves, "sim_completed": sim.stat_completed,
 		"sim_cancel_player": sim.stat_cancel_player, "sim_cancel_hesitant": sim.stat_cancel_hesitant,
 		"sim_cancel_unsafe": sim.stat_cancel_unsafe,
+		"set_pieces": director.set_pieces.spawned, "set_pieces_started": director.set_pieces.started,
+		"set_pieces_by_kind": director.set_pieces.spawned_by_kind.duplicate(),
+		"set_piece_hard_decels": c.set_piece_hard_decels, "peaks_seen": director.peaks_seen,
+		"peaks_no_chance": director.peaks_no_chance, "peaks_no_kind": director.peaks_no_kind,
+		"peaks_missed": director.peaks_missed, "peaks_unfit": director.peaks_unfit,
+		"set_pieces_passed": director.set_pieces.ended_passed,
+		"set_pieces_unmet": director.set_pieces.ended_unmet,
+		"set_pieces_ended_zone": director.set_pieces.ended_zone,
+		"set_pieces_ended_duration": director.set_pieces.ended_duration,
+		"set_pieces_ended_empty": director.set_pieces.ended_empty,
 		"metrics_raw": metrics_raw(), "messages": Array(c.messages),
 	}
 

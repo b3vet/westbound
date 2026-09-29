@@ -49,6 +49,10 @@ const TAG_HONK := &"honk"
 const TAG_CUT_IN := &"cut_in"
 const TAG_HIT := &"hit"
 
+## Lane closures (WP6.2): at most this many at once; the road's own carry this tag.
+const MAX_LANE_CLOSURES := 32
+const ROAD_CLOSURE_TAG := -1
+
 const _PEND_HAZARD_ON := 1
 const _PEND_HORN := 2
 const _BLINKERS := TrafficState.FLAG_BLINKER_LEFT | TrafficState.FLAG_BLINKER_RIGHT
@@ -74,6 +78,7 @@ var stat_cancel_player := 0        ## cancelled: the player entered the target g
 var stat_cancel_hesitant := 0      ## cancelled: Hesitant profile
 var stat_cancel_unsafe := 0        ## cancelled: gap no longer safe at the end of the signal
 var stat_model_updates := 0        ## vehicle model evaluations (near + far)
+var stat_merges := 0               ## mandatory merges signaled (a lane closing ahead)
 
 var _cap: int
 var _P: int                        # the player's index in the mirrors and the order
@@ -191,6 +196,17 @@ var _hit_hazard := PackedByteArray()   # hazards were switched on by a hit (swit
 var _lc_target_d := PackedFloat64Array()   # d the signaled / moving lateral move ends at
 var _lc_split := PackedInt32Array()    # the move enters a lane split (-1 left / +1 right boundary), 0 = no
 var _split := PackedInt32Array()       # riding the lane boundary on this side of `lane` (motorbikes), 0 = no
+var _hard_ok := PackedByteArray()      # set pieces: may brake beyond the clamp (announced >= 300 m ahead)
+# Lane closures (WP6.2): lane, [s0, s1], tag
+var _cl_lane := PackedInt32Array()
+var _cl_s0 := PackedFloat64Array()
+var _cl_s1 := PackedFloat64Array()
+var _cl_tag := PackedInt32Array()
+var _cl_n := 0
+var _cl_road_to := -INF
+var _merge_zone: float
+var _merge_urg: float
+var _merge_stop: float
 var _pending := PackedInt32Array()     # _PEND_* bits emitted at the next step
 var _pending_tag: Array[StringName] = []
 var _n_pending := 0
@@ -263,6 +279,11 @@ func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
 	_lc_target_d.resize(_cap)
 	_lc_split.resize(_cap)
 	_split.resize(_cap)
+	_hard_ok.resize(_cap)
+	_cl_lane.resize(MAX_LANE_CLOSURES)
+	_cl_s0.resize(MAX_LANE_CLOSURES)
+	_cl_s1.resize(MAX_LANE_CLOSURES)
+	_cl_tag.resize(MAX_LANE_CLOSURES)
 	_pending_tag.resize(_cap)
 	_pending_tag.fill(&"")
 	_edge = road.lanes_left_edge_d(0.0)
@@ -294,6 +315,7 @@ func clear() -> void:
 	stat_cancel_hesitant = 0
 	stat_cancel_unsafe = 0
 	stat_model_updates = 0
+	stat_merges = 0
 
 
 ## The player's body size (run.gd passes the CarDef's length_m / width_m). Until then
@@ -393,6 +415,7 @@ func spawn(rec: SpawnSource.Record) -> int:
 	_lc_target_d[i] = d
 	_lc_split[i] = 0
 	_split[i] = 0
+	_hard_ok[i] = 0
 
 	_ks[i] = rec.s
 	_kv[i] = rec.v
@@ -490,7 +513,15 @@ func request_lane_change(slot: int, target_lane: int) -> bool:
 			or absi(target_lane - state.lane[slot]) != 1 \
 			or (state.flags[slot] & TrafficState.FLAG_HIT) != 0:
 		return false
-	if _split[slot] != 0 or is_inf(_eval_target(slot, target_lane, false)):
+	if _split[slot] != 0:
+		return false
+	if (state.flags[slot] & TrafficState.FLAG_SCRIPTED) != 0:
+		# Set pieces (WP6.2) place their vehicles in any lane: no keep-right restriction,
+		# the same safety and no-ambush checks.
+		if target_lane < 0 or target_lane >= road.lane_count(_ks[slot]) or _closes_soon(target_lane, slot) \
+				or is_inf(_eval_move(slot, _lane_d(target_lane), target_lane, false)):
+			return false
+	elif is_inf(_eval_target(slot, target_lane, false)):
 		return false
 	_start_signal(slot, target_lane, _lane_d(target_lane), 0)
 	return true
@@ -499,6 +530,180 @@ func request_lane_change(slot: int, target_lane: int) -> bool:
 ## True while this motorbike rides a lane boundary (lane splitting).
 func is_lane_splitting(slot: int) -> bool:
 	return _split[slot] != 0
+
+
+# ---------------------------------------------------------------- Set-piece hooks (WP6.2)
+# The set-piece controllers (SetPieceSource) script FLAG_SCRIPTED vehicles only through
+# these (plus request_lane_change): a desired speed, a brake tap, the hard-decel
+# permission, and the release back to ordinary traffic. Allocation-free.
+
+## A scripted vehicle's desired speed (m/s).
+func set_scripted_v0(slot: int, v0: float) -> void:
+	if state.is_active(slot):
+		state.v0[slot] = v0
+
+
+## A brake tap (brake_tap_decel_mps2 for brake_tap_s, as the cut-in reaction; the brake
+## lights show it). False when inactive, hit, or a tap is still running.
+func scripted_brake_tap(slot: int) -> bool:
+	if not state.is_active(slot) or _tap_t[slot] > 0.0 or (state.flags[slot] & TrafficState.FLAG_HIT) != 0:
+		return false
+	_tap_t[slot] = _tap_s
+	return true
+
+
+## Fairness rule 4: a FLAG_SCRIPTED vehicle brakes beyond max_decel_mps2 (up to
+## scripted_max_decel_mps2) only while this is on. The set-piece source turns it on
+## after the piece was announced >= set_piece_min_warning_m ahead; spawn clears it.
+func set_hard_decel_allowed(slot: int, on: bool) -> void:
+	if state.is_active(slot):
+		_hard_ok[slot] = 1 if on else 0
+
+
+func hard_decel_allowed(slot: int) -> bool:
+	return _hard_ok[slot] == 1
+
+
+## Ends scripted control: FLAG_SCRIPTED off, desired speed `v0`, no hard decel, and
+## MOBIL resumes after the lane-change cooldown.
+func release_scripted(slot: int, v0: float) -> void:
+	if not state.is_active(slot):
+		return
+	state.flags[slot] &= ~TrafficState.FLAG_SCRIPTED
+	state.v0[slot] = v0
+	_hard_ok[slot] = 0
+	_mobil_t[slot] = _cooldown
+
+
+# ---------------------------------------------------------------- Lane closures and mandatory merges (WP6.2)
+# A closure: lane `lane` cannot be driven over [s0, s1]: a road lane drop (the dropped
+# lanes from the change's start through its taper), the added lanes of a widening while
+# their taper runs, and WP6.3's merge zone and road works (their own closures, by tag).
+#   - Vehicles in a lane that closes within merge_zone_m merge out: MOBIL (safety and
+#     no-ambush as always) with an incentive bonus ramping from 0 to merge_urgency_mps2
+#     at the closure, evaluated every model tick, telegraphed like any lane change (the
+#     blinker for the profile's signal time); a Hesitant driver never cancels it. Set-
+#     piece vehicles (FLAG_SCRIPTED) merge too.
+#   - Until it has started moving out, a vehicle in the closing lane brakes for a
+#     standing obstacle merge_stop_margin_m before the closure (IDM): one that finds no
+#     gap stops and waits at the end of its lane instead of driving onto the shoulder.
+#   - Nobody changes into (or lane-splits next to) a lane that closes within merge_zone_m.
+# The director feeds the road's closures (sync_road_closures, director rate); Flow keeps
+# spawns out of lanes that close within merge_spawn_clear_m (closure_ahead).
+
+## Adds a closure of `lane` over [s0, s1] (`tag` groups closures for removal; the road's
+## use ROAD_CLOSURE_TAG). False when MAX_LANE_CLOSURES are live. Director rate.
+func add_lane_closure(lane: int, s0: float, s1: float, tag: int = 0) -> bool:
+	if _cl_n >= MAX_LANE_CLOSURES:
+		return false
+	_cl_lane[_cl_n] = lane
+	_cl_s0[_cl_n] = s0
+	_cl_s1[_cl_n] = s1
+	_cl_tag[_cl_n] = tag
+	_cl_n += 1
+	return true
+
+
+## Removes every closure with this tag. Director rate.
+func remove_lane_closures(tag: int) -> void:
+	var w := 0
+	for c in _cl_n:
+		if _cl_tag[c] != tag:
+			_keep_closure(c, w)
+			w += 1
+	_cl_n = w
+
+
+## Drops closures that end before `s` (behind the player). Director rate.
+func forget_lane_closures_before(s: float) -> void:
+	var w := 0
+	for c in _cl_n:
+		if _cl_s1[c] >= s:
+			_keep_closure(c, w)
+			w += 1
+	_cl_n = w
+
+
+func lane_closure_count() -> int:
+	return _cl_n
+
+
+## The road's lane-count changes starting in [s_from, s_to) become closures (the lanes
+## between the old and the new count, over the change's start and taper). Repeated
+## calls never add a change twice. Director rate: allocates.
+func sync_road_closures(s_from: float, s_to: float) -> void:
+	var lo := maxf(s_from, _cl_road_to)
+	if s_to <= lo:
+		return
+	var found: Array[RoadFeature] = []
+	road.features_in(lo, s_to, found)
+	for f in found:
+		if f.kind != RoadFeature.Kind.LANE_COUNT_CHANGE or (f.s_start < lo and is_finite(_cl_road_to)):
+			continue
+		var before := road.lane_count(f.s_start - road.lane_width(f.s_start))
+		var after := int(f.value)
+		for l in range(mini(before, after), maxi(before, after)):
+			add_lane_closure(l, f.s_start, f.s_end, ROAD_CLOSURE_TAG)
+	_cl_road_to = s_to
+
+
+## Distance from s to the start of the next closure of `lane` still ahead of s (0 when
+## s is inside one), INF when none. Allocation-free.
+func closure_ahead(lane: int, s: float) -> float:
+	var best := INF
+	for c in _cl_n:
+		if _cl_lane[c] == lane and _cl_s1[c] >= s:
+			best = minf(best, maxf(_cl_s0[c] - s, 0.0))
+	return best
+
+
+## Lane t closes within merge_zone_m ahead of vehicle i's front (or i is inside the closure).
+func _closes_soon(t: int, i: int) -> bool:
+	return closure_ahead(t, _ks[i] + _khl[i]) < _merge_zone
+
+
+func _keep_closure(from: int, to: int) -> void:
+	_cl_lane[to] = _cl_lane[from]
+	_cl_s0[to] = _cl_s0[from]
+	_cl_s1[to] = _cl_s1[from]
+	_cl_tag[to] = _cl_tag[from]
+
+
+## IDM for a standing obstacle merge_stop_margin_m before the closure of vehicle i's
+## lane (INF: none within the lookahead, or i is already moving out of the lane).
+func _closure_wall_accel(i: int, vi: float, v0: float, p: int) -> float:
+	var cur := state.lane[i]
+	if state.lc_state[i] == _MOVING and state.target_lane[i] != cur:
+		return INF
+	var dist := closure_ahead(cur, _ks[i] + _khl[i])
+	if dist > _look:
+		return INF
+	return Idm.accel(vi, v0, maxf(dist - _merge_stop, _gap_floor), vi, _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p],
+		_gap_floor)
+
+
+## A mandatory merge out of a closing lane (see above).
+func _consider_merge(i: int) -> void:
+	if state.lc_state[i] != _NONE:
+		return
+	if _split[i] != 0:
+		_consider_split_exit(i)
+		return
+	var cur := state.lane[i]
+	var dist := closure_ahead(cur, _ks[i] + _khl[i])
+	var urgency := _merge_urg * clampf(1.0 - dist / _merge_zone, 0.0, 1.0)
+	var gl := _eval_target(i, cur - 1, true) + urgency
+	var gr := _eval_target(i, cur + 1, true) + urgency
+	var t := -1
+	if gl > 0.0 and gl >= gr:
+		t = cur - 1
+	elif gr > 0.0:
+		t = cur + 1
+	if t < 0:
+		return
+	_start_signal(i, t, _lane_d(t), 0)
+	_will_cancel[i] = 0
+	stat_merges += 1
 
 
 # ---------------------------------------------------------------- Tick
@@ -601,6 +806,8 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 		a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor)
 	else:
 		a = Idm.free_accel(vi, v0, _pa[p], _pdl[p])
+	if _cl_n > 0:
+		a = minf(a, _closure_wall_accel(i, vi, v0, p))
 	_lead[i] = lead
 	_lead_gap[i] = gap
 	_a_raw[i] = a
@@ -622,8 +829,8 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 	var f := state.flags[i]
 	if (f & TrafficState.FLAG_HIT) != 0 and _hit_recover - state.react_timer[i] < _hit_brake_s:
 		a = minf(a, -_hit_decel)
-	# Fairness rule 4: never beyond the clamp outside (warned) set pieces.
-	var lim := _scripted_decel if (f & TrafficState.FLAG_SCRIPTED) != 0 else _max_decel
+	# Fairness rule 4: never beyond the clamp outside set pieces announced >= 300 m ahead.
+	var lim := _scripted_decel if (f & TrafficState.FLAG_SCRIPTED) != 0 and _hard_ok[i] == 1 else _max_decel
 	if a < -lim:
 		a = -lim
 	state.accel[i] = a
@@ -647,6 +854,13 @@ func _step_lateral(i: int, out: ScoreEventBuffer) -> void:
 		_tick_signaling(i, mdt)
 	elif st == _MOVING:
 		_tick_moving(i, mdt)
+	elif (f & TrafficState.FLAG_HIT) == 0 and _cl_n > 0 \
+			and closure_ahead(state.lane[i], _ks[i] + _khl[i]) < _merge_zone:
+		# Mandatory merge: every model tick, or a MOBIL interval after a cancelled one.
+		var mt := minf(_mobil_t[i], _peval[state.profile_id[i]]) - mdt
+		_mobil_t[i] = maxf(mt, 0.0)
+		if mt <= 0.0:
+			_consider_merge(i)
 	elif (f & (TrafficState.FLAG_HIT | TrafficState.FLAG_SCRIPTED)) == 0:
 		var mt := _mobil_t[i] - mdt
 		if mt <= 0.0:
@@ -797,6 +1011,9 @@ func _consider_lane_change(i: int) -> void:
 ## (left one first) with the usual telegraphing, then filter past narrow-enough
 ## vehicles. Never starts during the player's lane change nearby.
 func _consider_split(i: int) -> void:
+	if _cl_n > 0 and (_closes_soon(state.lane[i], i) or _closes_soon(state.lane[i] - 1, i) \
+			or _closes_soon(state.lane[i] + 1, i)):
+		return   # no lane splitting next to a lane that ends
 	var lead := _lead[i]
 	if lead < 0 or lead == _P or _kv[lead] >= _split_max_v or _lead_gap[i] > _split_scan \
 			or state.v0[i] <= _split_max_v:
@@ -879,6 +1096,8 @@ func _eval_target(i: int, t: int, with_incentive: bool) -> float:
 	var lanes := road.lane_count(_ks[i])
 	if t < 0 or t >= lanes:
 		return -INF
+	if _cl_n > 0 and _closes_soon(t, i):
+		return -INF   # never into a lane that ends within merge_zone_m
 	var krl := _pkrl[state.profile_id[i]]
 	if krl > 0 and t < state.lane[i] and t < lanes - krl:
 		return -INF
@@ -1130,3 +1349,6 @@ func _cache_tuning() -> void:
 	_split_clear = t.lane_split_clearance_m
 	_split_player_lat = t.lane_split_player_lateral_mps
 	_split_player_range = t.lane_split_player_range_m
+	_merge_zone = t.merge_zone_m
+	_merge_urg = t.merge_urgency_mps2
+	_merge_stop = t.merge_stop_margin_m

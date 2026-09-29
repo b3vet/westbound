@@ -10,12 +10,15 @@ extends WBTest
 
 const LANES := 3
 const CAR := "res://data/cars/falcon_gt.tres"
+## Lane drops: the procedural road's seed and where lane 2 ends (3 -> 2 lanes).
+const DROP_SEED := 620411
+const DROP_S := 20.0   # lane 2 center closes ~62 m into the 200 m taper
 
 var tuning: Tuning
 var reg: TrafficRegistry
 var car: CarDef
 var params: VehicleParams
-var road: StraightRoadPath
+var road: RoadPath
 var pas: Passability
 var res: Passability.Result
 var traffic: TrafficState
@@ -282,6 +285,64 @@ func test_batch_wall_across_a_boundary_with_live_traffic() -> void:
 	pas.set_planned(batch)
 	check(not pas.check(traffic, player, params, road, 780.0, 1080.0, res), "a wall straddling the start fails")
 	pas.clear_planned()
+
+
+# ---------------------------------------------------------------- Lanes that end (WP6.2 lane drops)
+
+## A procedural road of 3 lanes (or 2 if `drop`) from DROP_S on, the default taper.
+func _setup_drop(drop: bool) -> bool:
+	var r := ProceduralRoadPath.new(RunContext.new(DROP_SEED, RunContext.MODE_JOURNEY, tuning))
+	if not eq(r.lane_count(0.0), LANES, "the procedural road starts with 3 lanes"):
+		return false
+	if drop:
+		r.schedule_lane_count(DROP_S, LANES - 1, tuning.road.lane_taper_length_m)
+	r.ensure_generated_to(DROP_S + 2000.0)
+	_setup()
+	road = r
+	pas = Passability.new(tuning, reg, road)
+	pas.set_player_body(car.length_m, car.width_m)
+	return true
+
+
+func test_a_lane_that_ends_is_left_in_time() -> void:
+	# The player alone in lane 2, which ends ahead: the path leaves it before its body
+	# would leave the driving lanes (the edge follows the taper), and ends in lane 0 or 1.
+	if not _setup_drop(true):
+		return
+	_place_player(2, 0.0, 110.0)
+	check(pas.check_player(traffic, player, params, road, res), "an ending lane with room beside it is passable")
+	_check_path_shape("lane end")
+	var hw := car.width_m * 0.5
+	for k in res.path_n:
+		if not le(res.path_d[k] + hw, road.lanes_right_edge_d(res.path_s[k]) + 1e-6,
+				"the body stays on the driving lanes at step %d (s %.1f)" % [k, res.path_s[k]]):
+			return
+	le(res.path_d[res.path_n - 1], road.lane_center_d(1, res.path_s[res.path_n - 1]) + 1e-6, "ends out of lane 2")
+
+
+func test_the_only_open_lane_ending_is_impossible() -> void:
+	# Trucks side by side in lanes 0 and 1 below the minimum speed; lane 2 is the way
+	# past them. Without the drop it passes; when lane 2 ends before the trucks are
+	# passed it does not, the lane end is credited but never offered for removal.
+	for drop: bool in [false, true]:
+		if not _setup_drop(drop):
+			return
+		_place_player(2, 0.0, 110.0)
+		_truck(0, 35.0, 80.0)
+		_truck(1, 35.0, 80.0)
+		var ok := pas.check_player(traffic, player, params, road, res)
+		if not drop:
+			check(ok, "lane 2 open all along: passable")
+			continue
+		check(not ok, "lane 2 ends before the trucks are passed: impossible")
+		var road_cut := 0.0
+		for o in res.obstacles:
+			if res.blocker_src[o] == Passability.SRC_ROAD:
+				road_cut += res.blocker_cut[o]
+		gt(road_cut, 0.0, "the lane end is credited with the paths it cuts")
+		eq(res.vehicles, 2, "road obstacles are not counted as vehicles")
+		var o := res.worst_blocker(func(src: int) -> bool: return src >= 0)
+		check(o >= 0 and res.blocker_src[o] >= 0, "a truck is the removable blocker")
 
 
 # ---------------------------------------------------------------- Slicing, determinism, cost

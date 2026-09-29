@@ -1,0 +1,39 @@
+[gd_resource type="Resource" script_class="SetPieceDef" format=3]
+
+[ext_resource type="Script" uid="uid://cc0n7yjgviyxv" path="res://src/traffic/set_piece_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"rolling_roadblock"
+kind = 1
+display_name = "Rolling roadblock"
+warning = 3
+warning_sign_distances_m = PackedFloat64Array(300)
+length_m = 10.0
+lanes_closed_min = 0
+lanes_closed_max = 0
+open_lanes = 0
+lane_count_override = 0
+drops_right_lane = false
+hazards = false
+allows_hard_decel = false
+min_leg = 1
+weight = 1.0
+is_checkpoint_landmark = false
+min_lanes = 2
+profile_ids = Array[StringName]([&"commuter", &"cruiser"])
+profile_weights = PackedFloat64Array(2, 1)
+speed_kmh = 125.0
+rows = 1
+row_stagger_m = 0.0
+start_distance_m = 50.0
+end_margin_m = 40.0
+duration_max_s = 60.0
+approach_max_s = 150.0
+clear_behind_m = 60.0
+clear_ahead_m = 80.0
+gap_interval_s = 4.0
+gap_distance_m = 22.0
+gap_speed_delta_kmh = 18.0
+gap_phase_max_s = 10.0
+ripple_step_s = 0.25

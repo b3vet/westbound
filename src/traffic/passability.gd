@@ -64,6 +64,11 @@ extends RefCounted
 ##    failure, how much path space each obstacle cut (forward sets from the failing
 ##    starts), for the director's "remove the vehicle that blocks the most paths".
 ##
+## 4. Lanes that end (WP6.2 lane drops, tapers): where the right edge of the driving
+##    lanes (RoadPath.lanes_right_edge_d, sampled) leaves a grid position's body outside,
+##    a static road obstacle blocks that position and every one right of it. It is never
+##    a leader for traffic and never removable (Result.blocker_src = SRC_ROAD).
+##
 ## Pure and deterministic (RefCounted, no Node, no randomness). Allocation-free per
 ## check after _init (preallocated structure-of-arrays storage).
 
@@ -84,6 +89,12 @@ const MAX_PRED := 5
 const MAX_VEHICLES := 160
 const MAX_PLANNED := 96
 const MAX_PROBES := 48
+## Result.blocker_src of a road obstacle (a lane that ends).
+const SRC_ROAD := -(1 << 30)
+## Sampling step of the lane edge for lane ends (a closure is widened by one step at both
+## ends); lane counts are compared this far apart first (no change: no closures).
+const CLOSURE_SAMPLE_M := 5.0   # lint: allow-number geometry sampling resolution, not gameplay
+const CLOSURE_SCAN_M := 50.0    # lint: allow-number shorter than any lane taper or lane-count stretch
 ## Relevance entries per obstacle and step: at most 3 positions, 4 pairs, 3 starts.
 const REL_PER_OBSTACLE := 10
 ## Substeps for integrating the full-throttle speed envelope over one decision step.
@@ -237,6 +248,8 @@ var _p_v := 0.0
 
 # Vehicles (private copy): index q < _n_veh
 var _n_veh := 0
+var _n_move := 0              ## simulated vehicles [0, _n_move); road obstacles after them
+var _cl_a := PackedFloat64Array()     ## per position: start of the closure being scanned (NAN: open)
 var _vs := PackedFloat64Array()
 var _vv := PackedFloat64Array()
 var _vd := PackedFloat64Array()
@@ -453,6 +466,7 @@ func _init(t: Tuning, reg: TrafficRegistry, road_path: RoadPath) -> void:
 	_cut.resize(nv)
 	_probe_ok.resize(MAX_PROBES)
 	_pos_d.resize(MAX_POS)
+	_cl_a.resize(MAX_POS)
 	_state_d.resize(MAX_STATES)
 	_state_pos.resize(MAX_STATES)
 	_succ.resize(MAX_STATES * MAX_SUCC)
@@ -826,8 +840,10 @@ func _prepare(params: VehicleParams) -> void:
 	out.failed_probes = 0
 	out.fail_t = INF
 	var s_ref := _p_s if _mode == MODE_PLAYER else _s_from
-	var lanes := clampi(road.lane_count(s_ref), 1, MAX_LANES)
 	var lw := road.lane_width(s_ref)
+	# A lane still tapering away at s_ref is on the grid (its closure blocks it).
+	var edge_lanes := ceili((road.lanes_right_edge_d(s_ref) - road.lanes_left_edge_d(s_ref)) / lw - STEP_EPS)
+	var lanes := clampi(maxi(road.lane_count(s_ref), edge_lanes), 1, MAX_LANES)
 	_grid = _pt.lateral_step_lanes * lw
 	_d_first = road.lane_center_d(0, s_ref)
 	var d_last := road.lane_center_d(lanes - 1, s_ref)
@@ -955,15 +971,17 @@ func _load(traffic: TrafficState) -> void:
 			continue
 		if s + h + maxf(0.0, maxf(traffic.v[i], traffic.v0[i]) - _v_lo) * horizon < lo0:
 			continue
-		if _n_veh >= MAX_VEHICLES:
+		if _n_veh >= MAX_VEHICLES - MAX_POS:
 			break
 		_load_live(traffic, i, _n_veh)
 		_n_veh += 1
 	for k in _n_planned:
-		if _n_veh >= MAX_VEHICLES:
+		if _n_veh >= MAX_VEHICLES - MAX_POS:
 			break
 		_load_planned(_planned[k], k, _n_veh)
 		_n_veh += 1
+	_n_move = _n_veh
+	_load_closures()
 	for q in _n_veh:
 		_vord[q] = q
 		_v_start0[q] = _vv[q]
@@ -972,7 +990,77 @@ func _load(traffic: TrafficState) -> void:
 		_fs_s[q] = _vs[q]
 		_fs_lo[q] = _vlo[q]
 		_fs_hi[q] = _vhi[q]
-	_out.vehicles = _n_veh
+	for q in range(_n_move, _n_veh):
+		_vplo[q] = INF   # never a leader for traffic
+		_vphi[q] = -INF
+	_out.vehicles = _n_move
+
+
+## Lanes that end within the corridor: per grid position, the stretches where the
+## player's body there would leave the driving lanes (the right edge sampled every
+## CLOSURE_SAMPLE_M, one sample wider at both ends) become static road obstacles
+## blocking that position and every position right of it. No lane-count change and no
+## taper in the corridor (the common case): nothing to do.
+func _load_closures() -> void:
+	var lo := _corr_lo[0] - _player_length()
+	var hi := _corr_hi[_k_steps] + _player_length()
+	var lanes := road.lane_count(lo)
+	var uniform := absf(road.lanes_right_edge_d(lo) - road.lane_center_d(lanes - 1, lo)
+		- road.lane_width(lo) * 0.5) < STEP_EPS
+	var s := lo
+	while uniform and s < hi:
+		s = minf(s + CLOSURE_SCAN_M, hi)
+		uniform = road.lane_count(s) == lanes
+	if uniform:
+		return
+	var hw := _player_width() * 0.5
+	for j in _n_pos:
+		_cl_a[j] = NAN
+	var n := ceili((hi - lo) / CLOSURE_SAMPLE_M)
+	for i in n + 1:
+		var si := lo + float(i) * CLOSURE_SAMPLE_M
+		var edge := road.lanes_right_edge_d(si)
+		for j in _n_pos:
+			var closed := _pos_d[j] + hw > edge
+			if closed and is_nan(_cl_a[j]):
+				_cl_a[j] = si - CLOSURE_SAMPLE_M
+			elif not closed and not is_nan(_cl_a[j]):
+				_add_closure(j, _cl_a[j], si)
+				_cl_a[j] = NAN
+	for j in _n_pos:
+		if not is_nan(_cl_a[j]):
+			_add_closure(j, _cl_a[j], hi + CLOSURE_SAMPLE_M)
+
+
+## A static road obstacle over [a, b] blocking grid position j and every one right of it.
+func _add_closure(j: int, a: float, b: float) -> void:
+	if _n_veh >= MAX_VEHICLES:
+		_overflows += 1
+		return
+	var q := _n_veh
+	# Lateral body: from half a grid step left of where position j's player body (with
+	# the clearance) would touch it, to beyond the last position.
+	var lo := _pos_d[j] + _player_width() * 0.5 + _pt.clearance_m - _grid * 0.5
+	var hi := _pos_d[_n_pos - 1] + _grid
+	_vs[q] = (a + b) * 0.5
+	_vv[q] = 0.0
+	_vd[q] = (lo + hi) * 0.5
+	_va[q] = 0.0
+	_vv0[q] = 1.0
+	_vlen[q] = b - a
+	_vw[q] = hi - lo
+	_vp[q] = 0
+	_vsrc[q] = SRC_ROAD
+	_vlim[q] = _max_decel
+	_vhit[q] = 0.0
+	_vst[q] = _NONE
+	_vt[q] = 0.0
+	_vdur[q] = 0.0
+	_vd0[q] = _vd[q]
+	_vd1[q] = _vd[q]
+	_vwide[q] = 0
+	_vsplit[q] = 0
+	_n_veh += 1
 
 
 func _load_live(ts: TrafficState, i: int, q: int) -> void:
@@ -1072,8 +1160,8 @@ func _predict(m_from: int, m_to: int) -> void:
 	var floor_gap := _gap_floor
 	for m in range(m_from, m_to):
 		var ps := _p_s + _p_v * dt * float(m + 1)
-		# 1. Integrate; lateral state machines.
-		for q in n:
+		# 1. Integrate; lateral state machines (road obstacles stay put).
+		for q in _n_move:
 			var a := _va[q]
 			var v := _vv[q]
 			var nv := v + a * dt
@@ -1123,6 +1211,8 @@ func _predict(m_from: int, m_to: int) -> void:
 		# 3. IDM on the leader found by lateral overlap (the player included).
 		for r in n:
 			var q := _vord[r]
+			if q >= _n_move:
+				continue
 			var s := _vs[q]
 			var v := _vv[q]
 			var v0 := _vv0[q]

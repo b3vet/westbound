@@ -29,6 +29,8 @@ extends Node3D
 ##           (cap), SEL < / SEL > (ask the selected car to change lanes)
 ##   LAYERS  IDM, MOBIL, BLINK, OCC, PASS
 ##   HUD     dev HUD (COPY report)
+##   WALL / BLOCK / WAVES (top right, second row; SetPieceControls, WP6.2): force a set
+##           piece into the next ahead batch; show the intensity curve (IntensityPlot)
 ## Tap a vehicle to select it (all MOBIL terms in a side panel).
 ## Keys: Space pause, . step, N +1 s, [ ] time scale, V camera mode, B driver,
 ## X clear, 1-5 layers (IDM, MOBIL, BLINK, OCC, PASS), backtick dev HUD, C rig camera.
@@ -113,6 +115,8 @@ var rig: CameraRig
 var hub: PlayerInput
 var bot: SandboxBot
 var events: ScoreEventBuffer
+## Set-piece triggers and the intensity curve (WP6.2).
+var set_piece_controls: SetPieceControls
 
 var _ctx: RunContext
 var _biome: BiomeDirector
@@ -212,6 +216,10 @@ func _ready() -> void:
 	reseed(traffic_seed)
 	set_driver(driver)
 	_build_ui()
+	set_piece_controls = SetPieceControls.new()
+	set_piece_controls.name = "SetPieceControls"
+	set_piece_controls.sandbox = self
+	add_child(set_piece_controls)
 	_place_slider()
 	get_viewport().size_changed.connect(_place_slider)
 	if Game.can_change_to(Game.COUNTDOWN):
@@ -979,7 +987,8 @@ func _place_slider() -> void:
 ## (FREE), signal=true (ask a car ahead to change lanes, then run until it signals),
 ## select=true (select the nearest labeled car), labels, layers=idm,mobil,blink,occ,pass
 ## (the ones to show; default all but pass), text (overlay text scale), run=true (keep running; default: paused
-## after the warm-up so the frame is exact).
+## after the warm-up so the frame is exact); set_piece=<id> (+ piece_dist_m, piece_wait_s)
+## and waves=true: SetPieceControls.snap_run.
 func snap_setup(args: Dictionary) -> void:
 	if args.has("sky_t"):
 		sky.sky_t = float(args["sky_t"])
@@ -1002,6 +1011,7 @@ func snap_setup(args: Dictionary) -> void:
 	if bool(args.get("signal", false)):
 		var slot := run_until_signal(float(args.get("signal_range_m", 80.0)), float(args.get("signal_wait_s", 30.0)))
 		print("snap: signaling car slot %d at %.0f m" % [slot, sim.state.s[slot] - car.state.s if slot >= 0 else NAN])
+	set_piece_controls.snap_run(args)   # set_piece=<id>, piece_dist_m, waves=true (WP6.2)
 	if args.has("layers"):
 		var on := String(args["layers"]).split(",")
 		overlay.show_idm = on.has("idm")

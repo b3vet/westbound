@@ -13,7 +13,7 @@ const SEED := 3303
 ## Gate counters of a run result (TrafficSoakRun.result()) must all be 0.
 const GATES: Array[String] = [
 	"collision_pairs", "signal_violations", "unsignaled_moves", "ambush_violations", "decel_violations",
-	"brake_flag_violations", "rear_end_normal", "impossible_traffic",
+	"brake_flag_violations", "rear_end_normal", "impossible_traffic", "offroad_violations",
 ]
 
 
@@ -73,3 +73,22 @@ func soak_short_soak_every_lane_count() -> void:
 		var r := TrafficSoakRun.new(k, SEED, -1, 1000.0)
 		r.run_to_end()
 		_gate(r.result(), "run %d" % k)
+
+
+func soak_canyon_lane_drops() -> void:
+	# WP6.2 (lane closures): two journeys on the canyon biome's road, whose tunnels drop
+	# 3 -> 2 lanes: every gate, and nobody outside the driving lanes at any tick.
+	var canyon := BiomePlan.load_biome(&"canyon")
+	if not check(canyon != null, "data/biomes/canyon.tres"):
+		return
+	for k in 2:
+		var r := TrafficSoakRun.new(k, SEED, -1, -1.0, null, 0, canyon)
+		r.run_to_end()
+		var res := r.result()
+		print(("      canyon run %d: %d merges, %d set pieces, player off the lanes %d ticks, bot no-path %d/%d, "
+			+ "batches %d failed %d re-rolls %d removed %d unresolved %d") % [
+			k, res["merges"], res["set_pieces"], res["player_offroad_ticks"], res["bot_no_path_checks"],
+			res["bot_checks"], res["pass_batches"], res["pass_failed"], res["pass_rerolls"], res["pass_removed"],
+			res["pass_unresolved"]])
+		_gate(res, "canyon run %d" % k)
+		gt(int(res["merges"]), 0, "traffic merged for the tunnels")

@@ -61,6 +61,19 @@ extends Resource
 @export var lane_split_player_lateral_mps: float = 0.5   # not in spec
 @export var lane_split_player_range_m: float = 100.0   # not in spec
 
+@export_group("Lane closures and mandatory merges (WP6.2; not in spec)")
+## A lane that ends (a road lane drop, WP6.3's merge zone and road works) is left
+## within this distance before it closes: vehicles in it merge out with a MOBIL
+## incentive bonus that ramps from 0 here to merge_urgency_mps2 at the closure, and no
+## vehicle changes into it any more.
+@export var merge_zone_m: float = 600.0   # not in spec
+@export var merge_urgency_mps2: float = 2.0   # not in spec
+## A vehicle that found no gap brakes for a standing obstacle this far before the
+## closure and waits there (never onto the shoulder).
+@export var merge_stop_margin_m: float = 15.0   # not in spec
+## Nothing spawns in a lane that closes within this distance ahead of the spawn.
+@export var merge_spawn_clear_m: float = 400.0   # not in spec
+
 @export_group("Readable braking")
 @export var brake_light_decel_mps2: float = 1.0
 @export var brake_light_strong_decel_mps2: float = 4.0
