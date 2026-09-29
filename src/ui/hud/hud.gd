@@ -7,12 +7,20 @@ extends CanvasLayer
 ## CONTRACTS §14. docs/HUD.md.
 ##
 ##   hud.bind(feed)                  # the run's HudFeed; null = unbound (draws nothing new)
-##   hud.pause_pressed / camera_pressed
+##   hud.pause_pressed / camera_pressed / high_beam_pressed
 ##
 ## Reads the per-frame values from the HudFeed and listens to `Events` for the
 ## animations (event stack, banking fly-in and count-up, life icons, glitter). Never
 ## writes gameplay state. Labels change only when their shown value changes; idle,
-## nothing redraws. Every piece but the two buttons ignores touches.
+## nothing redraws. Every piece but the buttons ignores touches.
+##
+## High beams (plan D8, WP5.5): a headlamp button under [CAM] emits high_beam_pressed
+## (the run toggles PlayerInput.toggle_high_beam()); it lights gold while
+## Events.high_beam_changed says the beams are on. It shows only while the headlights
+## matter: the SkyRig's headlight ramp at or above hud.high_beam_min_ramp (where
+## traffic turns its headlights on: late golden hour, dusk, night, dawn), fading in and
+## out (modulate only), hidden (no draw call) by day. Its slot is always reserved, so
+## the cluster never moves.
 ##
 ## Layout: HudLayout, from the canvas, the display safe area and the touch controls'
 ## rects (the PlayerInput hub's ControlsLayout when there is one, else one built from
@@ -20,6 +28,8 @@ extends CanvasLayer
 
 signal pause_pressed()
 signal camera_pressed()
+## The high-beam button (plan D8): the run toggles the hub's high beams.
+signal high_beam_pressed()
 
 const GROUP := &"wb_hud"
 const TILT_SHADER := preload("res://src/ui/theme/speed_tilt.gdshader")
@@ -77,6 +87,11 @@ var _accent_rgba: int = 0
 var _max_lives: int = 2
 var _legs: LegsTuning
 
+# High-beam button: the headlight ramp (from the SkyRig, or pinned) and the fade.
+var _ramp_pinned: bool = false
+var _pinned_ramp: float = 0.0
+var _hb_alpha: float = 0.0
+
 # Leg objective chip: its label is built only when the leg, id or units change.
 var _obj_leg: int = -1
 var _obj_id: StringName = &""
@@ -105,6 +120,7 @@ var _count_delay: float = 0.0
 @onready var _lives: HudLives = $Root/Lives
 @onready var _pause: HudButton = $Root/Pause
 @onready var _camera: HudButton = $Root/Camera
+@onready var _high_beam: HudButton = $Root/HighBeam
 @onready var _min_speed: HudMinSpeed = $Root/MinSpeed
 @onready var _speedo: HudSpeedo = $Root/Speedo
 @onready var _boost: HudBoost = $Root/Boost
@@ -131,8 +147,11 @@ func _ready() -> void:
 		w.use_tilt(TILT_SHADER, tuning.speed_tilt_rad())
 	_pause.glyph = HudButton.Glyph.PAUSE
 	_camera.glyph = HudButton.Glyph.CAMERA
+	_high_beam.glyph = HudButton.Glyph.HIGH_BEAM
 	_pause.pressed.connect(pause_pressed.emit)
 	_camera.pressed.connect(camera_pressed.emit)
+	_high_beam.pressed.connect(high_beam_pressed.emit)
+	_high_beam.visible = false
 	_read_settings()
 	_restyle()
 	_connect_events(true)
@@ -192,6 +211,7 @@ func set_accent(color: Color) -> void:
 		w.accent_changed()
 	_pause.queue_redraw()
 	_camera.queue_redraw()
+	_high_beam.queue_redraw()
 
 
 ## One frame: poll the layout inputs, read the feed, run the animations.
@@ -201,6 +221,33 @@ func advance(dt: float) -> void:
 	if feed != null:
 		_read_feed()
 	_animate(dt)
+	_animate_high_beam(dt)
+
+
+## Pins the headlight ramp the high-beam button follows (previews, tests); otherwise it
+## is read from the SkyRig. NAN unpins.
+func set_headlight_ramp(ramp: float) -> void:
+	_ramp_pinned = not is_nan(ramp)
+	_pinned_ramp = ramp
+
+
+## The high-beam button is showing (fully or fading).
+func high_beam_visible() -> bool:
+	return _high_beam.visible
+
+
+func high_beam_lit() -> bool:
+	return _high_beam.lit
+
+
+## Its opacity (0 hidden .. 1 shown).
+func high_beam_alpha() -> float:
+	return _hb_alpha
+
+
+## Ends the high-beam button's fade at once (previews that freeze a state).
+func settle_high_beam() -> void:
+	_animate_high_beam(maxf(tuning.high_beam_fade_s, EPS))
 
 
 ## Shown-value changes across the HUD (tests: labels change only on change).
@@ -225,7 +272,7 @@ func visible_item_count() -> int:
 	for w in _widgets:
 		if w.is_visible_in_tree():
 			n += 1
-	for b: HudButton in [_pause, _camera]:
+	for b: HudButton in [_pause, _camera, _high_beam]:
 		if b.is_visible_in_tree():
 			n += 1
 	return n
@@ -456,6 +503,7 @@ func _connect_events(on: bool) -> void:
 		[Events.dawn_started, _on_dawn],
 		[Events.morning_reached, _on_morning],
 		[Events.settings_changed, _on_setting_changed],
+		[Events.high_beam_changed, _on_high_beam_changed],
 	]
 	for p in pairs:
 		var sig: Signal = p[0]
@@ -617,6 +665,26 @@ static func _biome_name(id: StringName) -> String:
 	return String(id).to_upper().replace("_", " ")
 
 
+func _on_high_beam_changed(on: bool) -> void:
+	_high_beam.set_lit(on)
+
+
+## Fades the high-beam button toward shown while the headlights are on (the color
+## script's headlight ramp at or above hud.high_beam_min_ramp), hidden otherwise.
+## Modulate only; nothing changes when it is settled.
+func _animate_high_beam(dt: float) -> void:
+	var ramp := _pinned_ramp
+	if not _ramp_pinned:
+		ramp = _sky.current().emissive_headlight if _sky != null and is_instance_valid(_sky) else 0.0
+	var want := 1.0 if is_finite(ramp) and ramp >= tuning.high_beam_min_ramp else 0.0
+	if _hb_alpha == want:
+		return
+	var step := dt / maxf(tuning.high_beam_fade_s, EPS)
+	_hb_alpha = minf(_hb_alpha + step, want) if want > _hb_alpha else maxf(_hb_alpha - step, want)
+	_high_beam.modulate.a = _hb_alpha
+	_high_beam.visible = _hb_alpha > 0.0
+
+
 func _on_gear(gear: int) -> void:
 	_speedo.set_gear(gear)
 
@@ -657,6 +725,7 @@ func _restyle() -> void:
 		w.setup(style)
 	_pause.setup(style)
 	_camera.setup(style)
+	_high_beam.setup(style)
 
 
 func _poll_layout() -> void:
@@ -664,6 +733,7 @@ func _poll_layout() -> void:
 		_hub = get_tree().get_first_node_in_group(PlayerInput.GROUP) as PlayerInput
 		if _hub != null:
 			_layout_version = -1
+			_high_beam.set_lit(_hub.high_beam)
 	if _hub != null and _hub.layout_version != _layout_version:
 		_relayout()
 
@@ -697,6 +767,7 @@ func _relayout() -> void:
 	_place(_lives, layout.lives)
 	_place(_pause, layout.pause)
 	_place(_camera, layout.camera)
+	_place(_high_beam, layout.high_beam)
 	_place(_min_speed, layout.min_speed)
 	_place(_speedo, layout.speedo)
 	_place(_boost, layout.boost)

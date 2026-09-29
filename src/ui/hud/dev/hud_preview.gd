@@ -16,6 +16,7 @@ extends Control
 ## --failed=true;
 ## --hand=right|left, --throttle=auto|manual, --steering=drag|gyro, --controls_scale=<f>,
 ## --text_scale=1|1.25, --units=kmh|mph, --sky_t=<0..1> (default per state),
+## --high_beam=true (the high-beam button lit; it shows at dusk, night and dawn),
 ## --world=true (the 3D look preview behind instead of the flat background).
 ## Prints the frame's draw calls and the HUD's visible canvas items ("snap: ...").
 
@@ -62,6 +63,7 @@ func _ready() -> void:
 	feed.objective_target = t.legs.objective_close_passes_count
 	feed.objective_progress = 1
 	hud.bind(feed)
+	hud.high_beam_pressed.connect(hub.toggle_high_beam)
 	_set_sky(sky_t)
 
 
@@ -90,8 +92,10 @@ func snap_setup(args: Dictionary) -> void:
 	if bool(args.get("world", false)):
 		_add_world()
 	Events.run_started.emit(&"journey", 1)
+	hub.set_high_beam(bool(args.get("high_beam", false)))
 	await get_tree().process_frame
 	_apply_state(state, args)
+	hud.settle_high_beam()
 	# The HUD's own draw calls: the frame with it minus the frame without it.
 	await _frames(MEASURE_FRAMES)
 	var with_hud := Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
@@ -306,6 +310,7 @@ func _set_sky(value: float) -> void:
 	sky_t = value
 	_cs.sample_into(sky_t, _key)
 	hud.set_accent(_key.ui_accent)
+	hud.set_headlight_ramp(_key.emissive_headlight)
 	queue_redraw()
 
 

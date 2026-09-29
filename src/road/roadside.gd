@@ -20,6 +20,13 @@ extends Node3D
 ## however the player drove. On `Events.origin_shifted` the pool nodes move;
 ## each layer re-anchors on a later frame (one layer per frame) by translating
 ## its instances, so nothing is re-placed.
+##
+## Landmark clearance (WP5.5): no prop stands in a checkpoint landmark or warning sign
+## (the median light poles at the toll and sign gantries and through the tunnel, posts,
+## fences, fields, billboards and gantries at the booths, towers and tunnel hill). The
+## zones come from a LandmarkClearance built at setup from the road features, the
+## biome director and LandmarkTuning (the same inputs as Landmarks), prepared for the
+## window whenever it moves; each layer skips the instances that fall in one.
 
 const LIGHT_POLE_MESH := "res://assets/props/common/light_pole.res"
 const REFLECTOR_POST_MESH := "res://assets/props/common/reflector_post.res"
@@ -39,6 +46,12 @@ var biome_director: BiomeDirector
 var fallback_biome: BiomeDef
 ## > 0 overrides Quality.view_distance_m (previews, tests).
 var view_distance_override_m: float = 0.0
+## Keep props out of the landmarks' zones (false: place everything, as before WP5.5).
+var clear_landmarks: bool = true
+## Previews that force one landmark style (Landmarks.style_override) set the same here.
+var landmark_style_override: StringName = &""
+## The zones in use (built at setup when clear_landmarks; null otherwise).
+var landmark_clearance: LandmarkClearance
 
 var layers: Array[RoadsideLayer] = []
 
@@ -47,6 +60,7 @@ var _origin: FloatingOrigin
 var _tuning: RoadTuning
 var _quality: QualityTuning
 var _max_view_m: float = 0.0
+var _max_cell_m: float = 0.0
 var _step_index: int = 0
 var _refresh: bool = true
 var _connected: bool = false
@@ -65,7 +79,17 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void:
 	var seed_value := ctx.rng_props.derive(RNG_STREAM).get_seed()
 	_ctx = RoadsideContext.new(road, _tuning, seed_value, biome_director, fallback_biome)
 	_max_view_m = maxf(view_distance_override_m, _max_quality_view_m())
+	landmark_clearance = null
+	if clear_landmarks:
+		landmark_clearance = LandmarkClearance.new()
+		var lt: Variant = ctx.tuning.get(&"landmarks")
+		landmark_clearance.setup(road, lt as LandmarkTuning if lt is LandmarkTuning else LandmarkTuning.load_default(),
+			biome_director, landmark_style_override)
+	_ctx.clearance = landmark_clearance
 	_build_layers()
+	_max_cell_m = 0.0
+	for layer in layers:
+		_max_cell_m = maxf(_max_cell_m, layer.cell_length_m)
 	var window_max := _tuning.roadside_behind_m + _tuning.roadside_update_step_m + _max_view_m
 	for layer in layers:
 		layer.build(self, window_max)
@@ -88,6 +112,9 @@ func update_view(focus_s: float) -> void:
 		window_s_lo = q - _tuning.roadside_behind_m
 		window_s_hi = q + step + minf(view_distance_m(), _max_view_m)
 		var s_gen := _ctx.road.length_generated()
+		if landmark_clearance != null:
+			# Cells reach up to one cell length past the window.
+			landmark_clearance.prepare(maxf(window_s_lo - _max_cell_m, 0.0), window_s_hi + _max_cell_m)
 		for layer in layers:
 			layer.update_window(window_s_lo, window_s_hi, s_gen)
 	for layer in layers:
@@ -133,6 +160,14 @@ func instance_count() -> int:
 	var n := 0
 	for layer in layers:
 		n += layer.instance_count()
+	return n
+
+
+## Instances skipped so far for the landmarks' clearance.
+func cleared_count() -> int:
+	var n := 0
+	for layer in layers:
+		n += layer.cleared
 	return n
 
 

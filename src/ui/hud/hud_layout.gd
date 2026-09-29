@@ -23,6 +23,9 @@ var stack: Rect2 = Rect2()
 var lives: Rect2 = Rect2()
 var pause: Rect2 = Rect2()
 var camera: Rect2 = Rect2()
+## WP5.5: the high-beam button, under [CAM] (its slot is kept while it is hidden by day,
+## so nothing moves when it appears).
+var high_beam: Rect2 = Rect2()
 ## The speedometer panel, and the minimum-speed strip directly above it.
 var speedo: Rect2 = Rect2()
 var min_speed: Rect2 = Rect2()
@@ -65,6 +68,7 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	var button := hud.button_size_px * ts
 	camera = Rect2(Vector2(safe.end.x - m - button.x, top), button)
 	pause = Rect2(Vector2(camera.position.x - gap - button.x, top), button)
+	high_beam = Rect2(Vector2(camera.position.x, camera.end.y + gap), button)
 	var n := maxi(1, life_icons)
 	var icon := hud.lives_icon_px * ts
 	var lives_w := float(n) * icon + float(n + 1) * gap * LIVES_PAD
@@ -92,12 +96,12 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 
 ## Every HUD rect (tests check them against the touch controls and each other).
 func rects() -> Array[Rect2]:
-	return [score, sun, chain, stack, lives, pause, camera, min_speed, speedo, boost, objective]
+	return [score, sun, chain, stack, lives, pause, camera, min_speed, speedo, boost, objective, high_beam]
 
 
 static func names() -> PackedStringArray:
 	return PackedStringArray(["score", "sun", "chain", "stack", "lives", "pause", "camera",
-			"min_speed", "speedo", "boost", "objective"])
+			"min_speed", "speedo", "boost", "objective", "high_beam"])
 
 
 ## The touch controls' rects: the joined gas column (pedal + boost cap) and the brake.
@@ -169,7 +173,7 @@ func _place_objective(size: Vector2) -> Rect2:
 	var left := Rect2(_objective_left.position, size)
 	if _clear_of_bottom(left.grow(gap)):
 		return left
-	var right := Rect2(Vector2(camera.end.x - size.x, maxf(lives.end.y, camera.end.y) + gap), size)
+	var right := Rect2(Vector2(camera.end.x - size.x, maxf(lives.end.y, high_beam.end.y) + gap), size)
 	if _clear_of_bottom(right.grow(gap)) and not right.intersects(middle_column()):
 		return right
 	var centre := Rect2(Vector2(stack.get_center().x - size.x * 0.5, toast.end.y + gap), size)
@@ -197,7 +201,7 @@ func middle_column() -> Rect2:
 func _clear_of_top(r: Rect2) -> bool:
 	if not safe.encloses(r):
 		return false
-	for top: Rect2 in [score, sun, chain, stack, lives, pause, camera, toast]:
+	for top: Rect2 in [score, sun, chain, stack, lives, pause, camera, high_beam, toast]:
 		if r.intersects(top):
 			return false
 	return true

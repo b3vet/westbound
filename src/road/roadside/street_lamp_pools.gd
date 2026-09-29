@@ -19,6 +19,12 @@ extends Node3D
 ## materials/lamp_pool.tres). Instances are rewritten only when the window of poles
 ## moves or the floating origin shifts. Hidden (no draw call) while the ramp is below
 ## NightTuning.visible_min_ramp. Allocation-free per frame.
+##
+## Poles the roadside leaves out for a checkpoint landmark (WP5.5: the toll and sign
+## gantries, the tunnel) get no pools: `clearance` asks the same LandmarkClearance
+## question as the roadside's light-pole layer (same pole mesh bounds, s = k * spacing,
+## d = 0). Without one set, setup builds it from the road, LandmarkTuning and the biome
+## director (`biome_director`, else the one in BiomeDirector.GROUP).
 
 const MATERIAL := preload("res://assets/shaders/materials/lamp_pool.tres")
 ## Pools per pole: one under each head.
@@ -30,6 +36,12 @@ var tuning: NightTuning
 var sky: SkyRig
 ## The street-lamp ramp read last frame.
 var ramp: float = 0.0
+## Landmark zones the median poles are skipped in (null at setup: built there).
+var clearance: LandmarkClearance
+## For the built clearance: the checkpoint styles' biomes (null: BiomeDirector.GROUP).
+var biome_director: BiomeDirector
+## false: a pool under every pole, as before WP5.5.
+var clear_landmarks: bool = true
 
 var _road: RoadPath
 var _origin: FloatingOrigin
@@ -47,6 +59,8 @@ var _k0: int = 0
 var _k1: int = -1
 var _written_origin := Vector3.INF
 var _rewrites: int = 0
+var _own_clearance: bool = false
+var _pole_aabb: AABB
 
 
 func _init() -> void:
@@ -61,6 +75,8 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void:
 		var t: Variant = ctx.tuning.get(&"night") if ctx != null and ctx.tuning != null else null
 		tuning = t as NightTuning if t is NightTuning else NightTuning.load_default()
 	_spacing = maxf(ctx.tuning.road.light_pole_spacing_m, 1.0)
+	_pole_aabb = (load(Roadside.LIGHT_POLE_MESH) as Mesh).get_aabb()
+	_setup_clearance(ctx, road)
 	if _mmi == null:
 		_build()
 	_invalidate()
@@ -148,8 +164,14 @@ func _write(k0: int, k1: int, o: Vector3) -> void:
 		oy = _origin.origin_y
 		oz = _origin.origin_z
 	var half_d := tuning.pool_d_m
+	var clear := clearance if clear_landmarks else null
+	if clear != null:
+		clear.prepare(float(k0) * _spacing, float(k1) * _spacing)
 	for k in range(k0, k1 + 1):
-		_road.sample_into(float(k) * _spacing, _smp)
+		var s := float(k) * _spacing
+		if clear != null and clear.blocks_upright(_pole_aabb, s, 0.0, 0.0):
+			continue   # the roadside left this pole out for a landmark
+		_road.sample_into(s, _smp)
 		var b := Basis(_smp.right * tuning.pool_width_m, _smp.up, -_smp.tangent * tuning.pool_length_m)
 		var lift := _smp.up * tuning.pool_lift_m
 		_xf[n] = Transform3D(b, _smp.local_point(half_d, ox, oy, oz) + lift)
@@ -159,6 +181,18 @@ func _write(k0: int, k1: int, o: Vector3) -> void:
 		n += HEADS
 	_count = n
 	_mm.visible_instance_count = n
+
+
+func _setup_clearance(ctx: RunContext, road: RoadPath) -> void:
+	if clearance != null and not _own_clearance:
+		return
+	_own_clearance = true
+	var director := biome_director
+	if director == null and is_inside_tree():
+		director = get_tree().get_first_node_in_group(BiomeDirector.GROUP) as BiomeDirector
+	var lt: Variant = ctx.tuning.get(&"landmarks") if ctx != null and ctx.tuning != null else null
+	clearance = LandmarkClearance.new()
+	clearance.setup(road, lt as LandmarkTuning if lt is LandmarkTuning else LandmarkTuning.load_default(), director)
 
 
 func _build() -> void:

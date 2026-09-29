@@ -12,8 +12,9 @@ extends Node3D
 ##   landmarks.setup(ctx, road, origin)
 ##   landmarks.update_view(player_s)         # once per frame
 ##
-## Each CHECKPOINT feature gets the build of its style (feature tag, else the style of
-## the biome whose leg ends there, else `default_style`) AT the checkpoint line, and
+## Each CHECKPOINT feature gets the build of its style (feature tag, which the biome
+## director fills from the biome whose leg ends there, else `default_style`) AT the
+## checkpoint line, and
 ## each SIGN feature tagged ProceduralRoadPath.SIGN_CHECKPOINT a roadside panel on the
 ## right. Everything is pooled: every kind is built once at warm-up (per road
 ## cross-section) and drawn by `landmarks_per_kind_count` MeshInstance3Ds, signs by
@@ -23,6 +24,11 @@ extends Node3D
 ## Long builds bend along the road in landmark.gdshader through stations sampled once
 ## at placement, relative to the build's 64-bit anchor (the road at the checkpoint);
 ## the node sits at anchor - origin and simply moves on Events.origin_shifted.
+##
+## Roadside clearance (WP5.5): `clearance` (LandmarkClearance) knows every build's and
+## sign's ground zones from the road features and the tuning alone, before anything is
+## placed; `exclusion_zones(s0, s1, out)` lists them. Roadside and StreetLampPools keep
+## their own LandmarkClearance with the same inputs, so they skip the same props.
 
 const KIND_SIGN := LandmarkBuilds.KIND_SIGN
 const SHADER := preload("res://src/world/landmarks/landmark.gdshader")
@@ -63,7 +69,7 @@ class Slot:
 ## Set before setup: landmark style of the leg's biome and the next leg's name.
 var biome_director: BiomeDirector
 ## Style when neither the feature nor a biome gives one.
-var default_style: StringName = BiomeDef.LANDMARK_SIGN_GANTRY
+var default_style: StringName = LandmarkClearance.DEFAULT_STYLE
 ## Non-empty: every checkpoint uses this style (previews, dev).
 var style_override: StringName = &""
 ## > 0 overrides Quality.view_distance_m (previews, tests).
@@ -73,6 +79,8 @@ var tuning: LandmarkTuning
 
 var slots: Array[Slot] = []
 var atlas: LandmarkTextAtlas
+## The builds' and signs' ground zones (built at setup).
+var clearance: LandmarkClearance
 ## Placements that found no free slot of their kind (sizing error; tests assert 0).
 var dropped: int = 0
 ## Window of the last feature query (tests, previews).
@@ -106,6 +114,9 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void:
 		tuning = LandmarkTuning.load_default()
 	if _palette == null:
 		_palette = WBPalette.load_default()
+	clearance = LandmarkClearance.new()
+	clearance.default_style = default_style
+	clearance.setup(road, tuning, biome_director, style_override)
 	if slots.is_empty():
 		_warm_up(LandmarkSection.at(road, 0.0))
 	for slot in slots:
@@ -142,16 +153,15 @@ func view_distance_m() -> float:
 
 ## The style a checkpoint feature gets.
 func style_for(f: RoadFeature) -> StringName:
-	if style_override != &"":
-		return style_override
-	if f.tag != &"" and LandmarkBuilds.kinds().has(f.tag):
-		return f.tag
-	if biome_director != null:
-		# The biome of the leg that ends here.
-		var b := biome_director.biome_at(f.s_start - SAME_S_M)
-		if b != null and LandmarkBuilds.kinds().has(b.landmark_style):
-			return b.landmark_style
-	return default_style
+	return LandmarkClearance.resolve_style(f, biome_director, style_override, default_style)
+
+
+## The ground zones of every landmark and warning sign touching [s0, s1] (ZONE_FLOATS
+## each: s from, s to, d from, d to, floor height; LandmarkBuilds.clearance_zones), the
+## margin included. Available after setup, before anything is placed. Director rate.
+func exclusion_zones(s0: float, s1: float, out: PackedFloat64Array) -> void:
+	if clearance != null:
+		clearance.zones_in(s0, s1, out)
 
 
 # ---------------------------------------------------------------- Stats (dev HUD, previews, tests)
@@ -226,6 +236,8 @@ func _update_window(focus_s: float) -> void:
 		reach_after = maxf(reach_after, slot.template.s_after)
 	_features.clear()
 	_road.features_in(maxf(0.0, lo - reach_after), hi + reach_before, _features)
+	if biome_director != null:
+		biome_director.tag_checkpoints(_features)
 	for f in _features:
 		if f.kind == RoadFeature.Kind.CHECKPOINT:
 			var kind := style_for(f)

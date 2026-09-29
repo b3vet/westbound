@@ -189,6 +189,16 @@ extends Resource
 @export var settings_controls_scales: PackedFloat64Array = [0.8, 1.0, 1.2]   # not in spec
 @export var settings_sensitivities: PackedFloat64Array = [0.75, 1.0, 1.35]   # not in spec
 
+@export_group("High beams")
+## The high-beam button (plan D8) fades in and out over this while the headlights come
+## on at dusk and go off at dawn (modulate only: no redraws).
+@export var high_beam_fade_s: float = 0.4   # not in spec
+## It shows while the color script's headlight ramp is at least this: where traffic
+## switches its headlights on (Run.HEADLIGHTS_ON_RAMP), sky_t ~0.44, between golden hour
+## and sunset, until dawn. (NightTuning.visible_min_ramp, 0.05, is reached at sky_t
+## ~0.29, mid-afternoon: too early for a night control.)
+@export var high_beam_min_ramp: float = 0.3   # not in spec
+
 
 ## The text-size setting clamped to the offered range (100%..125%).
 func clamp_text_scale(value: float) -> float:

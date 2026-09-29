@@ -39,6 +39,39 @@ const HILL_FOOT_Y_M := -0.3
 const CROWN_WIDTH_FRAC := 0.55
 const CROWN_HEIGHT_FRAC := 0.4
 const PORTAL_CHAMFER_M := 1.6
+# Placeholder-art dimensions shared by the builds and their clearance zones (WP5.5).
+## Toll gantry: half the beam's depth along the road, its overhang past the outer
+## columns, and the booth island's inner edge (and the fascia) beyond the guardrail.
+const TOLL_BEAM_HALF_DEPTH_M := 0.6
+const TOLL_BEAM_OVERHANG_M := 0.7
+const TOLL_ISLAND_INSET_M := 0.5
+const TOLL_FASCIA_M := 0.05
+## Bridge: the walkway girder reaches this far past the tower legs' centre line; cables
+## are this thick; the backstay anchor blocks are 2 x this wide and long.
+const BRIDGE_GIRDER_OUTER_M := 1.2
+const BRIDGE_CABLE_M := 0.7
+const BRIDGE_ANCHOR_HALF_M := 2.2
+const BRIDGE_ANCHOR_HALF_LENGTH_M := 2.5
+## Sign gantry: its footing's half size (also bounds the uprights and the truss ends).
+const SIGN_GANTRY_FOOTING_M := 0.8
+## Tunnel: the portal face (template z), the shell's start, the façade's depth, the
+## shell's thickness over the openings.
+const TUNNEL_FACE_Z_M := 0.5
+const TUNNEL_BACK_Z_M := -1.0
+const TUNNEL_FACADE_DEPTH_M := 1.5
+const TUNNEL_SHELL_M := 1.0
+## The CHECKPOINT plate stands this far proud of the portal face.
+const TUNNEL_PLATE_PROUD_M := 0.25
+## Warning sign: its two posts (shares of the panel width), their half width and their
+## z range behind the panel.
+const SIGN_POST_FRACS: Array[float] = [0.2, 0.8]
+const SIGN_POST_HALF_M := 0.12
+const SIGN_POST_BACK_M := 0.26
+const SIGN_POST_FRONT_M := 0.02
+## Clearance zone record (clearance_zones): s from, s to (relative to the anchor s),
+## d from, d to (from the reference line), floor height (only what reaches above it
+## collides).
+const ZONE_FLOATS := 5
 
 
 static func build(kind: StringName, x: LandmarkSection, t: LandmarkTuning, palette: WBPalette) -> LandmarkTemplate:
@@ -56,6 +89,83 @@ static func build(kind: StringName, x: LandmarkSection, t: LandmarkTuning, palet
 		_:
 			_sign_gantry(b, x, t)
 	return LandmarkTemplate.from_builder(kind, b, true)
+
+
+## Where the build of `kind` stands on the ground, as clearance zones appended to `out`
+## (ZONE_FLOATS each, see ZONE_FLOATS): the roadside skips props there (WP5.5,
+## LandmarkClearance). Lateral bounds follow the builds below exactly; along s the
+## caller adds LandmarkTuning.clearance_margin_m. Parts over the carriageways above
+## `overhead_clearance_m` need no zone (nothing roadside stands there but the median
+## poles and gantries, which the median zones catch). Director rate (appends).
+static func clearance_zones(kind: StringName, x: LandmarkSection, t: LandmarkTuning, out: PackedFloat64Array) -> void:
+	var g := x.guardrail_d
+	match kind:
+		BiomeDef.LANDMARK_TOLL_GANTRY:
+			# Beam, columns (the middle one on the median) and lane lights, then the booth
+			# islands with their canopies.
+			var col := g + t.toll_column_offset_m + TOLL_BEAM_OVERHANG_M
+			_zone(out, -TOLL_BEAM_HALF_DEPTH_M, TOLL_BEAM_HALF_DEPTH_M, -col, col, 0.0)
+			var half_l := t.toll_canopy_length_m * 0.5 + TOLL_FASCIA_M
+			var inner := g + TOLL_ISLAND_INSET_M - TOLL_FASCIA_M
+			_zone_pair(out, -half_l, half_l, inner, inner + t.toll_canopy_width_m + 2.0 * TOLL_FASCIA_M, 0.0)
+		BiomeDef.LANDMARK_SUSPENSION_BRIDGE:
+			var lw := t.bridge_tower_leg_width_m
+			var leg_c := g + t.bridge_tower_offset_m + lw * 0.5
+			var zt := t.bridge_span_m * 0.5
+			var cable := BRIDGE_CABLE_M * 0.5
+			# Tower footings, the walkway's outer part with the suspenders and cables.
+			for zc: float in [-zt, zt]:
+				_zone_pair(out, zc - lw, zc + lw, leg_c - lw, leg_c + lw, 0.0)
+			_zone_pair(out, -zt - lw, zt + lw, leg_c - cable, leg_c + BRIDGE_GIRDER_OUTER_M, 0.0)
+			# Backstays and their anchor blocks.
+			var z1 := zt + t.bridge_backstay_m
+			var ah := BRIDGE_ANCHOR_HALF_LENGTH_M
+			for dir: float in [-1.0, 1.0]:
+				_zone_pair(out, minf(dir * zt, dir * z1), maxf(dir * zt, dir * z1), leg_c - cable, leg_c + cable, 0.0)
+				_zone_pair(out, dir * z1 - ah, dir * z1 + ah, leg_c - BRIDGE_ANCHOR_HALF_M, leg_c + BRIDGE_ANCHOR_HALF_M,
+					0.0)
+		BiomeDef.LANDMARK_TUNNEL_PORTAL:
+			var length := t.tunnel_length_m
+			var wall := g + t.tunnel_wall_offset_m
+			var foot := wall + TUNNEL_SHELL_M + t.tunnel_hill_width_m
+			# The pier and central wall on the median, the portal's plate to the exit face.
+			_zone(out, -(TUNNEL_FACE_Z_M + TUNNEL_PLATE_PROUD_M), length + TUNNEL_FACE_Z_M, -x.median_barrier_d,
+				x.median_barrier_d, 0.0)
+			# Walls, shell and the hill with its hipped ends past both façades. Low ground
+			# cover (crop tiles) may run on under the hill, which hides it.
+			var hill := t.tunnel_hill_width_m
+			var s0 := -(TUNNEL_BACK_Z_M + hill)
+			var s1 := length + TUNNEL_FACE_Z_M - TUNNEL_FACADE_DEPTH_M + hill
+			_zone_pair(out, s0, s1, wall, foot, t.clearance_ground_cover_m)
+		_:
+			# Big sign gantry over the player's carriageway: median upright to outer footing.
+			var foot := SIGN_GANTRY_FOOTING_M
+			_zone(out, -foot, foot, -foot, g + t.sign_gantry_upright_offset_m + foot, 0.0)
+
+
+## A warning sign's zones (right side, anchored at `sign_d` from the reference line):
+## its two posts from the ground, and the panel above its bottom edge.
+static func sign_clearance_zones(sign_d: float, t: LandmarkTuning, out: PackedFloat64Array) -> void:
+	var w := t.sign_panel_width_m
+	for f in SIGN_POST_FRACS:
+		var px := sign_d + w * f
+		_zone(out, PANEL_DEPTH_M + SIGN_POST_FRONT_M, PANEL_DEPTH_M + SIGN_POST_BACK_M, px - SIGN_POST_HALF_M,
+			px + SIGN_POST_HALF_M, 0.0)
+	_zone(out, 0.0, PANEL_DEPTH_M, sign_d, sign_d + w, t.sign_panel_bottom_m)
+
+
+static func _zone(out: PackedFloat64Array, s0: float, s1: float, d0: float, d1: float, floor_m: float) -> void:
+	out.append(s0)
+	out.append(s1)
+	out.append(d0)
+	out.append(d1)
+	out.append(floor_m)
+
+
+## The same zone on both sides of the median (|d| from d0 to d1).
+static func _zone_pair(out: PackedFloat64Array, s0: float, s1: float, d0: float, d1: float, floor_m: float) -> void:
+	_zone(out, s0, s1, d0, d1, floor_m)
+	_zone(out, s0, s1, -d1, -d0, floor_m)
 
 
 static func kinds() -> Array[StringName]:
@@ -130,9 +240,10 @@ static func _warning_sign(b: LandmarkMeshBuilder, t: LandmarkTuning) -> void:
 	var line_b := _line(b, 0.0, w, y0, y1, LINE_SMALL_FRAC)
 	_checkpoint_panel(b, 0.0, w, y0, y1, 0.0, 1.0, b.col(&"sign_green"), line_a, line_b)
 	var steel := b.col(&"steel")
-	for px: float in [w * 0.2, w * 0.8]:
-		b.box(Vector3(px - 0.12, 0.0, -PANEL_DEPTH_M - 0.26), Vector3(px + 0.12, y1 - 0.2, -PANEL_DEPTH_M - 0.02),
-			steel)
+	for f in SIGN_POST_FRACS:
+		var px := w * f
+		b.box(Vector3(px - SIGN_POST_HALF_M, 0.0, -PANEL_DEPTH_M - SIGN_POST_BACK_M),
+			Vector3(px + SIGN_POST_HALF_M, y1 - 0.2, -PANEL_DEPTH_M - SIGN_POST_FRONT_M), steel)
 
 
 # ---------------------------------------------------------------- Express toll gantry
@@ -146,7 +257,7 @@ static func _toll_gantry(b: LandmarkMeshBuilder, x: LandmarkSection, t: Landmark
 	var top := t.toll_beam_top_m
 	var bottom := top - t.toll_beam_height_m
 	var col_x := g + t.toll_column_offset_m
-	var half_d := 0.6
+	var half_d := TOLL_BEAM_HALF_DEPTH_M
 	var dark := b.col(&"steel_dark")
 	# Lines: 0 EXPRESS (every lane panel), 1 CHECKPOINT, 2 the next leg (headers).
 	var pw := t.toll_lane_panel_width_m
@@ -158,7 +269,8 @@ static func _toll_gantry(b: LandmarkMeshBuilder, x: LandmarkSection, t: Landmark
 	var hy1 := top + t.toll_header_height_m
 	var line_a := _line(b, hx0, hx1, hy0, hy1, LINE_BIG_FRAC)
 	var line_b := _line(b, hx0, hx1, hy0, hy1, LINE_SMALL_FRAC)
-	b.box(Vector3(-col_x - 0.7, bottom, -half_d), Vector3(col_x + 0.7, top, half_d), b.col(&"cream"),
+	b.box(Vector3(-col_x - TOLL_BEAM_OVERHANG_M, bottom, -half_d), Vector3(col_x + TOLL_BEAM_OVERHANG_M, top, half_d),
+		b.col(&"cream"),
 		b.col(&"concrete"), true)
 	for cx: float in [-col_x, 0.0, col_x]:
 		var hw := 0.45 if cx == 0.0 else 0.55
@@ -201,7 +313,7 @@ static func _toll_booths(b: LandmarkMeshBuilder, side: float, g: float, col_x: f
 	var ch := t.toll_canopy_height_m
 	var cw := t.toll_canopy_width_m
 	var cl := t.toll_canopy_length_m
-	var inner := g + 0.5
+	var inner := g + TOLL_ISLAND_INSET_M
 	var outer := inner + cw
 	var bx0 := col_x + 1.4
 	var bx1 := bx0 + bw
@@ -218,7 +330,8 @@ static func _toll_booths(b: LandmarkMeshBuilder, side: float, g: float, col_x: f
 		for pz: float in [-cl * 0.5 + 1.0, cl * 0.5 - 1.0]:
 			_box_side(b, side, px - 0.2, px + 0.2, 0.2, ch, pz - 0.2, pz + 0.2, b.col(&"steel"))
 	_box_side(b, side, inner, outer, ch, ch + 0.35, -cl * 0.5, cl * 0.5, b.col(&"cream"), b.col(&"concrete"))
-	_box_side(b, side, inner - 0.05, outer + 0.05, ch + 0.35, ch + 0.95, -cl * 0.5 - 0.05, cl * 0.5 + 0.05,
+	_box_side(b, side, inner - TOLL_FASCIA_M, outer + TOLL_FASCIA_M, ch + 0.35, ch + 0.95, -cl * 0.5 - TOLL_FASCIA_M,
+		cl * 0.5 + TOLL_FASCIA_M,
 		b.col(&"brand_teal"), b.col(&"concrete"))
 	# Light panels under the canopy (lit at night like street lamps).
 	var lamp := b.col(&"lamp_warm")
@@ -281,7 +394,7 @@ static func _suspension_bridge(b: LandmarkMeshBuilder, x: LandmarkSection, t: La
 		var xc := side * leg_c
 		# Walkway girder beyond the guardrail along the whole span (+ approach).
 		var gx0 := g + 0.25
-		var gx1 := leg_c + 1.2
+		var gx1 := leg_c + BRIDGE_GIRDER_OUTER_M
 		var gz := zt + lw
 		var gxa := gx0 if side > 0.0 else -gx1
 		var gxb := gx1 if side > 0.0 else -gx0
@@ -293,7 +406,7 @@ static func _suspension_bridge(b: LandmarkMeshBuilder, x: LandmarkSection, t: La
 			var z := lerpf(zt, -zt, float(i) / float(n))
 			var u := z / zt
 			pts.append(Vector3(xc, t.bridge_cable_low_m + (saddle - t.bridge_cable_low_m) * u * u, z))
-		b.cable(pts, 0.7, cable_col)
+		b.cable(pts, BRIDGE_CABLE_M, cable_col)
 		# Suspenders.
 		var k := int(floor(span / t.bridge_suspender_spacing_m))
 		for i in range(1, k):
@@ -313,9 +426,10 @@ static func _suspension_bridge(b: LandmarkMeshBuilder, x: LandmarkSection, t: La
 			for i in m + 1:
 				var f := float(i) / float(m)
 				stay.append(Vector3(xc, lerpf(saddle, 1.5, f), lerpf(z0, z1, f)))
-			b.cable(stay, 0.7, cable_col)
-			var az := z1 + dir * 2.5
-			b.box(Vector3(xc - 2.2, -0.5, minf(z1 - dir * 2.5, az)), Vector3(xc + 2.2, 2.2, maxf(z1 - dir * 2.5, az)),
+			b.cable(stay, BRIDGE_CABLE_M, cable_col)
+			var az := z1 + dir * BRIDGE_ANCHOR_HALF_LENGTH_M
+			var za := z1 - dir * BRIDGE_ANCHOR_HALF_LENGTH_M
+			b.box(Vector3(xc - BRIDGE_ANCHOR_HALF_M, -0.5, minf(za, az)), Vector3(xc + BRIDGE_ANCHOR_HALF_M, 2.2, maxf(za, az)),
 				concrete)
 
 
@@ -334,7 +448,8 @@ static func _sign_gantry(b: LandmarkMeshBuilder, x: LandmarkSection, t: Landmark
 	var dz := 0.55
 	b.box(Vector3(-0.35, 0.0, -0.35), Vector3(0.35, top + 0.2, 0.35), steel)
 	b.box(Vector3(out_x - 0.35, 0.0, -0.35), Vector3(out_x + 0.35, top + 0.2, 0.35), steel)
-	b.box(Vector3(out_x - 0.8, 0.0, -0.8), Vector3(out_x + 0.8, 0.4, 0.8), b.col(&"concrete"))
+	var foot := SIGN_GANTRY_FOOTING_M
+	b.box(Vector3(out_x - foot, 0.0, -foot), Vector3(out_x + foot, 0.4, foot), b.col(&"concrete"))
 	for y: float in [low, top]:
 		for z: float in [-dz, dz]:
 			b.beam(Vector3(-0.3, y, z), Vector3(out_x + 0.3, y, z), 0.22, steel)
@@ -379,24 +494,24 @@ static func _tunnel_portal(b: LandmarkMeshBuilder, x: LandmarkSection, t: Landma
 	var cover := t.tunnel_cover_top_m
 	var length := t.tunnel_length_m
 	var pier := x.median_barrier_d - 0.05
-	var face_z := 0.5
-	var back_z := -1.0
+	var face_z := TUNNEL_FACE_Z_M
+	var back_z := TUNNEL_BACK_Z_M
 	var exit_z := -length
 	var inner := b.col(&"concrete", TUNNEL_WALL_SHADE)
 	var roof := b.col(&"concrete_shade", TUNNEL_ROOF_SHADE)
 	var grass := b.col(&"grass")
 	var grass_dry := b.col(&"grass_dry")
 	var hill := t.tunnel_hill_width_m
-	var shell := 1.0
+	var shell := TUNNEL_SHELL_M
 	var plate_w := minf(2.0 * (wall - 2.0), 18.0)
 	var py0 := c + 1.0
 	var py1 := minf(cover - 0.2, py0 + 3.4)
 	var line_a := _line(b, -plate_w * 0.5, plate_w * 0.5, py0, py1, LINE_BIG_FRAC)
 	var line_b := _line(b, -plate_w * 0.5, plate_w * 0.5, py0, py1, LINE_SMALL_FRAC)
-	for pz: float in [face_z, exit_z - 0.5]:
+	for pz: float in [face_z, exit_z - face_z]:
 		var facing := 1.0 if pz > 0.0 else -1.0
-		_portal_facade(b, pz, facing * 1.5, wall, pier, c, cover, hill, shell)
-	_checkpoint_panel(b, -plate_w * 0.5, plate_w * 0.5, py0, py1, face_z + 0.25, 1.0, b.col(&"sign_green"),
+		_portal_facade(b, pz, facing * TUNNEL_FACADE_DEPTH_M, wall, pier, c, cover, hill, shell)
+	_checkpoint_panel(b, -plate_w * 0.5, plate_w * 0.5, py0, py1, face_z + TUNNEL_PLATE_PROUD_M, 1.0, b.col(&"sign_green"),
 		line_a, line_b)
 	# Shell: outer walls (inner faces dark), central wall, roof slab underside.
 	for side: float in [1.0, -1.0]:

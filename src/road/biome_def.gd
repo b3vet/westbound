@@ -53,4 +53,20 @@ const LANDMARK_TUNNEL_PORTAL := &"tunnel_portal"
 @export var set_piece_weights: PackedFloat64Array = []
 
 @export_group("Checkpoint")
+## The checkpoint landmark of a leg in this biome (when `landmark_styles` is empty).
 @export var landmark_style: StringName = LANDMARK_SIGN_GANTRY
+## Several styles (not in spec: variety, WP5.5): the biome's legs cycle through them in
+## this order from a seeded start (`checkpoint_style`). Empty = always `landmark_style`.
+@export var landmark_styles: Array[StringName] = []
+
+
+## The landmark style of the checkpoint ending leg `leg_index` (1-based) in this biome:
+## `landmark_style`, or, with several `landmark_styles`, the list cycled by leg index
+## from a start picked by `style_seed` (the run's props stream, BiomeDirector) and the
+## biome id. Deterministic; consecutive legs never repeat a style.
+func checkpoint_style(leg_index: int, style_seed: int) -> StringName:
+	var n := landmark_styles.size()
+	if n == 0:
+		return landmark_style
+	var start := posmod(TraceHash.mix_int(style_seed, Rng.fnv1a32(String(id))), n)
+	return landmark_styles[posmod(start + leg_index - 1, n)]

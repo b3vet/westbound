@@ -123,3 +123,5 @@ font_screen_button_px = 24
 font_screen_body_px = 20
 settings_controls_scales = PackedFloat64Array(0.8, 1, 1.2)
 settings_sensitivities = PackedFloat64Array(0.75, 1, 1.35)
+high_beam_fade_s = 0.4
+high_beam_min_ramp = 0.3
