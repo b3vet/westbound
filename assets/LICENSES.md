@@ -6,9 +6,7 @@ Every third-party file in the repo is listed here with its source URL and licens
 
 | Asset | Files | Source | License | Added by |
 | --- | --- | --- | --- | --- |
-| — | — | — | — | — |
-
-No third-party assets yet.
+| Chakra Petch SemiBold (600) and Bold (700), the HUD and UI display font | `assets/fonts/ChakraPetch-SemiBold.ttf`, `assets/fonts/ChakraPetch-Bold.ttf`, license text `assets/fonts/OFL.txt` | [google/fonts `ofl/chakrapetch`](https://github.com/google/fonts/tree/main/ofl/chakrapetch) (Copyright 2018 The Chakra Petch Project Authors, https://github.com/m4rc1e/Chakra-Petch) | SIL Open Font License 1.1 (OFL), no Reserved Font Name | WP4.3 |
 
 ## In-house generated assets (no third-party content)
 

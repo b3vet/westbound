@@ -1,0 +1,566 @@
+class_name Hud
+extends CanvasLayer
+## The gameplay HUD. Spec: UI, HUD and design system (layout, HUD elements, safe
+## areas, update rule, accessibility text size); Scoring → Score feedback, Multiplier,
+## Chain and banking, Boost; Sky timeline and sun clock → HUD. CONTRACTS §14.
+## docs/HUD.md.
+##
+##   hud.bind(feed)                  # the run's HudFeed; null = unbound (draws nothing new)
+##   hud.pause_pressed / camera_pressed
+##
+## Reads the per-frame values from the HudFeed and listens to `Events` for the
+## animations (event stack, banking fly-in and count-up, life icons, glitter). Never
+## writes gameplay state. Labels change only when their shown value changes; idle,
+## nothing redraws. Every piece but the two buttons ignores touches.
+##
+## Layout: HudLayout, from the canvas, the display safe area and the touch controls'
+## rects (the PlayerInput hub's ControlsLayout when there is one, else one built from
+## Settings), rebuilt when the controls layout, the viewport or a setting changes.
+
+signal pause_pressed()
+signal camera_pressed()
+
+const GROUP := &"wb_hud"
+const TILT_SHADER := preload("res://src/ui/theme/speed_tilt.gdshader")
+
+## Event words (Accessibility: every event has its own word).
+const WORD_PASS := "PASS"
+const WORD_CLOSE := "CLOSE!"
+const WORD_CUT := "CUT"
+const WORD_THREAD := "THREAD!"
+const WORD_HESITATED := "HESITATED"
+const WORD_BANKED := "BANKED"
+const WORD_CHAIN_LOST := "CHAIN LOST"
+const WORD_SHOULDER := "SHOULDER"
+const WORD_NIGHT := "NIGHT"
+const WORD_LIFE := "LIFE RESTORED"
+const NIGHT_POINTS := "×2"
+const PLUS := "+"
+const MINUS := "-"
+
+const SET_UNITS := &"units"
+const SET_TEXT_SCALE := &"text_scale"
+const UNITS_MPH := &"mph"
+## Settings that move the touch controls (the HUD re-places around them).
+const CONTROL_SETTINGS: Array[StringName] = [&"steering_mode", &"throttle_mode", &"left_handed",
+		&"controls_scale"]
+
+## false: the owner calls advance(dt) itself (tests).
+@export var auto_process: bool = true
+
+var feed: HudFeed
+var tuning: HudTuning
+var style := HudStyle.new()
+var layout := HudLayout.new()
+
+var _theme: Theme
+var _boost_bonus: float = 0.0
+var _hub: PlayerInput
+var _sky: SkyRig
+var _own_controls := ControlsLayout.new()
+var _layout_version: int = -1
+var _pinned: bool = false
+var _pinned_full: Rect2 = Rect2()
+var _pinned_safe: Rect2 = Rect2()
+var _text_scale: float = 1.0
+var _miles: bool = false
+var _accent_rgba: int = 0
+var _max_lives: int = 2
+
+# Banking count-up.
+var _counted: bool = false
+var _banked_target: int = 0
+var _count_from: float = 0.0
+var _count_to: int = 0
+var _count_t: float = -1.0
+var _count_delay: float = 0.0
+
+@onready var _root: Control = $Root
+@onready var _score: HudScore = $Root/Score
+@onready var _sun: HudSunBar = $Root/Sun
+@onready var _chain: HudChain = $Root/Chain
+@onready var _mult: HudMultiplier = $Root/Multiplier
+@onready var _stack: HudEventStack = $Root/Stack
+@onready var _lives: HudLives = $Root/Lives
+@onready var _pause: HudButton = $Root/Pause
+@onready var _camera: HudButton = $Root/Camera
+@onready var _min_speed: HudMinSpeed = $Root/MinSpeed
+@onready var _speedo: HudSpeedo = $Root/Speedo
+@onready var _boost: HudBoost = $Root/Boost
+@onready var _flyer: HudFlyer = $Root/Flyer
+@onready var _glitter: HudGlitter = $Root/Glitter
+var _widgets: Array[HudWidget] = []
+
+
+func _ready() -> void:
+	add_to_group(GROUP)
+	var t := Tuning.load_default()
+	tuning = t.hud
+	_boost_bonus = Units.pct_to_frac(t.vehicle.boost_top_speed_bonus_pct)
+	_max_lives = t.lives.lives
+	_theme = UiTheme.load_theme()
+	_root.theme = _theme
+	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_widgets = [_score, _sun, _chain, _mult, _stack, _lives, _min_speed, _speedo, _boost, _flyer, _glitter]
+	for w: HudWidget in [_chain, _mult, _stack, _flyer]:
+		w.use_tilt(TILT_SHADER, tuning.speed_tilt_rad())
+	_pause.glyph = HudButton.Glyph.PAUSE
+	_camera.glyph = HudButton.Glyph.CAMERA
+	_pause.pressed.connect(pause_pressed.emit)
+	_camera.pressed.connect(camera_pressed.emit)
+	_read_settings()
+	_restyle()
+	_connect_events(true)
+	get_viewport().size_changed.connect(_relayout)
+	_flyer.visible = false
+	_glitter.visible = false
+	_stack.visible = false
+	_min_speed.visible = false
+	_set_chain_row_visible(false)
+	_relayout()
+	_poll_accent()
+	if feed != null:
+		_read_feed()
+
+
+func _exit_tree() -> void:
+	_connect_events(false)
+
+
+func _process(delta: float) -> void:
+	if auto_process:
+		advance(delta)
+
+
+# ---------------------------------------------------------------- Public API
+
+## The run's feed (CONTRACTS §14). null unbinds: the HUD keeps what it shows.
+func bind(f: HudFeed) -> void:
+	feed = f
+	_counted = false
+	if f != null:
+		_max_lives = f.max_lives
+		if is_node_ready():
+			_read_feed()
+
+
+## Pins the canvas and safe rects (tests, previews); otherwise the viewport and the
+## display safe area are used.
+func set_screen(full: Rect2, safe: Rect2) -> void:
+	_pinned = true
+	_pinned_full = full
+	_pinned_safe = safe
+	if is_node_ready():
+		_relayout()
+
+
+## The design system's accent ("the sky's neon"). Redraws only on an 8-bit change.
+func set_accent(color: Color) -> void:
+	var rgba := color.to_rgba32()
+	if rgba == _accent_rgba:
+		return
+	_accent_rgba = rgba
+	style.accent = color
+	for w in _widgets:
+		w.accent_changed()
+	_pause.queue_redraw()
+	_camera.queue_redraw()
+
+
+## One frame: poll the layout inputs, read the feed, run the animations.
+func advance(dt: float) -> void:
+	_poll_layout()
+	_poll_accent()
+	if feed != null:
+		_read_feed()
+	_animate(dt)
+
+
+## Shown-value changes across the HUD (tests: labels change only on change).
+func change_count() -> int:
+	var n := 0
+	for w in _widgets:
+		n += w.changes
+	return n
+
+
+## _draw calls across the HUD (tests: nothing redraws when idle).
+func redraw_count() -> int:
+	var n := 0
+	for w in _widgets:
+		n += w.redraw_total()
+	return n
+
+
+## Canvas items that draw this frame (visible widgets and buttons).
+func visible_item_count() -> int:
+	var n := 0
+	for w in _widgets:
+		if w.is_visible_in_tree():
+			n += 1
+	for b: HudButton in [_pause, _camera]:
+		if b.is_visible_in_tree():
+			n += 1
+	return n
+
+
+func displayed_banked() -> int:
+	return _score.shown_banked()
+
+
+func counting_up() -> bool:
+	return _count_t >= 0.0
+
+
+func multiplier_text() -> String:
+	return _mult.multiplier_text()
+
+
+func chain_text() -> String:
+	return _chain.chain_text()
+
+
+func speed_text() -> String:
+	return _speedo.speed_text()
+
+
+func event_line_count() -> int:
+	return _stack.line_count()
+
+
+func event_line(i: int) -> String:
+	return _stack.line_text(i)
+
+
+func min_speed_visible() -> bool:
+	return _min_speed.visible
+
+
+func too_slow_shown() -> bool:
+	return _min_speed.too_slow_shown()
+
+
+func lives_shown() -> int:
+	return _lives.lives_shown()
+
+
+func life_breaking() -> bool:
+	return _lives.breaking()
+
+
+func life_restoring() -> bool:
+	return _lives.restoring()
+
+
+func ghost_shown() -> bool:
+	return _lives.ghost_shown()
+
+
+func glitter_alive() -> int:
+	return _glitter.alive()
+
+
+func boost_lit() -> int:
+	return _boost.lit_segments()
+
+
+func checkpoint_text() -> String:
+	return _sun.checkpoint_text()
+
+
+## The rects the HUD occupies now (canvas), keyed like HudLayout.names().
+func occupied_rects() -> Array[Rect2]:
+	return layout.rects()
+
+
+# ---------------------------------------------------------------- Feed
+
+func _read_feed() -> void:
+	var f := feed
+	var t := tuning
+	var top := maxf(f.top_speed_mps, EPS) * (1.0 + _boost_bonus)
+	_speedo.set_units(_miles)
+	_speedo.set_speed(HudFormat.speed_value(f.speed_mps, _miles), absf(f.speed_mps) / top,
+			1.0 / (1.0 + _boost_bonus))
+	_speedo.set_flags(f.too_slow, f.boosting)
+	var show_bar := f.min_speed_mps > 0.0 and HudMinSpeed.should_show(t, Units.mps_to_kmh(absf(f.speed_mps)),
+			f.too_slow, _min_speed.visible)
+	if show_bar != _min_speed.visible:
+		_min_speed.visible = show_bar
+	if show_bar:
+		_min_speed.set_state(absf(f.speed_mps) / maxf(f.min_speed_mps, EPS), f.too_slow,
+				HudFormat.speed_value(f.min_speed_mps, _miles))
+	_boost.set_fill(f.boost_fill, f.boosting)
+	_sun.set_sun(f.sun_height)
+	_sun.set_phase(f.night, f.dawning)
+	_sun.set_checkpoint(f.checkpoint_distance_m, _miles)
+	if not _lives.breaking() and not _lives.restoring():
+		_lives.set_lives(f.lives, f.max_lives)
+	_lives.set_ghost(f.ghost)
+	_chain.set_chain(f.chain)
+	_mult.set_multiplier(f.multiplier)
+	_set_chain_row_visible(f.chain > 0 or f.multiplier >= 1.0 + MULT_SHOWN)
+	_score.set_best(f.best)
+	_feed_banked(f.banked)
+
+
+func _feed_banked(v: int) -> void:
+	if not _counted or v < _banked_target:
+		# First read after bind, or a new run: show it at once.
+		_counted = true
+		_banked_target = v
+		_count_t = -1.0
+		_score.set_banked(v)
+		_score.set_counting(false)
+	elif v > _banked_target:
+		_start_count(v, _count_delay if _count_t >= 0.0 else 0.0)
+
+
+func _start_count(target: int, delay: float) -> void:
+	_counted = true
+	_banked_target = target
+	_count_from = float(_score.shown_banked()) if _score.shown_banked() >= 0 else 0.0
+	_count_to = target
+	_count_t = 0.0
+	_count_delay = delay
+
+
+func _set_chain_row_visible(on: bool) -> void:
+	if _chain.visible != on:
+		_chain.visible = on
+		_mult.visible = on
+
+
+# ---------------------------------------------------------------- Animation
+
+func _animate(dt: float) -> void:
+	for w in _widgets:
+		if w.visible:
+			w.animate(dt)
+	if _count_t < 0.0:
+		return
+	if _count_delay > 0.0:
+		_count_delay -= dt
+		return
+	_count_t += dt
+	var k := clampf(_count_t / maxf(tuning.bank_count_s, EPS), 0.0, 1.0)
+	var e := 1.0 - pow(1.0 - k, 3.0)
+	_score.set_counting(k < 1.0)
+	if k >= 1.0:
+		_count_t = -1.0
+		_score.set_banked(_count_to)
+		return
+	_score.set_banked(roundi(lerpf(_count_from, float(_count_to), e)))
+
+
+# ---------------------------------------------------------------- Events
+
+func _connect_events(on: bool) -> void:
+	var pairs: Array[Array] = [
+		[Events.scored, _on_scored],
+		[Events.chain_banked, _on_chain_banked],
+		[Events.chain_lost, _on_chain_lost],
+		[Events.hesitated, _on_hesitated],
+		[Events.bonus_awarded, _on_bonus],
+		[Events.hit, _on_hit],
+		[Events.life_restored, _on_life_restored],
+		[Events.ghost_started, _on_ghost_started],
+		[Events.ghost_ended, _on_ghost_ended],
+		[Events.shoulder_penalty_changed, _on_shoulder],
+		[Events.night_started, _on_night],
+		[Events.gear_shifted, _on_gear],
+		[Events.run_started, _on_run_started],
+		[Events.settings_changed, _on_setting_changed],
+	]
+	for p in pairs:
+		var sig: Signal = p[0]
+		var cb: Callable = p[1]
+		if on and not sig.is_connected(cb):
+			sig.connect(cb)
+		elif not on and sig.is_connected(cb):
+			sig.disconnect(cb)
+
+
+func _on_scored(kind: StringName, points: int, multiplier: float, _clearance_m: float) -> void:
+	var word := WORD_PASS
+	var role := HudEventStack.Role.TEXT
+	match kind:
+		Events.CLOSE_PASS:
+			word = WORD_CLOSE
+			role = HudEventStack.Role.ACCENT
+		Events.CUT:
+			word = WORD_CUT
+		Events.THREAD:
+			word = WORD_THREAD
+			role = HudEventStack.Role.GOLD
+	_stack.push(word, PLUS + HudFormat.thousands(points), role)
+	_chain.pulse()
+	if (kind == Events.CLOSE_PASS or kind == Events.THREAD) and multiplier >= tuning.glitter_min_multiplier:
+		var c := _mult.global_position + Vector2(_mult.size.x * GLITTER_FROM_X, _mult.size.y * 0.5)
+		_glitter.burst(c, tuning.glitter_count)
+
+
+func _on_chain_banked(amount: int, _reason: StringName, banked_total: int) -> void:
+	var pts := PLUS + HudFormat.thousands(amount)
+	_stack.push(WORD_BANKED, pts, HudEventStack.Role.GOLD)
+	_flyer.fly(pts, _chain.number_center(), _score.number_target() + Vector2(_flyer.size.x * 0.25, 0.0),
+			tuning.bank_fly_s)
+	if banked_total > _banked_target or not _counted:
+		_start_count(banked_total, tuning.bank_fly_s)
+
+
+func _on_chain_lost(amount: int, reason: StringName) -> void:
+	if reason == Events.REASON_HESITATED or amount <= 0:
+		return
+	_stack.push(WORD_CHAIN_LOST, MINUS + HudFormat.thousands(amount), HudEventStack.Role.HOT)
+
+
+func _on_hesitated() -> void:
+	_stack.push(WORD_HESITATED, "", HudEventStack.Role.HOT)
+
+
+func _on_bonus(kind: StringName, points: int, banked_total: int) -> void:
+	_stack.push(String(kind).to_upper().replace("_", " "), PLUS + HudFormat.thousands(points),
+			HudEventStack.Role.GOLD)
+	if banked_total > _banked_target:
+		_start_count(banked_total, 0.0)
+
+
+func _on_hit(_source: StringName, lives_left: int) -> void:
+	_lives.hit(lives_left)
+
+
+func _on_life_restored(lives: int) -> void:
+	_lives.restore(lives)
+	_stack.push(WORD_LIFE, "", HudEventStack.Role.GOLD)
+
+
+func _on_ghost_started(_duration_s: float) -> void:
+	_lives.set_ghost(true)
+
+
+func _on_ghost_ended() -> void:
+	_lives.set_ghost(false)
+
+
+func _on_shoulder(active: bool) -> void:
+	if active:
+		_stack.push(WORD_SHOULDER, "", HudEventStack.Role.HOT)
+
+
+func _on_night() -> void:
+	_stack.push(WORD_NIGHT, NIGHT_POINTS, HudEventStack.Role.ACCENT)
+
+
+func _on_gear(gear: int) -> void:
+	_speedo.set_gear(gear)
+
+
+func _on_run_started(_mode: StringName, _seed: int) -> void:
+	_stack.clear()
+	_counted = false
+	_count_t = -1.0
+	_speedo.set_gear(0)
+
+
+func _on_setting_changed(key: StringName) -> void:
+	if key == SET_UNITS or key == SET_TEXT_SCALE:
+		var old_ts := _text_scale
+		_read_settings()
+		if _text_scale != old_ts:
+			_restyle()
+		_relayout()
+		if feed != null:
+			_read_feed()
+	elif key in CONTROL_SETTINGS and _hub == null:
+		_relayout()
+
+
+# ---------------------------------------------------------------- Layout and style
+
+func _read_settings() -> void:
+	_miles = StringName(_setting(SET_UNITS, &"kmh")) == UNITS_MPH
+	_text_scale = tuning.clamp_text_scale(float(_setting(SET_TEXT_SCALE, 1.0)))
+
+
+func _restyle() -> void:
+	style.setup(_theme, tuning, _text_scale)
+	for w in _widgets:
+		w.setup(style)
+	_pause.setup(style)
+	_camera.setup(style)
+
+
+func _poll_layout() -> void:
+	if _hub == null or not is_instance_valid(_hub):
+		_hub = get_tree().get_first_node_in_group(PlayerInput.GROUP) as PlayerInput
+		if _hub != null:
+			_layout_version = -1
+	if _hub != null and _hub.layout_version != _layout_version:
+		_relayout()
+
+
+func _poll_accent() -> void:
+	if _sky == null or not is_instance_valid(_sky):
+		_sky = get_tree().get_first_node_in_group(SkyRig.GROUP) as SkyRig
+		if _sky == null:
+			if _accent_rgba == 0:
+				set_accent(_theme.get_color(UiTheme.C_ACCENT, UiTheme.TYPE))
+			return
+		_sky.accent_changed.connect(set_accent)
+		set_accent(_sky.get_accent())
+
+
+func _relayout() -> void:
+	var full := _pinned_full if _pinned else _root.get_viewport_rect()
+	var safe := _pinned_safe if _pinned else HudLayout.canvas_safe_rect(full)
+	var controls := _controls_layout(full, safe)
+	if _hub != null:
+		_layout_version = _hub.layout_version
+	layout.build(tuning, full, safe, controls, _text_scale, _max_lives)
+	_place(_score, layout.score)
+	_place(_sun, layout.sun)
+	var half := tuning.spacing_grid_px * 0.5
+	var cx := layout.chain.get_center().x
+	_place(_chain, Rect2(layout.chain.position, Vector2(cx - half - layout.chain.position.x, layout.chain.size.y)))
+	_place(_mult, Rect2(Vector2(cx + half, layout.chain.position.y),
+			Vector2(layout.chain.end.x - cx - half, layout.chain.size.y)))
+	_place(_stack, layout.stack)
+	_place(_lives, layout.lives)
+	_place(_pause, layout.pause)
+	_place(_camera, layout.camera)
+	_place(_min_speed, layout.min_speed)
+	_place(_speedo, layout.speedo)
+	_place(_boost, layout.boost)
+	_flyer.size = Vector2(layout.chain.size.x * 0.5, layout.chain.size.y)
+	_place(_glitter, full)
+
+
+func _controls_layout(full: Rect2, safe: Rect2) -> ControlsLayout:
+	if _hub != null:
+		return _hub.layout
+	var c := Tuning.load_default().controls
+	var px_per_cm := PlayerInput.canvas_px_per_cm(c, full.size, DisplayServer.window_get_size())
+	var size_scale := clampf(float(_setting(&"controls_scale", 1.0)), c.controls_scale_min_factor,
+			c.controls_scale_max_factor)
+	_own_controls.build(c, full, safe, px_per_cm, StringName(_setting(&"steering_mode", PlayerInput.DRAG)),
+			StringName(_setting(&"throttle_mode", PlayerInput.AUTO)), bool(_setting(&"left_handed", false)), size_scale)
+	return _own_controls
+
+
+static func _place(c: Control, r: Rect2) -> void:
+	c.position = r.position
+	c.size = r.size
+
+
+static func _setting(key: StringName, fallback: Variant) -> Variant:
+	if Settings.DEFAULTS.has(key):
+		return Settings.get_value(key)
+	return fallback
+
+
+const EPS := 1e-6   # lint: allow-number divide guard
+## The chain row shows once the multiplier reads above 1.0× (one tenth).
+const MULT_SHOWN := 0.05   # lint: allow-number half a displayed tenth
+## Glitter bursts from the multiplier readout's left third (where its digits are).
+const GLITTER_FROM_X := 0.25   # lint: allow-number readout geometry
