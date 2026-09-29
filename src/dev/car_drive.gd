@@ -42,6 +42,7 @@ var _origin: FloatingOrigin
 var _director: BiomeDirector
 var _builder: RoadBuilder
 var _roadside: Roadside
+var _landmarks: Landmarks
 var _sky: SkyRig
 var _hub: PlayerInput
 var _rig: CameraRig
@@ -108,6 +109,10 @@ func _ready() -> void:
 	_roadside.name = "Roadside"
 	_roadside.biome_director = _director
 	add_child(_roadside)
+	_landmarks = Landmarks.new()
+	_landmarks.name = "Landmarks"
+	_landmarks.biome_director = _director
+	add_child(_landmarks)
 
 	_sky = $Sky
 	_hub = $PlayerInput
@@ -122,6 +127,7 @@ func _ready() -> void:
 	_director.setup(_ctx, _road, _origin)
 	_builder.setup(_ctx, _road, _origin)
 	_roadside.setup(_ctx, _road, _origin)
+	_landmarks.setup(_ctx, _road, _origin)
 	_sky.setup(_ctx, _road, _origin)
 	_builder.build_all_now(0.0)
 
@@ -156,6 +162,7 @@ func _process(_delta: float) -> void:
 	_director.update_view(st.s)
 	_builder.update_view(st.s)
 	_roadside.update_view(st.s)
+	_landmarks.update_view(st.s)
 	_sky.update_view(st.s)
 	_traffic_view.update_view(st.s)
 	var night := _sky.current().emissive_headlight > HEADLIGHTS_ON
