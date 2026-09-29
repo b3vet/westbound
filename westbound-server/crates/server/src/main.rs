@@ -63,6 +63,28 @@ enum AdminCommand {
         period: String,
         account_id: i64,
     },
+    /// List player reports, newest first.
+    Reports {
+        /// Only reports not handled yet.
+        #[arg(long)]
+        unhandled: bool,
+        /// Most reports listed.
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    /// Mark a report handled.
+    ReportHandle { report_id: i64 },
+    /// Force-rename a crew (name rules and filter apply) and/or change its tag.
+    CrewRename {
+        crew_id: i64,
+        /// The new name (leave out to change only the tag).
+        name: Option<String>,
+        /// A new 2-4 character tag.
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Disband a crew (its members are released; its Loop crew entries are removed).
+    CrewDisband { crew_id: i64 },
 }
 
 fn long_version() -> &'static str {
@@ -176,6 +198,14 @@ async fn admin_cmd(cfg: &Config, command: AdminCommand) -> anyhow::Result<()> {
             period,
             account_id,
         } => admin::remove_entry(&pool, &board, &period, account_id).await,
+        AdminCommand::Reports { unhandled, limit } => admin::reports(&pool, unhandled, limit).await,
+        AdminCommand::ReportHandle { report_id } => {
+            admin::report_handle(&pool, report_id, now).await
+        }
+        AdminCommand::CrewRename { crew_id, name, tag } => {
+            admin::crew_rename(&pool, crew_id, name.as_deref(), tag.as_deref()).await
+        }
+        AdminCommand::CrewDisband { crew_id } => admin::crew_disband(&pool, crew_id).await,
     };
     db::close(&pool).await;
     println!("{}", result?);

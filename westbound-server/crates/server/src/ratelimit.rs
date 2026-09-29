@@ -233,6 +233,9 @@ pub struct RateLimiters {
     pub account: Arc<LimiterConfig<AccountKey>>,
     /// Run submissions per account (N7.1), on top of `account`.
     pub runs: Arc<LimiterConfig<AccountKey>>,
+    /// Social writes per account (N9.1: friend requests, blocks, crew create / join,
+    /// reports), on top of `account`.
+    pub social: Arc<LimiterConfig<AccountKey>>,
     metrics: Arc<Metrics>,
 }
 
@@ -271,6 +274,7 @@ impl RateLimiters {
         };
         let account = build_account(r.account_per_minute, SECS_PER_MINUTE, r.account_burst);
         let runs = build_account(r.runs_per_hour, SECS_PER_HOUR, r.runs_burst);
+        let social = build_account(r.social_per_hour, SECS_PER_HOUR, r.social_burst);
         Self {
             enabled: r.enabled,
             device_create: build_ip(
@@ -281,6 +285,7 @@ impl RateLimiters {
             auth: build_ip(r.auth_per_minute, SECS_PER_MINUTE, r.auth_burst),
             account,
             runs,
+            social,
             proxies: trusted,
             metrics,
         }
@@ -311,7 +316,11 @@ impl RateLimiters {
             l.retain_recent();
             l.shrink_to_fit();
         }
-        for l in [self.account.limiter(), self.runs.limiter()] {
+        for l in [
+            self.account.limiter(),
+            self.runs.limiter(),
+            self.social.limiter(),
+        ] {
             l.retain_recent();
             l.shrink_to_fit();
         }

@@ -87,11 +87,28 @@ pub async fn delete_account(
     State(state): State<AppState>,
     AuthedAllowBanned(auth): AuthedAllowBanned,
 ) -> ApiResult<StatusCode> {
-    let report = accounts::delete(&state.db, auth.account_id, "self").await?;
+    let now = state.clock.now();
+    let report = accounts::delete(
+        &state.db,
+        state.boards.config(),
+        auth.account_id,
+        "self",
+        now,
+    )
+    .await?;
     if report.accounts == 0 {
         return Err(gone());
     }
     state.boards.invalidate_all();
+    // Friends see the account go offline and stop watching it now; its open session (if
+    // any) ends now rather than at the next ban sweep.
+    state.presence.forget_account(auth.account_id);
+    if let Some(s) = state
+        .sessions
+        .get(protocol::AccountId(auth.account_id as u64))
+    {
+        s.kick(crate::sessions::Kick::Revoked);
+    }
     tracing::info!(account_id = auth.account_id, "account deleted");
     Ok(StatusCode::NO_CONTENT)
 }

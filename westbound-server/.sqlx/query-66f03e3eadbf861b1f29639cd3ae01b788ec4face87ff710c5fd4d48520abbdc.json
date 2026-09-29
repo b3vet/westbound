@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE reports SET reporter_id = NULL WHERE reporter_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "66f03e3eadbf861b1f29639cd3ae01b788ec4face87ff710c5fd4d48520abbdc"
+}

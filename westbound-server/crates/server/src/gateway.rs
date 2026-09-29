@@ -17,11 +17,16 @@
 //! 3. **Session**: `Welcome`, then the account is registered in `Sessions` (a second login
 //!    replaces the first, see `sessions.rs`).
 //! 4. **Messages**: each passes its type's token bucket (`msg_limits.rs`), then is routed.
-//!    `Ping` → `Pong` with the tick clock. Lobby and room messages have no owner yet (N5/N9).
+//!    `Ping` → `Pong` with the tick clock. `lobby_command.presence_subscribe` → friends
+//!    presence (N9.1, `presence.rs`). The other lobby and room messages have no owner yet
+//!    (N5/N9).
 //! 5. **Keepalive**: `ServerKeepalive` (protocol `Keepalive`), dead after 8 s of silence.
 //! 6. **Fatal errors** are sent, then the close frame follows once the client has closed or
 //!    `gateway.fatal_close_delay_ms` passed (see `linger`).
-//! 7. **Kicks** from outside (duplicate login, the ban sweep, a slow-client report from a
+//! 7. **Presence**: a new session (not a replacement) is announced to watching friends as
+//!    online, and its end as offline, after the registry changed; the session's own
+//!    subscription ends with it.
+//! 8. **Kicks** from outside (duplicate login, the ban sweep, a slow-client report from a
 //!    room) arrive on the session's `watch` and end in a fatal `Error` + close.
 
 use std::sync::Arc;
@@ -33,7 +38,7 @@ use protocol::handshake::{
 };
 use protocol::{
     decode_client_frame, AccountId, ClientMsg, DecodeError, ErrorCode, ErrorMsg, FrameBuilder,
-    MapHash, Pong, ServerMsg, Text,
+    LobbyCommand, MapHash, Pong, ServerMsg, Text,
 };
 use tokio::sync::watch;
 
@@ -54,6 +59,7 @@ pub const DETAIL_RATE_LIMITED: &str = "Too many messages; some were dropped.";
 pub const DETAIL_FLOOD: &str = "Too many messages.";
 pub const DETAIL_INTERNAL: &str = "Server error. Please try again.";
 pub const DETAIL_NO_LOBBY: &str = "The lobby is not available yet.";
+pub const DETAIL_PRESENCE_UNAVAILABLE: &str = "Friends presence is unavailable. Try again.";
 pub const DETAIL_NOT_IN_ROOM: &str = "You are not in a room.";
 
 /// What the gateway accepts and announces, built once from the config.
@@ -281,7 +287,7 @@ impl Conn<'_> {
             }
         }
         match self.handshake.on_message(msg, |_| Err(AuthError::Invalid)) {
-            Action::Forward => self.route(msg),
+            Action::Forward => self.route(msg).await,
             Action::Reject(m) => self.reject(&m, false),
             Action::Reply(_) | Action::Ignore => Step::Close(CloseReason::Error),
         }
@@ -351,6 +357,9 @@ impl Conn<'_> {
             self.out.tx.clone(),
         );
         let replaced = sessions.register(handle.clone());
+        if replaced.is_none() {
+            self.state.presence.on_online(account);
+        }
         self.metrics().count_handshake(HandshakeResult::Ok);
         tracing::info!(
             client = %self.client,
@@ -368,8 +377,47 @@ impl Conn<'_> {
         }
     }
 
+    /// `presence_subscribe`: `enabled` reads the account's friends (no lock held across the
+    /// read), sends this frame's earlier replies, then subscribes, which queues the
+    /// snapshot as its own frame (under the presence lock, so it is ordered with the pushes;
+    /// see `presence.rs`). `enabled: false` ends the subscription.
+    async fn presence_subscribe(&mut self, enabled: bool) -> Step {
+        let Some(session) = self.session.clone() else {
+            return Step::Close(CloseReason::Error);
+        };
+        let presence = &self.state.presence;
+        if !enabled {
+            presence.unsubscribe(session.account_id, session.session_id);
+            return Step::Continue;
+        }
+        let me = session.account_id.0 as i64;
+        let friends = match self.state.db.acquire().await {
+            Ok(mut conn) => crate::social::friend_ids(&mut conn, me).await,
+            Err(e) => Err(e),
+        };
+        let friends = match friends {
+            Ok(f) => f.unwrap_or_default(),
+            Err(e) => {
+                tracing::error!(error = %e, "database error reading friends for presence");
+                let notice = error_msg(ErrorCode::Internal, false, DETAIL_PRESENCE_UNAVAILABLE);
+                return match self.reply(&notice) {
+                    Ok(()) => Step::Continue,
+                    Err(r) => Step::Close(r),
+                };
+            }
+        };
+        if let Err(r) = self.flush() {
+            return Step::Close(r);
+        }
+        if presence.subscribe(&session, &friends) {
+            Step::Continue
+        } else {
+            Step::Close(CloseReason::SlowClient)
+        }
+    }
+
     /// An established session's message, after its rate limit.
-    fn route(&mut self, msg: &ClientMsg) -> Step {
+    async fn route(&mut self, msg: &ClientMsg) -> Step {
         let reply = match msg {
             ClientMsg::Ping(p) => {
                 let Some(session) = &self.session else {
@@ -380,7 +428,10 @@ impl Conn<'_> {
                     pong_clock(self.state, session).now(),
                 ))
             }
-            // N9: party, presence, rooms, Quick Join go to the lobby.
+            ClientMsg::LobbyCommand(LobbyCommand::PresenceSubscribe(p)) => {
+                return self.presence_subscribe(p.enabled).await;
+            }
+            // N5 / N9: party, rooms, Quick Join, the room browser go to the lobby.
             ClientMsg::LobbyCommand(_) => {
                 Some(error_msg(ErrorCode::NotAllowed, false, DETAIL_NO_LOBBY))
             }
@@ -511,7 +562,10 @@ pub async fn run(socket: WebSocket, state: &AppState, client: &str) -> CloseReas
         Metrics::inc(&metrics.ws_timeout_closed);
     }
     if let Some(s) = conn.session.take() {
-        state.sessions.unregister(s.account_id, s.session_id);
+        state.presence.unsubscribe(s.account_id, s.session_id);
+        if state.sessions.unregister(s.account_id, s.session_id) {
+            state.presence.on_offline(s.account_id);
+        }
     }
     if let CloseReason::Fatal(_) = reason {
         linger(&mut stream, state).await;

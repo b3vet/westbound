@@ -10,7 +10,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderValue, Method};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use sqlx::SqlitePool;
 use tokio::net::TcpListener;
@@ -28,6 +28,7 @@ use crate::gateway::GatewayPolicy;
 use crate::http::{self, DeepLinks};
 use crate::leaderboards::Leaderboards;
 use crate::metrics::Metrics;
+use crate::presence::PresenceHub;
 use crate::ratelimit::{RateLimiters, CLEANUP_INTERVAL};
 use crate::sessions::Sessions;
 use crate::tick::{MonotonicTickClock, TickClock};
@@ -58,6 +59,9 @@ pub struct AppState {
     /// `boards.record_multiplayer_run`, N8 replay verdicts through
     /// `boards.set_run_verification`.
     pub boards: Arc<Leaderboards>,
+    /// Friends presence over the session registry (N9.1): subscriptions, pushes, and the
+    /// N5 room seam (`presence.set_room`).
+    pub presence: Arc<PresenceHub>,
 }
 
 impl AppState {
@@ -94,6 +98,7 @@ impl AppState {
         let rate_limiters = RateLimiters::new(&config, auth.clone(), metrics.clone());
         let gateway = crate::gateway::policy(&config);
         let sessions = Arc::new(Sessions::new(metrics.clone()));
+        let presence = Arc::new(PresenceHub::new(sessions.clone()));
         let boards = Arc::new(Leaderboards::new(
             db.clone(),
             config.leaderboards.clone(),
@@ -113,6 +118,7 @@ impl AppState {
             sessions,
             tick_clock,
             boards,
+            presence,
         })
     }
 }
@@ -160,6 +166,7 @@ fn accounts_router(state: &AppState) -> Router<AppState> {
     let run_routes = Router::new()
         .route("/api/v1/runs", post(runs::routes::submit))
         .route("/api/v1/runs/legacy", post(runs::routes::legacy));
+    let social_routes = social_router(state);
     let (device_create, auth_routes, account_routes, board_routes, run_routes) = if rl.enabled {
         (
             device_create.layer(rl.layer(&rl.device_create)),
@@ -185,7 +192,72 @@ fn accounts_router(state: &AppState) -> Router<AppState> {
         .merge(account_routes)
         .merge(board_routes)
         .merge(run_routes)
+        .merge(social_routes)
         .layer(DefaultBodyLimit::max(state.config.http.max_body_bytes))
+}
+
+/// N9.1: friends, blocks, presence, crews, reports. Every route is under the account
+/// limit; the writes that create something (friend requests, blocks, crew create / join,
+/// reports) also under the social limit.
+fn social_router(state: &AppState) -> Router<AppState> {
+    use crate::social::{crews, friends, reports};
+    let rl = &state.rate_limiters;
+    let social = |m: MethodRouter<AppState>| {
+        if rl.enabled {
+            m.layer(rl.layer(&rl.social))
+        } else {
+            m
+        }
+    };
+    let r = Router::new()
+        .route("/api/v1/friends", get(friends::get_friends))
+        .route(
+            "/api/v1/friends/requests",
+            social(post(friends::post_request)),
+        )
+        .route(
+            "/api/v1/friends/requests/{id}/accept",
+            post(friends::post_accept),
+        )
+        .route(
+            "/api/v1/friends/requests/{id}/decline",
+            post(friends::post_decline),
+        )
+        .route(
+            "/api/v1/friends/{account_id}",
+            axum::routing::delete(friends::delete_friend),
+        )
+        .route("/api/v1/presence", get(friends::get_presence))
+        .route(
+            "/api/v1/blocks",
+            social(post(friends::post_block)).get(friends::get_blocks),
+        )
+        .route(
+            "/api/v1/blocks/{account_id}",
+            axum::routing::delete(friends::delete_block),
+        )
+        .route("/api/v1/crews", social(post(crews::post_crew)))
+        .route("/api/v1/crews/mine", get(crews::get_mine))
+        .route("/api/v1/crews/join", social(post(crews::post_join)))
+        .route(
+            "/api/v1/crews/{id}",
+            get(crews::get_crew).delete(crews::delete_crew),
+        )
+        .route("/api/v1/crews/{id}/leave", post(crews::post_leave))
+        .route("/api/v1/crews/{id}/kick", post(crews::post_kick))
+        .route("/api/v1/crews/{id}/promote", post(crews::post_promote))
+        .route("/api/v1/crews/{id}/demote", post(crews::post_demote))
+        .route("/api/v1/crews/{id}/transfer", post(crews::post_transfer))
+        .route(
+            "/api/v1/crews/{id}/invite-code",
+            post(crews::post_invite_code),
+        )
+        .route("/api/v1/reports", social(post(reports::post_report)));
+    if rl.enabled {
+        r.layer(rl.layer(&rl.account))
+    } else {
+        r
+    }
 }
 
 /// The public router: `/api/v1/*`, `/ws`, `/.well-known/*`.

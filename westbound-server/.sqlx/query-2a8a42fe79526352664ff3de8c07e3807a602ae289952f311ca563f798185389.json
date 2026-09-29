@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO friends (account_a, account_b, requester_id, status, created_at)\n                 VALUES (?, ?, ?, 'pending', ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "2a8a42fe79526352664ff3de8c07e3807a602ae289952f311ca563f798185389"
+}

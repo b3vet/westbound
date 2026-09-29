@@ -9,6 +9,9 @@
 //! N7.1: leaderboards (boards, periods, views, top-N cache), single-player run
 //! submissions with plausibility checks, legacy personal bests, the multiplayer-run hook
 //! for N6, the replay-verdict hook for N8, admin removals.
+//! N9.1: the social API (friends and requests, blocks, persistent crews with roles and
+//! invite codes, reports), friends presence over HTTP and the WebSocket, the friends
+//! leaderboard view, crew tags on boards, and the moderation admin commands.
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Architecture", "Server tech stack",
 //! "Resource budget and deployment"; docs/MULTIPLAYER_PLAN.md → N0, MP-D1.
 
@@ -28,6 +31,7 @@ pub mod leaderboards;
 pub mod metrics;
 pub mod msg_limits;
 pub mod names;
+pub mod presence;
 pub mod profanity;
 pub mod profile;
 pub mod ratelimit;

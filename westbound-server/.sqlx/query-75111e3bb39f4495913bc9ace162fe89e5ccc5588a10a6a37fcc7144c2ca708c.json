@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT blocked_id, created_at FROM blocks WHERE account_id = ?\n         ORDER BY created_at DESC, blocked_id DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "blocked_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "blocks",
+            "name": "blocked_id"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "blocks",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "75111e3bb39f4495913bc9ace162fe89e5ccc5588a10a6a37fcc7144c2ca708c"
+}

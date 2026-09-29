@@ -326,3 +326,43 @@ fn runs_env_overrides() {
     assert!(!c.leaderboards.show_pending);
     assert_eq!(c.rate_limits.runs_per_hour, 12);
 }
+
+#[test]
+fn social_defaults_validation_and_env() {
+    let mut c = Config::default();
+    with_secrets(&mut c);
+    // Spec: crews of up to 16 members; reports rate-limited per account.
+    assert_eq!(c.social.crew_max_members, 16);
+    assert_eq!(c.social.max_friends, 100);
+    assert_eq!(c.social.reports_per_day, 10);
+    assert_eq!(c.rate_limits.social_per_hour, 60);
+    c.validate().unwrap();
+
+    c.social.max_friends = 0;
+    c.social.crew_max_members = 0;
+    c.social.crew_invite_code_len = 4;
+    c.social.report_context_max_bytes = 1;
+    c.rate_limits.social_burst = 0;
+    let errs = c.validate().unwrap_err().0;
+    for key in [
+        "social.max_friends",
+        "social.crew_max_members",
+        "social.crew_invite_code_len",
+        "social.report_context_max_bytes",
+        "rate_limits",
+    ] {
+        assert!(errs.iter().any(|e| e.contains(key)), "{key}: {errs:?}");
+    }
+
+    let c = Config::from_toml_and_env(
+        "[social]\nmax_friends = 50\n",
+        env(&[
+            ("WB_SOCIAL__CREW_MAX_MEMBERS", "8"),
+            ("WB_RATE_LIMITS__SOCIAL_BURST", "5"),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(c.social.max_friends, 50);
+    assert_eq!(c.social.crew_max_members, 8);
+    assert_eq!(c.rate_limits.social_burst, 5);
+}

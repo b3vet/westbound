@@ -232,7 +232,7 @@ pub async fn behind(
 }
 
 /// The entries of the given subjects (a JSON array of ids), in rank order: the friends
-/// view. N9 passes the caller and their friends.
+/// view: the caller and their friends (`social::friend_ids`).
 pub async fn of_subjects(
     conn: &mut SqliteConnection,
     board: &str,

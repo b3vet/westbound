@@ -66,6 +66,8 @@ pub fn test_config(dir: &TempDir) -> Config {
     r.account_burst = 100_000;
     r.runs_per_hour = 100_000;
     r.runs_burst = 100_000;
+    r.social_per_hour = 100_000;
+    r.social_burst = 100_000;
     c.validate().expect("test config is valid");
     c
 }
