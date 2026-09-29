@@ -155,9 +155,9 @@ func advance(delta: float) -> void:
 
 func _apply_damage() -> void:
 	if _smoke != null:
-		var show := damaged and not _feel().smoke_hidden_camera_modes.has(camera_mode)
-		_smoke.visible = show
-		_smoke.emitting = show
+		var smoke_on := damaged and not _feel().smoke_hidden_camera_modes.has(camera_mode)
+		_smoke.visible = smoke_on
+		_smoke.emitting = smoke_on
 	if _lamp != null:
 		_lamp.visible = damaged
 
