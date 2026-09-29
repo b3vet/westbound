@@ -7,6 +7,9 @@ extends WBTest
 ## practice and scoreless crashes are not sent, and the legacy upload happens once per
 ## account. Spec: multiplayer handoff → Leaderboards (single-player runs, migration of
 ## local bests); docs/SERVER.md → POST /runs, POST /runs/legacy. WP N7.2.
+## N8.1: the run's replay is stored with it, uploaded after a receipt that requires it
+## (the run id patched in, binary body), kept through offline spells and retries, deleted
+## when uploaded, not needed or refused.
 
 const BASE := "https://runs.test/api/v1"
 const START_USEC := 7_000_000
@@ -31,6 +34,8 @@ var time: NetVirtualTime
 var session: NetSession
 var _nodes: Array[Node] = []
 var changes: Array[NetRunSubmission.State] = []
+## N8.1: the replay documents by key (they survive a "relaunch" like the queue).
+var replay_stores: Dictionary = {}
 
 
 ## A store that keeps the document as JSON text, like the file and web stores do (so
@@ -70,6 +75,7 @@ func before_each() -> void:
 	time = NetVirtualTime.new(START_USEC)
 	changes.clear()
 	session = null
+	replay_stores = {}
 
 
 func after_each() -> void:
@@ -97,6 +103,8 @@ func _client(s: NetSession, bests: Dictionary = {}) -> NetRunsClient:
 	c.unix_clock = func() -> float: return fake.now_s
 	c.car_of = func(_r: Dictionary) -> String: return CAR
 	c.local_bests = func() -> Dictionary: return bests
+	c.replay_source = func(_r: Dictionary, _date: String) -> PackedByteArray: return PackedByteArray()
+	c.replay_store_for = _replay_store
 	c.submission_changed.connect(func(sub: NetRunSubmission) -> void: changes.append(sub.state))
 	s.add_child(c)
 	return c
@@ -451,3 +459,170 @@ func test_payload_after_the_queue_round_trip_keeps_integers() -> void:
 	check(not b2.has("future_key"), "unknown keys never go")
 	eq(NetRunPayload.run_date("journey", 1, 1790640000.0), "2026-09-29")
 	eq(NetRunPayload.date_start("2026-09-29"), 1790640000)
+
+
+# ---------------------------------------------------------------- Replays (N8.1)
+
+func _replay_store(key: String) -> NetSessionStore:
+	if not replay_stores.has(key):
+		replay_stores[key] = JsonStore.new()
+	return replay_stores[key] as NetSessionStore
+
+
+## A small real replay file (what the recorder makes), run id 0 until the receipt.
+static func _replay_bytes(score: int = 183_200) -> PackedByteArray:
+	var r := NetReplayFile.new()
+	r.seed_value = SEED
+	r.client_build = 1
+	r.date = "2026-09-29"
+	r.car = CAR
+	r.score = score
+	for i in 8:
+		r.add_sample(1 + i * 4, 150.0 + i, 7.1, 0.0, 33.3, 0.0, 0.0, 1.0, 0.0, 0)
+	return r.encode()
+
+
+func _with_replays(c: NetRunsClient) -> NetRunsClient:
+	c.replay_source = func(res: Dictionary, _date: String) -> PackedByteArray:
+		return _replay_bytes(int(res.get(RunStats.SCORE, 0)))
+	return c
+
+
+func _replay_uploads() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for req in fake.requests:
+		if String(req["path"]).ends_with(NetRunsClient.PATH_REPLAY_SUFFIX):
+			out.append(req)
+	return out
+
+
+func _stored(key: String) -> bool:
+	return replay_stores.has(key) and not (replay_stores[key] as JsonStore).text.is_empty()
+
+
+func test_replay_is_uploaded_when_the_receipt_requires_it() -> void:
+	var c := _with_replays(await _online())
+	var payload := _payload()
+	Events.run_over.emit(payload)
+	await tree.process_frame
+	var sub := c.submission_for(payload)
+	if not check(sub != null and sub.replay_required, "a first run needs a replay"):
+		return
+	var ups := _replay_uploads()
+	if not eq(ups.size(), 1, "one upload"):
+		return
+	eq(String(ups[0]["path"]), "%s/%s%s" % [NetRunsClient.PATH_RUNS, sub.run_id, NetRunsClient.PATH_REPLAY_SUFFIX])
+	eq(ups[0]["content_type"], "application/octet-stream", "the .wbr bytes as they are")
+	check(ups[0]["auth"] != "", "with the bearer token")
+	var sent: PackedByteArray = ups[0]["bytes"]
+	eq(NetReplayFile.read_run_id(sent), int(sub.run_id), "the receipt's run id patched into the header")
+	var parsed := NetReplayFile.decode(sent)
+	check(parsed != null and parsed.sample_count == 8, "a whole replay")
+	eq(fake.replays_received.keys(), [sub.run_id], "the server took it")
+	eq(sub.replay_state, NetRunSubmission.REPLAY_UPLOADED)
+	eq(c.pending_uploads(), 0)
+	check(not _stored(sub.key), "deleted from the device once uploaded")
+	eq(c.stored_replays().size(), 0)
+
+
+func test_replay_is_deleted_when_not_required() -> void:
+	fake.force_replay = false
+	var c := _with_replays(await _online())
+	var payload := _payload()
+	Events.run_over.emit(payload)
+	await tree.process_frame
+	var sub := c.submission_for(payload)
+	check(sub != null and not sub.replay_required)
+	eq(_replay_uploads().size(), 0, "nothing uploaded")
+	eq(sub.replay_state, NetRunSubmission.REPLAY_NOT_NEEDED)
+	check(not _stored(sub.key), "deleted")
+	eq(c.stored_replays().size(), 0)
+
+
+func test_offline_replay_waits_with_its_run_and_goes_after_a_relaunch() -> void:
+	session = _session()
+	fake.offline = true
+	await session.start()
+	var c := _with_replays(_client(session))
+	var payload := _payload()
+	Events.run_over.emit(payload)
+	var sub := c.submission_for(payload)
+	eq(sub.replay_state, NetRunSubmission.REPLAY_STORED, "stored before anything is sent")
+	check(_stored(sub.key), "the replay is on the device")
+	var key := sub.key
+	c.free()
+	session.free()
+	_nodes.clear()
+	fake.offline = false
+	fake.requests.clear()
+	session = _session()
+	var c2 := _client(session)
+	await session.start()
+	await tree.process_frame
+	eq(_runs_requests(), 1, "the run went")
+	eq(_replay_uploads().size(), 1, "then its replay")
+	eq(fake.replays_received.size(), 1)
+	eq(c2.sub_for(key).replay_state, NetRunSubmission.REPLAY_UPLOADED)
+	check(not _stored(key), "deleted once uploaded")
+
+
+func test_upload_failures_keep_the_replay_and_retry() -> void:
+	var c := _with_replays(await _online())
+	# The run goes through, then the upload meets a server that is down.
+	fake.force_replay = true
+	var payload := _payload()
+	for i in tuning.api_max_retries + 1:
+		fake.script(HTTPClient.METHOD_POST, "%s/%d%s" % [NetRunsClient.PATH_RUNS, 901, NetRunsClient.PATH_REPLAY_SUFFIX],
+				503, {"error": "unavailable", "message": "down"})
+	Events.run_over.emit(payload)
+	await tree.process_frame
+	var sub := c.submission_for(payload)
+	eq(sub.run_id, "901")
+	eq(sub.state, NetRunSubmission.State.DONE, "the run itself is done")
+	eq(sub.replay_state, NetRunSubmission.REPLAY_QUEUED, "the replay waits")
+	eq(c.pending_uploads(), 1)
+	check(_stored(sub.key), "still on the device")
+	near(c.retry_in_s(), tuning.runs_retry_s, 1e-6, "the next try is planned")
+	time.advance_s(tuning.runs_retry_s)
+	c._process(0.0)
+	await tree.process_frame
+	await tree.process_frame
+	eq(sub.replay_state, NetRunSubmission.REPLAY_UPLOADED, "sent on the retry")
+	eq(fake.replays_received.size(), 1)
+	check(not _stored(sub.key))
+
+
+func test_refused_upload_is_dropped() -> void:
+	var c := _with_replays(await _online())
+	fake.script(HTTPClient.METHOD_POST, "%s/%d%s" % [NetRunsClient.PATH_RUNS, 901, NetRunsClient.PATH_REPLAY_SUFFIX],
+			409, {"error": "replay_not_required", "message": "not required"})
+	var payload := _payload()
+	Events.run_over.emit(payload)
+	await tree.process_frame
+	var sub := c.submission_for(payload)
+	eq(sub.replay_state, NetRunSubmission.REPLAY_REFUSED)
+	eq(c.pending_uploads(), 0, "never again")
+	check(not _stored(sub.key), "deleted")
+
+
+func test_too_many_stored_replays_drop_the_oldest() -> void:
+	session = _session()
+	fake.offline = true
+	await session.start()
+	var t := tuning.duplicate() as NetTuning
+	t.replay_keep_max = 2
+	var c := NetRunsClient.new()
+	c.configure(session, queue_store, t, time)
+	c.unix_clock = func() -> float: return fake.now_s
+	c.car_of = func(_r: Dictionary) -> String: return CAR
+	c.replay_store_for = _replay_store
+	_with_replays(c)
+	session.add_child(c)
+	var keys: Array[String] = []
+	for i in 3:
+		var payload := _payload()
+		Events.run_over.emit(payload)
+		keys.append(c.submission_for(payload).key)
+	eq(c.stored_replays(), PackedStringArray([keys[1], keys[2]]), "the newest two")
+	check(not _stored(keys[0]), "the oldest deleted")
+	eq(c.queued_count(), 3, "its run still waits")

@@ -14,7 +14,10 @@ extends NetFakeAccounts
 ## 400 `invalid_body`, as the server's serde would answer.
 ##
 ## Test hooks (besides NetFakeAccounts'): min_build, add_player(), seed_board(),
-## befriend(), set_crew(), entries_of(), reports, blocks_made, runs_received.
+## befriend(), set_crew(), entries_of(), reports, blocks_made, runs_received,
+## replays_received (N8.1: POST /runs/{run_id}/replay, owner only, only when the receipt
+## said replay_required, `replay_max_bytes`, idempotent), force_replay (every new receipt
+## requires a replay; false: none does; null: the placement rule).
 
 const RUN_FIELDS_INT: Array[String] = ["score", "legs_completed", "best_chain", "passes", "close_passes",
 		"threads", "cuts", "hits", "client_build"]
@@ -51,11 +54,18 @@ var blocks_made: Array[Dictionary] = []
 var runs_received: Array[Dictionary] = []
 ## Every raw POST /runs body text (valid or not).
 var run_texts: PackedStringArray = PackedStringArray()
+## N8.1: run id -> the replay bytes accepted for it.
+var replays_received: Dictionary = {}
+var replay_max_bytes: int = 4194304
+## null: the placement rule decides replay_required; true / false: forced.
+var force_replay: Variant = null
 
 ## account|idempotency key -> the stored receipt.
 var _receipts: Dictionary = {}
 ## account|board -> true (legacy uploads).
 var _legacy: Dictionary = {}
+## run id -> {"who": account, "replay": bool (the receipt's replay_required)}
+var _run_meta: Dictionary = {}
 var _next_run: int = 900
 var _next_report: int = 1
 
@@ -181,6 +191,33 @@ func _route(method: int, path: String, auth: String, body: String) -> NetHttpRes
 	return super._route(method, path, auth, body)
 
 
+## POST /runs/{run_id}/replay (docs/SERVER.md → Replays): the body is the .wbr file.
+func _route_raw(method: int, path: String, auth: String, body: PackedByteArray) -> NetHttpResponse:
+	var prefix := NetRunsClient.PATH_RUNS + "/"
+	if method != HTTPClient.METHOD_POST or not path.begins_with(prefix) or not path.ends_with(NetRunsClient.PATH_REPLAY_SUFFIX):
+		return super._route_raw(method, path, auth, body)
+	var run_id := path.substr(prefix.length(), path.length() - prefix.length() - NetRunsClient.PATH_REPLAY_SUFFIX.length())
+	return _with_account(auth, _replay_upload.bind(run_id, body))
+
+
+func _replay_upload(who: String, run_id: String, body: PackedByteArray) -> NetHttpResponse:
+	if not _run_meta.has(run_id):
+		return _err(404, "unknown_run")
+	var meta: Dictionary = _run_meta[run_id]
+	if meta["who"] != who:
+		return _err(403, "not_owner")
+	if replays_received.has(run_id):
+		return _ok(200, {"run_id": run_id, "status": "pending", "duplicate": true, "size_bytes": body.size()})
+	if not bool(meta["replay"]):
+		return _err(409, "replay_not_required")
+	if body.size() > replay_max_bytes:
+		return _err(413, "body_too_large")
+	if NetReplayFile.read_run_id(body) != int(run_id):
+		return _err(400, "invalid_replay")
+	replays_received[run_id] = body
+	return _ok(201, {"run_id": run_id, "status": "pending", "duplicate": false, "size_bytes": body.size()})
+
+
 func _with_account(auth: String, handler: Callable) -> NetHttpResponse:
 	var who: Variant = _authed(auth, false)
 	if who is NetHttpResponse:
@@ -241,6 +278,9 @@ func _run(who: String, text: String) -> NetHttpResponse:
 		placements.append({"board": board, "period": period, "score": value, "rank": _opt(rank, rank > 0),
 				"improved": improved, "previous_best": prev, "on_board": rank > 0})
 	receipt["placements"] = placements
+	if force_replay is bool:
+		replay = bool(force_replay)
+	_run_meta[run_id] = {"who": who, "replay": replay}
 	receipt["replay_required"] = replay
 	receipt["verification"] = "pending" if replay else "unverified"
 	receipt["verifying"] = replay

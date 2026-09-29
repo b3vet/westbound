@@ -38,6 +38,9 @@ enum Command {
     Backup { path: PathBuf },
     /// Probe `/api/v1/health` on localhost; exit 0 when healthy (Docker HEALTHCHECK).
     Healthcheck,
+    /// Run the replay verification queue alone, against the same database (a sidecar next
+    /// to `serve` with `replays.worker_enabled = false`; docs/SERVER.md → Replays).
+    VerifyWorker,
     /// Moderation commands on the live database (each one is logged to admin_log).
     Admin {
         #[command(subcommand)]
@@ -56,6 +59,10 @@ enum AdminCommand {
     /// Delete a run (and its replay); the entries it held fall back to the player's next
     /// best run.
     RemoveRun { run_id: i64 },
+    /// The replay verification queue: jobs per status, and the failed ones with why.
+    Replays,
+    /// Put failed replay jobs (or one run's job) back in the queue with fresh attempts.
+    ReplayRequeue { run_id: Option<i64> },
     /// Delete one leaderboard entry: BOARD (loop, loop_crew, journey, daily, distance),
     /// PERIOD (YYYY-MM, YYYY-Www, YYYY-MM-DD or all) and the account (crew on loop_crew).
     RemoveEntry {
@@ -134,6 +141,10 @@ fn main() -> ExitCode {
             telemetry::init(&cfg.log);
             current_thread().and_then(|rt| rt.block_on(admin_cmd(&cfg, command)))
         }
+        Command::VerifyWorker => {
+            telemetry::init(&cfg.log);
+            current_thread().and_then(|rt| rt.block_on(verify_worker(cfg)))
+        }
         Command::Serve => {
             telemetry::init(&cfg.log);
             tokio::runtime::Builder::new_multi_thread()
@@ -193,6 +204,8 @@ async fn admin_cmd(cfg: &Config, command: AdminCommand) -> anyhow::Result<()> {
         AdminCommand::RemoveRun { run_id } => {
             admin::remove_run(&pool, &cfg.leaderboards, run_id).await
         }
+        AdminCommand::Replays => admin::replays(&pool).await,
+        AdminCommand::ReplayRequeue { run_id } => admin::replay_requeue(&pool, run_id).await,
         AdminCommand::RemoveEntry {
             board,
             period,
@@ -209,6 +222,38 @@ async fn admin_cmd(cfg: &Config, command: AdminCommand) -> anyhow::Result<()> {
     };
     db::close(&pool).await;
     println!("{}", result?);
+    Ok(())
+}
+
+/// The replay queue worker on its own (N8.1): one verifier process at a time until
+/// SIGTERM / SIGINT.
+async fn verify_worker(cfg: Config) -> anyhow::Result<()> {
+    if cfg.replays.verifier_command.is_empty() {
+        anyhow::bail!("replays.verifier_command is empty: nothing to run the jobs with");
+    }
+    let pool = db::connect(&cfg.db).await?;
+    let clock: std::sync::Arc<dyn clock::Clock> = std::sync::Arc::new(clock::SystemClock);
+    let boards = std::sync::Arc::new(westbound_server::leaderboards::Leaderboards::new(
+        pool.clone(),
+        cfg.leaderboards.clone(),
+        clock.clone(),
+    ));
+    let worker = westbound_server::replays::worker::Worker {
+        db: pool.clone(),
+        boards,
+        cfg: cfg.replays.clone(),
+        clock,
+        wake: std::sync::Arc::new(tokio::sync::Notify::new()),
+    };
+    let stop = tokio_util::sync::CancellationToken::new();
+    let on_signal = stop.clone();
+    tokio::spawn(async move {
+        shutdown::signal().await;
+        on_signal.cancel();
+    });
+    worker.run(stop).await;
+    db::close(&pool).await;
+    tracing::info!("verify-worker stopped");
     Ok(())
 }
 

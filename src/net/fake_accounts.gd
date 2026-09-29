@@ -12,7 +12,8 @@ extends NetHttpBackend
 ##   script(method, path, status, body, headers)   the next matching request gets this
 ##   script_failure(method, path, result)          ... or this transport failure
 ##   ban(id, until), expire_access_tokens(), now_s (the server's unix clock)
-##   requests (each: method, path, auth, body), waits (backoff seconds asked for)
+##   requests (each: method, path, auth, body, content_type; `bytes` for binary bodies),
+##   waits (backoff seconds asked for)
 ## `wait()` returns at once and advances `now_s`, so retries cost no real time.
 
 signal released()
@@ -105,12 +106,31 @@ func paths() -> PackedStringArray:
 
 func request(method: int, url: String, headers: PackedStringArray, body: String,
 		_timeout_s: float) -> NetHttpResponse:
+	return await _dispatch(method, url, headers, body)
+
+
+## Binary bodies (N8.1 replay uploads): recorded with `bytes` and the content type, routed
+## to _route_raw().
+func request_raw(method: int, url: String, headers: PackedStringArray, body: PackedByteArray,
+		_timeout_s: float) -> NetHttpResponse:
+	return await _dispatch(method, url, headers, body)
+
+
+func _dispatch(method: int, url: String, headers: PackedStringArray, body: Variant) -> NetHttpResponse:
 	var path := _path(url)
 	var auth := ""
+	var content_type := ""
 	for h in headers:
 		if h.to_lower().begins_with("authorization: bearer "):
 			auth = h.substr("authorization: bearer ".length())
-	requests.append({"method": method, "path": path, "auth": auth, "body": body})
+		elif h.to_lower().begins_with("content-type: "):
+			content_type = h.substr("content-type: ".length())
+	var raw := body is PackedByteArray
+	var rec := {"method": method, "path": path, "auth": auth, "body": "" if raw else String(body),
+			"content_type": content_type}
+	if raw:
+		rec["bytes"] = body
+	requests.append(rec)
 	if hold:
 		await released
 	if offline:
@@ -122,7 +142,9 @@ func request(method: int, url: String, headers: PackedStringArray, body: String,
 			if int(s["result"]) >= 0:
 				return NetHttpResponse.failed(int(s["result"]))
 			return NetHttpResponse.make(int(s["status"]), String(s["body"]), s["headers"] as PackedStringArray)
-	return _route(method, path, auth, body)
+	if raw:
+		return _route_raw(method, path, auth, body as PackedByteArray)
+	return _route(method, path, auth, String(body))
 
 
 func wait(seconds: float) -> void:
@@ -165,6 +187,11 @@ func _route(method: int, path: String, auth: String, body: String) -> NetHttpRes
 			return who as NetHttpResponse
 		_delete(String(who))
 		return NetHttpResponse.make(204)
+	return _err(404, "not_found")
+
+
+## Binary-body routes (none here; NetFakeBoards adds the replay upload).
+func _route_raw(_method: int, _url_path: String, _auth: String, _body: PackedByteArray) -> NetHttpResponse:
 	return _err(404, "not_found")
 
 
