@@ -1,0 +1,33 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://src/run/run.gd" id="1_run"]
+[ext_resource type="PackedScene" path="res://src/sun/sky.tscn" id="2_sky"]
+[ext_resource type="Script" path="res://src/input/player_input.gd" id="3_hub"]
+[ext_resource type="PackedScene" path="res://src/camera/camera_rig.tscn" id="4_rig"]
+[ext_resource type="PackedScene" path="res://src/ui/controls_overlay.tscn" id="5_overlay"]
+[ext_resource type="PackedScene" path="res://src/ui/dev_hud.tscn" id="6_hud"]
+[ext_resource type="Script" path="res://src/run/time_scale.gd" id="7_time"]
+[ext_resource type="Script" path="res://src/run/run_events.gd" id="8_events"]
+
+[node name="Run" type="Node3D"]
+script = ExtResource("1_run")
+
+[node name="Sky" parent="." instance=ExtResource("2_sky")]
+
+[node name="PlayerInput" type="Node" parent="."]
+script = ExtResource("3_hub")
+
+[node name="CameraRig" parent="." instance=ExtResource("4_rig")]
+
+[node name="Overlay" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="ControlsOverlay" parent="Overlay" instance=ExtResource("5_overlay")]
+
+[node name="DevHud" parent="." instance=ExtResource("6_hud")]
+
+[node name="TimeScale" type="Node" parent="."]
+script = ExtResource("7_time")
+
+[node name="RunEvents" type="Node" parent="."]
+script = ExtResource("8_events")
