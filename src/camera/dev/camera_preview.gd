@@ -5,12 +5,13 @@ extends Node3D
 ## judged in every mode, at any speed, mid lane change.
 ##
 ## The stand-in car follows the modular convention's origin (ground, between the axles,
-## facing -Z) and carries a Markers/cam_hood node, like the real models will.
+## facing -Z), carries a Markers/cam_hood node, like the real models will, and hides
+## its body in the cockpit view (set_body_visible, as PlayerCar).
 ##
 ## Keys: C cycle camera (saved) | Up/Down speed | Left/Right lane change | B boost punch
 ##       H hit shake | P close-pass shake | R reduced motion | A auto lane changes
 ##
-## Snap hook (tools/snap.sh): --mode=chase|far|hood|overhead  --speed_kmh=  --steer=-1..1
+## Snap hook (tools/snap.sh): --mode=chase|far|hood|overhead|cockpit  --speed_kmh=  --steer=-1..1
 ## (starts a lane change at once, holding that input for the physics' one-lane hold time,
 ## or --steer_hold_s=)  --lane=  --s=  --sky_t=  --boost  --shake=strength.
 ## --seconds= is consumed by snap.sh itself (extra simulated time before the capture);
@@ -108,7 +109,7 @@ func _ready() -> void:
 		Game.change_state(Game.RUNNING)
 	_place_car()
 	_car.reset_physics_interpolation()
-	_rig.set_target(_car, _state, _car_def.top_speed_mps())
+	_rig.set_target(_car, _state, _car_def.top_speed_mps(), _car_def)
 
 
 func _physics_process(dt: float) -> void:
@@ -244,8 +245,18 @@ func _on_origin_shifted(_offset: Vector3) -> void:
 	_car.reset_physics_interpolation()
 
 
+## The stand-in body: hidden by the camera rig in the cockpit view.
+class StandInCar:
+	extends Node3D
+
+	func set_body_visible(on: bool) -> void:
+		for n in get_children():
+			if n is MeshInstance3D:
+				(n as MeshInstance3D).visible = on
+
+
 func _make_car() -> Node3D:
-	var car := Node3D.new()
+	var car := StandInCar.new()
 	car.name = "StandInCar"
 	car.add_child(_box("Body", BODY_SIZE, Vector3(0.0, BODY_LIFT + BODY_SIZE.y * 0.5, 0.0), PAINT))
 	var cabin_y := BODY_LIFT + BODY_SIZE.y + CABIN_SIZE.y * 0.5

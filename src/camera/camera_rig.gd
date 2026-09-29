@@ -1,6 +1,7 @@
 class_name CameraRig
 extends Node3D
-## Gameplay camera rig. Spec: Cameras (chase, far chase, hood, overhead; spring follow,
+## Gameplay camera rig. Spec: Cameras (chase, far chase, hood, overhead, cockpit (plan
+## D11, WP4.7: before the cars have interiors, see docs/COCKPIT.md); spring follow,
 ## speed response, look-ahead, roll and shake, reduced motion, cycling, glare rule);
 ## Audio, haptics and game feel (shake on hits, FOV punch on boost); Accessibility ->
 ## Reduced motion; Performance budget (far plane just past the fog end).
@@ -31,7 +32,17 @@ extends Node3D
 ##     the road-relative lateral velocity (the lane you are moving into);
 ##   - roll: up to 1.5 deg into the lateral acceleration (right turn = right side down);
 ##   - hood: rigid (0 Hz springs) at the model's Markers/cam_hood when it has one.
-## Reduced motion (Settings `reduced_motion`) zeroes shake, roll and the FOV punch.
+##   - cockpit (CameraTuning.cockpit_mode): this node is the rigid seat frame at the
+##     driver's eye (the model's authored Markers/cam_cockpit, else CameraTuning's
+##     CarDef-proportional default), with the car's full pose (road pitch included) and
+##     the roll (mode_roll_factor < 0: leaning out of the turn with the body). A
+##     procedural Cockpit is its child, so it moves exactly with the car and the view.
+##     The Camera3D carries the head: the look direction (the look-ahead into the lane
+##     you move into), a bounded head sway from the accelerations, and the shake. The
+##     target's body is hidden (target.set_body_visible(false), when it has the method)
+##     while in cockpit mode and restored when leaving it or changing targets.
+## Reduced motion (Settings `reduced_motion`) zeroes shake, roll, head sway and the FOV
+## punch.
 
 ## Runs after the player car's physics tick (default priority 0).
 const PHYSICS_PRIORITY := 100
@@ -84,6 +95,18 @@ var _punch_t: float = 0.0
 var _roll_out: float = 0.0
 var _fov_out: float = 0.0
 
+# Cockpit mode.
+var _cockpit_i: int = -1
+var _cockpit: Cockpit
+var _car_def: CarDef
+var _cockpit_built_for: Vector3 = Vector3.INF
+var _eye_local := Vector3.ZERO
+var _eye_from_marker: bool = false
+var _head := DampedSpring.new()
+var _head_xform := Transform3D.IDENTITY
+## The target whose body this rig hid (restored on leaving cockpit or changing target).
+var _body_hidden_on: Node3D
+
 
 func _ready() -> void:
 	if tuning == null:
@@ -104,6 +127,8 @@ func _ready() -> void:
 	_fov_out = tuning.fov_min_deg
 	_look_lat.configure(tuning.look_ahead_hz, tuning.look_ahead_damping_ratio)
 	_roll.configure(tuning.roll_hz, tuning.roll_damping_ratio)
+	_head.configure(tuning.cockpit_head_sway_hz, tuning.cockpit_head_sway_damping_ratio)
+	_cockpit_i = tuning.cockpit_index()
 	_reduced_motion = bool(Settings.get_value(&"reduced_motion"))
 	_apply_mode_index(_restored_mode_index())
 	_apply_far_plane()
@@ -122,20 +147,35 @@ func _physics_process(delta: float) -> void:
 	advance(delta)
 
 
+func _exit_tree() -> void:
+	_restore_body()
+
+
+func _enter_tree() -> void:
+	if _target != null:
+		_apply_cockpit_view()   # back in the tree after a removal: hide the body again
+
+
 # ---------------------------------------------------------------- API
 
 ## target: the player car node (its global_transform is the car pose). state: read for
 ## speed (FOV, pull-back), lateral velocity (look-ahead) and lateral acceleration (roll).
-## top_speed_mps: the speed where the FOV reaches its maximum. Snaps to the target.
-func set_target(target: Node3D, state: VehicleState, top_speed_mps: float) -> void:
+## top_speed_mps: the speed where the FOV reaches its maximum. car_def: the body size and
+## paint for the cockpit (null: the target's `car` property when it is a CarDef, else
+## CarDef defaults). Snaps to the target.
+func set_target(target: Node3D, state: VehicleState, top_speed_mps: float, car_def: CarDef = null) -> void:
+	_restore_body()
 	_target = target
 	_state = state
 	_top_speed_mps = top_speed_mps
+	_car_def = car_def if car_def != null else _car_def_of(target)
+	_cockpit_built_for = Vector3.INF
 	_resolve_marker()
+	_apply_cockpit_view()
 	snap_to_target()
 
 
-## Switches mode (&"chase", &"far", &"hood", &"overhead", ...: CameraTuning.modes) and
+## Switches mode (&"chase", &"far", &"hood", &"overhead", &"cockpit": CameraTuning.modes) and
 ## snaps. Does not save the choice (cycle_mode does).
 func set_mode(new_mode: StringName) -> void:
 	var i := tuning.mode_index(new_mode)
@@ -183,6 +223,8 @@ func snap_to_target() -> void:
 	_update(0.0, true)
 	reset_physics_interpolation()
 	_cam.reset_physics_interpolation()
+	if _cockpit != null:
+		_cockpit.reset_physics_interpolation()
 
 
 func camera() -> Camera3D:
@@ -239,6 +281,32 @@ func is_reduced_motion() -> bool:
 	return _reduced_motion
 
 
+## True in the cockpit mode (CameraTuning.cockpit_mode).
+func is_cockpit() -> bool:
+	return _mode_i == _cockpit_i
+
+
+## The procedural cockpit (null until the cockpit mode was first used with a target).
+func cockpit() -> Cockpit:
+	return _cockpit
+
+
+## Driver's eye in the target's frame (m; valid once a target is set).
+func cockpit_eye_local() -> Vector3:
+	return _eye_local
+
+
+## True when the eye comes from the model's authored Markers/cam_cockpit.
+func cockpit_eye_from_marker() -> bool:
+	return _eye_from_marker
+
+
+## The head transform on the Camera3D in cockpit mode (look direction and head sway,
+## shake excluded); identity in the other modes.
+func head_transform() -> Transform3D:
+	return _head_xform
+
+
 # ---------------------------------------------------------------- Internals
 
 func _has_target() -> bool:
@@ -258,6 +326,7 @@ func _apply_mode_index(i: int) -> void:
 	_pos.configure(tuning.mode_position_hz[i], tuning.mode_position_damping_ratio[i])
 	_heading.configure(tuning.mode_heading_hz[i], tuning.mode_heading_damping_ratio[i])
 	_resolve_marker()
+	_apply_cockpit_view()
 	snap_to_target()
 
 
@@ -265,9 +334,110 @@ func _resolve_marker() -> void:
 	_marker = null
 	if not _has_target():
 		return
+	if is_cockpit():
+		_resolve_cockpit_eye()
+		return
 	var path := tuning.mode_marker[_mode_i]
 	if not path.is_empty():
 		_marker = _target.get_node_or_null(NodePath(path)) as Node3D
+
+
+# ---------------------------------------------------------------- Cockpit
+
+static func _car_def_of(target: Node3D) -> CarDef:
+	if target == null:
+		return null
+	var c: Variant = target.get(&"car")
+	return c as CarDef if c is CarDef else null
+
+
+## Body size (width, height, length) from the CarDef, or CarDef's defaults.
+func _body_size() -> Vector3:
+	var c := _car_def if _car_def != null else CarDef.new()
+	return Vector3(c.width_m, c.height_m, c.length_m)
+
+
+## The eye in the target's frame: an authored Markers/cam_cockpit, else the default.
+func _resolve_cockpit_eye() -> void:
+	var size := _body_size()
+	_eye_local = tuning.cockpit_eye_default(size.z, size.x, size.y)
+	_eye_from_marker = false
+	var mk := _authored_cockpit_marker()
+	if mk != null:
+		_eye_local = _relative_xform(_target, mk).origin
+		_eye_from_marker = true
+
+
+## The cockpit marker directly under the target (tuning path), or in the target's
+## CarModel (`model` property) unless CarModel.conform() stubbed it (at import time,
+## root meta `car_import_stubbed`, or at load time, CarModel.stubbed): a stub is only a
+## guess from the body bounds, and the CarDef-proportional default fits the generic
+## cockpit better.
+func _authored_cockpit_marker() -> Node3D:
+	var path := tuning.mode_marker[_cockpit_i]
+	if path.is_empty():
+		return null
+	var direct := _target.get_node_or_null(NodePath(path)) as Node3D
+	if direct != null:
+		return direct
+	var m: Variant = _target.get(&"model")
+	var model := m as CarModel if m is CarModel else null
+	if model == null or model.root == null or not is_instance_valid(model.root):
+		return null
+	var import_stubs: Variant = model.root.get_meta(&"car_import_stubbed", PackedStringArray())
+	if model.stubbed.has(path) or (import_stubs is PackedStringArray and (import_stubs as PackedStringArray).has(path)):
+		return null
+	return model.root.get_node_or_null(NodePath(path)) as Node3D
+
+
+## Transform of `n` relative to its ancestor `ancestor`.
+static func _relative_xform(ancestor: Node3D, n: Node3D) -> Transform3D:
+	var xf := Transform3D.IDENTITY
+	var cur: Node = n
+	while cur != null and cur != ancestor:
+		var n3 := cur as Node3D
+		if n3 != null:
+			xf = n3.transform * xf
+		cur = cur.get_parent()
+	return xf
+
+
+## Shows the cockpit and hides the target's body in cockpit mode; restores otherwise.
+func _apply_cockpit_view() -> void:
+	var on := is_cockpit() and _has_target()
+	if on:
+		_ensure_cockpit()
+	if _cockpit != null:
+		_cockpit.visible = on
+	if _body_hidden_on != null and (not on or _body_hidden_on != _target):
+		_restore_body()
+	if on and _body_hidden_on == null and _target.has_method(&"set_body_visible"):
+		_target.call(&"set_body_visible", false)
+		_body_hidden_on = _target
+	if not on:
+		_head_xform = Transform3D.IDENTITY
+
+
+func _restore_body() -> void:
+	if _body_hidden_on != null and is_instance_valid(_body_hidden_on) \
+			and _body_hidden_on.has_method(&"set_body_visible"):
+		_body_hidden_on.call(&"set_body_visible", true)
+	_body_hidden_on = null
+
+
+## Creates the cockpit on first use and (re)builds it for the current eye and body.
+func _ensure_cockpit() -> void:
+	if _cockpit == null:
+		_cockpit = Cockpit.new()
+		_cockpit.name = "Cockpit"
+		add_child(_cockpit)
+		var vt := Tuning.load_default().vehicle
+		_cockpit.configure(vt.steering_wheel_ratio_factor, Units.kmh_to_mps(tuning.cockpit_speedo_max_kmh),
+			tuning.cockpit_tach_max_rpm, vt.engine_redline_rpm)
+	if _cockpit_built_for != _eye_local:
+		var paint := _car_def.default_paint if _car_def != null else CarDef.new().default_paint
+		_cockpit.build(_eye_local, _body_size(), paint)
+		_cockpit_built_for = _eye_local
 
 
 ## World heading of `b` (rad, clockwise from above, 0 faces -Z), or `fallback` when the
@@ -299,7 +469,9 @@ func _update(dt: float, snap: bool) -> void:
 
 	# Position goal: marker, or the mode offset scaled by the speed pull-back.
 	var goal: Vector3
-	if _marker != null and is_instance_valid(_marker):
+	if mi == _cockpit_i:
+		goal = tp * _eye_local
+	elif _marker != null and is_instance_valid(_marker):
 		goal = _marker.global_position
 	else:
 		var k := tuning.pullback_scale(v, _top_speed_mps, mi)
@@ -325,7 +497,7 @@ func _update(dt: float, snap: bool) -> void:
 		lat_speed = _state.v * sin(_state.yaw) + _state.v_lat * cos(_state.yaw)
 		accel_lat = _state.accel_lat
 	var lat_goal := tuning.look_ahead_lateral_m(lat_speed)
-	var roll_goal := 0.0 if _reduced_motion else tuning.roll_rad(accel_lat)
+	var roll_goal := 0.0 if _reduced_motion else tuning.roll_rad(accel_lat) * tuning.mode_roll_factor[mi]
 	if snap:
 		_look_lat.reset(lat_goal)
 		_roll.reset(roll_goal)
@@ -334,6 +506,18 @@ func _update(dt: float, snap: bool) -> void:
 		_roll.step(roll_goal, dt)
 	_roll_out = 0.0 if _reduced_motion else _roll.value
 
+	if mi == _cockpit_i:
+		_pose_cockpit(tp, dt, snap)
+	else:
+		_pose_follow(anchor, fwd, right, psi)
+	_fov_out = tuning.fov_deg(v, _top_speed_mps) + tuning.mode_fov_offset_deg[mi] \
+			+ punch_deg() * tuning.mode_punch_scale[mi]
+	_cam.fov = _fov_out
+	_apply_shake()
+
+
+func _pose_follow(anchor: Vector3, fwd: Vector3, right: Vector3, psi: float) -> void:
+	var mi := _mode_i
 	var look := anchor + fwd * tuning.mode_look_ahead_m[mi] \
 			+ Vector3.UP * tuning.mode_look_height_m[mi] + right * _look_lat.value
 	var eye := _pos.vec_value
@@ -347,20 +531,46 @@ func _update(dt: float, snap: bool) -> void:
 	b = b * Basis(Vector3.BACK, -_roll_out)
 	global_transform = Transform3D(b, eye)
 
-	_fov_out = tuning.fov_deg(v, _top_speed_mps) + tuning.mode_fov_offset_deg[mi] + punch_deg()
-	_cam.fov = _fov_out
-	_apply_shake()
+
+## Cockpit: this node = the seat frame (the car's pose at the eye, rolled); the head
+## (look direction + bounded sway) goes on the Camera3D via _head_xform.
+func _pose_cockpit(tp: Transform3D, dt: float, snap: bool) -> void:
+	var mi := _mode_i
+	var seat := tp.basis.orthonormalized() * Basis(Vector3.BACK, -_roll_out)
+	global_transform = Transform3D(seat, _pos.vec_value)
+
+	var sway_goal := Vector3.ZERO
+	if not _reduced_motion and _state != null:
+		sway_goal = tuning.cockpit_head_sway_m(_state.accel_lat, _state.accel_long)
+	if snap or dt <= 0.0:
+		_head.reset_vec(sway_goal)
+	else:
+		_head.step_vec(sway_goal, dt)
+	var m := tuning.cockpit_head_sway_max_m
+	var sway := Vector3.ZERO if _reduced_motion else _head.vec_value.clamp(-Vector3.ONE * m, Vector3.ONE * m)
+
+	# Look point in the car's frame (lateral look-ahead included), seen from the eye.
+	var look := Vector3(_look_lat.value, tuning.mode_look_height_m[mi], -tuning.mode_look_ahead_m[mi]) - _eye_local
+	_head_xform = Transform3D(Basis.looking_at(look, Vector3.UP), sway)
+
+	if _cockpit != null:
+		if _state != null:
+			_cockpit.update_from(_state.steer_angle, _state.v, _state.rpm)
+		else:
+			_cockpit.update_from(0.0, 0.0, 0.0)
 
 
+## Camera3D local transform: the head (identity outside the cockpit) and the shake,
+## scaled per mode.
 func _apply_shake() -> void:
-	var a := shake_amplitude()
+	var a := shake_amplitude() * tuning.mode_shake_scale[_mode_i]
 	if a <= 0.0:
-		_cam.transform = Transform3D.IDENTITY
+		_cam.transform = _head_xform
 		return
 	var off := tuning.shake_offset_m * a
 	var rot := deg_to_rad(tuning.shake_rotation_deg) * a
 	var euler := Vector3(_noise(CH_PITCH) * rot, _noise(CH_YAW) * rot, _noise(CH_ROLL) * rot)
-	_cam.transform = Transform3D(Basis.from_euler(euler), Vector3(_noise(CH_X) * off, _noise(CH_Y) * off, 0.0))
+	_cam.transform = _head_xform * Transform3D(Basis.from_euler(euler), Vector3(_noise(CH_X) * off, _noise(CH_Y) * off, 0.0))
 
 
 ## Smooth deterministic noise in [-1, 1] for one shake channel (no RNG: view-only).
@@ -379,7 +589,9 @@ func _on_settings_changed(key: StringName) -> void:
 		_reduced_motion = bool(Settings.get_value(&"reduced_motion"))
 		if _reduced_motion:
 			_roll_out = 0.0
-			_cam.transform = Transform3D.IDENTITY
+			_head.reset_vec(Vector3.ZERO)
+			_head_xform.origin = Vector3.ZERO
+			_cam.transform = _head_xform
 	elif key == &"camera_mode":
 		var i := tuning.mode_index(StringName(str(Settings.get_value(&"camera_mode"))))
 		if i >= 0 and i != _mode_i:
@@ -396,6 +608,8 @@ func _on_origin_shifted(offset: Vector3) -> void:
 	global_transform = t
 	reset_physics_interpolation()
 	_cam.reset_physics_interpolation()
+	if _cockpit != null:
+		_cockpit.reset_physics_interpolation()
 
 
 func _on_quality_changed(_tier: StringName) -> void:
