@@ -123,7 +123,7 @@ Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p9
 | N0 Server foundation | ✅ **gate met on the real VPS** (owner, 2026-09-29): deployed on Coolify at `westbound.sipsakrandevu.com`, reachable, wss echo works from a phone. Image 3.6 MB; CI pushes `ghcr.io/b3vet/westbound-server:edge` |
 | N1 Accounts (device) | ✅ server accounts (N1.1) + client session and profile panel (N1.2); autoload `Net` signs in silently on web and release builds (native dev runs stay offline unless `--server=`). **Owner: set `WB_AUTH__JWT_SECRET` and `WB_AUTH__DEVICE_SECRET_PEPPER` in Coolify before redeploying.** The "survives an iOS reinstall / second device" check waits for the Keychain plugin and providers (MP-D2) |
 | N2 Protocol & clock | ✅ protocol crate + golden vectors, GDScript codec/transports/clock (MP-D4), gateway on `/ws` (handshake, auth, bans, map hashes, keepalive, rate limits, newest-login-wins sessions); echo check moved to `/ws/echo`. Production answers `map_mismatch` until N3 sets `WB_GATEWAY__MAP_HASHES` |
-| N3 Loop map | 🟡 N3.1 merged: `loop_v1` (25.000 km, closes to 5e-12 m), editor, canonical export. **Map hash `26a4e08b8e456ec56471c7d0626ab4ed760ba7579add6e4c279e9b3faa0dd296` → Coolify `WB_GATEWAY__MAP_HASHES`**. N3.2 (client wrap-around streaming, loop test mode, server map load) next |
+| N3 Loop map | ✅ `loop_v1` (25 km) + editor + canonical export; the client drives it lap after lap in loop practice mode (`?mode=loop`: sectors, room clock, per-section traffic; 3-lap soak clean); the server compiles the map in and accepts its hash automatically (`26a4e08b…d296`). Open question: should roadside props repeat every lap |
 | N4 Networked traffic | ⬜ |
 | N5 Rooms & players | ⬜ |
 | N6 Multiplayer scoring | ⬜ |
