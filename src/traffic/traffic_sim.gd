@@ -304,6 +304,19 @@ func set_player_body(length_m: float, width_m: float) -> void:
 	_khl[_P] = _plen * 0.5
 
 
+## Plan D11 (the director's late-leg density): every profile's IDM time headway T
+## becomes its DriverProfile value x `scale` (denser late legs drive closer). Director
+## rate (on a leg change), never per tick; Flow's spawn gaps use the same scale.
+func set_headway_scale(scale: float) -> void:
+	for p in _pT.size():
+		_pT[p] = registry.headway[p] * scale
+
+
+## Profile p's IDM time headway T in use (after set_headway_scale).
+func headway(p: int) -> float:
+	return _pT[p]
+
+
 ## Index that stands for the player in leader_of() (= capacity).
 func player_index() -> int:
 	return _P

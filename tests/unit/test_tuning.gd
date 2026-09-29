@@ -268,9 +268,9 @@ func test_ref_traffic_max_deceleration() -> void:
 
 
 func test_ref_density_by_leg() -> void:
-	# 8 -> 16 vehicles per km per lane
+	# 8 -> 16 vehicles per km per lane; plan D11 (owner, M3): the last leg raised to 18
 	near(t.director.density_first_per_km_lane, 8.0, EPS)
-	near(t.director.density_last_per_km_lane, 16.0, EPS)
+	near(t.director.density_last_per_km_lane, 18.0, EPS)
 
 
 func test_ref_aggressive_share() -> void:
@@ -280,7 +280,8 @@ func test_ref_aggressive_share() -> void:
 
 
 func test_ref_max_active_vehicles() -> void:
-	eq(t.traffic.max_active_vehicles, 60)
+	# Spec 60; plan D7/D11: raised to 90 (leg-8 density on 4 lanes, phone tick budget).
+	eq(t.traffic.max_active_vehicles, 90)
 
 
 func test_ref_field_of_view() -> void:
@@ -473,8 +474,8 @@ func test_curve_helpers() -> void:
 	near(t.vehicle.steer_max_rad(0.0), deg_to_rad(30.0), EPS)
 	near(t.vehicle.steer_max_rad(Units.kmh_to_mps(250.0)), deg_to_rad(3.5), EPS)
 	near(t.director.density_per_km_lane(1), 8.0, EPS)
-	near(t.director.density_per_km_lane(8), 16.0, EPS)
-	near(t.director.density_per_km_lane(12), 16.0, EPS, "holds after leg 8")
+	near(t.director.density_per_km_lane(8), 18.0, EPS, "plan D11")
+	near(t.director.density_per_km_lane(12), 18.0, EPS, "holds after leg 8")
 	near(t.director.aggressive_share_frac(1), 0.05, EPS)
 	near(t.director.aggressive_share_frac(8), 0.20, EPS)
 	# Lane flow speed rises toward the left (lane 0 = next to the median).

@@ -68,6 +68,10 @@ class Flow:
 	## Player box, for the behind-spawn gap check (set by the director).
 	var player_length_m: float = 0.0
 	var player_width_m: float = 0.0
+	## Multiplies every profile's IDM time headway in the spawn gaps (s*), matching
+	## TrafficSim.set_headway_scale (plan D11: late legs drive closer). Set by the
+	## director from DirectorTuning.headway_scale(leg).
+	var headway_scale: float = 1.0
 
 	var _n: int = 0
 	# Per profile, SI.
@@ -137,7 +141,7 @@ class Flow:
 
 	## s* of profile `p` following at v with closing speed dv (see idm_desired_gap).
 	func desired_gap(p: int, v: float, dv: float) -> float:
-		return SpawnSources.idm_desired_gap(v, dv, _p_headway[p], _p_s0[p], _p_a[p], _p_b[p])
+		return SpawnSources.idm_desired_gap(v, dv, _p_headway[p] * headway_scale, _p_s0[p], _p_a[p], _p_b[p])
 
 	## Minimum center-to-center spacing from a follower (profile pf, speed vf, length lf)
 	## to a leader (speed vl, length ll).

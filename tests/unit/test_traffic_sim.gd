@@ -9,11 +9,13 @@ extends WBTest
 ## rule from the spec's wording and reads only the published TrafficState.
 
 const DT := TrafficScenario.DT
-## Per-tick budget (usec) for 60 vehicles + the player, realistic spread; ~3x the local
-## median (docs/TRAFFIC.md "Measured cost"). A 120 Hz tick is 8333 usec.
-const TICK_BUDGET_USEC := 600.0
-## Worst case: all 60 within the near radius (a jam around the player).
-const TICK_BUDGET_ALL_NEAR_USEC := 900.0
+## Per-tick budget (usec) per active vehicle (+ the player), realistic spread; ~3x the
+## local median (docs/TRAFFIC.md "Measured cost"; 600 usec at the old cap of 60). The
+## bench runs at the cap (traffic.max_active_vehicles, plan D7/D11). A 120 Hz tick is
+## 8333 usec.
+const TICK_BUDGET_USEC_PER_VEHICLE := 10.0
+## Worst case: every vehicle within the near radius (a jam around the player).
+const TICK_BUDGET_ALL_NEAR_USEC_PER_VEHICLE := 15.0
 const FAST_DENSE_S := 45.0
 const SOAK_DENSE_S := 600.0
 
@@ -160,7 +162,7 @@ func test_tuning_sim_fields_and_invariants() -> void:
 func test_spawn_fills_record_and_capacity() -> void:
 	var sc := _scene(3)
 	var sim := sc.sim
-	eq(sim.state.capacity, t.traffic.max_active_vehicles, "capacity = traffic cap (60)")
+	eq(sim.state.capacity, t.traffic.max_active_vehicles, "capacity = traffic cap (max_active_vehicles)")
 	var rec := SpawnSource.Record.new()
 	rec.s = 500.0
 	rec.lane = 2
@@ -228,6 +230,30 @@ func test_following_settles_at_equilibrium_gap_and_player_is_a_leader() -> void:
 	near(sc.sim.state.v[behind_player], v, 0.01, "car behind the player matches the player")
 	near(pgap, se, 0.05, "the player is a leader like any car")
 	eq(sc.sim.leader_of(behind_player), sc.sim.player_index())
+	eq(sc.checker.total_violations(), 0, sc.checker.summary())
+
+
+func test_headway_scale_shortens_the_equilibrium_gap() -> void:
+	# Plan D11: late legs drive closer. set_headway_scale(k) makes every profile's T
+	# k x its DriverProfile value (the director sets it per leg).
+	var k := 0.8
+	var sc := _scene(4, 1, 72.0, 0)
+	sc.bot.follow = false
+	sc.bot.state.s = -5000.0
+	sc.sim.set_headway_scale(k)
+	var lead := sc.add(400.0, 0, &"commuter", &"sedan", 72.0, 72.0)
+	var foll := sc.add(300.0, 0, &"commuter", &"sedan", 90.0, 144.0)
+	sc.run(120.0)
+	var reg := sc.registry
+	var pid := reg.profile_index(&"commuter")
+	var v := _kmh(72.0)
+	var gap := sc.sim.state.s[lead] - sc.sim.state.s[foll] - 4.8
+	near(gap, Idm.equilibrium_gap(v, _kmh(144.0), reg.headway[pid] * k, reg.s0[pid], 4), 0.05, "gap with T x k")
+	lt(gap, Idm.equilibrium_gap(v, _kmh(144.0), reg.headway[pid], reg.s0[pid], 4) - 1.0, "closer than with T")
+	sc.sim.set_headway_scale(1.0)
+	sc.run(120.0)
+	gap = sc.sim.state.s[lead] - sc.sim.state.s[foll] - 4.8
+	near(gap, Idm.equilibrium_gap(v, _kmh(144.0), reg.headway[pid], reg.s0[pid], 4), 0.05, "back to T")
 	eq(sc.checker.total_violations(), 0, sc.checker.summary())
 
 
@@ -719,16 +745,19 @@ func test_determinism_trace() -> void:
 
 # ---------------------------------------------------------------- Budget
 
-func test_tick_cost_60_vehicles() -> void:
-	var sc := _bench_scene(60, 3, false)
-	eq(sc.sim.state.count, 60, "60 vehicles")
+func test_tick_cost_at_the_cap() -> void:
+	var n := t.traffic.max_active_vehicles
+	var budget := TICK_BUDGET_USEC_PER_VEHICLE * float(n)
+	var budget_near := TICK_BUDGET_ALL_NEAR_USEC_PER_VEHICLE * float(n)
+	var sc := _bench_scene(n, 4, false)
+	eq(sc.sim.state.count, n, "the cap's worth of vehicles")
 	var usec := WBBench.usec_per_call(sc.tick_sim_only, 240, 240, 5)
-	WBBench.report("traffic step, 60 vehicles + player (spread -200..+750 m)", usec, TICK_BUDGET_USEC)
-	le(usec, WBBench.budget(TICK_BUDGET_USEC), "usec per 120 Hz tick")
-	var sc2 := _bench_scene(60, 3, true)
+	WBBench.report("traffic step, %d vehicles + player, 4 lanes (spread -200..+750 m)" % n, usec, budget)
+	le(usec, WBBench.budget(budget), "usec per 120 Hz tick")
+	var sc2 := _bench_scene(n, 4, true)
 	var usec2 := WBBench.usec_per_call(sc2.tick_sim_only, 120, 120, 5)
-	WBBench.report("traffic step, 60 vehicles all within 200 m", usec2, TICK_BUDGET_ALL_NEAR_USEC)
-	le(usec2, WBBench.budget(TICK_BUDGET_ALL_NEAR_USEC), "usec per tick, worst case")
+	WBBench.report("traffic step, %d vehicles all within 200 m" % n, usec2, budget_near)
+	le(usec2, WBBench.budget(budget_near), "usec per tick, worst case")
 
 
 func test_ticks_do_not_grow_memory() -> void:
@@ -809,8 +838,8 @@ func soak_hesitant_cancel_ratio() -> void:
 
 func soak_tick_cost_report() -> void:
 	# Numbers for docs/TRAFFIC.md and the D7 decision (cap 60 vs ~90).
-	for cfg: Array in [[60, 3, false, -1], [60, 3, true, -1], [60, 4, false, -1], [90, 4, false, 90],
-			[90, 3, false, 90], [90, 4, true, 90]]:
+	for cfg: Array in [[45, 3, false, 60], [60, 3, false, 60], [60, 3, true, 60], [60, 4, false, 60],
+			[90, 4, false, 90], [90, 3, false, 90], [90, 4, true, 90], [110, 4, false, 110], [110, 4, true, 110]]:
 		var sc := _bench_scene(cfg[0], cfg[1], cfg[2], cfg[3])
 		var m := WBBench.measure(sc.tick_sim_only, 600, 240, 9)
 		print("      bench  %d vehicles, %d lanes, %s: median %.1f usec (min %.1f, max %.1f), count %d" % [

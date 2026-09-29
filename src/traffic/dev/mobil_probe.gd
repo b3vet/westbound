@@ -191,7 +191,7 @@ func evaluate_into(slot: int, target_lane: int, out: Result) -> void:
 	if lead >= 0:
 		gl = _s(lead) - si - _hl(lead) - hl
 		dvl = vi - _v(lead)
-		out.a_c_new = Idm.accel(vi, v0, gl, dvl, registry.a_max[p], registry.b_comfort[p], registry.headway[p],
+		out.a_c_new = Idm.accel(vi, v0, gl, dvl, registry.a_max[p], registry.b_comfort[p], sim.headway(p),
 			registry.s0[p], registry.delta[p], gap_floor)
 	else:
 		out.a_c_new = Idm.free_accel(vi, v0, registry.a_max[p], registry.delta[p])
@@ -347,4 +347,4 @@ func _follower_accel(f: int, gap: float, dv: float) -> float:
 			tuning.player_idm_headway_s, tuning.player_idm_s0_m, gap_floor)
 	var p := sim.state.profile_id[f]
 	return Idm.accel(sim.state.v[f], sim.state.v0[f], gap, dv, registry.a_max[p], registry.b_comfort[p],
-		registry.headway[p], registry.s0[p], registry.delta[p], gap_floor)
+		sim.headway(p), registry.s0[p], registry.delta[p], gap_floor)

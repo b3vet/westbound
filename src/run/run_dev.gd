@@ -8,19 +8,37 @@ extends Node
 ## Placement: the spec's HUD owns the four corners and the top-center (score
 ## top-left, sun bar and chain top-center, lives + pause + camera top-right, speed
 ## bottom-left, boost bottom-right). The dev rows hang from the top-left, pushed down
-## below the score block (the layer's offset), so they never cover a HUD readout.
+## below the HUD's top-left elements (score block, objective chip: the lowest of the
+## HUD's occupied_rects() in the rows' region, else TOP_OFFSET_PX), so they never
+## cover a HUD readout.
 ##   row 0: DEV +/-, HUD (dev HUD), CAM
 ##   row 1: STEER, THR, MIRROR
 ##   row 2: CAR, RECAL, RESET (car back into a lane), RETRY (a new run now)
 ##   row 3: RING/WHEEL, SIZE, LIVES
 ##   row 4: LEG (auto or a fixed director leg), SANDBOX, DRIVE (the M3 drive scene)
+##   row 5: DENS (runtime traffic density scale, plan D11: x1.0 / x1.25 / x1.5 / x0.75)
+## The panel reports the director's effective density around the player, its target,
+## the scale and the director's planning gain to DevStats (&"density",
+## &"density_target", &"density_scale", &"density_gain"), so the dev report shows them.
 ## Dev scene values below are canvas px, not tuning.
 
 const BUTTON := Vector2(124.0, 44.0)
 const CAM_BUTTON := Vector2(150.0, 44.0)
-## Below the HUD's score block (BANKED, total, BEST) on the 720 px canvas.
-const TOP_OFFSET_PX := 150.0
+## Below the HUD's score block and objective chip (125% text) on the 720 px canvas,
+## when the HUD cannot say where its elements are.
+const TOP_OFFSET_PX := 216.0
+## Left-anchored HUD rects (starting left of this, above ROWS_REGION_BOTTOM_PX: the
+## score block and the objective chip, not the centred sun bar / chain / event stack)
+## push the rows down.
+const ROWS_REGION_RIGHT_PX := 320.0
+const ROWS_REGION_BOTTOM_PX := 360.0
+## Gap between the lowest such HUD rect and the first dev row.
+const HUD_GAP_PX := 8.0
 const LEG_COUNT := 8
+## DENS button steps (dev knob, plan D11).
+const DENSITY_SCALES: Array[float] = [1.0, 1.25, 1.5, 0.75]
+## Effective density is reported this often (s, real time).
+const DENSITY_REPORT_S := 0.5
 
 var run: Run
 var controls: DriveControls
@@ -36,6 +54,11 @@ var _visual_button: Button
 var _size_button: Button
 var _lives_button: Button
 var _leg_button: Button
+var _density_button: Button
+var _density_index: int = 0
+## The director the scale was last applied to (a retry builds a new one).
+var _scaled_director: TrafficDirector
+var _density_clock: float = 0.0
 
 
 func setup(owner_run: Run) -> void:
@@ -43,7 +66,7 @@ func setup(owner_run: Run) -> void:
 	controls = DriveControls.new()
 	controls.name = "DriveControls"
 	controls.process_mode = Node.PROCESS_MODE_ALWAYS
-	controls.offset = Vector2(0.0, TOP_OFFSET_PX)
+	controls.offset = Vector2(0.0, rows_top())
 	var c := DriveControls.Corner.TOP_LEFT
 	_dev_button = controls.add_button(c, 0, "DEV +", DriveControls.WIDE, toggle)
 	controls.add_button(c, 0, "HUD", DriveControls.WIDE, _toggle_dev_hud)
@@ -61,6 +84,7 @@ func setup(owner_run: Run) -> void:
 	_leg_button = controls.add_button(c, 4, "LEG AUTO", BUTTON, _next_leg, true)
 	controls.add_button(c, 4, "SANDBOX", BUTTON, run.open_sandbox, true)
 	controls.add_button(c, 4, "DRIVE", BUTTON, run.open_drive_scene, true)
+	_density_button = controls.add_button(c, 5, "DENS x1.0", BUTTON, _next_density, true)
 	add_child(controls)
 	Events.camera_mode_changed.connect(func(_m: StringName) -> void: refresh())
 	Events.settings_changed.connect(func(_k: StringName) -> void: refresh())
@@ -74,9 +98,26 @@ func toggle() -> void:
 	_apply_rows()
 
 
+## Where the dev rows start (canvas px): below the HUD's top-left elements.
+func rows_top() -> float:
+	var hud := run.hud if run != null else null
+	if hud == null or not hud.has_method(&"occupied_rects"):
+		return TOP_OFFSET_PX
+	var rects: Array[Rect2] = hud.call(&"occupied_rects")
+	var bottom := 0.0
+	var found := false
+	for r in rects:
+		if r.size == Vector2.ZERO or r.position.x >= ROWS_REGION_RIGHT_PX or r.position.y >= ROWS_REGION_BOTTOM_PX:
+			continue
+		bottom = maxf(bottom, r.end.y)
+		found = true
+	return bottom + HUD_GAP_PX if found else TOP_OFFSET_PX
+
+
 func refresh() -> void:
 	if controls == null or run == null:
 		return
+	controls.offset = Vector2(0.0, rows_top())
 	DriveControls.set_text(_cam_button, "CAM %s" % String(run.rig.mode).to_upper())
 	var steering := String(run.hub.effective_steering).to_upper()
 	if Settings.get_value(&"steering_mode") == &"gyro" and run.hub.effective_steering != &"gyro":
@@ -89,6 +130,31 @@ func refresh() -> void:
 	DriveControls.set_text(_size_button, "SIZE %.1f" % float(Settings.get_value(&"controls_scale")))
 	DriveControls.set_text(_lives_button, "LIVES INF" if run.infinite_lives else "LIVES %d" % run.lives.max_lives)
 	DriveControls.set_text(_leg_button, "LEG AUTO" if run.leg_override <= 0 else "LEG %d" % run.leg_override)
+	DriveControls.set_text(_density_button, "DENS x%.2f" % density_scale())
+
+
+## The runtime density scale the DENS button selects.
+func density_scale() -> float:
+	return DENSITY_SCALES[_density_index]
+
+
+## Keeps the scale on the current director (a retry builds a new one) and reports the
+## effective density to DevStats a few times per second.
+func _process(delta: float) -> void:
+	if run == null or run.director == null:
+		return
+	if _scaled_director != run.director:
+		_scaled_director = run.director
+		if _scaled_director.density_scale != density_scale():
+			_scaled_director.set_density_scale(density_scale())
+	_density_clock -= delta
+	if _density_clock > 0.0 or run.car == null:
+		return
+	_density_clock = DENSITY_REPORT_S
+	DevStats.report(&"density", snappedf(run.director.window_density_per_km_lane(run.car.state.s), 0.1))
+	DevStats.report(&"density_target", snappedf(run.director.target_density_per_km_lane(), 0.1))
+	DevStats.report(&"density_scale", density_scale())
+	DevStats.report(&"density_gain", snappedf(run.director.density_gain, 0.01))
 
 
 func _apply_rows() -> void:
@@ -143,6 +209,14 @@ func _next_car() -> void:
 
 func _toggle_lives() -> void:
 	run.infinite_lives = not run.infinite_lives
+	refresh()
+
+
+func _next_density() -> void:
+	_density_index = (_density_index + 1) % DENSITY_SCALES.size()
+	if run.director != null:
+		_scaled_director = run.director
+		_scaled_director.set_density_scale(density_scale())
 	refresh()
 
 

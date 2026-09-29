@@ -2,7 +2,7 @@ extends WBTest
 ## TrafficDirector (skeleton) against a fake sim. Spec: Traffic → Spawning and the
 ## opposite carriageway (ahead ~750 m past the fog end; behind ~150 m in the left lanes
 ## only when the player is slower and out of the frustum; despawn 200 m behind or
-## beyond the active window); Road-space simulation (cap 60); Fairness rule 5 (no
+## beyond the active window); Road-space simulation (the cap; 90 after D11); Fairness rule 5 (no
 ## visible pop-in); Lives → No unfair spawns (never overlapping the player or the
 ## ghost zone); Architecture rule 2 (determinism).
 
@@ -224,10 +224,12 @@ func _manual_vehicle(s: float) -> int:
 
 # ---------------------------------------------------------------- Cap
 
-func test_cap_60_on_the_player_carriageway() -> void:
+func test_cap_on_the_player_carriageway() -> void:
 	# Very dense traffic on four lanes, a slow player (behind spawns too), and a sim with
-	# more room than the cap: the director alone must hold 60.
+	# more room than the cap: the director alone must hold the cap (a low one here, so
+	# IDM-consistent spacing can reach it; the tuning's is traffic.max_active_vehicles).
 	var t := _tuning_copy()
+	t.traffic.max_active_vehicles = 50
 	t.director.density_first_per_km_lane = 40.0
 	t.director.density_last_per_km_lane = 40.0
 	_setup(SEED, 4, t, 120, 3, 50.0)
@@ -277,6 +279,66 @@ func test_ghost_zone_default_is_player_box_plus_margins() -> void:
 	check(dir.overlaps_ghost_zone(player.s, player.d, 4.0, 1.8, player), "the player's own spot")
 	check(not dir.overlaps_ghost_zone(player.s + 100.0, player.d, 4.0, 1.8, player), "100 m ahead")
 	check(not dir.overlaps_ghost_zone(player.s, road.lane_center_d(0, 0.0), 4.0, 1.8, player), "the next lane")
+
+
+# ---------------------------------------------------------------- Density (plan D11)
+
+func test_density_scale_scales_the_target_and_the_prefill() -> void:
+	var counts := PackedInt32Array()
+	var opp := PackedInt32Array()
+	for scale: float in [1.0, 1.5]:
+		_setup(SEED, LANES, null, 200)
+		dir.set_leg(4, player.s)
+		dir.set_density_scale(scale)
+		near(dir.target_density_per_km_lane(), tuning.director.density_per_km_lane(4) * scale, 1e-9)
+		_reset()
+		counts.append(sim.state.count)
+		opp.append(dir.opposite.target_count())
+	gt(float(counts[1]), float(counts[0]) * 1.3, "x1.5 plans about half as much again")
+	gt(opp[1], opp[0], "the opposite side follows the scale")
+	dir.set_density_scale(-1.0)
+	eq(dir.density_scale, 0.0, "never negative")
+
+
+func test_window_density_counts_the_window() -> void:
+	_setup()
+	var dt_ := tuning.director
+	for rel: float in [-dt_.density_window_behind_m - 1.0, -dt_.density_window_behind_m, 0.0,
+			dt_.density_window_ahead_m, dt_.density_window_ahead_m + 1.0]:
+		_manual_vehicle(player.s + rel)
+	var lane_km := (dt_.density_window_behind_m + dt_.density_window_ahead_m) / Units.M_PER_KM * LANES
+	near(dir.window_density_per_km_lane(player.s), 3.0 / lane_km, 1e-9, "3 of 5 inside [behind, ahead]")
+
+
+func test_density_gain_integrates_the_shortfall() -> void:
+	# An empty window (a parked player: batches land beyond it) raises the gain up to its
+	# maximum; a crowded one lowers it to its minimum. Batches use target x gain.
+	var d := tuning.director
+	_setup()
+	player.v = 0.0
+	_reset()
+	eq(dir.density_gain, 1.0, "reset starts at 1")
+	var t := 0.0
+	while t < 2.0:
+		dir.step(DT, player)
+		t += DT
+	gt(dir.density_gain, 1.0, "rises while the window is short")
+	lt(dir.density_gain, d.density_gain_max, "slowly")
+	for k in roundi(2.0 / (d.density_gain_rate_per_s * DT)):
+		dir.step(DT, player)
+	near(dir.density_gain, d.density_gain_max, 1e-9, "clamped at the maximum")
+	dir.set_leg(dir.leg, player.s)
+	near(dir.ctx.density_per_km_lane, dir.target_density_per_km_lane() * d.density_gain_max, 1e-9,
+		"batches are planned at target x gain")
+	# Crowd the window far beyond the target.
+	var n := ceili(3.0 * dir.target_density_per_km_lane() * LANES
+		* (d.density_window_behind_m + d.density_window_ahead_m) / Units.M_PER_KM)
+	for k in mini(n, sim.state.capacity - sim.state.count):
+		_manual_vehicle(player.s + float(k) * d.density_window_ahead_m / float(n))
+	gt(dir.window_density_per_km_lane(player.s), 1.5 * dir.target_density_per_km_lane())
+	for k in roundi(4.0 / (d.density_gain_rate_per_s * DT)):
+		dir.step(DT, player)
+	near(dir.density_gain, d.density_gain_min, 1e-9, "clamped at the minimum")
 
 
 # ---------------------------------------------------------------- Legs, opposite side

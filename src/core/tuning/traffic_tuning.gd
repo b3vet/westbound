@@ -7,7 +7,8 @@ extends Resource
 ## the values here are global rules and floors that apply to every profile.
 
 @export_group("Simulation budget")
-@export var max_active_vehicles: int = 60   # TrafficState capacity, player's carriageway
+## Plan D7/D11: the spec's 60 raised to 90 (leg-8 density on 4 lanes; see docs/SPAWNING.md).
+@export var max_active_vehicles: int = 90   # TrafficState capacity, player's carriageway
 @export var near_radius_m: float = 200.0
 @export var near_tick_hz: int = 120
 @export var far_tick_hz: int = 30

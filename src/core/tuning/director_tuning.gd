@@ -14,7 +14,8 @@ extends Resource
 @export var ramp_first_leg: int = 1
 @export var ramp_last_leg: int = 8
 @export var density_first_per_km_lane: float = 8.0
-@export var density_last_per_km_lane: float = 16.0
+## Plan D11 (owner, M3): the spec's 16 at leg 8 raised; see density_window_*.
+@export var density_last_per_km_lane: float = 18.0
 @export var aggressive_share_first_pct: float = 5.0
 @export var aggressive_share_last_pct: float = 20.0
 @export var hesitant_first_leg: int = 3
@@ -25,6 +26,32 @@ extends Resource
 @export var blind_density_cap_pct: float = 60.0
 ## Set pieces may exceed the 6 m/s^2 deceleration clamp only if announced this far ahead.
 @export var set_piece_min_warning_m: float = 300.0
+
+@export_group("Density around the player (plan D11; not in spec)")
+## The window the director's effective density is measured over (dev report, the
+## density survey): [player s - behind, player s + ahead].
+@export var density_window_behind_m: float = 150.0   # not in spec
+@export var density_window_ahead_m: float = 600.0   # not in spec
+## The effective density is measured this often; its relative shortfall is integrated
+## into the planning gain at this rate (per second per unit of relative error).
+@export var density_control_interval_s: float = 0.25   # not in spec
+@export var density_gain_rate_per_s: float = 0.05   # not in spec: slow (spawns reach the window 10-40 s later)
+## Planning gain range (1 = the target density exactly).
+@export var density_gain_min: float = 0.7   # not in spec
+@export var density_gain_max: float = 1.5   # not in spec
+## After each batch, lanes the player is catching (their flow speed + this below the
+## player's speed) are topped up to target x gain in the band beyond the fog.
+@export var density_topup_speed_margin_kmh: float = 10.0   # not in spec
+## At most this many top-up spawns per batch (keeps the director-rate cost bounded).
+@export var density_topup_max_per_batch: int = 16   # not in spec
+
+@export_group("Closer following in late legs (plan D11; not in spec)")
+## Every driver profile's IDM time headway T is scaled by this, ramped like the density
+## (first -> last leg). IDM's equilibrium gaps, not the director, cap how dense a lane
+## can stay at its flow speed (~13-14 vehicles per km per lane with the profiles' own
+## T around a fast player); denser late legs need closer following.
+@export var headway_scale_first: float = 1.0   # not in spec
+@export var headway_scale_last: float = 0.8   # not in spec
 
 @export_group("Batches")
 @export var spawn_batch_length_m: float = 300.0
@@ -37,6 +64,10 @@ func leg_ramp(leg: int) -> float:
 
 func density_per_km_lane(leg: int) -> float:
 	return lerpf(density_first_per_km_lane, density_last_per_km_lane, leg_ramp(leg))
+
+
+func headway_scale(leg: int) -> float:
+	return lerpf(headway_scale_first, headway_scale_last, leg_ramp(leg))
 
 
 func aggressive_share_frac(leg: int) -> float:
