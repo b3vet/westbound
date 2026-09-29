@@ -387,6 +387,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-29 | §7 `objective_completed` kind (WP5.2); §13 `wb_player_light_dir` length = fake-light reach, `wb_retro_light()` in the world include (WP5.4) | WP4.5 docs refresh, recording merged behaviour |
+| 2026-09-29 | TrafficSim zones (`add_speed_zone` with keep, `add_headway_zone`, `remove_zones`, `set_merge_hold`, `set_hazards`, `kept_by_zone`), `ProceduralRoadPath.add_rail_gap`, `HitDetection.sweep_static_box` + set-piece prop query, `SkyRig.set_tunnel_light` (WP6.3; docs/SET_PIECES.md) | Orchestrator merge review |
 | 2026-09-29 | §10 DriverProfile: 9 profiles (racer), `spawn_left_lane_count`; Flow reads the racer share from director tuning (WP6.6) | Orchestrator merge review |
 | 2026-09-29 | §3 `FORK` feature spans the whole fork (`s_start..s_end`, `value` = split s); RoadPath fork hooks, `hold_at_forks`, `swap_state`; §7 fork-announced/-taken and journey-complete kinds (`RunForks`, `RunFinale`); §13 `RoadBuilder.set_skip_range`, `ForkView`; `TrafficDirector.request_breather` (WP6.5; see docs/FORKS.md) | Orchestrator merge review |
 | 2026-09-29 | §6 Flow shaper / lane guard, SetPieceSource + Controller API, set-piece events via the run buffer, TrafficSim lane-closure API (`add_lane_closure`, `remove_lane_closures`, `closure_ahead`, `sync_road_closures`), `TrafficDirector.events` (WP6.2; see docs/SET_PIECES.md) | Orchestrator merge review |
