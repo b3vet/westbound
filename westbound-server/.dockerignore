@@ -1,0 +1,13 @@
+# Build context is westbound-server/. Keep it to the sources the image needs.
+target/
+dev-data/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+.git
+.gitignore
+.gdignore
+Dockerfile
+.dockerignore
+docker-compose.yml
+deploy/

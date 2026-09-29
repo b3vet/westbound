@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Westbound echo check</title>
+<style>
+  :root { color-scheme: light dark; --ok: #1a7f37; --bad: #cf222e; }
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 0 16px; max-width: 40rem; }
+  h1 { font-size: 1.25rem; }
+  pre { white-space: pre-wrap; word-break: break-word; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+  button { font: inherit; padding: 0.5rem 1rem; }
+</style>
+</head>
+<body>
+<h1>Westbound server: WebSocket echo check</h1>
+<p>Checks <code>/api/v1/health</code>, then sends a binary message over <code>/ws</code> and waits for the echo.</p>
+<p id="result">Running...</p>
+<pre id="log"></pre>
+<button id="again" type="button">Run again</button>
+<script>
+(() => {
+  const log = document.getElementById('log');
+  const result = document.getElementById('result');
+  const say = (line) => { log.textContent += line + '\n'; };
+  const done = (ok, text) => { result.className = ok ? 'ok' : 'bad'; result.textContent = text; };
+  async function run() {
+    log.textContent = '';
+    result.className = '';
+    result.textContent = 'Running...';
+    try {
+      const health = await fetch('/api/v1/health', { cache: 'no-store' }).then((r) => r.json());
+      say('health: ' + JSON.stringify(health));
+    } catch (e) {
+      say('health failed: ' + e);
+    }
+    const url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+    say('connecting ' + url);
+    const payload = new Uint8Array(1024).map((_, i) => (i * 31 + 7) % 256);
+    const ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    let t0 = 0;
+    const timer = setTimeout(() => { done(false, 'FAIL: timeout'); ws.close(); }, 10000);
+    ws.onopen = () => { t0 = performance.now(); say('open, sending 1024 bytes'); ws.send(payload); };
+    ws.onerror = () => say('websocket error');
+    ws.onclose = (e) => { clearTimeout(timer); say('closed: code ' + e.code); };
+    ws.onmessage = (e) => {
+      if (!(e.data instanceof ArrayBuffer)) return;
+      const back = new Uint8Array(e.data);
+      const same = back.length === payload.length && back.every((b, i) => b === payload[i]);
+      const rtt = Math.round(performance.now() - t0);
+      clearTimeout(timer);
+      done(same, same ? 'OK: echo over ' + url + ' in ' + rtt + ' ms' : 'FAIL: echo differs');
+      ws.close(1000);
+    };
+  }
+  document.getElementById('again').addEventListener('click', run);
+  run();
+})();
+</script>
+</body>
+</html>
