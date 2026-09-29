@@ -1,0 +1,48 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "error",
+  "type_id": 66,
+  "vectors": [
+    {
+      "name": "update_required",
+      "message": {
+        "code": "update_required",
+        "detail": "Please update Westbound to play online.",
+        "fatal": true,
+        "type": "error"
+      },
+      "hex": "422a00000127506c65617365207570646174652057657374626f756e6420746f20706c6179206f6e6c696e652e"
+    },
+    {
+      "name": "map_mismatch",
+      "message": {
+        "code": "map_mismatch",
+        "detail": "Your map data is out of date. Please update Westbound.",
+        "fatal": true,
+        "type": "error"
+      },
+      "hex": "423900020136596f7572206d61702064617461206973206f7574206f6620646174652e20506c65617365207570646174652057657374626f756e642e"
+    },
+    {
+      "name": "room_full_nonfatal_empty_detail",
+      "message": {
+        "code": "room_full",
+        "detail": "",
+        "fatal": false,
+        "type": "error"
+      },
+      "hex": "4203000a0000"
+    },
+    {
+      "name": "internal_max_detail",
+      "message": {
+        "code": "internal",
+        "detail": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\n",
+        "fatal": true,
+        "type": "error"
+      },
+      "hex": "4202011301ffc3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a90a"
+    }
+  ]
+}

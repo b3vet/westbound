@@ -1,0 +1,43 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "quick_chat",
+  "type_id": 78,
+  "vectors": [
+    {
+      "name": "phrase",
+      "message": {
+        "item": {
+          "kind": "phrase",
+          "phrase": "regroup"
+        },
+        "player_id": 1,
+        "type": "quick_chat"
+      },
+      "hex": "4e040001000003"
+    },
+    {
+      "name": "horn",
+      "message": {
+        "item": {
+          "kind": "horn"
+        },
+        "player_id": 2,
+        "type": "quick_chat"
+      },
+      "hex": "4e0300020001"
+    },
+    {
+      "name": "emote",
+      "message": {
+        "item": {
+          "emote": 0,
+          "kind": "emote"
+        },
+        "player_id": 65535,
+        "type": "quick_chat"
+      },
+      "hex": "4e0400ffff0200"
+    }
+  ]
+}

@@ -1,0 +1,80 @@
+{
+  "protocol_version": 1,
+  "direction": "client_to_server",
+  "type": "score_claim",
+  "type_id": 5,
+  "vectors": [
+    {
+      "name": "pass",
+      "message": {
+        "cars": [
+          {
+            "car_id": 412,
+            "clearance_mm": 2150
+          }
+        ],
+        "claim_id": 17,
+        "kind": "pass",
+        "side": "left",
+        "tick": 123460,
+        "type": "score_claim"
+      },
+      "hex": "050d00110044e201000001019c016608"
+    },
+    {
+      "name": "close_pass",
+      "message": {
+        "cars": [
+          {
+            "car_id": 97,
+            "clearance_mm": 640
+          }
+        ],
+        "claim_id": 18,
+        "kind": "close_pass",
+        "side": "right",
+        "tick": 123470,
+        "type": "score_claim"
+      },
+      "hex": "050d0012004ee2010001020161008002"
+    },
+    {
+      "name": "cut",
+      "message": {
+        "cars": [
+          {
+            "car_id": 5,
+            "clearance_mm": 9800
+          }
+        ],
+        "claim_id": 19,
+        "kind": "cut",
+        "side": "none",
+        "tick": 123480,
+        "type": "score_claim"
+      },
+      "hex": "050d00130058e2010002000105004826"
+    },
+    {
+      "name": "thread_max",
+      "message": {
+        "cars": [
+          {
+            "car_id": 65535,
+            "clearance_mm": 65535
+          },
+          {
+            "car_id": 0,
+            "clearance_mm": 0
+          }
+        ],
+        "claim_id": 65535,
+        "kind": "thread",
+        "side": "left",
+        "tick": 4294967295,
+        "type": "score_claim"
+      },
+      "hex": "051100ffffffffffff030102ffffffff00000000"
+    }
+  ]
+}

@@ -1,0 +1,554 @@
+{
+  "protocol_version": 1,
+  "rounding": "half_away_from_zero",
+  "fields": [
+    {
+      "field": "s",
+      "scale": 1000.0,
+      "wire_min": 0,
+      "wire_max": 4294967295,
+      "out_of_range": "reject"
+    },
+    {
+      "field": "d",
+      "scale": 100.0,
+      "wire_min": -10000,
+      "wire_max": 10000,
+      "out_of_range": "clamp"
+    },
+    {
+      "field": "speed",
+      "scale": 100.0,
+      "wire_min": 0,
+      "wire_max": 20000,
+      "out_of_range": "clamp"
+    },
+    {
+      "field": "heading",
+      "scale": 10000.0,
+      "wire_min": -31416,
+      "wire_max": 31416,
+      "out_of_range": "wrap_then_clamp"
+    },
+    {
+      "field": "lat_vel",
+      "scale": 100.0,
+      "wire_min": -32767,
+      "wire_max": 32767,
+      "out_of_range": "clamp"
+    },
+    {
+      "field": "yaw_rate",
+      "scale": 1000.0,
+      "wire_min": -32767,
+      "wire_max": 32767,
+      "out_of_range": "clamp"
+    },
+    {
+      "field": "steer",
+      "scale": 10000.0,
+      "wire_min": -10000,
+      "wire_max": 10000,
+      "out_of_range": "clamp"
+    },
+    {
+      "field": "clearance",
+      "scale": 1000.0,
+      "wire_min": 0,
+      "wire_max": 65535,
+      "out_of_range": "clamp"
+    },
+    {
+      "field": "multiplier",
+      "scale": 1000.0,
+      "wire_min": 0,
+      "wire_max": 4294967295,
+      "out_of_range": "clamp"
+    }
+  ],
+  "vectors": [
+    {
+      "field": "s",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "s",
+      "physical": -0.0004,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "s",
+      "physical": -0.0005,
+      "wire": null,
+      "back": null,
+      "error": "out_of_range"
+    },
+    {
+      "field": "s",
+      "physical": 0.0005,
+      "wire": 1,
+      "back": 0.001,
+      "error": null
+    },
+    {
+      "field": "s",
+      "physical": 1.2345,
+      "wire": 1235,
+      "back": 1.235,
+      "error": null
+    },
+    {
+      "field": "s",
+      "physical": 12345.6784,
+      "wire": 12345678,
+      "back": 12345.678,
+      "error": null
+    },
+    {
+      "field": "s",
+      "physical": 25000.0,
+      "wire": 25000000,
+      "back": 25000.0,
+      "error": null
+    },
+    {
+      "field": "s",
+      "physical": 4294967.295,
+      "wire": 4294967295,
+      "back": 4294967.295,
+      "error": null
+    },
+    {
+      "field": "s",
+      "physical": 4294967.296,
+      "wire": null,
+      "back": null,
+      "error": "out_of_range"
+    },
+    {
+      "field": "s",
+      "physical": -1.0,
+      "wire": null,
+      "back": null,
+      "error": "out_of_range"
+    },
+    {
+      "field": "d",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": 0.005,
+      "wire": 1,
+      "back": 0.01,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": -0.005,
+      "wire": -1,
+      "back": -0.01,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": 1.75,
+      "wire": 175,
+      "back": 1.75,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": -3.504,
+      "wire": -350,
+      "back": -3.5,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": 100.0,
+      "wire": 10000,
+      "back": 100.0,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": -100.0,
+      "wire": -10000,
+      "back": -100.0,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": 100.004,
+      "wire": 10000,
+      "back": 100.0,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": 250.0,
+      "wire": 10000,
+      "back": 100.0,
+      "error": null
+    },
+    {
+      "field": "d",
+      "physical": -1000000000.0,
+      "wire": -10000,
+      "back": -100.0,
+      "error": null
+    },
+    {
+      "field": "speed",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "speed",
+      "physical": 0.125,
+      "wire": 13,
+      "back": 0.13,
+      "error": null
+    },
+    {
+      "field": "speed",
+      "physical": 30.555,
+      "wire": 3056,
+      "back": 30.56,
+      "error": null
+    },
+    {
+      "field": "speed",
+      "physical": 69.44,
+      "wire": 6944,
+      "back": 69.44,
+      "error": null
+    },
+    {
+      "field": "speed",
+      "physical": 200.0,
+      "wire": 20000,
+      "back": 200.0,
+      "error": null
+    },
+    {
+      "field": "speed",
+      "physical": 200.01,
+      "wire": 20000,
+      "back": 200.0,
+      "error": null
+    },
+    {
+      "field": "speed",
+      "physical": -3.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "speed",
+      "physical": 1000000.0,
+      "wire": 20000,
+      "back": 200.0,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": 0.12345,
+      "wire": 1235,
+      "back": 0.1235,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": -0.00005,
+      "wire": -1,
+      "back": -0.0001,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": 3.141592653589793,
+      "wire": 31416,
+      "back": 3.1416,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": -3.141592653589793,
+      "wire": -31416,
+      "back": -3.1416,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": 3.1416,
+      "wire": 31416,
+      "back": 3.1416,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": 3.14165,
+      "wire": -31415,
+      "back": -3.1415,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": 3.2,
+      "wire": -30832,
+      "back": -3.0832,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": -3.2,
+      "wire": 30832,
+      "back": 3.0832,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": 6.783185307179586,
+      "wire": 5000,
+      "back": 0.5,
+      "error": null
+    },
+    {
+      "field": "heading",
+      "physical": -7.0,
+      "wire": -7168,
+      "back": -0.7168,
+      "error": null
+    },
+    {
+      "field": "lat_vel",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "lat_vel",
+      "physical": -0.42,
+      "wire": -42,
+      "back": -0.42,
+      "error": null
+    },
+    {
+      "field": "lat_vel",
+      "physical": 327.67,
+      "wire": 32767,
+      "back": 327.67,
+      "error": null
+    },
+    {
+      "field": "lat_vel",
+      "physical": -327.67,
+      "wire": -32767,
+      "back": -327.67,
+      "error": null
+    },
+    {
+      "field": "lat_vel",
+      "physical": 400.0,
+      "wire": 32767,
+      "back": 327.67,
+      "error": null
+    },
+    {
+      "field": "lat_vel",
+      "physical": -400.0,
+      "wire": -32767,
+      "back": -327.67,
+      "error": null
+    },
+    {
+      "field": "yaw_rate",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "yaw_rate",
+      "physical": 0.1185,
+      "wire": 119,
+      "back": 0.119,
+      "error": null
+    },
+    {
+      "field": "yaw_rate",
+      "physical": -32.767,
+      "wire": -32767,
+      "back": -32.767,
+      "error": null
+    },
+    {
+      "field": "yaw_rate",
+      "physical": 32.767,
+      "wire": 32767,
+      "back": 32.767,
+      "error": null
+    },
+    {
+      "field": "yaw_rate",
+      "physical": 40.0,
+      "wire": 32767,
+      "back": 32.767,
+      "error": null
+    },
+    {
+      "field": "steer",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "steer",
+      "physical": -0.125,
+      "wire": -1250,
+      "back": -0.125,
+      "error": null
+    },
+    {
+      "field": "steer",
+      "physical": 1.0,
+      "wire": 10000,
+      "back": 1.0,
+      "error": null
+    },
+    {
+      "field": "steer",
+      "physical": -1.0,
+      "wire": -10000,
+      "back": -1.0,
+      "error": null
+    },
+    {
+      "field": "steer",
+      "physical": 1.5,
+      "wire": 10000,
+      "back": 1.0,
+      "error": null
+    },
+    {
+      "field": "steer",
+      "physical": -2.0,
+      "wire": -10000,
+      "back": -1.0,
+      "error": null
+    },
+    {
+      "field": "clearance",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "clearance",
+      "physical": 0.64,
+      "wire": 640,
+      "back": 0.64,
+      "error": null
+    },
+    {
+      "field": "clearance",
+      "physical": 2.15,
+      "wire": 2150,
+      "back": 2.15,
+      "error": null
+    },
+    {
+      "field": "clearance",
+      "physical": 65.535,
+      "wire": 65535,
+      "back": 65.535,
+      "error": null
+    },
+    {
+      "field": "clearance",
+      "physical": 70.0,
+      "wire": 65535,
+      "back": 65.535,
+      "error": null
+    },
+    {
+      "field": "clearance",
+      "physical": -1.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "multiplier",
+      "physical": 1.0,
+      "wire": 1000,
+      "back": 1.0,
+      "error": null
+    },
+    {
+      "field": "multiplier",
+      "physical": 12.5,
+      "wire": 12500,
+      "back": 12.5,
+      "error": null
+    },
+    {
+      "field": "multiplier",
+      "physical": 999.9995,
+      "wire": 1000000,
+      "back": 1000.0,
+      "error": null
+    },
+    {
+      "field": "multiplier",
+      "physical": 0.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    },
+    {
+      "field": "multiplier",
+      "physical": 4294967.295,
+      "wire": 4294967295,
+      "back": 4294967.295,
+      "error": null
+    },
+    {
+      "field": "multiplier",
+      "physical": 1000000000000.0,
+      "wire": 4294967295,
+      "back": 4294967.295,
+      "error": null
+    },
+    {
+      "field": "multiplier",
+      "physical": -1.0,
+      "wire": 0,
+      "back": 0.0,
+      "error": null
+    }
+  ]
+}
