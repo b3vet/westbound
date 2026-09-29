@@ -86,6 +86,7 @@ var origin: FloatingOrigin
 var biome_director: BiomeDirector
 var builder: RoadBuilder
 var roadside: Roadside
+var landmarks: Landmarks
 var sky: SkyRig
 var hub: PlayerInput
 var rig: CameraRig
@@ -202,6 +203,10 @@ func _ready() -> void:
 	roadside.name = "Roadside"
 	roadside.biome_director = biome_director
 	add_child(roadside)
+	landmarks = Landmarks.new()
+	landmarks.name = "Landmarks"
+	landmarks.biome_director = biome_director
+	add_child(landmarks)
 	traffic_view = TrafficView.new()
 	traffic_view.name = "TrafficView"
 	add_child(traffic_view)
@@ -647,6 +652,7 @@ func frame(real_dt: float) -> void:
 	biome_director.update_view(s)
 	builder.update_view(s)
 	roadside.update_view(s)
+	landmarks.update_view(s)
 	sky.update_view(s)
 	traffic_view.update_view(s)
 	_fill_feed()
@@ -701,6 +707,7 @@ func _start_run() -> void:
 	biome_director.setup(ctx, road, origin)
 	builder.setup(ctx, road, origin)
 	roadside.setup(ctx, road, origin)
+	landmarks.setup(ctx, road, origin)
 	sky.setup(ctx, road, origin)
 	builder.build_all_now(start_s)
 	_next_forget_s = start_s + FORGET_EVERY_M
