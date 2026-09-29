@@ -33,6 +33,11 @@ var checkpoint_distance_m: float = -1.0
 var leg_index: int = 1
 var objective: StringName = &""
 var objective_done: bool = false
+## WP5.2 (additive): the objective failed ("no X" broken), and its progress for the
+## HUD chip ("3/5"; objective_target 0 = no count to show). LegObjectives.
+var objective_failed: bool = false
+var objective_progress: int = 0
+var objective_target: int = 0
 ## Lives left, the cap, and whether the ghost period is running.
 var lives: int = 2
 var max_lives: int = 2
@@ -58,6 +63,9 @@ func reset() -> void:
 	leg_index = 1
 	objective = &""
 	objective_done = false
+	objective_failed = false
+	objective_progress = 0
+	objective_target = 0
 	lives = max_lives
 	ghost = false
 	banked = 0

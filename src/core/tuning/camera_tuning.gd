@@ -5,10 +5,15 @@ extends Resource
 ## (src/camera/camera_rig.gd).
 ##
 ## Per-mode values are parallel arrays indexed like `modes` (the QualityTuning tier
-## pattern): adding a mode (e.g. cockpit, once cars have interiors) means appending one
-## entry to `modes` and to every `mode_*` array. `mode_arrays_error()` checks the sizes.
+## pattern): adding a mode means appending one entry to `modes` and to every `mode_*`
+## array. `mode_arrays_error()` checks the sizes.
+##
+## The cockpit mode (plan D11, WP4.7; docs/COCKPIT.md) is the mode named `cockpit_mode`:
+## a rigid driver's-eye seat frame with the procedural cockpit around it, the car body
+## hidden, and the look-ahead, head sway, shake and punch applied to the head (the
+## Camera3D) so the dash moves in the view. Its numbers are the `cockpit_*` fields.
 
-@export var modes: PackedStringArray = ["chase", "far", "hood", "overhead"]
+@export var modes: PackedStringArray = ["chase", "far", "hood", "overhead", "cockpit"]
 @export var default_mode: String = "chase"
 
 @export_group("Speed response")
@@ -33,29 +38,60 @@ extends Resource
 
 @export_group("Per-mode placement (indexed like modes)")
 ## Camera distance behind the target origin along the (smoothed) heading; negative = ahead.
-@export var mode_behind_m: PackedFloat64Array = [7.0, 11.0, -0.6, 10.0]   # not in spec: framed from snaps
-## Camera height above the target origin (the car's ground point).
-@export var mode_height_m: PackedFloat64Array = [3.6, 5.5, 1.15, 18.0]   # not in spec
-## Look point ahead of the target origin along the heading.
-@export var mode_look_ahead_m: PackedFloat64Array = [12.0, 14.0, 30.0, 12.0]   # not in spec
-## Look point height above the target origin.
-@export var mode_look_height_m: PackedFloat64Array = [0.0, 0.0, 0.9, 0.0]   # not in spec
+## Unused by the cockpit (its eye comes from the marker or the cockpit_eye_* fractions).
+@export var mode_behind_m: PackedFloat64Array = [7.0, 11.0, -0.6, 10.0, 0.0]   # not in spec: framed from snaps
+## Camera height above the target origin (the car's ground point). Unused by the cockpit.
+@export var mode_height_m: PackedFloat64Array = [3.6, 5.5, 1.15, 18.0, 0.0]   # not in spec
+## Look point ahead of the target origin along the heading (cockpit: in the car's frame).
+@export var mode_look_ahead_m: PackedFloat64Array = [12.0, 14.0, 30.0, 12.0, 40.0]   # not in spec
+## Look point height above the target origin (cockpit: in the car's frame).
+@export var mode_look_height_m: PackedFloat64Array = [0.0, 0.0, 0.9, 0.0, 0.3]   # not in spec
 ## Added to the speed FOV (62 -> 78 deg).
-@export var mode_fov_offset_deg: PackedFloat64Array = [0.0, 0.0, 0.0, 0.0]   # not in spec
+@export var mode_fov_offset_deg: PackedFloat64Array = [0.0, 0.0, 0.0, 0.0, 0.0]   # not in spec
 ## How much of the speed pull-back (distance_pullback_max_pct) the mode gets: 0..1.
-@export var mode_pullback_factor: PackedFloat64Array = [1.0, 1.0, 0.0, 1.0]   # not in spec: a mounted camera does not pull back
+@export var mode_pullback_factor: PackedFloat64Array = [1.0, 1.0, 0.0, 1.0, 0.0]   # not in spec: a mounted camera does not pull back
 ## Node path under the target that places the camera, when the model has it (modular
-## car convention: Markers/cam_hood, later Markers/cam_cockpit). Empty = use the offsets.
-@export var mode_marker: PackedStringArray = ["", "", "Markers/cam_hood", ""]
+## car convention: Markers/cam_hood, Markers/cam_cockpit). Empty = use the offsets. The
+## cockpit also looks in the target's CarModel and ignores a marker conform() stubbed.
+@export var mode_marker: PackedStringArray = ["", "", "Markers/cam_hood", "", "Markers/cam_cockpit"]
+## Scale on the roll (roll_max_deg into the lateral acceleration). Negative = the view
+## leans out of the turn with the car body (cockpit: the seat is bolted to the body).
+@export var mode_roll_factor: PackedFloat64Array = [1.0, 1.0, 1.0, 1.0, -1.0]   # not in spec
+## Scale on the shake (offset and rotation) and on the FOV punch.
+@export var mode_shake_scale: PackedFloat64Array = [1.0, 1.0, 1.0, 1.0, 0.6]   # not in spec: subtler from the seat
+@export var mode_punch_scale: PackedFloat64Array = [1.0, 1.0, 1.0, 1.0, 0.7]   # not in spec
 
 @export_group("Per-mode springs (indexed like modes; 0 Hz = rigid)")
 ## Position spring natural frequency. Forward and vertical target motion is fed forward
 ## (no lag at constant speed or on grades); lateral motion and accelerations lag.
-@export var mode_position_hz: PackedFloat64Array = [1.6, 1.3, 0.0, 1.2]   # not in spec: cool_drive-like looseness
-@export var mode_position_damping_ratio: PackedFloat64Array = [0.9, 1.0, 1.0, 1.0]   # not in spec: slightly under or critical
+@export var mode_position_hz: PackedFloat64Array = [1.6, 1.3, 0.0, 1.2, 0.0]   # not in spec: cool_drive-like looseness
+@export var mode_position_damping_ratio: PackedFloat64Array = [0.9, 1.0, 1.0, 1.0, 1.0]   # not in spec: slightly under or critical
 ## Heading (yaw) spring natural frequency.
-@export var mode_heading_hz: PackedFloat64Array = [1.4, 1.2, 0.0, 1.0]   # not in spec
-@export var mode_heading_damping_ratio: PackedFloat64Array = [1.0, 1.0, 1.0, 1.0]   # not in spec
+@export var mode_heading_hz: PackedFloat64Array = [1.4, 1.2, 0.0, 1.0, 0.0]   # not in spec
+@export var mode_heading_damping_ratio: PackedFloat64Array = [1.0, 1.0, 1.0, 1.0, 1.0]   # not in spec
+
+@export_group("Cockpit (plan D11)")
+## The mode that gets the driver's-eye seat frame, the procedural cockpit and the hidden
+## car body. Must be one of `modes`.
+@export var cockpit_mode: String = "cockpit"
+## Default eye position when the model has no authored Markers/cam_cockpit, as fractions
+## of the CarDef body: + right of the centreline (left seat for right-hand traffic),
+## above the ground, + behind the axle centre.
+@export var cockpit_eye_right_frac: float = -0.19   # not in spec: ~0.36 m left on a 1.9 m car
+@export var cockpit_eye_up_frac: float = 0.86   # not in spec: ~1.08 m on a 1.25 m sports car
+@export var cockpit_eye_back_frac: float = 0.04   # not in spec
+## Head sway (on the Camera3D, so the dash moves in the view): the head lags the car's
+## accelerations (turning right pushes it left, braking pushes it forward), per m/s^2,
+## bounded by cockpit_head_sway_max_m, through a spring. Off with reduced motion.
+@export var cockpit_head_sway_lat_m_per_mps2: float = 0.006   # not in spec
+@export var cockpit_head_sway_long_m_per_mps2: float = 0.004   # not in spec
+@export var cockpit_head_sway_max_m: float = 0.04   # not in spec
+@export var cockpit_head_sway_hz: float = 1.8   # not in spec
+@export var cockpit_head_sway_damping_ratio: float = 0.75   # not in spec: a slight bob
+## Binnacle gauges: speedometer and tachometer full scale (the needles' end stops).
+## The tachometer's red band starts at VehicleTuning.engine_redline_rpm.
+@export var cockpit_speedo_max_kmh: float = 320.0   # not in spec
+@export var cockpit_tach_max_rpm: float = 8000.0   # not in spec
 
 @export_group("Shake and FOV punch")
 ## Shake translation per unit strength (Events.camera_shake_requested strength 1 = a hit).
@@ -89,6 +125,9 @@ func mode_arrays_error() -> String:
 		"mode_fov_offset_deg": mode_fov_offset_deg.size(),
 		"mode_pullback_factor": mode_pullback_factor.size(),
 		"mode_marker": mode_marker.size(),
+		"mode_roll_factor": mode_roll_factor.size(),
+		"mode_shake_scale": mode_shake_scale.size(),
+		"mode_punch_scale": mode_punch_scale.size(),
 		"mode_position_hz": mode_position_hz.size(),
 		"mode_position_damping_ratio": mode_position_damping_ratio.size(),
 		"mode_heading_hz": mode_heading_hz.size(),
@@ -99,7 +138,29 @@ func mode_arrays_error() -> String:
 			return "%s has %d entries for %d modes" % [key, sizes[key], n]
 	if mode_index(StringName(default_mode)) < 0:
 		return "default_mode %s is not a mode" % default_mode
+	if not cockpit_mode.is_empty() and mode_index(StringName(cockpit_mode)) < 0:
+		return "cockpit_mode %s is not a mode" % cockpit_mode
 	return ""
+
+
+## Index of the cockpit mode in `modes`, or -1 when there is none.
+func cockpit_index() -> int:
+	return mode_index(StringName(cockpit_mode)) if not cockpit_mode.is_empty() else -1
+
+
+## Default driver's eye in the car's frame (m; origin on the ground between the axles,
+## -Z forward) for a body of `length_m` x `width_m` x `height_m`.
+func cockpit_eye_default(length_m: float, width_m: float, height_m: float) -> Vector3:
+	return Vector3(width_m * cockpit_eye_right_frac, height_m * cockpit_eye_up_frac,
+		length_m * cockpit_eye_back_frac)
+
+
+## Head sway goal (m, in the seat frame: + right, + back) for the car's accelerations
+## (m/s^2, + right / + forward). Each axis is bounded by cockpit_head_sway_max_m.
+func cockpit_head_sway_m(accel_lat_mps2: float, accel_long_mps2: float) -> Vector3:
+	var m := cockpit_head_sway_max_m
+	return Vector3(clampf(-accel_lat_mps2 * cockpit_head_sway_lat_m_per_mps2, -m, m), 0.0,
+		clampf(accel_long_mps2 * cockpit_head_sway_long_m_per_mps2, -m, m))
 
 
 ## Speed-response progress: 0 at or below fov_min_speed_kmh, 1 at `top_speed_mps` and above.

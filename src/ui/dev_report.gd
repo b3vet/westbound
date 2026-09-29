@@ -5,6 +5,7 @@ extends RefCounted
 ## Shared by the dev HUD's COPY button. Dev-only; allocates freely.
 
 const BUILD_INFO_PATH := "res://build_info.cfg"
+const QUALITY_SCRIPT := preload("res://src/platform/quality.gd")
 
 
 static func build_line() -> String:
@@ -13,6 +14,27 @@ static func build_line() -> String:
 	if cfg.load(BUILD_INFO_PATH) != OK:
 		return "local (no build_info.cfg) %s" % debug
 	return "%s %s %s" % [cfg.get_value("build", "commit", "?"), cfg.get_value("build", "date", "?"), debug]
+
+
+## What the 3D renders at (WP4.6): tier, render scale, internal resolution, MSAA and
+## whether a dev override set them, so a pasted report says what was tested.
+static func render_line(window_size: Vector2i) -> String:
+	var tree := Engine.get_main_loop() as SceneTree
+	var vp: Viewport = tree.root if tree != null else null
+	var scale_3d := vp.scaling_3d_scale if vp != null else 1.0
+	var internal := QUALITY_SCRIPT.internal_3d_size(window_size, scale_3d)
+	var msaa := viewport_msaa_label(vp) if vp != null else "?"
+	var dev: bool = DevStats.get_value(DevStats.QUALITY_DEV_OVERRIDE, false)
+	return "render    tier %s, 3d scale %.2f -> %dx%d, msaa %s%s" % [
+		str(DevStats.get_value(DevStats.QUALITY_TIER, "?")), scale_3d, internal.x, internal.y, msaa,
+		" (dev override)" if dev else ""]
+
+
+## A viewport's 3D MSAA as "off", "2x", "4x" or "8x".
+static func viewport_msaa_label(vp: Viewport) -> String:
+	if vp.msaa_3d == Viewport.MSAA_DISABLED or vp.msaa_3d == Viewport.MSAA_MAX:
+		return "off"
+	return "%dx" % (1 << int(vp.msaa_3d))
 
 
 ## `hud_rows`: [[name, value], ...] from the dev HUD.
@@ -30,6 +52,7 @@ static func compose(hud_rows: Array, scene_name: String) -> String:
 	lines.append("screen    %dx%d, canvas %s, safe %s" % [win.x, win.y,
 		str(Engine.get_main_loop().root.get_visible_rect().size),
 		str(DisplayServer.get_display_safe_area())])
+	lines.append(render_line(win))
 	lines.append("scene     %s" % scene_name)
 	lines.append("-- hud")
 	for row: Array in hud_rows:

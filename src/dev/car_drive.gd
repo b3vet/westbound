@@ -14,7 +14,8 @@ extends Node3D
 ## THROTTLE (auto/manual), MIRROR; CAR, RECAL (gyro neutral), RESET; RING/WHEEL (drag
 ## visual), SIZE (controls_scale 0.8/1.0/1.2); top-left SANDBOX
 ## (the traffic sandbox; on web also `?scene=sandbox` in the URL, reload to come back).
-## Keys: A/D steer, W gas (manual), S brake, Shift boost, C camera, backtick HUD.
+## Keys: A/D steer, W gas (manual), S brake, Shift boost, C camera, H high beams,
+## backtick HUD.
 
 const CAR_PATHS: Array[String] = [
 	"res://data/cars/falcon_gt.tres",
@@ -42,6 +43,7 @@ var _origin: FloatingOrigin
 var _director: BiomeDirector
 var _builder: RoadBuilder
 var _roadside: Roadside
+var _landmarks: Landmarks
 var _sky: SkyRig
 var _hub: PlayerInput
 var _rig: CameraRig
@@ -54,6 +56,10 @@ var _registry: TrafficRegistry
 var _sim: TrafficSim
 var _tdir: TrafficDirector
 var _traffic_view: TrafficView
+# Night lighting (WP5.4): player headlights (H: high beams), traffic cones, lamp pools.
+var _headlights := PlayerHeadlights.new()
+var _cones := HeadlightCones.new()
+var _pools := StreetLampPools.new()
 var _events: ScoreEventBuffer
 var _hits: HitDetection
 var _contact := HitDetection.Contact.new()
@@ -108,6 +114,10 @@ func _ready() -> void:
 	_roadside.name = "Roadside"
 	_roadside.biome_director = _director
 	add_child(_roadside)
+	_landmarks = Landmarks.new()
+	_landmarks.name = "Landmarks"
+	_landmarks.biome_director = _director
+	add_child(_landmarks)
 
 	_sky = $Sky
 	_hub = $PlayerInput
@@ -122,6 +132,7 @@ func _ready() -> void:
 	_director.setup(_ctx, _road, _origin)
 	_builder.setup(_ctx, _road, _origin)
 	_roadside.setup(_ctx, _road, _origin)
+	_landmarks.setup(_ctx, _road, _origin)
 	_sky.setup(_ctx, _road, _origin)
 	_builder.build_all_now(0.0)
 
@@ -156,8 +167,14 @@ func _process(_delta: float) -> void:
 	_director.update_view(st.s)
 	_builder.update_view(st.s)
 	_roadside.update_view(st.s)
+	_landmarks.update_view(st.s)
 	_sky.update_view(st.s)
 	_traffic_view.update_view(st.s)
+	if not is_instance_valid(_headlights.car) or _headlights.car != _car:
+		_headlights.bind(_car)
+	_headlights.high_beam = _hub.high_beam
+	for n: Node in [_headlights, _cones, _pools]:
+		n.call(&"update_view", st.s)
 	var night := _sky.current().emissive_headlight > HEADLIGHTS_ON
 	if night != _night:
 		_night = night
@@ -191,8 +208,9 @@ func _process(_delta: float) -> void:
 	DevStats.report(&"seed", run_seed)
 
 
-## Snap hook (tools/snap.sh): --s=, --sky_t=, --car=0..2, --cam=, --speed_kmh=.
+## Snap hook (tools/snap.sh): --s=, --sky_t=, --car=0..2, --cam=, --speed_kmh=, --high_beam.
 func snap_setup(args: Dictionary) -> void:
+	_hub.set_high_beam(bool(args.get("high_beam", false)))
 	if args.has("sky_t"):
 		_sky.sky_t = float(args["sky_t"])
 	if args.has("car"):
@@ -273,8 +291,14 @@ func _setup_traffic() -> void:
 	_lives = Lives.new(_tuning.lives)
 	_traffic_view = TrafficView.new()
 	_traffic_view.name = "TrafficView"
+	_traffic_view.headlight_pools = false   # HeadlightCones draws them
 	add_child(_traffic_view)
 	_traffic_view.setup(_ctx, _road, _origin, _registry, _sim.state, _tdir.opposite.state)
+	for n: Node3D in [_headlights, _cones, _pools]:
+		n.set(&"sky", _sky)
+		add_child(n)
+		n.call(&"setup", _ctx, _road, _origin)
+	_cones.bind(_traffic_view, _sim.state, _tdir.opposite.state)
 	var biome := _director.current()
 	if biome != null and not biome.traffic_palette.is_empty():
 		_traffic_view.set_palette(biome.traffic_palette)

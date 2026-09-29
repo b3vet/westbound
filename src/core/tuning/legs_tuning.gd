@@ -25,8 +25,24 @@ extends Resource
 @export var bonus_heat_points: int = 5000   # not in spec
 
 @export_group("Objectives (one optional per leg)")
+## The objectives drawn from (LegObjectives ids), one per leg, never the same twice in a
+## row. The spec's examples are "5 close passes", "thread twice" and "no braking".
+@export var objective_pool: Array[StringName] = [&"close_passes", &"threads", &"no_braking",
+		&"cuts", &"top_speed", &"slipstream", &"no_shoulder"]
+## The first leg with an objective (1: every leg, the spec's "each leg ... on entry").
+@export var objective_first_leg: int = 1
 @export var objective_close_passes_count: int = 5
 @export var objective_threads_count: int = 2
+@export var objective_cuts_count: int = 6   # not in spec
+@export var objective_top_speed_kmh: float = 250.0   # not in spec
+## Slipstream objective: seconds in slipstream during the leg (added up, not continuous).
+@export var objective_slipstream_s: float = 5.0   # not in spec
+## "No X" objectives (no braking, no shoulder) ignore the leg's first seconds (the
+## crossing itself, a hit's recovery at the line), then fail on the first offence and
+## complete at the checkpoint if they never failed.
+@export var objective_avoid_grace_s: float = 3.0   # not in spec
+## "No braking" fails on brake input above this (0..1; a feathered touch is not braking).
+@export var objective_brake_threshold: float = 0.2   # not in spec
 @export var objective_bonus_points: int = 2500   # not in spec
 
 @export_group("Journey")
@@ -43,3 +59,7 @@ func pace_target_mps() -> float:
 
 func pace_full_lift_margin_mps() -> float:
 	return Units.kmh_to_mps(pace_full_lift_margin_kmh)
+
+
+func objective_top_speed_mps() -> float:
+	return Units.kmh_to_mps(objective_top_speed_kmh)

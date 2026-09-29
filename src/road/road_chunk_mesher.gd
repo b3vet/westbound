@@ -10,6 +10,10 @@ extends RefCounted
 ##                 edge lines as geometry (tint class 2), raised reflectors (emissive 1).
 ##   SURFACE_WORLD (materials/world.tres): median barrier, guardrail rails, ground ribbon.
 ## Both carriageways are built; the opposite one is mirrored at d < 0.
+## With `merge_surfaces` (RoadBuilder, WP4.6), commit_merged() writes both as ONE
+## surface (one draw call per chunk): road.gdshader and world.gdshader are the same
+## code, so the pixels do not change. The output arrays stay split either way; only
+## the world indices are offset past the road vertices while merging.
 ##
 ## Precision: vertices are relative to the chunk's anchor (the reference line at s0),
 ## computed in 64-bit (RoadSample.local_point) before narrowing, so a chunk 5,000 km
@@ -56,6 +60,9 @@ const ROW_CAPACITY := 64
 
 var tuning: RoadTuning
 var palette: RoadPalette
+## Build for commit_merged(): world indices continue after the road vertices. Set
+## before begin().
+var merge_surfaces: bool = false
 
 # ---------------------------------------------------------------- Output (read after build)
 
@@ -118,6 +125,8 @@ var _rv: int = 0
 var _ri: int = 0
 var _wv: int = 0
 var _wi: int = 0
+## Added to every world index (the road vertex count while merging, else 0).
+var _world_index_base: int = 0
 
 
 func _init(road_tuning: RoadTuning = null, road_palette: RoadPalette = null) -> void:
@@ -172,6 +181,7 @@ func begin(road: RoadPath, s0: float, s1: float) -> void:
 	_world_quads = intervals * WORLD_QUADS_PER_INTERVAL
 	_size_road(_road_quads)
 	_size_world(_world_quads)
+	_world_index_base = _road_quads * 4 if merge_surfaces else 0
 	_rv = 0
 	_ri = 0
 	_wv = 0
@@ -239,6 +249,36 @@ func commit(mesh: ArrayMesh, road_material: Material, world_material: Material) 
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _arrays)
 	mesh.surface_set_material(SURFACE_WORLD, world_material)
 	# Drop the extra references so the next build writes in place (no copy-on-write).
+	_arrays[Mesh.ARRAY_VERTEX] = null
+	_arrays[Mesh.ARRAY_NORMAL] = null
+	_arrays[Mesh.ARRAY_COLOR] = null
+	_arrays[Mesh.ARRAY_TEX_UV2] = null
+	_arrays[Mesh.ARRAY_INDEX] = null
+
+
+## Replaces `mesh`'s surfaces with the last build as ONE surface (road then world
+## geometry) with `material`. Needs a build made with merge_surfaces on. Load/commit
+## time: it allocates the joined arrays once per chunk, never per tick.
+func commit_merged(mesh: ArrayMesh, material: Material) -> void:
+	assert(merge_surfaces, "commit_merged needs a build with merge_surfaces on")
+	mesh.clear_surfaces()
+	var verts := road_vertices.duplicate()
+	verts.append_array(world_vertices)
+	var normals := road_normals.duplicate()
+	normals.append_array(world_normals)
+	var colors := road_colors.duplicate()
+	colors.append_array(world_colors)
+	var uv2 := road_uv2.duplicate()
+	uv2.append_array(world_uv2)
+	var indices := road_indices.duplicate()
+	indices.append_array(world_indices)
+	_arrays[Mesh.ARRAY_VERTEX] = verts
+	_arrays[Mesh.ARRAY_NORMAL] = normals
+	_arrays[Mesh.ARRAY_COLOR] = colors
+	_arrays[Mesh.ARRAY_TEX_UV2] = uv2
+	_arrays[Mesh.ARRAY_INDEX] = indices
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, _arrays)
+	mesh.surface_set_material(0, material)
 	_arrays[Mesh.ARRAY_VERTEX] = null
 	_arrays[Mesh.ARRAY_NORMAL] = null
 	_arrays[Mesh.ARRAY_COLOR] = null
@@ -665,12 +705,13 @@ func _world_quad(v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3, hint: Vecto
 		world_colors[o + q] = col
 		world_uv2[o + q] = uv
 	var x := _wi
-	world_indices[x] = o
-	world_indices[x + 1] = o + 1
-	world_indices[x + 2] = o + 2
-	world_indices[x + 3] = o
-	world_indices[x + 4] = o + 2
-	world_indices[x + 5] = o + 3
+	var b := o + _world_index_base
+	world_indices[x] = b
+	world_indices[x + 1] = b + 1
+	world_indices[x + 2] = b + 2
+	world_indices[x + 3] = b
+	world_indices[x + 4] = b + 2
+	world_indices[x + 5] = b + 3
 	_wv += 4
 	_wi += 6
 

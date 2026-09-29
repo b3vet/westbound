@@ -56,6 +56,7 @@ class Crossing:
 	var heat: bool = false          ## heat_best_s >= bonus_heat_hold_s
 	var objective: StringName = &""
 	var objective_done: bool = false
+	var objective_points: int = 0   ## the objective bonus paid for this leg (after the night factor)
 	var at_night: bool = false      ## finished at night (leg bonuses x2)
 	var coast: bool = false         ## this crossing reached the coast
 
@@ -118,6 +119,7 @@ var _close_passes: int = 0
 var _heat_run_s: float = 0.0
 var _heat_best_s: float = 0.0
 var _objective_done: bool = false
+var _objective_points: int = 0
 
 var _planned_to: float = 0.0
 var _cp_s := PackedFloat64Array()
@@ -217,6 +219,7 @@ func step(dt: float, player_s: float, is_night: bool, out: ScoreEventBuffer) -> 
 	c.heat = _heat_best_s >= _legs.bonus_heat_hold_s - TIME_EPS_S
 	c.objective = objective
 	c.objective_done = _objective_done
+	c.objective_points = _objective_points
 	c.at_night = is_night
 	c.coast = not coast_reached and c.leg_index >= _legs.legs_to_coast
 	legs_completed += 1
@@ -253,20 +256,36 @@ func notify_close_pass() -> void:
 	_close_passes += 1
 
 
-## Objective hook (content in Phase 5): the run sets the leg's objective at leg start...
+## Objective hook: the run sets the leg's objective at leg start (LegObjectives)...
 func set_objective(id: StringName) -> void:
 	objective = id
 	_objective_done = false
+	_objective_points = 0
 
 
-## ...and marks it done when its condition is met (evaluated by the objective system).
-func complete_objective() -> void:
+## ...and marks it done when its condition is met (evaluated by LegObjectives), with the
+## bonus paid for it (after the night factor; carried into the crossing summary).
+func complete_objective(points: int = 0) -> void:
 	if objective != &"":
 		_objective_done = true
+		_objective_points = points
+
+
+## A "no X" objective is judged at the line, after step() already filled `crossing`
+## (and started the next leg): the run marks the crossing's objective done here.
+func complete_crossing_objective(points: int) -> void:
+	if crossing.objective != &"":
+		crossing.objective_done = true
+		crossing.objective_points = points
 
 
 func is_objective_done() -> bool:
 	return _objective_done
+
+
+## Where the current leg began (the last checkpoint line, or the run start).
+func leg_start_s() -> float:
+	return _leg_start_s
 
 
 func threads_in_leg() -> int:
@@ -314,6 +333,7 @@ func _start_leg(start_s: float) -> void:
 	_heat_best_s = 0.0
 	objective = &""
 	_objective_done = false
+	_objective_points = 0
 
 
 ## Drops consumed queue entries (director rate).

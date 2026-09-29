@@ -120,7 +120,7 @@ func test_spring_step_converges_with_bounded_overshoot() -> void:
 
 func test_tuning_mode_arrays_consistent() -> void:
 	eq(ct.mode_arrays_error(), "")
-	eq(ct.modes, PackedStringArray(["chase", "far", "hood", "overhead"]))
+	eq(ct.modes, PackedStringArray(["chase", "far", "hood", "overhead", "cockpit"]))
 	eq(ct.mode_marker[ct.mode_index(&"hood")], "Markers/cam_hood")
 	for i in ct.modes.size():
 		le(ct.mode_position_damping_ratio[i], 1.0 + 1e-9, "position spring not over-damped")
@@ -364,11 +364,12 @@ func test_cycle_mode_wraps_saves_and_emits() -> void:
 	var on_changed := func(m: StringName) -> void: seen.append(m)
 	Events.camera_mode_changed.connect(on_changed)
 	eq(rig.mode, &"chase")
-	for i in 4:
+	for i in 5:
 		rig.cycle_mode()
 		eq(Settings.get_value(&"camera_mode"), rig.mode, "saved")
 	Events.camera_mode_changed.disconnect(on_changed)
-	eq(seen, [&"far", &"hood", &"overhead", &"chase"] as Array[StringName], "wraps through the four modes")
+	eq(seen, [&"far", &"hood", &"overhead", &"cockpit", &"chase"] as Array[StringName],
+			"wraps through the five modes (cockpit: WP4.7, tests/camera/test_cockpit_camera.gd)")
 
 
 func test_saved_mode_restored_at_startup() -> void:
@@ -408,12 +409,13 @@ func test_hood_uses_marker_when_present() -> void:
 
 
 func test_modes_frame_the_car_ahead() -> void:
-	# Every mode looks forward (heading 0 = -Z) and, except hood, sits behind and above.
+	# Every mode looks forward (heading 0 = -Z) and, except the mounted hood and cockpit,
+	# sits behind and above.
 	for m: String in ct.modes:
 		var target := _make_target()
 		var rig := _make_rig(target, _state(150.0), StringName(m))
 		lt(-rig.global_basis.z.z, 0.0, "%s looks forward" % m)
-		if m != "hood":
+		if m != "hood" and m != "cockpit":
 			gt(rig.global_position.z, target.position.z, "%s is behind" % m)
 			gt(rig.global_position.y, target.position.y + 1.0, "%s is above" % m)
 			# Glare rule: chase-type cameras never pitch up above the horizon.

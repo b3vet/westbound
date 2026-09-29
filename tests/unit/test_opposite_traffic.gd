@@ -204,3 +204,35 @@ func test_deterministic() -> void:
 		hashes.append(opp.state.trace_hash())
 	eq(hashes[0], hashes[1])
 	ne(hashes[0], hashes[2])
+
+
+## One tick of the opposite side at leg 8 (the densest), with the player at 200 km/h.
+## WP4.6: it is visual-only but runs every 120 Hz tick; the owner's iPhone web build
+## measured ~26 us per tick before the far-tick split.
+func test_step_tick_budget() -> void:
+	_setup(SEED, 8)
+	var st := {"s": 0.0}
+	var v_player := Units.kmh_to_mps(200.0)
+	var tick := func() -> void:
+		st["s"] = float(st["s"]) + v_player * DT
+		opp.step(DT, float(st["s"]))
+	for k in 240:
+		tick.call()
+	var usec := WBBench.usec_per_call(tick, 2000)
+	WBBench.report("opposite traffic step, %d vehicles" % opp.state.count, usec, 20.0)
+	le(usec, WBBench.budget(20.0), "opposite step usec")
+
+
+func test_lane_centers_refresh_at_the_far_rate() -> void:
+	# d is re-read from the road for every vehicle within one far tick (30 Hz).
+	_setup()
+	for i in opp.state.capacity:
+		opp.state.d[i] = 0.0
+	var ratio := tuning.traffic.far_tick_ratio()
+	gt(ratio, 1, "far rate below the tick rate")
+	for k in ratio:
+		opp.step(DT, 0.0)
+	for i in opp.state.capacity:
+		if opp.state.active[i] == 1:
+			near(opp.state.d[i], road.opposite_lane_center_d(opp.state.lane[i], opp.state.s[i]), 1e-9,
+				"slot %d back on its lane center" % i)

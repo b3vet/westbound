@@ -49,6 +49,9 @@ var road: RoadPath
 var origin: FloatingOrigin
 var model: CarModel
 var visual: CarVisual
+## False while a camera hides the body (cockpit). Effects that toggle the visual
+## (the ghost flicker) respect it.
+var body_visible: bool = true
 var shadow: BlobShadow
 
 var _sample := RoadSample.new()
@@ -114,6 +117,17 @@ func world_velocity() -> Vector3:
 	var right := Vector3(cos(h), 0.0, sin(h))
 	var along := state.v * cos(state.yaw) - state.v_lat * sin(state.yaw)
 	return fwd * state.v + right * state.v_lat + Vector3.UP * (along * _sample.grade)
+
+
+## Shows or hides the drawn body (the CarVisual with the model, and the blob shadow),
+## for the cockpit camera (CameraRig, plan D11). View only: physics, placement and the
+## visual's tick carry on.
+func set_body_visible(on: bool) -> void:
+	body_visible = on
+	if visual != null:
+		visual.visible = on
+	if shadow != null:
+		shadow.visible = on
 
 
 ## The road sample at state.s used for the last placement. Read-only.

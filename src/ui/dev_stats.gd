@@ -19,6 +19,11 @@ const GOVERNOR_RUNG := &"governor_rung"
 const MAX_FPS := &"max_fps"
 const DRAW_CALL_BUDGET := &"draw_call_budget"
 const TRIANGLE_BUDGET := &"triangle_budget"
+## Applied by Quality (WP4.6): render scale (float), MSAA ("off"/"2x"/"4x") and whether
+## a dev override set them (bool).
+const RENDER_SCALE := &"render_scale"
+const MSAA := &"msaa"
+const QUALITY_DEV_OVERRIDE := &"quality_dev_override"
 
 static var _values: Dictionary = {}
 ## Ring buffer of the last `sim_tick_window()` tick times (one second of ticks).

@@ -17,8 +17,10 @@ extends Node3D
 ##   5.   scoring.step; boost fill into the meter; sun nudges -> sun.lift, near misses
 ##        -> traffic_sim.notify_close_pass, threads / close passes -> leg tracker
 ##   6.   sun_clock.advance(dt, scoring.is_too_slow()); scoring.set_night; headlights
-##   7.   leg tracker (observe_multiplier, step); a crossing runs the spec's order:
-##        bank, sun lift or dawn, leg bonuses, clean-leg life, then set_night again
+##   7.   leg objective (LegObjectives.step: brake, speed, slipstream, shoulder), leg
+##        tracker (observe_multiplier, step); a crossing runs the spec's order: bank,
+##        sun lift or dawn, leg bonuses (+ a "no X" objective), clean-leg life, then
+##        set_night again, then the next leg's objective
 ## Every sim writes into one ScoreEventBuffer; RunEvents drains it once per frame.
 ## Slow motion, camera shake, the crash cue and screens react at frame rate.
 
@@ -30,6 +32,8 @@ const CAR_PATHS: Array[String] = [
 ]
 ## WP4.3's HUD: installed only if the scene exists (built in parallel).
 const HUD_SCENE_PATH := "res://src/ui/hud/hud.tscn"
+## WP4.4's in-run screens: countdown (gyro calibration), pause menu, crash hint, results.
+const SCREENS_SCENE := preload("res://src/ui/screens/run_screens.tscn")
 const DRIVE_SCENE := "res://src/dev/car_drive.tscn"
 const SANDBOX_SCENE := "res://src/traffic/dev/traffic_sandbox.tscn"
 ## The journey bonus kind (paid on the crossing that reaches the coast).
@@ -49,8 +53,6 @@ const PHYSICS_PRIORITY := 50
 ## Rolling start: lane and speed at the start line (car_drive's values).
 const START_LANE := 1
 const START_SPEED_KMH := 120.0   # lint: allow-number pending tuning (hud/legs)
-## One countdown step (hud.countdown_from steps).
-const COUNTDOWN_STEP_S := 1.0
 ## Traffic headlights on while the color script's headlight ramp is above this.
 const HEADLIGHTS_ON_RAMP := 0.3   # lint: allow-number pending tuning (sun)
 ## Crash: traffic within this distance (along s) of the player brakes (hit reaction).
@@ -62,10 +64,14 @@ const CRASH_BRAKE_RADIUS_M := 80.0   # lint: allow-number pending tuning (lives)
 @export var run_seed: int = 0
 @export var mode: StringName = RunContext.MODE_JOURNEY
 @export var car_index: int = 0
-## Off: the countdown waits for go() (WP4.4's countdown screen, gyro calibration).
+## Off: the countdown waits for go(). On (the game), the run counts hud.countdown_from
+## steps of hud.countdown_step_s (a retry: retry_countdown_step_s) and the countdown
+## screen shows them and calibrates the gyro; the screen can hold it (hold_countdown).
 @export var auto_countdown: bool = true
 ## Store the personal best in Save at run end.
 @export var record_best: bool = true
+## The Jolt crash cinematic (CrashSequence, WP4.2); off = the fallback skid to a stop.
+@export var crash_cinematic: bool = true
 ## Tests: tick() and frame() are called by the test instead of the engine.
 @export var manual_ticks: bool = false
 
@@ -82,6 +88,7 @@ var origin: FloatingOrigin
 var biome_director: BiomeDirector
 var builder: RoadBuilder
 var roadside: Roadside
+var landmarks: Landmarks
 var sky: SkyRig
 var hub: PlayerInput
 var rig: CameraRig
@@ -90,9 +97,15 @@ var registry: TrafficRegistry
 var sim: TrafficSim
 var director: TrafficDirector
 var traffic_view: TrafficView
+## Night lighting (WP5.4): the player's headlights, traffic cones, street-lamp pools.
+var headlights: PlayerHeadlights
+var headlight_cones: HeadlightCones
+var lamp_pools: StreetLampPools
 var scoring: Scoring
 var sun: SunClock
 var legs: LegTracker
+## The leg objective (WP5.2): chosen at each leg start, judged per tick, paid once.
+var objectives: LegObjectives
 var hits: HitDetection
 var lives: Lives
 var stats := RunStats.new()
@@ -101,7 +114,8 @@ var feed := HudFeed.new()
 var adapter: RunEvents
 var time_scale: TimeScale
 var fx: PlayerFx
-var ui: RunUi
+## WP4.4's RunScreens (countdown, pause, crash hint, results): intents in, flow calls out.
+var screens: RunScreens
 ## WP4.3's Hud (null until src/ui/hud/hud.tscn exists).
 var hud: Node
 var dev: RunDevPanel
@@ -131,7 +145,7 @@ var _crash_controller := CrashController.new()
 var _countdown_ticks: int = 0
 var _countdown_step_ticks: int = 1
 var _countdown_shown: int = -1
-var _go_flash_s: float = 0.0
+var _countdown_held: bool = false
 var _crash_left_s: float = 0.0
 var _crash_by_sequence: bool = false
 var _pending_first_hit_fx: bool = false
@@ -170,7 +184,6 @@ func _ready() -> void:
 	process_physics_priority = PHYSICS_PRIORITY
 	tuning = Tuning.load_default()
 	_dt = tuning.vehicle.physics_dt()
-	_countdown_step_ticks = maxi(roundi(COUNTDOWN_STEP_S / _dt), 1)
 	events = ScoreEventBuffer.new(tuning.scoring.event_buffer_capacity * EVENT_SOURCES)
 	_base_seed = run_seed if run_seed != 0 else Rng.random_seed()
 
@@ -196,29 +209,38 @@ func _ready() -> void:
 	roadside.name = "Roadside"
 	roadside.biome_director = biome_director
 	add_child(roadside)
+	landmarks = Landmarks.new()
+	landmarks.name = "Landmarks"
+	landmarks.biome_director = biome_director
+	add_child(landmarks)
 	traffic_view = TrafficView.new()
 	traffic_view.name = "TrafficView"
+	traffic_view.headlight_pools = false   # HeadlightCones draws them
 	add_child(traffic_view)
+	_add_night_lights()
 	registry = TrafficRegistry.load_default(tuning.traffic)
 	scoring = Scoring.new()
 	sun = SunClock.new(tuning.sun, tuning.legs)
 	legs = LegTracker.new(tuning.legs)
+	objectives = LegObjectives.new(tuning.legs)
 	hits = HitDetection.new(tuning.lives, tuning.traffic.max_active_vehicles)
 	lives = Lives.new(tuning.lives)
 	fx = PlayerFx.new()
 	fx.name = "PlayerFx"
 	add_child(fx)
-	ui = RunUi.new()
-	ui.name = "RunUi"
-	add_child(ui)
-	ui.retry_pressed.connect(retry)
-	ui.pause_pressed.connect(toggle_pause)
-	ui.resume_pressed.connect(resume)
+	_install_screens()
 	_build_headlight_lut()
 	_install_hud()
 	dev = RunDevPanel.new()
 	dev.name = "RunDev"
 	add_child(dev)
+	if crash_cinematic:
+		var cs := CrashSequence.new()
+		cs.name = "CrashSequence"
+		cs.tap_to_skip = false   # the run owns the tap (skip())
+		cs.auto_advance = false  # advanced from frame() with the real frame time
+		add_child(cs)
+		crash_sequence = cs
 
 	_start_run()
 	dev.setup(self)
@@ -239,7 +261,6 @@ func _exit_tree() -> void:
 func retry() -> void:
 	if state == Game.PAUSED:
 		get_tree().paused = false
-		ui.show_paused(false)
 	if crash_sequence != null and crash_sequence.has_method(&"reset"):
 		crash_sequence.call(&"reset")
 	_start_run()
@@ -251,8 +272,13 @@ func go() -> void:
 		return
 	_enter(Game.RUNNING)
 	_countdown_ticks = 0
-	_go_flash_s = COUNTDOWN_STEP_S
 	Events.countdown_tick.emit(0)
+
+
+## The countdown screen holds the countdown (web + gyro: until the tap that grants the
+## motion permission) and lets it run again.
+func hold_countdown(on: bool) -> void:
+	_countdown_held = on
 
 
 func pause() -> void:
@@ -262,7 +288,7 @@ func pause() -> void:
 	state = Game.PAUSED
 	Game.pause()
 	get_tree().paused = true
-	ui.show_paused(true)
+	_sync_hud()
 
 
 func resume() -> void:
@@ -271,7 +297,7 @@ func resume() -> void:
 	get_tree().paused = false
 	state = _paused_from
 	Game.resume()
-	ui.show_paused(false)
+	_sync_hud()
 
 
 func toggle_pause() -> void:
@@ -350,7 +376,8 @@ func tick() -> void:
 			car.tick(dt)
 			_sim_tick(dt)
 		Game.CRASH:
-			car.tick(dt)
+			if not _crash_by_sequence:
+				car.tick(dt)   # the fallback skid; the cinematic's body carries the car
 			_crash_tick(dt)
 	tick_count += 1
 	var smp := car.road_sample()
@@ -358,7 +385,7 @@ func tick() -> void:
 
 
 func _countdown_tick() -> void:
-	if not auto_countdown:
+	if not auto_countdown or _countdown_held:
 		return
 	_countdown_ticks -= 1
 	if _countdown_ticks <= 0:
@@ -410,7 +437,9 @@ func _sim_tick(dt: float) -> void:
 	sun.advance(dt, scoring.is_too_slow(), events)
 	scoring.set_night(sun.is_night())
 	_update_headlights()
-	# 7. legs and checkpoints.
+	# 7. the leg objective, legs and checkpoints.
+	if objectives.step(dt, car.input.brake, st.v, scoring.is_slipstreaming(), scoring.is_on_shoulder()):
+		legs.complete_objective(_pay_objective())
 	legs.observe_multiplier(dt, scoring.multiplier())
 	if legs.step(dt, st.s, sun.is_night(), events):
 		_dispatch_crossing()
@@ -439,8 +468,34 @@ func _forward_scoring(from: int, to: int) -> void:
 			sim.notify_close_pass(events.slot[i])
 		elif k == ScoreEvents.THREAD:
 			legs.notify_thread()
+			_objective_scored(k)
 		elif k == ScoreEvents.CLOSE_PASS:
 			legs.notify_close_pass()
+			_objective_scored(k)
+		elif k == ScoreEvents.CUT:
+			_objective_scored(k)
+
+
+## A scored kind the objective counts; a completion is paid at once.
+func _objective_scored(kind: StringName) -> void:
+	if objectives.notify_scored(kind):
+		legs.complete_objective(_pay_objective())
+
+
+## The objective bonus, straight into the banked total (x2 at night), and
+## objective_completed with the points actually paid. Called exactly once per completed
+## objective: LegObjectives reports each completion once. Returns the points.
+func _pay_objective() -> int:
+	var before := scoring.banked()
+	scoring.award_bonus(LegTracker.BONUS_OBJECTIVE, tuning.legs.objective_bonus_points, events)
+	var paid := scoring.banked() - before
+	events.push(LegObjectives.KIND_OBJECTIVE_COMPLETED, paid, 0.0, -1.0, -1, 0.0, objectives.current())
+	return paid
+
+
+## The leg's objective, drawn at its start (LegObjectives, seeded) and set on the tracker.
+func _start_leg_objective() -> void:
+	legs.set_objective(objectives.start_leg(legs.leg_index))
 
 
 ## The spec's crossing sequence (Legs and checkpoints, steps 1-4; 5 is the HUD toast).
@@ -450,8 +505,10 @@ func _dispatch_crossing() -> void:
 	sun.on_checkpoint(c.avg_speed_mps, events)
 	for i in c.bonus_count():
 		scoring.award_bonus(c.bonus_kind(i), c.bonus_base_points(i, tuning.legs), events)
-	if c.objective_done:
-		scoring.award_bonus(LegTracker.BONUS_OBJECTIVE, tuning.legs.objective_bonus_points, events)
+	# A "no X" objective is judged at the line and paid with the leg bonuses; the others
+	# were paid when completed (c.objective_done, c.objective_points), never again here.
+	if objectives.finish_leg():
+		legs.complete_crossing_objective(_pay_objective())
 	if c.coast:
 		scoring.award_bonus(BONUS_JOURNEY, tuning.legs.journey_bonus_points, events)
 	if c.clean:
@@ -459,6 +516,9 @@ func _dispatch_crossing() -> void:
 	# After the bonuses: a leg finished at night pays x2, then the dawn clears the night.
 	scoring.set_night(sun.is_night())
 	_update_headlights()
+	# The new leg's objective (leg_started is already in the buffer; the adapter reads
+	# the objective when it drains).
+	_start_leg_objective()
 
 
 func _update_headlights() -> void:
@@ -518,7 +578,14 @@ func _begin_crash() -> void:
 ## then.) Returning false keeps the fallback: the car brakes to a stop, surrounding
 ## traffic brakes, and the results come after feel.slowmo_crash_s real seconds or a tap.
 func _start_crash_sequence() -> bool:
-	return false
+	var cs := crash_sequence as CrashSequence
+	if cs == null:
+		return false
+	cs.start(car, _contact, sim.state, traffic_view, road, origin, rig)
+	if not cs.is_running():
+		return false
+	cs.finished.connect(func(_skipped: bool) -> void: _end_crash(), CONNECT_ONE_SHOT)
+	return true
 
 
 ## Surrounding traffic brakes (TrafficSim.notify_hit: hard brake, hazards, a small
@@ -534,8 +601,9 @@ func _brake_surrounding_traffic() -> void:
 func _end_crash() -> void:
 	if state != Game.CRASH:
 		return
+	if not _crash_by_sequence:
+		Events.crash_finished.emit()   # CrashSequence emits its own
 	_crash_by_sequence = false
-	Events.crash_finished.emit()
 	time_scale.restore()
 	_show_results()
 
@@ -550,9 +618,8 @@ func _show_results() -> void:
 		Save.submit_best_score(mode, score)
 	last_results[&"personal_best"] = maxi(best, score)
 	last_results[&"new_best"] = new_best
-	Events.run_over.emit(last_results)
-	ui.show_hint("")
-	ui.show_results(last_results, best, new_best)
+	last_results[&"previous_best"] = best
+	Events.run_over.emit(last_results)   # the results screen opens on it
 
 
 # ---------------------------------------------------------------- Frame
@@ -560,6 +627,8 @@ func _show_results() -> void:
 ## Once per rendered frame with the real (unscaled) frame time: drains the events,
 ## plays the frame-rate reactions, updates the views, the sky and the HUD feed.
 func frame(real_dt: float) -> void:
+	if state == Game.CRASH and _crash_by_sequence:
+		(crash_sequence as CrashSequence).advance(real_dt)
 	if state == Game.CRASH and not _crash_by_sequence:
 		_crash_left_s -= real_dt
 		if _crash_left_s <= 0.0:
@@ -572,27 +641,19 @@ func frame(real_dt: float) -> void:
 		Events.slowmo_requested.emit(feel.slowmo_first_hit_scale, feel.slowmo_first_hit_s, TimeScale.REASON_FIRST_HIT)
 	if _pending_crash_fx:
 		_pending_crash_fx = false
-		Events.crash_started.emit()
 		if not _crash_by_sequence:
+			Events.crash_started.emit()   # CrashSequence emits its own
 			Events.slowmo_requested.emit(feel.slowmo_crash_scale, feel.slowmo_crash_s, TimeScale.REASON_CRASH)
-		if state == Game.CRASH:
-			ui.show_hint("TAP TO SKIP")
-	if _go_flash_s > 0.0:
-		_go_flash_s -= real_dt
-		ui.show_countdown(0 if _go_flash_s > 0.0 else -1)
-	elif state == Game.COUNTDOWN and auto_countdown:
-		ui.show_countdown(maxi(_countdown_shown, 1))
-	else:
-		ui.show_countdown(-1)
 	var s := car.state.s
 	sky.sky_t = sun.sky_t
 	biome_director.update_view(s)
 	builder.update_view(s)
 	roadside.update_view(s)
+	landmarks.update_view(s)
 	sky.update_view(s)
 	traffic_view.update_view(s)
+	_update_night_lights(s)
 	_fill_feed()
-	ui.update_readouts(feed, Settings.get_value(&"units") != &"mph")
 	_report_dev_stats()
 
 
@@ -612,6 +673,9 @@ func _fill_feed() -> void:
 	feed.leg_index = legs.leg_index
 	feed.objective = legs.objective
 	feed.objective_done = legs.is_objective_done()
+	feed.objective_failed = objectives.is_failed()
+	feed.objective_progress = objectives.progress()
+	feed.objective_target = objectives.target()
 	feed.lives = lives.lives
 	feed.max_lives = lives.max_lives
 	feed.ghost = lives.is_ghost()
@@ -640,6 +704,7 @@ func _start_run() -> void:
 	biome_director.setup(ctx, road, origin)
 	builder.setup(ctx, road, origin)
 	roadside.setup(ctx, road, origin)
+	landmarks.setup(ctx, road, origin)
 	sky.setup(ctx, road, origin)
 	builder.build_all_now(start_s)
 	_next_forget_s = start_s + FORGET_EVERY_M
@@ -655,16 +720,25 @@ func _start_run() -> void:
 	if biome != null and not biome.traffic_palette.is_empty():
 		traffic_view.set_palette(biome.traffic_palette)
 
+	headlights.setup(ctx, road, origin)
+	headlight_cones.setup(ctx, road, origin)
+	headlight_cones.bind(traffic_view, sim.state, director.opposite.state)
+	lamp_pools.setup(ctx, road, origin)
+	if crash_sequence != null:
+		(crash_sequence as CrashSequence).setup(ctx, registry)
 	scoring.reset(ctx)
 	sun.reset()
 	legs.reset(start_s)
 	lives.reset()
 	events.reset()
+	objectives.reset(ctx)
+	_start_leg_objective()
+	# Leg 1 is announced like every other leg (its objective "on entry").
+	events.push(LegTracker.KIND_LEG_STARTED, 0, 0.0, -1.0, -1, float(legs.leg_index))
 	_force_pending = false
 	_pending_first_hit_fx = false
 	_pending_crash_fx = false
 	_crash_by_sequence = false
-	_go_flash_s = 0.0
 	_place_car(car_def, start_s, Units.kmh_to_mps(START_SPEED_KMH))
 	legs.plan_ahead(road, _plan_ahead_to(start_s))
 	_director_leg = leg_override if leg_override > 0 else legs.leg_index
@@ -694,18 +768,18 @@ func _start_run() -> void:
 	feed.lives = lives.lives
 	time_scale.restore()
 	fx.reset()
-	ui.show_paused(false)
-	ui.hide_results()
-	ui.show_hint("")
 	last_results = {}
 	sky.sky_t = sun.sky_t
 
+	# A retry counts faster: back driving inside hud.retry_max_s (Run end).
+	var step_s := tuning.hud.countdown_step_s if run_count <= 1 else tuning.hud.retry_countdown_step_s
+	_countdown_step_ticks = maxi(roundi(step_s / _dt), 1)
 	_countdown_ticks = tuning.hud.countdown_from * _countdown_step_ticks
 	_countdown_shown = tuning.hud.countdown_from
+	_countdown_held = false
 	_enter(Game.COUNTDOWN)
-	Events.run_started.emit(mode, current_seed)
+	Events.run_started.emit(mode, current_seed)   # the countdown screen prepares (and may hold)
 	Events.countdown_tick.emit(_countdown_shown)
-	ui.show_countdown(_countdown_shown)
 	_fill_feed()
 
 
@@ -760,6 +834,13 @@ func _enter(to: StringName) -> void:
 		Game.start_run(mode)
 	elif Game.state != to:
 		Game.change_state(to)
+	_sync_hud()
+
+
+## The gameplay HUD steps aside for the pause menu, the crash cinematic and the results.
+func _sync_hud() -> void:
+	if hud != null:
+		(hud as CanvasLayer).visible = state != Game.CRASH and state != Game.RESULTS and state != Game.PAUSED
 
 
 func _install_hud() -> void:
@@ -775,7 +856,20 @@ func _install_hud() -> void:
 				hud.connect(&"pause_pressed", toggle_pause)
 			if hud.has_signal(&"camera_pressed"):
 				hud.connect(&"camera_pressed", hub.request_camera_cycle)
-	ui.set_fallback_visible(hud == null)
+
+
+## The in-run screens: they emit intents, the run acts on them (CONTRACTS §14).
+func _install_screens() -> void:
+	screens = SCREENS_SCENE.instantiate() as RunScreens
+	screens.name = "RunScreens"
+	add_child(screens)
+	screens.bind(hub, feed)
+	screens.resume.connect(resume)
+	screens.recalibrate.connect(hub.recalibrate_gyro)
+	screens.retry.connect(retry)
+	screens.quit.connect(retry)   # no title screen until Phase 8: QUIT starts a fresh run
+	screens.skip.connect(skip)
+	screens.countdown_hold.connect(hold_countdown)
 
 
 ## Headlights by sky_t, the same ramp the sky shows (ColorScript.emissive_headlight),
@@ -792,6 +886,30 @@ func _build_headlight_lut() -> void:
 
 func _view_ahead(s: float) -> float:
 	return s + builder.view_distance_m() + tuning.road.chunk_length_m * 2.0
+
+
+## Night lighting nodes (WP5.4, docs/NIGHT.md): visual only, fed by the sky's ramps.
+func _add_night_lights() -> void:
+	headlights = PlayerHeadlights.new()
+	headlights.name = "PlayerHeadlights"
+	headlight_cones = HeadlightCones.new()
+	headlight_cones.name = "HeadlightCones"
+	lamp_pools = StreetLampPools.new()
+	lamp_pools.name = "StreetLampPools"
+	for n: Node3D in [headlights, headlight_cones, lamp_pools]:
+		n.set(&"sky", sky)
+		add_child(n)
+
+
+## Per frame, before the sky pushes the globals (it is a child: it processes after us).
+func _update_night_lights(s: float) -> void:
+	if not is_instance_valid(headlights.car) or headlights.car != car:
+		headlights.bind(car)
+	headlights.high_beam = hub.high_beam
+	headlights.enabled = state != Game.CRASH
+	headlights.update_view(s)
+	headlight_cones.update_view(s)
+	lamp_pools.update_view(s)
 
 
 ## Legs are planned a whole leg past the view, so the next checkpoint (the HUD's sun
@@ -815,6 +933,7 @@ func trace_hash() -> int:
 	h = scoring.hash_into(h)
 	h = lives.hash_into(h)
 	h = legs.hash_into(h)
+	h = objectives.hash_into(h)
 	h = TraceHash.mix_float(h, sun.sky_t)
 	return stats.hash_into(h)
 
@@ -870,7 +989,7 @@ func open_drive_scene() -> void:
 
 
 ## Snap hook (tools/snap.sh): --state=countdown|running|results|paused, --sky_t=,
-## --s=, --speed_kmh=, --car=0..2, --cam=, --damaged, --ghost, --seed= (default SNAP_SEED).
+## --s=, --speed_kmh=, --car=0..2, --cam=, --damaged, --ghost, --high_beam, --seed= (default SNAP_SEED).
 func snap_setup(args: Dictionary) -> void:
 	# Reproducible snaps: a fixed seed unless --seed is given.
 	if args.has("car"):
@@ -906,7 +1025,7 @@ func snap_setup(args: Dictionary) -> void:
 		fx.set_damaged(true)
 	if args.get("ghost", false):
 		fx.start_ghost(tuning.lives.ghost_period_s)
-	_go_flash_s = 0.0
+	hub.set_high_beam(bool(args.get("high_beam", false)))
 	rig.snap_to_target()
 
 
@@ -918,6 +1037,8 @@ func _report_dev_stats() -> void:
 	DevStats.report(&"seed", current_seed)
 	DevStats.report(&"leg", legs.leg_index)
 	DevStats.report(&"director_leg", _director_leg)
+	DevStats.report(&"objective", legs.objective)
+	DevStats.report(&"objective_progress", objectives.progress())
 	DevStats.report(&"lives", lives.lives)
 	DevStats.report(&"hits", lives.hits)
 	DevStats.report(&"ghost", lives.is_ghost())

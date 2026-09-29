@@ -77,10 +77,67 @@ func test_covers_behind_to_view_distance() -> void:
 	eq(b.needed_range_max(), _expected_max(focus))
 	check(not b.has_chunk(_expected_min(focus) - 1), "nothing further behind")
 	check(not b.has_chunk(_expected_max(focus) + 1), "nothing beyond the view distance")
-	eq(b.draw_call_count(), 2 * b.active_chunk_count(), "two draw calls per chunk")
+	eq(b.draw_call_count(), b.active_chunk_count(), "one draw call per chunk")
 	print("    road at %d m view: %d chunks, %d draw calls, %d triangles (before culling)" % [
 		int(VIEW_M), b.active_chunk_count(), b.draw_call_count(), b.triangle_count()])
-	le(b.draw_call_count(), 16, "road draw calls stay a small share of the 100 budget")
+	le(b.draw_call_count(), 8, "road draw calls stay a small share of the 100 budget")
+
+
+# ---------------------------------------------------------------- One surface per chunk (WP4.6)
+
+## Shader code without comments and blank lines.
+static func _shader_body(path: String) -> String:
+	var out := PackedStringArray()
+	for line in (load(path) as Shader).code.split("\n"):
+		var l := line.strip_edges()
+		var c := l.find("//")
+		if c >= 0:
+			l = l.substr(0, c).strip_edges()
+		if not l.is_empty():
+			out.append(l)
+	return "\n".join(out)
+
+
+func test_road_and_world_shaders_are_the_same_code() -> void:
+	# The merge draws the barrier, rails and ground with road.tres: only valid while
+	# road.gdshader and world.gdshader stay identical (else split the surfaces again).
+	eq(_shader_body("res://assets/shaders/road.gdshader"), _shader_body("res://assets/shaders/world.gdshader"),
+		"road and world shaders identical apart from comments")
+	var road_mat := load("res://assets/shaders/materials/road.tres") as ShaderMaterial
+	var world_mat := load("res://assets/shaders/materials/world.tres") as ShaderMaterial
+	eq(road_mat.get_property_list().filter(func(p: Dictionary) -> bool: return String(p.name).begins_with("shader_parameter/")).size(),
+		0, "road material sets no per-material parameters")
+	eq(world_mat.get_property_list().filter(func(p: Dictionary) -> bool: return String(p.name).begins_with("shader_parameter/")).size(),
+		0, "world material sets no per-material parameters")
+
+
+func test_each_chunk_is_one_surface_with_everything() -> void:
+	var road := StraightRoadPath.new(3, t)
+	var b := _make(road)
+	b.build_all_now(0.0)
+	var c := b.get_chunk(1)
+	eq(c.mesh.get_surface_count(), 1, "one surface")
+	eq(c.mesh.surface_get_material(0), RoadBuilder.ROAD_MATERIAL, "road material")
+	# Same geometry as the split build: road + world triangles and vertices.
+	var m := RoadChunkMesher.new(t)
+	m.build(road, t.chunk_length_m, 2.0 * t.chunk_length_m)
+	eq(CarModel.triangle_count(c.mesh), m.triangle_count(), "every triangle kept")
+	eq(c.triangles, m.triangle_count(), "chunk triangle stat")
+	var arrays := c.mesh.surface_get_arrays(0)
+	var verts := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+	eq(verts.size(), m.road_vertices.size() + m.world_vertices.size(), "vertex count")
+	var idx := arrays[Mesh.ARRAY_INDEX] as PackedInt32Array
+	var hi := 0
+	for i in idx:
+		hi = maxi(hi, i)
+	eq(hi, verts.size() - 1, "indices reach the world vertices (offset past the road)")
+	# A world triangle drawn from the merged mesh is the split world triangle.
+	var n_road := m.road_indices.size()
+	for k in 3:
+		near(verts[idx[n_road + k]].distance_to(m.world_vertices[m.world_indices[k]]), 0.0, 1e-5,
+			"world triangle corner %d" % k)
+	var uv2 := arrays[Mesh.ARRAY_TEX_UV2] as PackedVector2Array
+	eq(uv2[idx[0]], m.road_uv2[m.road_indices[0]], "road classes kept (tint, emissive)")
 
 
 func test_respects_per_frame_build_budget() -> void:

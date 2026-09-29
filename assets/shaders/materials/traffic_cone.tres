@@ -1,0 +1,20 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://assets/shaders/light_decal.gdshader" id="1_shader"]
+
+[resource]
+resource_name = "traffic_cone"
+render_priority = 1
+shader = ExtResource("1_shader")
+shader_parameter/shape = 0
+shader_parameter/ramp = 0
+shader_parameter/light_color = Vector3(1, 0.93, 0.8)
+shader_parameter/strength = 0.3
+shader_parameter/gain = 1.0
+shader_parameter/use_instance_custom = true
+shader_parameter/use_rows = false
+shader_parameter/edge_power = 1.3
+shader_parameter/near_fade = 0.08
+shader_parameter/along_hold = 0.2
+shader_parameter/along_power = 1.0
+shader_parameter/pool_power = 1.6

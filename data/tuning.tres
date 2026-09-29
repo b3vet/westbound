@@ -17,6 +17,9 @@
 [ext_resource type="Resource" uid="uid://b65iva0d51nhw" path="res://data/tuning/hud.tres" id="15_hud"]
 [ext_resource type="Resource" uid="uid://dq87et61steb1" path="res://data/tuning/progression.tres" id="16_progression"]
 [ext_resource type="Resource" path="res://data/tuning/traffic_view.tres" id="17_traffic_view"]
+[ext_resource type="Resource" path="res://data/tuning/crash.tres" id="18_crash"]
+[ext_resource type="Resource" path="res://data/tuning/landmarks.tres" id="19_landmarks"]
+[ext_resource type="Resource" path="res://data/tuning/night.tres" id="20_night"]
 
 [resource]
 script = ExtResource("1_script")
@@ -36,3 +39,6 @@ feel = ExtResource("14_feel")
 hud = ExtResource("15_hud")
 progression = ExtResource("16_progression")
 traffic_view = ExtResource("17_traffic_view")
+crash = ExtResource("18_crash")
+landmarks = ExtResource("19_landmarks")
+night = ExtResource("20_night")

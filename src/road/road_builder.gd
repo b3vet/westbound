@@ -32,10 +32,12 @@ extends Node3D
 ## director is set (BiomeDef.verge_color / ground_color), else set_ground_colors().
 ## Chunks whose colors went stale rebuild within the frame budget.
 ##
-## Draw calls: two per visible chunk (road + world material).
+## Draw calls: one per visible chunk. Road surface, markings, reflectors, barrier,
+## rails and ground ribbon are one surface (RoadChunkMesher.commit_merged): the road
+## and world shaders are the same code, so merging them changes no pixel (WP4.6;
+## tests/unit/test_road_builder.gd guards the shaders staying identical).
 
 const ROAD_MATERIAL: Material = preload("res://assets/shaders/materials/road.tres")
-const WORLD_MATERIAL: Material = preload("res://assets/shaders/materials/world.tres")
 const FREE := -1
 ## Lowest chunk index built (the run starts at s = 0).
 const FIRST_CHUNK := 0
@@ -119,6 +121,7 @@ func setup(ctx: RunContext, road_path: RoadPath, floating_origin: FloatingOrigin
 	road = road_path
 	origin = floating_origin
 	_mesher = RoadChunkMesher.new(tuning, palette)
+	_mesher.merge_surfaces = true
 	_cancel_pending()
 	for c in _pool:
 		_free_chunk(c)
@@ -195,7 +198,7 @@ func needed_range_max() -> int:
 	return _k_max
 
 
-## Triangles in live chunks (both surfaces).
+## Triangles in live chunks.
 func triangle_count() -> int:
 	var n := 0
 	for c in _pool:
@@ -204,9 +207,9 @@ func triangle_count() -> int:
 	return n
 
 
-## Draw calls for live chunks before frustum culling (two surfaces per chunk).
+## Draw calls for live chunks before frustum culling (one surface per chunk).
 func draw_call_count() -> int:
-	return active_chunk_count() * 2
+	return active_chunk_count()
 
 
 # ---------------------------------------------------------------- Internals
@@ -280,7 +283,7 @@ func _begin(k: int, c: Chunk, rebuild: bool) -> void:
 
 func _commit_pending() -> void:
 	var c := _pending
-	_mesher.commit(c.mesh, ROAD_MATERIAL, WORLD_MATERIAL)
+	_mesher.commit_merged(c.mesh, ROAD_MATERIAL)
 	c.index = _pending_k
 	c.dirty = _pending_stale
 	c.verge = _pending_verge

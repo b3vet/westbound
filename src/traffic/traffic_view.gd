@@ -51,6 +51,9 @@ var tuning: TrafficViewTuning
 ## Vehicles further than this from the camera are skipped (set by setup(); the run may
 ## update it when the quality tier's view distance changes).
 var cull_distance_m: float = 0.0
+## Headlight pools in the glow pass (glow.gdshader). The run turns them off when
+## HeadlightCones (WP5.4) draws the traffic light cones instead. Set before setup().
+var headlight_pools: bool = true
 
 
 class ModelPool:
@@ -79,6 +82,8 @@ class Carriageway:
 	## +1: the player's carriageway (travel toward +s); -1: the opposite one.
 	var dir: float = 1.0
 	var live: PackedByteArray
+	## 1 = not drawn (set_slot_hidden); cleared when a new vehicle takes the slot.
+	var hidden: PackedByteArray
 	var id: PackedInt32Array
 	var model: PackedInt32Array
 	var inv_wheel_r: PackedFloat64Array
@@ -102,6 +107,7 @@ class Carriageway:
 		dir = direction
 		var n := st.capacity
 		live.resize(n)
+		hidden.resize(n)
 		id.resize(n)
 		model.resize(n)
 		inv_wheel_r.resize(n)
@@ -213,7 +219,11 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin, registry: Tr
 	_glow_mm.mesh = _build_glow_mesh()
 	_glow_mm.instance_count = total * GLOWS_PER_VEHICLE
 	_glow_mm.visible_instance_count = 0
-	_glow = _make_instance(&"Glow", _glow_mm, GLOW_MATERIAL)
+	var glow_mat := GLOW_MATERIAL
+	if not headlight_pools:
+		glow_mat = GLOW_MATERIAL.duplicate() as ShaderMaterial
+		glow_mat.set_shader_parameter(&"pool_strength", 0.0)
+	_glow = _make_instance(&"Glow", _glow_mm, glow_mat)
 	_shadows = BlobShadowMulti.new()
 	_shadows.name = &"Shadows"
 	add_child(_shadows)
@@ -307,7 +317,7 @@ func render(fraction: float) -> void:
 	for sd in _sides:
 		var st := sd.state
 		for i in st.capacity:
-			if sd.live[i] == 0 or st.active[i] == 0 or sd.s1[i] < s_min or sd.s1[i] > s_max:
+			if sd.live[i] == 0 or sd.hidden[i] != 0 or st.active[i] == 0 or sd.s1[i] < s_min or sd.s1[i] > s_max:
 				continue
 			# Visual body motion (roll from lateral, pitch from longitudinal acceleration,
 			# + roll leans left as CarVisual) and wheel spin at v / r.
@@ -385,6 +395,15 @@ func render(fraction: float) -> void:
 		_shadow_mm.visible_instance_count = _shadow_count
 
 
+## Hides (or shows again) the vehicle in `slot`: no body, glow or shadow is drawn for
+## it (the crash sequence draws the hit car on a physics body instead). A new vehicle
+## taking the slot is drawn again. Allocation-free.
+func set_slot_hidden(slot: int, hidden: bool, opposite: bool = false) -> void:
+	var sd := _side(opposite)
+	if sd != null and slot >= 0 and slot < sd.hidden.size():
+		sd.hidden[slot] = 1 if hidden else 0
+
+
 # ---------------------------------------------------------------- Budget numbers
 
 ## Draw calls the view submits this frame (models with a vehicle on screen, glow,
@@ -442,6 +461,12 @@ func model_capacity(index: int) -> int:
 
 func model_triangles(index: int) -> int:
 	return _models[index].tris
+
+
+## True if the slot's vehicle is drawn (live, not hidden by set_slot_hidden). Allocation-free.
+func is_slot_drawn(slot: int, opposite: bool = false) -> bool:
+	var sd := _side(opposite)
+	return sd != null and slot >= 0 and slot < sd.live.size() and sd.live[slot] == 1 and sd.hidden[slot] == 0
 
 
 ## Model index a slot is drawn with (-1 if the slot is not live).
@@ -514,6 +539,7 @@ func _capture(sd: Carriageway, t_start: float) -> void:
 				sd.live[i] = 0
 				continue
 			sd.live[i] = 1
+			sd.hidden[i] = 0
 			sd.id[i] = st.vehicle_id[i]
 			sd.model[i] = mi
 			sd.inv_wheel_r[i] = 1.0 / _models[mi].wheel_radius_m

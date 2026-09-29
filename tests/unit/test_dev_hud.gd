@@ -113,6 +113,8 @@ func test_report_contains_rows_and_build() -> void:
 	check(text.contains("build "), "build line")
 	check(text.contains("fps "), "hud rows")
 	check(text.contains("speed_kmh") and text.contains("212"), "DevStats values")
+	check(text.contains("render    tier"), "render line (tier, scale, internal size, MSAA)")
+	check(text.contains("msaa "), "msaa row")
 
 
 func test_three_finger_tap_with_ios_touch_ids() -> void:
@@ -127,3 +129,36 @@ func test_three_finger_tap_with_ios_touch_ids() -> void:
 	var after: bool = hud.is_hud_visible()
 	hud.free()
 	ne(after, before, "three iOS-id touches toggle the dev HUD")
+
+
+func test_quality_row_cycles_live_and_resets() -> void:
+	# Drives the live Quality autoload: restore it afterwards.
+	var saved_scale := tree.root.scaling_3d_scale
+	_hud.set_hud_visible(true)
+	Quality.clear_dev_override()
+	var tier_scale := tree.root.scaling_3d_scale
+	var texts: PackedStringArray = _hud.quality_button_texts()
+	eq(texts[0], "3D %.2f" % tier_scale, "scale button shows the applied scale")
+	eq(texts[1], "MSAA %s" % DevReport.viewport_msaa_label(tree.root))
+	check(not texts[2].ends_with("*"), "tier button without the override mark")
+	_hud.cycle_render_scale()
+	ne(tree.root.scaling_3d_scale, tier_scale, "render scale changed live")
+	texts = _hud.quality_button_texts()
+	eq(texts[0], "3D %.2f" % tree.root.scaling_3d_scale)
+	check(texts[2].ends_with("*"), "tier button marks the override")
+	check((_hud.get_row_text(_hud.Row.SCALE) as String).begins_with("%.2f  " % tree.root.scaling_3d_scale),
+		"scale row with the internal resolution")
+	check((_hud.get_row_text(_hud.Row.QUALITY) as String).contains("*"), "quality row marks the override")
+	_hud.cycle_msaa()
+	ne(tree.root.msaa_3d, Viewport.MSAA_DISABLED, "MSAA on")
+	eq(_hud.get_row_text(_hud.Row.MSAA), DevReport.viewport_msaa_label(tree.root))
+	_hud.reset_quality()
+	near(tree.root.scaling_3d_scale, tier_scale, 1e-6, "back to the tier")
+	check(not Quality.has_dev_override())
+	tree.root.scaling_3d_scale = saved_scale
+
+
+func test_draws_row_shows_the_3d_share() -> void:
+	_hud.set_hud_visible(true)
+	_hud.refresh()
+	check((_hud.get_row_text(_hud.Row.DRAWS) as String).contains("3d "), "3D draws next to the total")

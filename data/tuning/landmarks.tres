@@ -1,0 +1,55 @@
+[gd_resource type="Resource" script_class="LandmarkTuning" format=3]
+
+[ext_resource type="Script" path="res://src/core/tuning/landmark_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+update_step_m = 25.0
+keep_behind_m = 60.0
+place_margin_m = 100.0
+landmarks_per_kind_count = 2
+sign_pool_count = 4
+overhead_clearance_m = 5.5
+bend_station_step_m = 8.0
+sign_setback_m = 1.0
+sign_panel_width_m = 8.5
+sign_panel_height_m = 3.6
+sign_panel_bottom_m = 2.2
+toll_beam_top_m = 7.8
+toll_beam_height_m = 1.3
+toll_column_offset_m = 1.2
+toll_lane_panel_width_m = 2.8
+toll_lane_panel_height_m = 1.05
+toll_header_height_m = 2.4
+toll_booth_width_m = 3.2
+toll_booth_length_m = 5.0
+toll_booth_height_m = 2.8
+toll_canopy_height_m = 5.0
+toll_canopy_width_m = 9.0
+toll_canopy_length_m = 16.0
+bridge_span_m = 360.0
+bridge_tower_height_m = 54.0
+bridge_tower_offset_m = 2.0
+bridge_tower_leg_width_m = 2.6
+bridge_crossbeam_low_m = 18.0
+bridge_cable_low_m = 6.0
+bridge_suspender_spacing_m = 12.0
+bridge_backstay_m = 90.0
+sign_gantry_top_m = 8.6
+sign_gantry_upright_offset_m = 1.5
+sign_gantry_panel_height_m = 3.8
+tunnel_length_m = 120.0
+tunnel_clearance_m = 7.2
+tunnel_wall_offset_m = 0.6
+tunnel_cover_top_m = 11.6
+tunnel_hill_width_m = 26.0
+tunnel_lamp_spacing_m = 8.0
+text_atlas_width_px = 1024
+text_atlas_height_px = 1024
+text_row_px = 48
+text_gutter_px = 6
+text_cap_height_frac = 0.62
+text_side_margin_frac = 0.4
+retro_emissive_factor = 1.6
+retro_light_factor = 2.5
+retro_day_fill_frac = 0.55

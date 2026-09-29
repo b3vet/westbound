@@ -120,10 +120,11 @@ func _listen(sig: Signal, fn: Callable) -> void:
 	_conns.append([sig, fn])
 
 
-func _make(run_seed: int = SEED) -> Run:
+func _make(run_seed: int = SEED, crash_cinematic: bool = false) -> Run:
 	var r := RUN_SCENE.instantiate() as Run
 	r.run_seed = run_seed
 	r.manual_ticks = true
+	r.crash_cinematic = crash_cinematic
 	r.record_best = false
 	tree.root.add_child(r)
 	_runs.append(r)
@@ -177,7 +178,7 @@ func test_countdown_then_running() -> void:
 	eq(Game.state, Game.COUNTDOWN)
 	eq(_last("run_started"), ["run_started", RunContext.MODE_JOURNEY, SEED])
 	var s0 := r.car.state.s
-	var countdown_ticks := _ticks_for(float(hud.countdown_from) * Run.COUNTDOWN_STEP_S)
+	var countdown_ticks := _ticks_for(float(hud.countdown_from) * hud.countdown_step_s)
 	_run_ticks(r, countdown_ticks - 1)
 	eq(r.state, Game.COUNTDOWN, "one tick before GO")
 	eq(r.car.state.s, s0, "the car waits on the line during the countdown")
@@ -209,7 +210,7 @@ func test_pause_freezes_and_resumes() -> void:
 	eq(r.state, Game.PAUSED)
 	eq(Game.state, Game.PAUSED)
 	check(tree.paused, "the tree is paused")
-	check(r.ui.paused_panel.visible)
+	check(r.screens.pause_screen.visible, "the pause menu shows")
 	r.resume()
 	eq(r.state, Game.RUNNING)
 	eq(Game.state, Game.RUNNING)
@@ -219,14 +220,9 @@ func test_pause_freezes_and_resumes() -> void:
 	eq(r.state, Game.RUNNING, "toggle resumes")
 
 
-func test_hud_is_optional() -> void:
+func test_hud_and_feed() -> void:
 	var r := _make()
-	if ResourceLoader.exists(Run.HUD_SCENE_PATH):
-		check(r.hud != null, "the HUD is installed when its scene exists")
-		check(not r.ui.score_label.visible, "no fallback readouts under the HUD")
-	else:
-		check(r.hud == null)
-		check(r.ui.score_label.visible, "fallback readouts keep the build playable")
+	check(r.hud != null, "the HUD is installed")
 	r.go()
 	_run_ticks(r, 20)
 	gt(r.feed.speed_mps, 0.0, "the feed is filled every frame")
@@ -236,6 +232,38 @@ func test_hud_is_optional() -> void:
 
 
 # ---------------------------------------------------------------- A whole run
+
+## The Jolt cinematic (CrashSequence) takes the car at the second hit, emits the crash
+## events once, ends into the results after its duration, and retry parks it again.
+func test_crash_cinematic_flow() -> void:
+	var r := _make(SEED, true)
+	var t := Tuning.load_default()
+	var cs := r.crash_sequence as CrashSequence
+	if not check(cs != null, "the cinematic is installed"):
+		return
+	r.go()
+	_run_ticks(r, _ticks_for(1.0))
+	r.lives.lives = 1
+	r.force_hit(HitDetection.HIT_BARRIER, -1, 1)
+	_run_ticks(r, TICKS_PER_FRAME)
+	eq(r.state, Game.CRASH)
+	check(cs.is_running(), "the sequence took the car")
+	eq(_count("crash_started"), 1, "crash_started once (from the sequence)")
+	eq(_last("slowmo"), ["slowmo", t.feel.slowmo_crash_scale, t.feel.slowmo_crash_s, &"crash"])
+	var s_crash := r.car.state.s
+	_run_ticks(r, 30)
+	eq(r.car.state.s, s_crash, "the run no longer ticks the car; the body carries it")
+	r.skip()
+	eq(r.state, Game.RESULTS, "tap skips to the results")
+	eq(_count("crash_finished"), 1, "crash_finished once")
+	eq(Engine.time_scale, 1.0)
+	r.retry()
+	check(not cs.is_running(), "retry parks the bodies")
+	eq(r.state, Game.COUNTDOWN)
+	r.go()
+	_run_ticks(r, _ticks_for(0.5))
+	gt(r.car.state.s, r.start_s_m(), "drivable again after retry")
+
 
 func test_score_hit_crash_results_retry() -> void:
 	var r := _make()
@@ -317,7 +345,7 @@ func test_score_hit_crash_results_retry() -> void:
 	ge(float(res[&"best_chain"]), float(chain), "the lost chain counts as the best chain")
 	gt(float(res[&"distance_m"]), 100.0)
 	gt(float(res[&"top_speed_kmh"]), 150.0)
-	check(r.ui.results_panel.visible, "results screen")
+	check(r.screens.results_screen.visible, "results screen")
 
 	# Retry: back on the road in the same frame, new seed, everything reset.
 	var frames_before := Engine.get_process_frames()
@@ -336,11 +364,29 @@ func test_score_hit_crash_results_retry() -> void:
 	eq(r.stats.hits, 0)
 	near(r.car.state.s, r.start_s_m(), 1e-6, "back on the start line")
 	check(not r.fx.damaged, "damage cleared")
-	check(not r.ui.results_panel.visible)
+	check(not r.screens.results_screen.visible)
 	gt(r.sim.state.count, 0, "traffic refilled")
 	_bot(r)
 	_run_ticks(r, _ticks_for(3.0) + 10)
 	eq(r.state, Game.RUNNING, "and driving again after the countdown")
+
+
+## The ghost flicker never shows a body the cockpit camera hid (and restores hidden).
+func test_ghost_flicker_respects_hidden_body() -> void:
+	var r := _make()
+	r.go()
+	_run_ticks(r, 10)
+	r.car.set_body_visible(false)
+	r.fx.start_ghost(1.0)
+	for i in 30:
+		r.fx.advance(1.0 / 60.0)
+		if r.car.visual.visible:
+			fail("body shown by the flicker at step %d" % i)
+			break
+	r.fx.stop_ghost()
+	check(not r.car.visual.visible, "still hidden after the ghost")
+	r.car.set_body_visible(true)
+	check(r.car.visual.visible)
 
 
 func test_retry_seeds_are_deterministic() -> void:
