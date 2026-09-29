@@ -10,6 +10,13 @@ extends Resource
 @export var checkpoint_warning_distances_m: PackedFloat64Array = [1000.0, 500.0]
 @export var fork_sign_distance_m: float = 1000.0
 
+@export_group("Run start")
+## The rolling start: the car waits on the line in this lane (0 = next to the median)
+## and leaves it at this speed when the countdown ends (above the minimum speed, so
+## the run starts scoring at once).
+@export var start_lane: int = 1   # not in spec: the M3 drive scene's lane
+@export var start_speed_kmh: float = 120.0   # not in spec: a rolling start
+
 @export_group("Pace (Pace bonus and the checkpoint sun lift)")
 @export var pace_target_kmh: float = 170.0   # not in spec: "the leg's pace target"
 ## The pace sun lift reaches its maximum at this much above the target (linear from the target).
@@ -51,6 +58,10 @@ extends Resource
 
 func leg_length_m() -> float:
 	return Units.km_to_m(leg_length_km)
+
+
+func start_speed_mps() -> float:
+	return Units.kmh_to_mps(start_speed_kmh)
 
 
 func pace_target_mps() -> float:

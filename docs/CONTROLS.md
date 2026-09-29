@@ -166,6 +166,7 @@ Plan D9 (owner, M2: "a single finger for a single side"). Per finger (touch slot
 | `wb_camera` | C, gamepad Y |
 | `wb_pause` | P, Esc, gamepad Start |
 | `wb_mute` | M |
+| `wb_high_beam` | H, gamepad X (high beams on/off: `toggle_high_beam()`, visual only) |
 
 WASD are physical keys (the same positions on AZERTY and similar layouts). The left stick X and both triggers are read by axis (`JOY_AXIS_LEFT_X`, `JOY_AXIS_TRIGGER_RIGHT`, `JOY_AXIS_TRIGGER_LEFT`) to stay analog.
 

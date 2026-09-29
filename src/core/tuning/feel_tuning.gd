@@ -26,3 +26,28 @@ extends Resource
 @export var hit_shake_s: float = 0.4   # not in spec
 @export var close_pass_shake_strength: float = 0.15   # not in spec: "a tiny shake on close passes"
 @export var close_pass_shake_s: float = 0.15   # not in spec
+
+@export_group("Damage look")
+## PlayerFx (visual only). Ghost flicker: the body toggles visible/hidden at this rate
+## ("flickers translucent" during the ghost period).
+@export var ghost_flicker_hz: float = 12.0   # not in spec
+## Hood smoke after the first hit: particles at medium quality (x Quality.particle_scale),
+## lifetime, initial speed range, direction in car space (+Z is the car's rear: up and
+## back), spread, rise, puff size and its scale at birth and at death.
+@export var smoke_particles: int = 10   # not in spec
+@export var smoke_lifetime_s: float = 0.9   # not in spec
+@export var smoke_speed_min_mps: float = 1.5   # not in spec
+@export var smoke_speed_max_mps: float = 3.5   # not in spec
+@export var smoke_direction: Vector3 = Vector3(0.0, 0.8, 1.0)   # not in spec
+@export var smoke_spread_deg: float = 18.0   # not in spec
+@export var smoke_rise_mps2: float = 1.2   # not in spec
+@export var smoke_size_m: float = 0.55   # not in spec
+@export var smoke_scale_birth: float = 0.6   # not in spec
+@export var smoke_scale_death: float = 1.8   # not in spec
+## The flickering headlight: flicker steps per second and the share of steps that are lit.
+@export var lamp_flicker_hz: float = 14.0   # not in spec
+@export var lamp_lit_share: float = 0.35   # not in spec
+## Quad size when the lamp has no mesh (width, height; the height is also the minimum
+## side), and its offset in front of the lamp face.
+@export var lamp_fallback_size_m: Vector2 = Vector2(0.34, 0.16)   # not in spec
+@export var lamp_offset_m: float = 0.02   # not in spec

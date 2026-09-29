@@ -35,6 +35,12 @@ extends Resource
 @export var close_pass_nudge_window_s: float = 10.0
 @export var close_pass_nudge_pct: float = 1.0
 
+@export_group("Traffic headlights")
+## Traffic headlights (and the director's night mix) are on while the color script's
+## emissive_headlight ramp at the sun clock's sky_t is above this: lights come on in
+## the golden hour and go off during the dawn, as the sky shows.
+@export var traffic_headlights_on_ramp: float = 0.3   # not in spec: the M3 drive scene's threshold
+
 @export_group("Dawn")
 ## Night -> dawn -> morning after a checkpoint at night, while play continues.
 @export var dawn_transition_s: float = 6.0

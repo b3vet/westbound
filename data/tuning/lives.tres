@@ -14,6 +14,7 @@ first_hit_deflect_max_deg = 10.0
 first_hit_wobble_amplitude_deg = 2.0
 first_hit_wobble_hz = 3.0
 first_hit_recovery_max_s = 1.0
+crash_brake_radius_m = 80.0
 collision_inset_m = 0.08
 collision_broadphase_m = 40.0
 collision_test_max_speed_kmh = 350.0

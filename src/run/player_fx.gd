@@ -14,7 +14,8 @@ extends Node3D
 ##   - DeadLamp: one small quad over headlight_L that flickers between a dead lamp and
 ##     a sputtering flare (the damage shader's lamp mode, set per frame).
 ## No lights, no StandardMaterial3D: both use src/run/damage_fx.gdshader (unlit, ends
-## with wb_output). Both stay hidden (0 draw calls) until the first hit.
+## with wb_output). Both stay hidden (0 draw calls) until the first hit. Every number
+## is in FeelTuning's "Damage look" group (data/tuning/feel.tres).
 
 const SHADER := preload("res://src/run/damage_fx.gdshader")
 const SMOKE_NODE := &"HoodSmoke"
@@ -24,31 +25,14 @@ const MARKER_SMOKE := &"smoke_hood"
 ## Transparent pass order: above the sky layers (-100..-97, docs/CONTRACTS.md §13).
 const RENDER_PRIORITY := 2
 
-# ---- pending tuning (feel.tres, WP7.4 owns it): visual-only numbers, see docs/RUN.md
-## Ghost flicker: visible/hidden toggles at this rate ("flickers translucent").
-const GHOST_FLICKER_HZ := 12.0   # lint: allow-number pending tuning (feel)
-## Hood smoke: particles at medium quality, lifetime, speed back/up, puff size.
-const SMOKE_PARTICLES := 10
-const SMOKE_LIFETIME_S := 0.9   # lint: allow-number pending tuning (feel)
-const SMOKE_VELOCITY_MPS := Vector2(1.5, 3.5)   # min, max
-const SMOKE_DIRECTION := Vector3(0.0, 0.8, 1.0)   # up and back (+Z is the car's rear)
-const SMOKE_SPREAD_DEG := 18.0   # lint: allow-number pending tuning (feel)
-const SMOKE_RISE_MPS2 := 1.2   # lint: allow-number pending tuning (feel)
-const SMOKE_SIZE_M := 0.55   # lint: allow-number pending tuning (feel)
-const SMOKE_GROW := Vector2(0.6, 1.8)   # scale at birth, at death
-## Dead headlight: flicker steps per second and the share of steps that are lit.
-const LAMP_FLICKER_HZ := 14.0   # lint: allow-number pending tuning (feel)
-const LAMP_LIT_SHARE := 0.35   # lint: allow-number pending tuning (feel)
-const LAMP_SIZE_M := Vector2(0.34, 0.16)   # fallback when the lamp has no mesh
-const LAMP_OFFSET_M := 0.02   # lint: allow-number pending tuning: in front of the lamp face
-# ----
-
 ## Knuth's multiplicative hash for the flicker pattern (visual only, no gameplay RNG).
 const _HASH_MUL := 2654435761
 const _HASH_SHIFT := 13
 const _HASH_MASK := 0xFF
 
 var car: PlayerCar
+## The look's numbers (FeelTuning "Damage look"); the default tuning's when unset.
+var feel: FeelTuning
 var damaged: bool = false
 var ghost: bool = false
 
@@ -98,7 +82,7 @@ func bind(player_car: PlayerCar) -> void:
 		model.root.add_child(_lamp)
 		var box := model.body_aabb
 		_lamp.position = Vector3(box.position.x + box.size.x * 0.25, box.get_center().y,
-			box.position.z - LAMP_OFFSET_M)
+			box.position.z - _feel().lamp_offset_m)
 	_apply_damage()
 
 
@@ -152,10 +136,11 @@ func advance(delta: float) -> void:
 		if _ghost_left_s <= 0.0:
 			stop_ghost()
 		elif car != null and car.visual != null:
-			car.visual.visible = car.body_visible and int(_t * GHOST_FLICKER_HZ * 2.0) % 2 == 0
+			car.visual.visible = car.body_visible and int(_t * _feel().ghost_flicker_hz * 2.0) % 2 == 0
 	if damaged and _lamp_mat != null:
-		var step := int(_t * LAMP_FLICKER_HZ)
-		var lit := float(((step * _HASH_MUL) >> _HASH_SHIFT) & _HASH_MASK) < LAMP_LIT_SHARE * float(_HASH_MASK)
+		var f := _feel()
+		var step := int(_t * f.lamp_flicker_hz)
+		var lit := float(((step * _HASH_MUL) >> _HASH_SHIFT) & _HASH_MASK) < f.lamp_lit_share * float(_HASH_MASK)
 		var level := 1.0 if lit else 0.0
 		if level != _lamp_level:
 			_lamp_level = level
@@ -171,31 +156,32 @@ func _apply_damage() -> void:
 
 
 func _make_smoke() -> CPUParticles3D:
+	var f := _feel()
 	var p := CPUParticles3D.new()
 	p.name = SMOKE_NODE
 	var q := float(Quality.particle_scale) if is_inside_tree() else 1.0
-	p.amount = maxi(roundi(float(SMOKE_PARTICLES) * q), 1)
-	p.lifetime = SMOKE_LIFETIME_S
+	p.amount = maxi(roundi(float(f.smoke_particles) * q), 1)
+	p.lifetime = f.smoke_lifetime_s
 	p.local_coords = true
 	p.emitting = false
 	p.visible = false
-	p.direction = SMOKE_DIRECTION.normalized()
-	p.spread = SMOKE_SPREAD_DEG
-	p.initial_velocity_min = SMOKE_VELOCITY_MPS.x
-	p.initial_velocity_max = SMOKE_VELOCITY_MPS.y
-	p.gravity = Vector3(0.0, SMOKE_RISE_MPS2, 0.0)
+	p.direction = f.smoke_direction.normalized()
+	p.spread = f.smoke_spread_deg
+	p.initial_velocity_min = f.smoke_speed_min_mps
+	p.initial_velocity_max = f.smoke_speed_max_mps
+	p.gravity = Vector3(0.0, f.smoke_rise_mps2, 0.0)
 	var grow := Curve.new()
-	grow.add_point(Vector2(0.0, SMOKE_GROW.x / SMOKE_GROW.y))
+	grow.add_point(Vector2(0.0, f.smoke_scale_birth / f.smoke_scale_death))
 	grow.add_point(Vector2(1.0, 1.0))
-	p.scale_amount_min = SMOKE_GROW.y
-	p.scale_amount_max = SMOKE_GROW.y
+	p.scale_amount_min = f.smoke_scale_death
+	p.scale_amount_max = f.smoke_scale_death
 	p.scale_amount_curve = grow
 	var fade := Gradient.new()
 	fade.set_color(0, Color(1.0, 1.0, 1.0, 1.0))
 	fade.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
 	p.color_ramp = fade
 	var quad := QuadMesh.new()
-	quad.size = Vector2(SMOKE_SIZE_M, SMOKE_SIZE_M)
+	quad.size = Vector2(f.smoke_size_m, f.smoke_size_m)
 	p.mesh = quad
 	var mat := ShaderMaterial.new()
 	mat.shader = SHADER
@@ -206,13 +192,14 @@ func _make_smoke() -> CPUParticles3D:
 
 
 func _make_lamp(lamp_node: Node3D) -> MeshInstance3D:
-	var size := LAMP_SIZE_M
-	var offset := Vector3(0.0, 0.0, -LAMP_OFFSET_M)
+	var f := _feel()
+	var size := f.lamp_fallback_size_m
+	var offset := Vector3(0.0, 0.0, -f.lamp_offset_m)
 	var lamp_mesh := lamp_node as MeshInstance3D
 	if lamp_mesh != null and lamp_mesh.mesh != null:
 		var box := lamp_mesh.get_aabb()
-		size = Vector2(maxf(box.size.x, LAMP_SIZE_M.y), maxf(box.size.y, LAMP_SIZE_M.y))
-		offset = box.get_center() + Vector3(0.0, 0.0, -box.size.z * 0.5 - LAMP_OFFSET_M)
+		size = Vector2(maxf(box.size.x, f.lamp_fallback_size_m.y), maxf(box.size.y, f.lamp_fallback_size_m.y))
+		offset = box.get_center() + Vector3(0.0, 0.0, -box.size.z * 0.5 - f.lamp_offset_m)
 	var mi := MeshInstance3D.new()
 	mi.name = LAMP_NODE
 	var quad := QuadMesh.new()
@@ -243,6 +230,12 @@ func _on_ghost_started(duration_s: float) -> void:
 
 func _on_run_started(_mode: StringName, _seed: int) -> void:
 	reset()
+
+
+func _feel() -> FeelTuning:
+	if feel == null:
+		feel = Tuning.load_default().feel
+	return feel
 
 
 static func _connect(sig: Signal, fn: Callable) -> void:
