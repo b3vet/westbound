@@ -89,7 +89,6 @@ signal set_piece_started(kind: StringName)
 signal set_piece_ended(kind: StringName)
 ## Traffic reactions to the player (vehicle_id is the traffic sim slot index).
 signal traffic_horn(vehicle_id: int, world_pos: Vector3)
-signal traffic_high_beams(vehicle_id: int)
 signal traffic_brake_tap(vehicle_id: int)
 signal traffic_hazards(vehicle_id: int, on: bool)
 

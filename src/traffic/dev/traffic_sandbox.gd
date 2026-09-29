@@ -331,8 +331,6 @@ func _forward_events() -> void:
 				mark = TrafficOverlay.Mark.HORN
 			TrafficSim.KIND_BRAKE_TAP:
 				mark = TrafficOverlay.Mark.BRAKE_TAP
-			TrafficSim.KIND_HIGH_BEAMS:
-				mark = TrafficOverlay.Mark.HIGH_BEAMS
 			TrafficSim.KIND_HAZARDS:
 				if events.value[k] > 0.0:
 					mark = TrafficOverlay.Mark.HAZARDS

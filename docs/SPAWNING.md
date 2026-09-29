@@ -51,3 +51,12 @@ Each lane is planned as a renewal process at `DirectorTuning.density_per_km_lane
 - Intensity waves and blind-window caps go in `_refresh_ctx()`.
 - Passability and re-rolls go between `plan_batch` and the commit in `_plan_range()`.
 - Set pieces become further sources assigned to `source`. Flow stays in charge of behind spawns and the opposite side's mix.
+
+
+## Hardening (WP3.3)
+
+- `SpawnSources.occupies_lane()` decides lane occupancy from the lateral span, so lane-splitting motorbikes and cars mid lane change count in both lanes.
+- `TrafficDirector.keeps_live_gaps()` re-checks every committed spawn against live vehicles using `s*` including the closing term. Refusals are counted in `rejected_overlap`.
+- A failed behind-spawn waits `spawn_behind_retry_s` before retrying.
+
+Details are in `docs/TRAFFIC.md` and `docs/SOAK.md`.
