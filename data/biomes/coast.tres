@@ -1,0 +1,154 @@
+[gd_resource type="Resource" script_class="BiomeDef" load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://src/road/biome_def.gd" id="1_biome"]
+[ext_resource type="Script" path="res://src/road/roadside/roadside_prop.gd" id="3_prop"]
+[ext_resource type="Script" path="res://src/world/ocean/water_def.gd" id="4_water"]
+[ext_resource type="Script" path="res://src/world/horizon_sets/horizon_set_def.gd" id="5_horizon"]
+
+[sub_resource type="Resource" id="Prop_cliffs"]
+script = ExtResource("3_prop")
+id = &"cliffs"
+mesh_paths = PackedStringArray("res://assets/props/coast/cliff_rock.res")
+pattern = 1
+sides = 2
+density_per_km = 7.0
+cell_length_m = 400.0
+setback_min_m = 2.0
+setback_max_m = 30.0
+facing = 0
+yaw_jitter_deg = 25.0
+scale_min_factor = 0.7
+scale_max_factor = 1.3
+row_count_min = 5
+row_count_max = 9
+row_spacing_m = 20.0
+
+[sub_resource type="Resource" id="Prop_houses"]
+script = ExtResource("3_prop")
+id = &"coast_houses"
+mesh_paths = PackedStringArray("res://assets/props/coast/coast_house.res")
+pattern = 0
+sides = 2
+density_per_km = 3.5
+cell_length_m = 400.0
+setback_min_m = 8.0
+setback_max_m = 60.0
+facing = 0
+yaw_jitter_deg = 12.0
+scale_min_factor = 0.9
+scale_max_factor = 1.1
+
+[sub_resource type="Resource" id="Prop_palms_land"]
+script = ExtResource("3_prop")
+id = &"palms_land"
+mesh_paths = PackedStringArray("res://assets/props/coast/palm.res")
+pattern = 0
+sides = 2
+density_per_km = 14.0
+cell_length_m = 250.0
+setback_min_m = 1.0
+setback_max_m = 30.0
+facing = 1
+scale_min_factor = 0.85
+scale_max_factor = 1.3
+
+[sub_resource type="Resource" id="Prop_scrub_land"]
+script = ExtResource("3_prop")
+id = &"scrub_land"
+mesh_paths = PackedStringArray("res://assets/props/coast/scrub.res")
+pattern = 0
+sides = 2
+density_per_km = 34.0
+cell_length_m = 200.0
+setback_min_m = 0.0
+setback_max_m = 70.0
+facing = 1
+scale_min_factor = 0.7
+scale_max_factor = 1.4
+
+[sub_resource type="Resource" id="Water_ocean"]
+script = ExtResource("4_water")
+side = 1
+shore_offset_m = 2.0
+shore_width_m = 10.0
+width_m = 3000.0
+far_bank_width_m = 0.0
+surf_width_m = 5.0
+near_column_m = 9.0
+column_growth_factor = 1.6
+row_step_m = 12.0
+lift_m = 0.35
+drop_m = 18.0
+min_drop_m = 8.0
+level_smoothing_m = 1600.0
+slope_run_m = 46.0
+slope_jag_m = 4.0
+top_lift_m = 0.02
+shore_color = Color(0.86, 0.79, 0.62, 1)
+top_color = Color(0.55, 0.57, 0.38, 1)
+cliff_color = Color(0.52, 0.5, 0.36, 1)
+cliff_dark_color = Color(0.46, 0.43, 0.39, 1)
+foam_color = Color(0.9, 0.93, 0.92, 1)
+shallow_color = Color(0.2, 0.56, 0.58, 1)
+deep_color = Color(0.07, 0.25, 0.4, 1)
+deep_distance_m = 140.0
+wave_height_m = 0.3
+wave_ramp_m = 14.0
+wave_period_s = 3.5
+sky_reflect_factor = 0.7
+sun_path_gain = 2.2
+depth_pull_frac = 0.004
+islet_mesh_paths = PackedStringArray("res://assets/props/coast/sea_stacks.res", "res://assets/props/coast/lighthouse_islet.res")
+islet_weights = PackedFloat64Array(0.75, 0.25)
+islet_cell_m = 450.0
+islet_chance_frac = 0.55
+islet_offset_min_m = 25.0
+islet_offset_max_m = 220.0
+islet_scale_min_factor = 0.8
+islet_scale_max_factor = 1.3
+span_cell_m = 0.0
+span_chance_frac = 1.0
+arrive_m = 600.0
+arrive_offset_m = 700.0
+meander_amplitude_m = 0.0
+build_units_per_frame = 3
+rebuild_step_m = 60.0
+
+[sub_resource type="Resource" id="Horizon_coast"]
+script = ExtResource("5_horizon")
+id = &"coast_headlands"
+layer_land = Vector4(1, -1, 1, 1)
+layer_mist = Vector4(0.15, 0.3, 0, 0)
+layer_windows = Vector4(0, 0, 0, 0)
+sea_softness = 0.18
+
+[resource]
+script = ExtResource("1_biome")
+id = &"coast"
+display_name = "Coastal Highway"
+order = 4
+lane_count = 4
+curve_frequency_scale = 1.2
+crest_frequency_scale = 0.5
+tunnel_frequency_scale = 0.0
+scatter_props = Array[ExtResource("3_prop")]([SubResource("Prop_cliffs"), SubResource("Prop_houses"), SubResource("Prop_palms_land"), SubResource("Prop_scrub_land")])
+fence_mesh_path = ""
+fence_setback_m = 0.0
+world_tint_offset = Color(-0.012, 0, 0.012, 0)
+fog_tint_offset = Color(-0.01, 0.004, 0.016, 0)
+horizon_cards = PackedStringArray()
+horizon_layer_style = Vector4(6, 5, 3, 3)
+horizon_layer_height_m = Vector4(200, 180, 1100, 3000)
+heat_shimmer = 0.0
+horizon_set = &"coast_headlands"
+ground_color = Color(0.55, 0.57, 0.38, 1)
+verge_color = Color(0.5, 0.55, 0.35, 1)
+rock_color = Color(0.49, 0.46, 0.42, 1)
+rock_shade_color = Color(0.62, 0.58, 0.52, 1)
+traffic_palette = PackedColorArray(0.94, 0.93, 0.89, 1, 0.7, 0.82, 0.88, 1, 0.45, 0.72, 0.68, 1, 0.93, 0.47, 0.42, 1, 0.9, 0.82, 0.62, 1, 0.13, 0.17, 0.35, 1, 0.75, 0.15, 0.13, 1, 0.6, 0.63, 0.66, 1, 0.11, 0.11, 0.13, 1, 0.98, 0.78, 0.16, 1)
+set_piece_ids = Array[StringName]([&"slalom", &"merge_zone", &"road_works", &"convoy", &"truck_wall"])
+set_piece_weights = PackedFloat64Array(1.2, 1, 0.8, 0.7, 0.5)
+landmark_style = &"suspension_bridge"
+landmark_styles = Array[StringName]([&"suspension_bridge", &"sign_gantry", &"tunnel_portal"])
+water = SubResource("Water_ocean")
+horizon_def = SubResource("Horizon_coast")
