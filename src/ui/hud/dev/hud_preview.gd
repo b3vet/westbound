@@ -16,6 +16,9 @@ extends Control
 ## --failed=true;
 ## --hand=right|left, --throttle=auto|manual, --steering=drag|gyro, --controls_scale=<f>,
 ## --text_scale=1|1.25, --units=kmh|mph, --sky_t=<0..1> (default per state),
+## --high_beam=true (the high-beam button lit; it shows at dusk, night and dawn),
+## --objective=<id> (WP5.6: the chip's objective, and the toast's next one; e.g.
+## slipstream, the longest label), --chain=<n> (the chain shown, e.g. 186400),
 ## --world=true (the 3D look preview behind instead of the flat background).
 ## Prints the frame's draw calls and the HUD's visible canvas items ("snap: ...").
 
@@ -39,6 +42,7 @@ var _clock: float = 0.0
 var _next_event: float = 0.0
 var _event_i: int = 0
 var _world: Node
+var _objective_id: StringName = &""
 
 @onready var hud: Hud = $Hud
 @onready var hub: PlayerInput = $PlayerInput
@@ -62,6 +66,7 @@ func _ready() -> void:
 	feed.objective_target = t.legs.objective_close_passes_count
 	feed.objective_progress = 1
 	hud.bind(feed)
+	hud.high_beam_pressed.connect(hub.toggle_high_beam)
 	_set_sky(sky_t)
 
 
@@ -90,8 +95,15 @@ func snap_setup(args: Dictionary) -> void:
 	if bool(args.get("world", false)):
 		_add_world()
 	Events.run_started.emit(&"journey", 1)
+	hub.set_high_beam(bool(args.get("high_beam", false)))
 	await get_tree().process_frame
+	_objective_id = StringName(String(args.get("objective", "")))
+	if _objective_id != &"":
+		_set_objective(_objective_id)
 	_apply_state(state, args)
+	if args.has("chain"):
+		feed.chain = int(args["chain"])
+	hud.settle_high_beam()
 	# The HUD's own draw calls: the frame with it minus the frame without it.
 	await _frames(MEASURE_FRAMES)
 	var with_hud := Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
@@ -196,8 +208,8 @@ func _apply_state(state: String, args: Dictionary = {}) -> void:
 				Events.bonus_awarded.emit(LegTracker.BONUS_OBJECTIVE, 2500, f.banked + 2500)
 				f.banked += 2500
 			elif bool(args.get("failed", false)):
-				f.objective = LegObjectives.NO_BRAKING
-				f.objective_target = 0
+				_set_objective(_objective_id if LegObjectives.completes_at_checkpoint(_objective_id)
+						else LegObjectives.NO_BRAKING)
 				f.objective_failed = true
 		"warning":
 			f.speed_mps = Units.kmh_to_mps(208.0)
@@ -225,8 +237,7 @@ func _leg_toast(night: bool) -> void:
 	f.sun_height = 0.05 if night else 0.85
 	f.checkpoint_distance_m = 3480.0
 	f.leg_index = 3
-	f.objective = LegObjectives.THREADS
-	f.objective_target = 2
+	_set_objective(_objective_id if _objective_id != &"" else LegObjectives.THREADS)
 	f.objective_progress = 0
 	f.objective_done = false
 	f.objective_failed = false
@@ -238,7 +249,7 @@ func _leg_toast(night: bool) -> void:
 		RunEvents.SUMMARY_OBJECTIVE_POINTS: 2500 * k,
 	}
 	Events.checkpoint_crossed.emit(2, summary)
-	Events.leg_started.emit(3, &"farmland", LegObjectives.THREADS)
+	Events.leg_started.emit(3, &"farmland", f.objective)
 	f.banked += 48_200
 	Events.chain_banked.emit(48_200, Events.REASON_CHECKPOINT, f.banked)
 	if night:
@@ -247,6 +258,12 @@ func _leg_toast(night: bool) -> void:
 		f.banked += int(b[1]) * k
 		Events.bonus_awarded.emit(b[0], int(b[1]) * k, f.banked)
 	Events.life_restored.emit(2)
+
+
+func _set_objective(id: StringName) -> void:
+	feed.objective = id
+	feed.objective_target = LegObjectives.target_of(id, Tuning.load_default().legs)
+	feed.objective_progress = mini(feed.objective_progress, feed.objective_target)
 
 
 func _emit_scored(kind: StringName, points: int, mult: float) -> void:
@@ -306,6 +323,7 @@ func _set_sky(value: float) -> void:
 	sky_t = value
 	_cs.sample_into(sky_t, _key)
 	hud.set_accent(_key.ui_accent)
+	hud.set_headlight_ramp(_key.emissive_headlight)
 	queue_redraw()
 
 

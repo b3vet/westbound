@@ -53,3 +53,6 @@ text_side_margin_frac = 0.4
 retro_emissive_factor = 1.6
 retro_light_factor = 2.5
 retro_day_fill_frac = 0.55
+clearance_margin_m = 1.0
+clearance_cache_pad_m = 500.0
+clearance_ground_cover_m = 1.0

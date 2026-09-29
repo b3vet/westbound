@@ -146,9 +146,11 @@ func _paint_pass(outlines: bool) -> void:
 		else:
 			s.display.draw_string(rid, Vector2(x, y), word, HORIZONTAL_ALIGNMENT_LEFT, -1.0, s.size_event,
 					Color(_color(_role[i]), a))
+			HudDraw.note(self, Vector2(x, y), ww, s.size_event, word)
 			if not pts.is_empty():
 				HudDraw.glyphs(rid, s.display, Vector2(x + ww + gap, y), pts, s.size_event, cell,
 						Color(s.text, a), 0)
+				HudDraw.note(self, Vector2(x + ww + gap, y), pw - gap, s.size_event, pts)
 
 
 func _alpha(i: int, t: HudTuning) -> float:

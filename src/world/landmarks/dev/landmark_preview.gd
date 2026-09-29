@@ -11,7 +11,8 @@ extends Node3D
 ## snap_setup args: --kind=toll_gantry|suspension_bridge|sign_gantry|tunnel_portal,
 ## --dist=<m before the checkpoint> (negative: past it; the 1 km sign is at 1000),
 ## --cam=chase|hood|high|side, --sky_t=<0..1>, --seed=N, --lane=0..2,
-## --roadside=false (no roadside props), --lights=<player fake-light gain, default 1>,
+## --roadside=false (no roadside props), --clear=false (the roadside ignores the
+## landmark, as before WP5.5), --lights=<player fake-light gain, default 1>,
 ## --dump_atlas=<png path> (saves the sign-text atlas).
 ## Prints the frame's draw calls and the landmarks' own share ("snap: ..." lines).
 
@@ -87,6 +88,8 @@ func _build() -> void:
 		_roadside.name = "Roadside"
 		_roadside.biome_director = _director
 		_roadside.view_distance_override_m = view
+		_roadside.landmark_style_override = kind
+		_roadside.clear_landmarks = bool(_args.get("clear", true))
 		add_child(_roadside)
 		_roadside.setup(ctx, _road, _origin)
 		_roadside.update_view(s)

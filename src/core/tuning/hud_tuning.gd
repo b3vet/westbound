@@ -136,6 +136,10 @@ extends Resource
 @export var leg_toast_item_rows: int = 3
 ## The leg objective chip, under the score panel (left-anchored, like the score).
 @export var objective_chip_size_px: Vector2 = Vector2(244.0, 50.0)
+## WP5.6: the chip grows to fit its text and progress up to this width (canvas px at
+## 100% text; x of objective_chip_size_px is the narrowest). The layout keeps this much
+## room for it.
+@export var objective_chip_max_width_px: float = 280.0   # not in spec
 ## A new objective pops in (scale from this share of full size)...
 @export var objective_pop_s: float = 0.25
 @export var objective_pop_from_pct: float = 80.0
@@ -188,6 +192,16 @@ extends Resource
 ## In-run settings choices (multipliers of the tuned control values).
 @export var settings_controls_scales: PackedFloat64Array = [0.8, 1.0, 1.2]   # not in spec
 @export var settings_sensitivities: PackedFloat64Array = [0.75, 1.0, 1.35]   # not in spec
+
+@export_group("High beams")
+## The high-beam button (plan D8) fades in and out over this while the headlights come
+## on at dusk and go off at dawn (modulate only: no redraws).
+@export var high_beam_fade_s: float = 0.4   # not in spec
+## It shows while the color script's headlight ramp is at least this: where traffic
+## switches its headlights on (Run.HEADLIGHTS_ON_RAMP), sky_t ~0.44, between golden hour
+## and sunset, until dawn. (NightTuning.visible_min_ramp, 0.05, is reached at sky_t
+## ~0.29, mid-afternoon: too early for a night control.)
+@export var high_beam_min_ramp: float = 0.3   # not in spec
 
 
 ## The text-size setting clamped to the offered range (100%..125%).

@@ -246,6 +246,28 @@ func test_run_countdown_screen_follows_the_run() -> void:
 	check(not r.screens.countdown.card_visible(), "drag steering: no calibration card")
 
 
+## WP5.6: the countdown's leg chip names the leg's biome and shows its objective the
+## way the HUD does ("5 CLOSE PASSES", in the units setting), from the run's leg 1
+## announcement in the countdown's first frame; a retry announces its own.
+func test_countdown_names_the_biome_and_the_objective() -> void:
+	var r := _run()
+	var legs := Tuning.load_default().legs
+	_ticks(r, TICKS_PER_FRAME)
+	check(r.state == Game.COUNTDOWN, "still counting down")
+	var place := Hud.biome_name(r.biome_director.biome_at(r.legs.leg_start_s()).id)
+	eq(place, "FARMLAND PLAINS")
+	var lines := r.screens.countdown.leg_lines()
+	eq(lines, PackedStringArray(["LEG 1 OF %d" % legs.legs_to_coast, place,
+			LegObjectives.label(r.objectives.current(), legs)]), "leg, biome and objective")
+	Settings.set_value(&"units", &"mph")
+	eq(r.screens.countdown.leg_lines()[2], LegObjectives.label(r.objectives.current(), legs, true), "units follow")
+	r.retry()
+	eq(r.screens.countdown.leg_lines()[1], "", "a retry forgets the old run's biome until its own leg 1")
+	_ticks(r, TICKS_PER_FRAME)
+	eq(r.screens.countdown.leg_lines()[1], place, "...which comes in the first frame")
+	eq(r.screens.countdown.leg_lines()[2], LegObjectives.label(r.objectives.current(), legs, true))
+
+
 func test_gyro_recalibrates_through_the_countdown_and_locks_at_go() -> void:
 	var fake := FakeGravity.new()
 	fake.tilt(TILT_A)

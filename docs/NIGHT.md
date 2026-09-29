@@ -70,8 +70,8 @@ judged by eye as the contract asks.
 ## High beams (D8)
 
 - Controls: `H`, gamepad `X` (`KeysGamepad.HIGH_BEAM`, not in spec), or
-  `PlayerInput.toggle_high_beam()` / `set_high_beam(on)`. The HUD button comes later
-  (needs: HUD high-beam button).
+  `PlayerInput.toggle_high_beam()` / `set_high_beam(on)`. The HUD has a high-beam
+  button under [CAM] from late golden hour to dawn (see HUD.md → High-beam button).
 - State: `PlayerInput.high_beam`, and a signal `PlayerInput.high_beam_changed(on)` until
   `Events.high_beam_changed(on: bool)` exists (needs: Events signal). The toggle is manual:
   it stays on until toggled again and survives `release_all()`.

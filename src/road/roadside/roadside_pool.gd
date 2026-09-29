@@ -14,6 +14,8 @@ extends RefCounted
 const FLOATS := 12
 
 var mesh: Mesh
+## The mesh's bounds (footprints for LandmarkClearance).
+var aabb: AABB
 var mmi: MultiMeshInstance3D
 var multimesh: MultiMesh
 ## Row-major 3x4 transforms (MultiMesh TRANSFORM_3D layout).
@@ -34,6 +36,7 @@ var _block_count := PackedInt32Array()
 
 func _init(pool_mesh: Mesh, max_per_block: int) -> void:
 	mesh = pool_mesh
+	aabb = pool_mesh.get_aabb()
 	per_block = max_per_block
 	var faces := 0
 	for i in mesh.get_surface_count():

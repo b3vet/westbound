@@ -37,6 +37,11 @@ var tuning: HudTuning
 var style := HudStyle.new()
 var state: StringName = &""
 var legs_total: int = 8
+## The countdown's leg chip: the leg's biome (display name) and objective id, from
+## Events.leg_started (the run announces leg 1 during the countdown).
+var leg_place: String = ""
+var leg_objective: StringName = &""
+var leg_index: int = 0
 
 var countdown: CountdownScreen
 var pause_screen: PauseScreen
@@ -50,6 +55,8 @@ var _pinned_full: Rect2 = Rect2()
 var _pinned_safe: Rect2 = Rect2()
 var _sky: SkyRig
 var _accent_rgba: int = 0
+var _legs: LegsTuning
+var _hud_layout := HudLayout.new()
 
 
 func _init() -> void:
@@ -62,6 +69,7 @@ func _ready() -> void:
 	var t := Tuning.load_default()
 	tuning = t.hud
 	legs_total = t.legs.legs_to_coast
+	_legs = t.legs
 	_theme = UiTheme.load_theme()
 	countdown = $Countdown as CountdownScreen
 	crash_screen = $Crash as CrashScreen
@@ -161,10 +169,10 @@ func show_state(to: StringName, from: StringName = &"") -> void:
 func prepare_countdown() -> void:
 	for s: RunScreen in [pause_screen, crash_screen, results_screen]:
 		s.close(false)
+	_relayout()   # the touch controls may have moved since (the HUD's panels follow them)
 	countdown.kill_tweens()
 	countdown.reduced_motion = _reduced_motion()
-	if feed != null:
-		countdown.set_leg(feed.leg_index, legs_total, _objective_text(feed.objective))
+	_refresh_leg()
 	countdown.set_gyro(gyro_active())
 	var hold := needs_motion_tap()
 	countdown.set_hold(hold)
@@ -229,6 +237,7 @@ func _connect_events(on: bool) -> void:
 		[Events.game_state_changed, _on_state],
 		[Events.run_started, _on_run_started],
 		[Events.countdown_tick, _on_countdown_tick],
+		[Events.leg_started, _on_leg_started],
 		[Events.run_over, _on_run_over],
 		[Events.settings_changed, _on_setting_changed],
 	]
@@ -247,7 +256,34 @@ func _on_state(from: StringName, to: StringName) -> void:
 
 func _on_run_started(_mode: StringName, _seed: int) -> void:
 	state = Game.COUNTDOWN
+	leg_index = 0
+	leg_place = ""
+	leg_objective = &""
 	prepare_countdown()
+
+
+## The run announces leg 1 (its biome and objective) in the countdown's first frame
+## (WP5.6: the countdown names the biome).
+func _on_leg_started(index: int, biome: StringName, objective: StringName) -> void:
+	leg_index = index
+	leg_place = Hud.biome_name(biome)
+	leg_objective = objective
+	if state == Game.COUNTDOWN:
+		_refresh_leg()
+
+
+## The countdown's leg chip from what is known now: the leg_started of this run, else
+## the feed (its leg and objective; no biome).
+func _refresh_leg() -> void:
+	var index := leg_index
+	var objective := leg_objective
+	if index <= 0 and feed != null:
+		index = feed.leg_index
+		objective = feed.objective
+	if index <= 0:
+		countdown.set_leg(0, legs_total, "")
+		return
+	countdown.set_leg(index, legs_total, _objective_text(objective), leg_place if index == leg_index else "")
 
 
 func _on_countdown_tick(n: int) -> void:
@@ -294,6 +330,8 @@ func _gyro_fallback() -> void:
 func _on_setting_changed(key: StringName) -> void:
 	if key == &"text_scale":
 		_restyle()
+	elif key == &"units" and state == Game.COUNTDOWN:
+		_refresh_leg()
 	elif key == &"left_handed":
 		pause_screen.mirrored = _left_handed()
 		results_screen.mirrored = _left_handed()
@@ -315,8 +353,18 @@ func _restyle() -> void:
 func _relayout() -> void:
 	var full := _pinned_full if _pinned else Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
 	var safe := _pinned_safe if _pinned else HudLayout.canvas_safe_rect(full)
+	_update_hud_rects(full, safe)
 	for s in screens:
 		s.place(full, safe)
+
+
+## Where the HUD's panels are (the countdown's info column stays clear of them): the
+## HUD's own layout for this canvas, text size and the hub's touch controls.
+func _update_hud_rects(full: Rect2, safe: Rect2) -> void:
+	if countdown == null or tuning == null:
+		return
+	_hud_layout.build(tuning, full, safe, hub.layout if hub != null else null, style.ts)
+	countdown.hud_rects = _hud_layout.rects()
 
 
 func _poll_accent() -> void:
@@ -350,8 +398,11 @@ static func _count_visible(n: Node) -> int:
 	return k
 
 
-static func _objective_text(objective: StringName) -> String:
-	return String(objective).to_upper().replace("_", " ")
+## The objective's HUD label ("5 CLOSE PASSES", "HIT 155 MPH"), in the units setting.
+func _objective_text(objective: StringName) -> String:
+	if objective == &"":
+		return ""
+	return LegObjectives.label(objective, _legs if _legs != null else Tuning.load_default().legs, _miles())
 
 
 static func _left_handed() -> bool:
