@@ -72,10 +72,19 @@ const float WB_HALO_TIGHT_WEIGHT = 0.6;
 const float WB_LIGHT_MIN_SIN = 0.2;
 // How much of the halo lights the fog (in-scatter toward the sun).
 const float WB_FOG_HALO = 0.8;
-// Player fake light cone (cos of the inner/outer edge) and distance falloff.
+// Player fake light cone (cos of the inner/outer edge) and distance falloff (per m^2,
+// at reach 1; see wb_player_light).
 const float WB_PLAYER_CONE_OUTER = 0.85;
 const float WB_PLAYER_CONE_INNER = 0.97;
 const float WB_PLAYER_FALLOFF = 0.002;
+// The fake light scales an albedo estimated from the lit color (lit / night shade);
+// the shade is floored here so a dark key never divides by ~0.
+const float WB_PLAYER_SHADE_MIN = 0.02;
+// Retro-reflection (reflectors and sign faces, emissive class 1): wider cone, much
+// longer reach, gain over the albedo.
+const float WB_RETRO_CONE_OUTER = 0.7;
+const float WB_RETRO_FALLOFF = 0.00004;
+const float WB_RETRO_GAIN = 4.0;
 
 // ---------------------------------------------------------------- Color space
 
@@ -170,14 +179,49 @@ vec3 wb_emissive(vec3 albedo, float emissive_class) {
 	return albedo * k;
 }
 
-// Player "fake light": brightens surfaces inside the headlight cone at night.
-vec3 wb_player_light(vec3 albedo, vec3 world_pos) {
+// Player headlights (WP5.4). wb_player_light_pos is the lamps' render-space position,
+// wb_player_light_dir the beam axis; its LENGTH is the beam's reach (1 = low beams,
+// high beams longer: distances are divided by it). wb_player_light_strength already
+// includes the color script's headlight ramp (0 by day). Written by SkyRig.
+
+// Player "fake light": brightens surfaces inside the headlight cone at night. `lit` is
+// the surface's lit color (as the world, road and traffic shaders compute it); the
+// light scales the albedo, estimated as lit / (the key's average shade of an upward
+// and a shadow-side face), so the dark night shading doesn't swallow the headlights.
+// Linear math before wb_output(): identical on both renderers.
+vec3 wb_player_light(vec3 lit, vec3 world_pos) {
+	if (wb_player_light_strength <= 0.0) {
+		return vec3(0.0);
+	}
 	vec3 to_p = world_pos - wb_player_light_pos;
 	float dist = length(to_p);
+	float reach = max(length(wb_player_light_dir), 0.001);
 	float cone = smoothstep(WB_PLAYER_CONE_OUTER, WB_PLAYER_CONE_INNER,
-			dot(to_p / max(dist, 0.001), normalize(wb_player_light_dir)));
-	float falloff = 1.0 / (1.0 + dist * dist * WB_PLAYER_FALLOFF);
-	return albedo * wb_player_light_strength * cone * falloff;
+			dot(to_p / max(dist, 0.001), wb_player_light_dir / reach));
+	float d = dist / reach;
+	float falloff = 1.0 / (1.0 + d * d * WB_PLAYER_FALLOFF);
+	vec3 shade = 0.5 * (wb_light(vec3(1.0), vec3(0.0, 1.0, 0.0)) + wb_shadow_tint.rgb * wb_ambient.rgb);
+	// Per channel: the estimate keeps the surface's own hue, not the night's blue.
+	return lit / max(shade, vec3(WB_PLAYER_SHADE_MIN)) * (wb_player_light_strength * cone * falloff);
+}
+
+// Retro-reflective faces (reflector posts, sign faces: emissive class 1) inside the
+// player's headlight cone send the light back to the driver: bright from far away,
+// strongest when the face looks straight back at the lamps. Pass the linear albedo
+// (0 for other faces) and the world normal; add the result before fog.
+vec3 wb_retro_light(vec3 albedo, vec3 world_pos, vec3 world_normal) {
+	if (wb_player_light_strength <= 0.0) {
+		return vec3(0.0);
+	}
+	vec3 to_p = world_pos - wb_player_light_pos;
+	float dist = length(to_p);
+	vec3 dir = to_p / max(dist, 0.001);
+	float reach = max(length(wb_player_light_dir), 0.001);
+	float cone = smoothstep(WB_RETRO_CONE_OUTER, WB_PLAYER_CONE_INNER, dot(dir, wb_player_light_dir / reach));
+	float facing = clamp(-dot(normalize(world_normal), dir), 0.0, 1.0);
+	float d = dist / reach;
+	float falloff = 1.0 / (1.0 + d * d * WB_RETRO_FALLOFF);
+	return albedo * (wb_player_light_strength * WB_RETRO_GAIN * cone * facing * falloff);
 }
 
 // ---------------------------------------------------------------- Sky and fog

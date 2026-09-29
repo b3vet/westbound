@@ -84,7 +84,8 @@ void vertex() {
 	v_pool = UV2.x;
 	if (UV2.x > 0.5) {
 		// Headlight pool on the road ahead of a front pair with a headlight on.
-		bool on = front && (kl == KIND_HEAD || kr == KIND_HEAD) && night > 0.0;
+		// pool_strength 0: HeadlightCones draws the cones (TrafficView.headlight_pools).
+		bool on = front && (kl == KIND_HEAD || kr == KIND_HEAD) && night > 0.0 && pool_strength > 0.0;
 		vec3 world = (MODEL_MATRIX * vec4(VERTEX.x, pool_lift_m, ic.a + VERTEX.z, 1.0)).xyz;
 		v_world = world;
 		float fog = wb_fog_factor(length(world - CAMERA_POSITION_WORLD));

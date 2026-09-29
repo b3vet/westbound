@@ -101,6 +101,8 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void:
 	_quality = ctx.tuning.quality
 	_leg_length_m = ctx.tuning.legs.leg_length_m()
 	if tuning == null:
+		tuning = ctx.tuning.get(&"landmarks") as LandmarkTuning
+	if tuning == null:
 		tuning = LandmarkTuning.load_default()
 	if _palette == null:
 		_palette = WBPalette.load_default()

@@ -95,6 +95,8 @@ signal traffic_hazards(vehicle_id: int, on: bool)
 # ---------------------------------------------------------------- Player vehicle
 signal gear_shifted(gear: int)
 signal hard_braking_changed(active: bool)
+## The player's manual high beams (D8): view only, never affects scoring or traffic.
+signal high_beam_changed(on: bool)
 
 # ---------------------------------------------------------------- World
 ## The floating origin re-centred the world. Every world-space system subtracts `offset`.

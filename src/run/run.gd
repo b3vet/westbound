@@ -97,6 +97,10 @@ var registry: TrafficRegistry
 var sim: TrafficSim
 var director: TrafficDirector
 var traffic_view: TrafficView
+## Night lighting (WP5.4): the player's headlights, traffic cones, street-lamp pools.
+var headlights: PlayerHeadlights
+var headlight_cones: HeadlightCones
+var lamp_pools: StreetLampPools
 var scoring: Scoring
 var sun: SunClock
 var legs: LegTracker
@@ -211,7 +215,9 @@ func _ready() -> void:
 	add_child(landmarks)
 	traffic_view = TrafficView.new()
 	traffic_view.name = "TrafficView"
+	traffic_view.headlight_pools = false   # HeadlightCones draws them
 	add_child(traffic_view)
+	_add_night_lights()
 	registry = TrafficRegistry.load_default(tuning.traffic)
 	scoring = Scoring.new()
 	sun = SunClock.new(tuning.sun, tuning.legs)
@@ -646,6 +652,7 @@ func frame(real_dt: float) -> void:
 	landmarks.update_view(s)
 	sky.update_view(s)
 	traffic_view.update_view(s)
+	_update_night_lights(s)
 	_fill_feed()
 	_report_dev_stats()
 
@@ -713,6 +720,10 @@ func _start_run() -> void:
 	if biome != null and not biome.traffic_palette.is_empty():
 		traffic_view.set_palette(biome.traffic_palette)
 
+	headlights.setup(ctx, road, origin)
+	headlight_cones.setup(ctx, road, origin)
+	headlight_cones.bind(traffic_view, sim.state, director.opposite.state)
+	lamp_pools.setup(ctx, road, origin)
 	if crash_sequence != null:
 		(crash_sequence as CrashSequence).setup(ctx, registry)
 	scoring.reset(ctx)
@@ -877,6 +888,30 @@ func _view_ahead(s: float) -> float:
 	return s + builder.view_distance_m() + tuning.road.chunk_length_m * 2.0
 
 
+## Night lighting nodes (WP5.4, docs/NIGHT.md): visual only, fed by the sky's ramps.
+func _add_night_lights() -> void:
+	headlights = PlayerHeadlights.new()
+	headlights.name = "PlayerHeadlights"
+	headlight_cones = HeadlightCones.new()
+	headlight_cones.name = "HeadlightCones"
+	lamp_pools = StreetLampPools.new()
+	lamp_pools.name = "StreetLampPools"
+	for n: Node3D in [headlights, headlight_cones, lamp_pools]:
+		n.set(&"sky", sky)
+		add_child(n)
+
+
+## Per frame, before the sky pushes the globals (it is a child: it processes after us).
+func _update_night_lights(s: float) -> void:
+	if not is_instance_valid(headlights.car) or headlights.car != car:
+		headlights.bind(car)
+	headlights.high_beam = hub.high_beam
+	headlights.enabled = state != Game.CRASH
+	headlights.update_view(s)
+	headlight_cones.update_view(s)
+	lamp_pools.update_view(s)
+
+
 ## Legs are planned a whole leg past the view, so the next checkpoint (the HUD's sun
 ## bar distance) is always queued. Director rate: allocates only when the road grows.
 func _plan_ahead_to(s: float) -> float:
@@ -954,7 +989,7 @@ func open_drive_scene() -> void:
 
 
 ## Snap hook (tools/snap.sh): --state=countdown|running|results|paused, --sky_t=,
-## --s=, --speed_kmh=, --car=0..2, --cam=, --damaged, --ghost, --seed= (default SNAP_SEED).
+## --s=, --speed_kmh=, --car=0..2, --cam=, --damaged, --ghost, --high_beam, --seed= (default SNAP_SEED).
 func snap_setup(args: Dictionary) -> void:
 	# Reproducible snaps: a fixed seed unless --seed is given.
 	if args.has("car"):
@@ -990,6 +1025,7 @@ func snap_setup(args: Dictionary) -> void:
 		fx.set_damaged(true)
 	if args.get("ghost", false):
 		fx.start_ghost(tuning.lives.ghost_period_s)
+	hub.set_high_beam(bool(args.get("high_beam", false)))
 	rig.snap_to_target()
 
 

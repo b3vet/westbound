@@ -7,7 +7,7 @@ extends RefCounted
 ## release), W/↑ gas (manual mode), S/↓ brake, Shift boost, C camera, P or Esc pause,
 ## M mute. Gamepad: left stick steers (dead zone + the shared response curve),
 ## right trigger gas, left trigger brake (both analog), A boost, Y camera (Start
-## pauses: not in spec).
+## pauses: not in spec). H or gamepad X toggles the high beams (plan D8; not in spec).
 ##
 ## The actions are registered at runtime (register_actions(), idempotent) so the
 ## project file needs no [input] section; an action already defined there wins. The
@@ -24,12 +24,14 @@ const BOOST := &"wb_boost"
 const CAMERA := &"wb_camera"
 const PAUSE := &"wb_pause"
 const MUTE := &"wb_mute"
+const HIGH_BEAM := &"wb_high_beam"
 
 ## Edge bits returned by handle_event().
 const EDGE_BOOST := 1
 const EDGE_CAMERA := 1 << 1
 const EDGE_PAUSE := 1 << 2
 const EDGE_MUTE := 1 << 3
+const EDGE_HIGH_BEAM := 1 << 4
 
 ## Held-key counters (two keys can drive one action).
 enum Held { LEFT, RIGHT, GAS, BRAKE, COUNT }
@@ -86,6 +88,7 @@ static func register_actions() -> void:
 	_add(CAMERA, [_key(KEY_C), _joy(JOY_BUTTON_Y)])
 	_add(PAUSE, [_key(KEY_P), _key(KEY_ESCAPE), _joy(JOY_BUTTON_START)])
 	_add(MUTE, [_key(KEY_M)])
+	_add(HIGH_BEAM, [_phys(KEY_H), _joy(JOY_BUTTON_X)])
 
 
 ## Feeds one event; returns the EDGE_* bits it triggered (0 if none).
@@ -108,6 +111,8 @@ func handle_event(event: InputEvent) -> int:
 		edges |= EDGE_PAUSE
 	if event.is_action_pressed(MUTE):
 		edges |= EDGE_MUTE
+	if event.is_action_pressed(HIGH_BEAM):
+		edges |= EDGE_HIGH_BEAM
 	return edges
 
 
