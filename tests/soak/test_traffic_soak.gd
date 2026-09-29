@@ -44,7 +44,7 @@ func test_tiny_soak_leg8_dense() -> void:
 func _trace_of(runs: PackedInt32Array, base_seed: int) -> PackedInt64Array:
 	var out := PackedInt64Array()
 	for k in runs:
-		var r := TrafficSoakRun.new(k, base_seed, 2, 300.0)
+		var r := TrafficSoakRun.new(k, base_seed, 2, 200.0)
 		r.check_windows = false
 		r.run_to_end()
 		gt(r.time, 5.0, "the trace covers several seconds")

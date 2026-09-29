@@ -55,6 +55,8 @@ const SPAWN_STEP_M := 6.0
 const SPAWN_TRIES := 40
 const SPAWN_CLEAR_M := 12.0
 const HEADLIGHTS_ON := 0.3
+## The PASS overlay re-checks the player's own window this often (a check costs a few ms).
+const PASS_REFRESH_S := 0.5
 const STATS_INTERVAL_S := 0.25
 const LC_WINDOW_S := 60
 const FORGET_EVERY_M := 500.0
@@ -129,6 +131,10 @@ var _lc_ring_t := PackedFloat64Array()   ## ... and the sim time of each sample
 var _lc_ring_n: int = 0
 var _lc_next_t: float = 1.0
 var _stats_t: float = 0.0
+var _pass: Passability
+var _pass_res := Passability.Result.new()
+var _pass_t: float = 0.0
+var _pass_usec: int = 0
 var _lane_sum := PackedFloat64Array()
 var _lane_n := PackedInt32Array()
 
@@ -351,6 +357,39 @@ func _process(delta: float) -> void:
 	if _stats_t <= 0.0:
 		_stats_t = STATS_INTERVAL_S
 		refresh_stats()
+	if overlay.show_passability:
+		_pass_t -= delta
+		if _pass_t <= 0.0:
+			_pass_t = PASS_REFRESH_S
+			refresh_passability()
+
+
+## PASS overlay: the director's batch paths and the player's own path from now
+## (Passability.check_player on the live traffic). Dev rate, allocates.
+func refresh_passability() -> void:
+	var paths: Array[PackedVector2Array] = []
+	for i in director.pass_paths_s.size():
+		var ps := director.pass_paths_s[i]
+		var pd := director.pass_paths_d[i]
+		var line := PackedVector2Array()
+		for k in ps.size():
+			line.append(Vector2(ps[k], pd[k]))
+		paths.append(line)
+	overlay.passability_paths = paths
+	if _pass == null:
+		_pass = Passability.new(tuning, registry, road)
+		_pass.set_player_body(car.car.length_m, car.car.width_m)
+	_pass.set_headway_scale(tuning.director.headway_scale(leg))
+	var t0 := Time.get_ticks_usec()
+	var ok := _pass.check_player(sim.state, car.state, car.params, road, _pass_res)
+	_pass_usec = Time.get_ticks_usec() - t0
+	overlay.player_path_ok = ok
+	var mine := PackedVector2Array()
+	for k in _pass_res.path_n:
+		mine.append(Vector2(_pass_res.path_s[k], _pass_res.path_d[k]))
+	overlay.player_path = mine
+	overlay.player_path_note = "%d vehicles, %.1f ms%s" % [_pass_res.vehicles, float(_pass_usec) / 1000.0,
+		"" if ok else ", blocked after %.2f s" % _pass_res.fail_t]
 
 
 # ---------------------------------------------------------------- Actions
@@ -365,6 +404,8 @@ func reseed(seed_value: int) -> void:
 	director = TrafficDirector.new(traffic_ctx, road, sim, registry.profiles, registry.types,
 		car.car.length_m, car.car.width_m)
 	director.set_fog_end(_builder.view_distance_m())
+	director.set_player_params(car.params)   # passability (WP6.1)
+	director.record_pass_paths = true
 	director.set_leg(leg, car.state.s)
 	director.set_biome(_biome.current())
 	_night = sky.current().emissive_headlight > HEADLIGHTS_ON
@@ -968,6 +1009,8 @@ func snap_setup(args: Dictionary) -> void:
 		overlay.show_blink = on.has("blink")
 		overlay.show_occupancy = on.has("occ")
 		overlay.show_passability = on.has("pass")
+		if overlay.show_passability:
+			refresh_passability()
 	if args.has("labels"):
 		overlay.label_cap = int(args["labels"])
 	if args.has("text"):

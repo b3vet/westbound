@@ -231,3 +231,18 @@ Metrics by lane count (whole soak): gaps per km 11.9 / 11.1 / 10.8, density 13.2
 | 146 (leg 1) | 2 | The bot is at 101 km/h, 1.0 s after its own lane change, behind a cruiser at 87 km/h that is signaling into the other lane | The 2-lane "slow wall" of D12: the player may not drop below 100 km/h |
 
 Both follow the bot's own lateral move, like the three 2-lane windows of the WP3.3 soak. The 3-lane one is a cut-in into the path of a car that was already merging: the contact would be the player's doing ("the player caused it"). Under the oracle's pre-registered rule it still counts as a traffic window, because the player was not yet within 0.3 m of the car at t0. **This was not reclassified here** (it would redefine the gate after seeing the result). See *Findings* point 1 for the option already on the table: counting windows that start during or right after the player's own lateral move as player-induced. For this window, the narrower "the player's lateral move is in progress and the other car's lane change started first" would also apply. The orchestrator decides.
+
+## WP6.1: passability, the bot driver and the gate (pre-registered before the run)
+
+Written before the WP6.1 soak was run; the results section below was added afterwards.
+
+**The bot driver.** The soak's player is now `PassabilityBot` (`tests/soak/passability_bot.gd`), "the same module ... with a bot driver" (spec, *Passability guarantee*). Every 0.5 s it runs `Passability.check_player` from its exact state and drives the path it found (re-extracted with its own target speed and target lane: weaving legs pick a random target lane every 2-6 s, lane-keeping legs keep theirs). Without a path it holds its lateral position and follows the car ahead with IDM, and counts `bot_no_path_checks`. The director checks every committed batch (`TrafficDirector.set_player_params`). The metrics reference and the density survey keep the WP3.3 weaving bot (`TrafficSoakRun.BOT_WEAVE`), so their baselines stay comparable. The impossible-window checker is unchanged and shares no code with `passability.gd`.
+
+**Classification rule (pre-registered).** A window stays a *traffic* window (the gate) unless one of these holds at the failed check that starts it:
+
+1. *Contact* (unchanged since WP3.3): the player is already within the clearance of a hull.
+2. *Player cut-in* (new): the player entered its current lane less than `CUT_IN_WINDOW_S` = 2.0 s earlier (its body started overlapping that lane; a half-lane move included), and at that entry either
+    - the bumper gap to the vehicle ahead in that lane was under `CUT_IN_HEADWAY_S` = 0.8 s at the player's speed, closer than any traffic driver follows (the shortest IDM time headway in play: aggressive 1.0 s × the leg-8 headway scale 0.8), or
+    - the vehicle behind in that lane was closing faster than it can brake away within the gap at the traffic's 6 m/s² clamp: closing² / (2 × 6) > gap.
+
+Justification: the spec's fairness rule "If the player cuts in front of a faster car with an impossible gap, the resulting contact counts as a hit, because the player caused it" puts the consequences of an impossible cut-in on the player. The second bullet is that rule, measured the way the traffic's own model would fail (IDM braking is clamped at 6 m/s²). The first bullet is its mirror image: entering behind a car closer than any traffic driver would follow it is also a gap no driver would accept. 2.0 s = the longest player lane change (~1.2 s) plus the shortest traffic headway (0.8 s): the window must follow directly from that entry. Windows under rule 2 are reported as `impossible_player_cut_in`, not gated. The raw count is reported too.

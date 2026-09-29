@@ -237,8 +237,11 @@ func reset(player: VehicleState) -> void:
 	_control_clock = 0.0
 	var batch := director_tuning.spawn_batch_length_m
 	var a := player.s
+	_pass_reset()   # WP6.1
 	while a < player.s + ahead_distance():
+		var pass_mark := state.next_vehicle_id   # WP6.1
 		_plan_range(a, a + batch, player)
+		_pass_check_now(a, a + batch, pass_mark, player)   # WP6.1: before anything is drawn
 		a += batch
 	_spawned_to = a
 	_prefilling = false
@@ -253,7 +256,10 @@ func step(dt: float, player: VehicleState) -> void:
 	step_despawn(player.s)
 	_step_density(dt, player)
 	if player.s + ahead_distance() >= _spawned_to:
+		var pass_mark := state.next_vehicle_id   # WP6.1: what this batch spawns is checked
 		_plan_ahead(player)
+		_pass_queue(player.s + min_ahead_m(), _spawned_to, pass_mark)
+	_pass_step(dt, player)   # WP6.1
 	_step_behind(dt, player)
 	opposite.step(dt, player.s)
 
@@ -552,3 +558,239 @@ func _refresh_ctx(player: VehicleState) -> void:
 	ctx.set_pieces_allowed = false
 	ctx.is_night = is_night
 	ctx.biome = biome
+
+
+# ---------------------------------------------------------------- Passability (WP6.1: the commit path)
+#
+# Spec: Traffic → Passability guarantee ("Before committing any spawn batch (the next
+# ~300 m), the director runs passability.gd ... Without one, re-roll the batch (up to 5
+# times), then remove the vehicle that blocks the most paths"). A batch is committed
+# beyond the fog (fairness rule 5), then checked there while it is still invisible:
+# the check is time-sliced (Passability.advance, director_slices_per_tick per tick), and
+# a re-roll or a removal only ever despawns vehicles beyond min_ahead_m(), so the
+# player never sees a batch that failed. Every source's batches take this path (Flow,
+# Daily, and later SetPiece: scripted batches are counted in pass_scripted_batches);
+# a re-roll plans the range again with the same source on the passability stream.
+# Deterministic: fixed slices per tick, a derived stream, no wall-clock budget.
+
+## The passability module (null until set_player_params: then the director checks).
+var passability: Passability
+## The player car's physics params (lane-change capability curve, acceleration).
+var player_params: VehicleParams
+## Result of the last finished batch check.
+var pass_result := Passability.Result.new()
+## Keep the arrival paths the checks found (the sandbox's PASS overlay). Off in the game.
+var record_pass_paths := false
+## The last PASS_PATHS_KEPT paths found: s and d per point (t = k x step_s).
+var pass_paths_s: Array[PackedFloat64Array] = []
+var pass_paths_d: Array[PackedFloat64Array] = []
+const PASS_PATHS_KEPT := 4
+## Queued ranges (a batch while another is still being checked).
+const PASS_QUEUE := 8
+
+# Stats (soak, sandbox, tests).
+var pass_batches := 0          ## ranges checked
+var pass_scripted_batches := 0 ## ... containing set-piece (scripted) vehicles
+var pass_checks := 0           ## checks run (a range + its re-rolls and removals)
+var pass_failed := 0           ## checks without a path
+var pass_rerolls := 0
+var pass_removed := 0          ## blockers removed
+var pass_unresolved := 0       ## ranges still failing after the removals (committed as they are)
+var pass_probes := 0
+var pass_ticks_max := 0        ## longest range verification, in ticks
+var pass_log: Array[String] = []   ## failures, for soak reports (director rate)
+const PASS_LOG_MAX := 24
+
+var _pass_rng: Rng
+var _pass_busy := false
+var _pass_a := 0.0
+var _pass_b := 0.0
+var _pass_mark := 0
+var _pass_rerolls_left := 0
+var _pass_removals_left := 0
+var _pass_ticks := 0
+var _pass_ids := PackedInt32Array()     ## vehicle_id per slot when the check began
+var _pass_qa := PackedFloat64Array()
+var _pass_qb := PackedFloat64Array()
+var _pass_qm := PackedInt32Array()
+var _pass_qn := 0
+
+
+## Enables passability: the player car's params (VehicleParams.build). run.gd, the
+## soak, the sandbox. null disables it again.
+func set_player_params(params: VehicleParams) -> void:
+	player_params = params
+	if params != null and passability == null:
+		var reg := TrafficRegistry.new(flow.profiles, flow.types, traffic_tuning)
+		passability = Passability.new(run.tuning, reg, road)
+		_pass_rng = run.rng_traffic.derive(&"passability")
+		_pass_ids.resize(state.capacity)
+		_pass_qa.resize(PASS_QUEUE)
+		_pass_qb.resize(PASS_QUEUE)
+		_pass_qm.resize(PASS_QUEUE)
+	if passability != null:
+		passability.set_player_body(flow.player_length_m, flow.player_width_m)
+
+
+## True when committed batches are checked.
+func passability_active() -> bool:
+	return passability != null and player_params != null and run.tuning.passability.director_enabled
+
+
+## True while a committed range is still being checked (or re-rolled).
+func passability_busy() -> bool:
+	return _pass_busy or _pass_qn > 0
+
+
+func _pass_reset() -> void:
+	_pass_busy = false
+	_pass_qn = 0
+	pass_batches = 0
+	pass_scripted_batches = 0
+	pass_checks = 0
+	pass_failed = 0
+	pass_rerolls = 0
+	pass_removed = 0
+	pass_unresolved = 0
+	pass_probes = 0
+	pass_ticks_max = 0
+	pass_log.clear()
+	pass_paths_s.clear()
+	pass_paths_d.clear()
+
+
+## A committed range [a, b) (its vehicles: vehicle_id >= mark) to check. Director rate.
+func _pass_queue(a: float, b: float, mark: int) -> void:
+	if not passability_active() or b <= a:
+		return
+	if _pass_qn >= PASS_QUEUE:
+		# Merge into the last queued range (it only grows the checked stretch).
+		_pass_qb[_pass_qn - 1] = maxf(_pass_qb[_pass_qn - 1], b)
+		return
+	_pass_qa[_pass_qn] = a
+	_pass_qb[_pass_qn] = b
+	_pass_qm[_pass_qn] = mark
+	_pass_qn += 1
+
+
+## Per tick: starts the next queued range and advances the running check.
+func _pass_step(_dt: float, player: VehicleState) -> void:
+	if not _pass_busy:
+		if _pass_qn == 0 or not passability_active():
+			return
+		_pass_begin(_pass_qa[0], _pass_qb[0], _pass_qm[0], player)
+		for i in range(1, _pass_qn):
+			_pass_qa[i - 1] = _pass_qa[i]
+			_pass_qb[i - 1] = _pass_qb[i]
+			_pass_qm[i - 1] = _pass_qm[i]
+		_pass_qn -= 1
+	_pass_ticks += 1
+	if passability.advance(run.tuning.passability.director_slices_per_tick):
+		_pass_done(player)
+
+
+## Start of run: the prefilled range is checked, re-rolled and cleared at once.
+func _pass_check_now(a: float, b: float, mark: int, player: VehicleState) -> void:
+	if not passability_active():
+		return
+	_pass_begin(a, b, mark, player)
+	while _pass_busy:
+		passability.advance(Passability.ALL_SLICES)
+		_pass_done(player)
+
+
+func _pass_begin(a: float, b: float, mark: int, player: VehicleState) -> void:
+	_pass_busy = true
+	_pass_a = a
+	_pass_b = b
+	_pass_mark = mark
+	_pass_ticks = 0
+	_pass_rerolls_left = run.tuning.passability.max_rerolls
+	_pass_removals_left = run.tuning.passability.max_removals
+	pass_batches += 1
+	for i in state.capacity:
+		if state.active[i] == 1 and state.vehicle_id[i] >= mark and state.s[i] >= a and state.s[i] < b \
+				and state.has_flag(i, TrafficState.FLAG_SCRIPTED):
+			pass_scripted_batches += 1
+			break
+	_pass_start_check(player)
+
+
+func _pass_start_check(player: VehicleState) -> void:
+	for i in state.capacity:
+		_pass_ids[i] = state.vehicle_id[i] if state.active[i] == 1 else -1
+	passability.clear_planned()
+	passability.set_headway_scale(director_tuning.headway_scale(leg))
+	passability.record_paths = record_pass_paths
+	passability.begin_check(state, player, player_params, road, Passability.MODE_ARRIVAL, _pass_a, _pass_b,
+		pass_result)
+
+
+## A check finished: commit (keep), re-roll, remove the worst blocker, or give up.
+func _pass_done(player: VehicleState) -> void:
+	pass_checks += 1
+	pass_probes += pass_result.probes
+	if pass_result.passable:
+		_pass_finish(player)
+		return
+	pass_failed += 1
+	if _pass_rerolls_left > 0:
+		_pass_rerolls_left -= 1
+		pass_rerolls += 1
+		_pass_reroll(player)
+		_pass_start_check(player)
+		return
+	if _pass_removals_left > 0:
+		_pass_removals_left -= 1
+		var o := pass_result.worst_blocker(_pass_removable.bind(player))
+		if o >= 0:
+			sim.despawn(pass_result.blocker_src[o])
+			pass_removed += 1
+			_pass_start_check(player)
+			return
+	pass_unresolved += 1
+	if pass_log.size() < PASS_LOG_MAX:
+		pass_log.append("unresolved at s %.0f (range %.0f..%.0f, player %.0f km/h, leg %d): %d probes, %d failed" % [
+			pass_result.fail_s, _pass_a, _pass_b, player.v / Units.kmh_to_mps(1.0), leg, pass_result.probes,
+			pass_result.failed_probes])
+	_pass_finish(player)
+
+
+func _pass_finish(_player: VehicleState) -> void:
+	_pass_busy = false
+	pass_ticks_max = maxi(pass_ticks_max, _pass_ticks)
+	if record_pass_paths and pass_result.path_n > 1:
+		var ps := PackedFloat64Array()
+		var pd := PackedFloat64Array()
+		for k in pass_result.path_n:
+			ps.append(pass_result.path_s[k])
+			pd.append(pass_result.path_d[k])
+		pass_paths_s.append(ps)
+		pass_paths_d.append(pd)
+		if pass_paths_s.size() > PASS_PATHS_KEPT:
+			pass_paths_s.remove_at(0)
+			pass_paths_d.remove_at(0)
+
+
+## A vehicle the director may still remove: live, the one the check saw, and never
+## visible (beyond min_ahead_m(), or anywhere during the prefill).
+func _pass_removable(src: int, player: VehicleState) -> bool:
+	if src < 0 or state.active[src] == 0 or state.vehicle_id[src] != _pass_ids[src]:
+		return false
+	return _prefilling or state.s[src] - player.s >= min_ahead_m()
+
+
+## Re-roll: the range's own vehicles still beyond the fog are despawned and the range
+## planned again (same source, the passability stream), then committed through the
+## usual rules.
+func _pass_reroll(player: VehicleState) -> void:
+	var lo := _pass_a
+	for i in state.capacity:
+		if state.active[i] == 1 and state.vehicle_id[i] >= _pass_mark and state.s[i] >= lo and state.s[i] < _pass_b \
+				and (_prefilling or state.s[i] - player.s >= min_ahead_m()):
+			sim.despawn(i)
+	var keep := _rng
+	_rng = _pass_rng
+	_plan_range(maxf(lo, player.s + (0.0 if _prefilling else min_ahead_m())), _pass_b, player)
+	_rng = keep
+

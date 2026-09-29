@@ -9,8 +9,12 @@ extends RefCounted
 ##   - the procedural road (lanes_default from TrafficTuning.soak_lane_counts), the real
 ##     TrafficRegistry, TrafficSim, TrafficDirector (Flow, behind spawns, despawn, cap,
 ##     ghost zone) and the opposite carriageway;
-##   - a bot player (TrafficBotPlayer) as the sim's participant: per leg it weaves or
-##     keeps its lane, at a target speed drawn from [soak_bot_min_kmh, soak_bot_max_kmh];
+##   - a bot player as the sim's participant: per leg it weaves or keeps its lane, at a
+##     target speed drawn from [soak_bot_min_kmh, soak_bot_max_kmh]. BOT_PASSABILITY (the
+##     default, the gate): PassabilityBot drives passability's path (spec: "The same
+##     module runs in tests with a bot driver"). BOT_WEAVE: the WP3.3 TrafficBotPlayer
+##     (the metrics reference and the density survey, for comparable baselines);
+##   - the director checks every committed batch with passability (WP6.1);
 ##   - legs 1..soak_run_legs of LegsTuning's leg length, each at its leg's density and
 ##     aggressive share (night from the second half);
 ##   - per tick: the independent TrafficRuleChecker (collisions, signal time, unsignaled
@@ -36,6 +40,15 @@ const LC_TAGS: Array[String] = ["", "/signaling", "/moving"]
 ## A run that has not finished after this many times its distance at the minimum
 ## bot speed stops (a stuck bot would otherwise hang the soak).
 const TIMEOUT_FACTOR := 3.0
+## Which bot drives (see the class doc).
+const BOT_WEAVE := 0
+const BOT_PASSABILITY := 1
+## Pre-registered player cut-in rule for impossible windows (docs/SOAK.md, WP6.1): a
+## window within CUT_IN_WINDOW_S of the player entering its lane, when it entered closer
+## than CUT_IN_HEADWAY_S behind the vehicle ahead or with a gap the vehicle behind cannot
+## brake away within at the traffic's deceleration clamp.
+const CUT_IN_WINDOW_S := 2.0
+const CUT_IN_HEADWAY_S := 0.8
 
 var index: int
 var seed_value: int
@@ -48,6 +61,10 @@ var car: CarDef
 var sim: TrafficSim
 var director: TrafficDirector
 var bot: TrafficBotPlayer
+## The passability bot (BOT_PASSABILITY), the same object as `bot`; null otherwise.
+var pbot: PassabilityBot
+var bot_kind: int
+var params: VehicleParams
 var checker: TrafficRuleChecker
 var windows: ImpossibleWindowChecker
 var metrics: TrafficMetrics
@@ -72,9 +89,18 @@ var window_checks := 0
 var impossible_checks := 0
 var impossible_windows := 0
 var impossible_player_induced := 0
+var impossible_player_cut_in := 0
 var window_examples: Array[Dictionary] = []
 
 var _bot_rng: Rng
+# The player's lane entries (the cut-in rule): lanes its body overlapped last tick, and
+# the last entry's time, headway to the car ahead and the follower verdict.
+var _entry_mask := 0
+var _entry_t := -INF
+var _entry_headway := INF
+var _entry_follower_impossible := false
+var _entry_lane := -1
+static var _params_cache := {}
 var _next_hash := 0.0
 var _next_window := 0.0
 var _in_window := false
@@ -92,8 +118,9 @@ var active_sum := 0
 ## `run_legs` / `leg_m` <= 0 use TrafficTuning.soak_run_legs / LegsTuning's leg length.
 ## `fixed_leg` > 0 drives every leg at that leg's density and mix (D7 reference runs).
 func _init(run_index: int, base_seed: int, run_legs: int = -1, leg_m: float = -1.0, base: Tuning = null,
-		fixed_leg: int = 0) -> void:
+		fixed_leg: int = 0, which_bot: int = BOT_PASSABILITY) -> void:
 	index = run_index
+	bot_kind = which_bot
 	_fixed_leg = fixed_leg
 	seed_value = Rng.derive_seed(base_seed, "soak_run_%d" % run_index)
 	var b := base if base != null else Tuning.load_default()
@@ -110,15 +137,22 @@ func _init(run_index: int, base_seed: int, run_legs: int = -1, leg_m: float = -1
 	road = ProceduralRoadPath.new(ctx)
 	registry = TrafficRegistry.load_default(tuning.traffic)
 	car = _car(run_index)
+	params = _params_for(car, tuning)
 	_bot_rng = ctx.rng_events.derive(&"soak_bot")
 	var start_lane := _bot_rng.int_range(0, lanes - 1)
-	bot = TrafficBotPlayer.new(road, start_lane, Units.kmh_to_mps(tuning.traffic.soak_bot_min_kmh),
-		TrafficBotPlayer.Mode.WEAVE, _bot_rng.int_range(1, 1 << 30))
+	var bot_seed := _bot_rng.int_range(1, 1 << 30)
+	var v_start := Units.kmh_to_mps(tuning.traffic.soak_bot_min_kmh)
+	if bot_kind == BOT_PASSABILITY:
+		pbot = PassabilityBot.new(road, registry, tuning, car, params, start_lane, v_start, bot_seed)
+		bot = pbot
+	else:
+		bot = TrafficBotPlayer.new(road, start_lane, v_start, TrafficBotPlayer.Mode.WEAVE, bot_seed)
 	bot.length_m = car.length_m
 	bot.width_m = car.width_m
 	sim = TrafficSim.new(ctx, road, registry)
 	sim.set_player_body(car.length_m, car.width_m)
 	director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types, car.length_m, car.width_m)
+	director.set_player_params(params)
 	checker = TrafficRuleChecker.new(tuning, registry, road, car.length_m, car.width_m)
 	windows = ImpossibleWindowChecker.new(tuning, registry, car)
 	metrics = TrafficMetrics.new(tuning)
@@ -168,6 +202,8 @@ func tick() -> void:
 	metrics.sample(DT, sim.state, bot.state, road)
 	metrics.add_lane_changes(sim.stat_completed - _completed)
 	_completed = sim.stat_completed
+	if check_windows:
+		_track_lane_entry()
 	peak_active = maxi(peak_active, sim.state.count)
 	time += DT
 	ticks += 1
@@ -196,6 +232,8 @@ func _start_leg(k: int) -> void:
 	director.set_night(night)
 	sim.set_headlights(night)
 	var t := tuning.traffic
+	if pbot != null:
+		pbot.set_headway_scale(tuning.director.headway_scale(_fixed_leg if _fixed_leg > 0 else k))
 	bot.v_target = Units.kmh_to_mps(_bot_rng.float_range(t.soak_bot_min_kmh, t.soak_bot_max_kmh))
 	if _bot_rng.chance(Units.pct_to_frac(t.soak_bot_weave_pct)):
 		bot.set_weave(t.soak_bot_weave_min_s, t.soak_bot_weave_max_s)
@@ -218,6 +256,8 @@ func _check_window() -> void:
 	impossible_windows += 1
 	if windows.started_in_contact:
 		impossible_player_induced += 1
+	elif _is_player_cut_in():
+		impossible_player_cut_in += 1
 	if window_examples.size() < MAX_WINDOW_EXAMPLES:
 		window_examples.append(_describe_window())
 
@@ -251,6 +291,8 @@ func _describe_window() -> Dictionary:
 	var why := "other"
 	if windows.started_in_contact:
 		why = "player already within clearance of a hull (its own cut-in)"
+	elif _is_player_cut_in():
+		why = "player cut-in (pre-registered rule)"
 	elif slow_lanes == lanes:
 		why = "slow wall: every lane has a vehicle below the minimum speed ahead"
 	return {
@@ -258,6 +300,9 @@ func _describe_window() -> Dictionary:
 		"player_kmh": bot.state.v / Units.kmh_to_mps(1.0), "player_lane": road.lane_index_at(bot.state.d, ps),
 		"player_moved_s_ago": time - checker.player_last_lateral_t(),
 		"fail_after_s": windows.fail_t, "why": why, "per_lane": per_lane,
+		"entry_s_ago": time - _entry_t, "entry_lane": _entry_lane, "entry_headway_s": _entry_headway,
+		"entry_follower_impossible": _entry_follower_impossible,
+		"bot_has_path": pbot != null and pbot.result.passable,
 	}
 
 
@@ -281,7 +326,17 @@ func result() -> Dictionary:
 		"rear_end_episodes": c.rear_end_episodes, "rear_end_normal": c.rear_end_normal,
 		"window_checks": window_checks, "impossible_checks": impossible_checks,
 		"impossible_windows": impossible_windows, "impossible_player_induced": impossible_player_induced,
-		"impossible_traffic": impossible_windows - impossible_player_induced,
+		"impossible_player_cut_in": impossible_player_cut_in,
+		"impossible_traffic": impossible_windows - impossible_player_induced - impossible_player_cut_in,
+		"bot": "passability" if pbot != null else "weave",
+		"bot_checks": pbot.checks if pbot != null else 0,
+		"bot_no_path_checks": pbot.no_path_checks if pbot != null else 0,
+		"bot_check_usec": pbot.check_usec if pbot != null else 0,
+		"pass_batches": director.pass_batches, "pass_checks": director.pass_checks,
+		"pass_failed": director.pass_failed, "pass_rerolls": director.pass_rerolls,
+		"pass_removed": director.pass_removed, "pass_unresolved": director.pass_unresolved,
+		"pass_probes": director.pass_probes, "pass_ticks_max": director.pass_ticks_max,
+		"pass_scripted_batches": director.pass_scripted_batches, "pass_log": Array(director.pass_log),
 		"window_examples": window_examples,
 		"spawned_ahead": director.spawned_ahead, "spawned_behind": director.spawned_behind,
 		"despawned": director.despawned, "rejected_cap": director.rejected_cap,
@@ -303,6 +358,58 @@ func metrics_raw() -> Dictionary:
 		"density_vehicles": m.density_vehicles, "lane_speed_sum": Array(m.lane_speed_sum),
 		"lane_speed_n": Array(m.lane_speed_n),
 	}
+
+
+## The pre-registered cut-in rule (see CUT_IN_WINDOW_S) at the current tick.
+func _is_player_cut_in() -> bool:
+	return time - _entry_t <= CUT_IN_WINDOW_S and (_entry_headway < CUT_IN_HEADWAY_S or _entry_follower_impossible)
+
+
+## Records the player's lane entries (its body starting to overlap a lane) with the
+## headway to the vehicle ahead and whether the vehicle behind could brake for it.
+func _track_lane_entry() -> void:
+	var ps := bot.state
+	var lo := ps.d - bot.width_m * 0.5
+	var hi := ps.d + bot.width_m * 0.5
+	var mask := 0
+	for l in lanes:
+		var c := road.lane_center_d(l, ps.s)
+		var half := road.lane_width(ps.s) * 0.5
+		if lo < c + half and hi > c - half:
+			mask |= 1 << l
+	var entered := mask & ~_entry_mask
+	_entry_mask = mask
+	if entered == 0:
+		return
+	for l in lanes:
+		if (entered >> l) & 1 == 0:
+			continue
+		var ts := sim.state
+		var gap_a := INF
+		var gap_b := INF
+		var v_b := 0.0
+		for i in ts.capacity:
+			if ts.active[i] == 0 or not SpawnSources.occupies_lane(ts, i, l, road):
+				continue
+			var g := absf(ts.s[i] - ps.s) - (ts.length[i] + bot.length_m) * 0.5
+			if ts.s[i] >= ps.s:
+				gap_a = minf(gap_a, g)
+			elif g < gap_b:
+				gap_b = g
+				v_b = ts.v[i]
+		var closing := v_b - ps.v
+		_entry_t = time
+		_entry_lane = l
+		_entry_headway = gap_a / maxf(ps.v, 0.1)
+		_entry_follower_impossible = closing > 0.0 and closing * closing / (2.0 * tuning.traffic.max_decel_mps2) > gap_b
+
+
+## VehicleParams per car (VehicleParams.build takes ~0.35 s), cached per process.
+static func _params_for(c: CarDef, t: Tuning) -> VehicleParams:
+	var key := String(c.id)
+	if not _params_cache.has(key):
+		_params_cache[key] = VehicleParams.build(t, c)
+	return _params_cache[key] as VehicleParams
 
 
 static func _car(run_index: int) -> CarDef:

@@ -1,0 +1,407 @@
+extends WBTest
+## Passability (src/traffic/passability.gd). Spec: Traffic → Passability guarantee
+## ("forward-simulate traffic at 10 Hz for 8 s; search player moves over a grid of
+## lateral positions (lane centers and half-lanes) in 0.25 s steps, limited by the
+## player car's real lane-change capability at its current speed; speed anywhere from
+## minimum speed to current speed plus possible acceleration; require a path that stays
+## at or above minimum speed and never comes within 0.3 m of a hull"); Architecture rules
+## 4-6 (pure, deterministic, no allocations per call). Hand-built traffic on a straight
+## road with the real registry and a real car's VehicleParams. docs/PASSABILITY.md.
+
+const LANES := 3
+const CAR := "res://data/cars/falcon_gt.tres"
+
+var tuning: Tuning
+var reg: TrafficRegistry
+var car: CarDef
+var params: VehicleParams
+var road: StraightRoadPath
+var pas: Passability
+var res: Passability.Result
+var traffic: TrafficState
+var player: VehicleState
+
+var truck_p: int
+var semi_t: int
+var bike_p: int
+var bike_t: int
+var commuter_p: int
+var sedan_t: int
+var aggressive_p: int
+var sports_t: int
+
+
+func before_all() -> void:
+	tuning = Tuning.load_default()
+	reg = TrafficRegistry.load_default(tuning.traffic)
+	car = load(CAR) as CarDef
+	params = VehicleParams.build(tuning, car)
+	truck_p = reg.profile_index(&"truck")
+	semi_t = reg.type_index(&"semi")
+	bike_p = reg.profile_index(&"motorbike")
+	bike_t = reg.type_index(&"motorbike")
+	commuter_p = reg.profile_index(&"commuter")
+	sedan_t = reg.type_index(&"sedan")
+	aggressive_p = reg.profile_index(&"aggressive")
+	sports_t = reg.type_index(&"sports")
+
+
+func _setup(lanes: int = LANES, t: Tuning = null) -> void:
+	var tun := t if t != null else tuning
+	road = StraightRoadPath.new(lanes, tun.road)
+	pas = Passability.new(tun, reg, road)
+	pas.set_player_body(car.length_m, car.width_m)
+	res = Passability.Result.new()
+	traffic = TrafficState.new(tun.traffic.max_active_vehicles)
+	player = VehicleState.new()
+
+
+func _kmh(v: float) -> float:
+	return Units.kmh_to_mps(v)
+
+
+func _place_player(lane: int, s: float, v_kmh: float) -> void:
+	player.reset()
+	player.s = s
+	player.d = road.lane_center_d(lane, s)
+	player.v = _kmh(v_kmh)
+
+
+## A vehicle cruising in `lane` (desired speed = its speed), or at d when given.
+func _add(profile: int, type: int, lane: int, s: float, v_kmh: float, d: float = NAN) -> int:
+	var i := traffic.allocate()
+	traffic.s[i] = s
+	traffic.d[i] = road.lane_center_d(lane, s) if is_nan(d) else d
+	traffic.v[i] = _kmh(v_kmh)
+	traffic.v0[i] = _kmh(v_kmh)
+	traffic.length[i] = reg.length[type]
+	traffic.width[i] = reg.width[type]
+	traffic.lane[i] = lane
+	traffic.target_lane[i] = lane
+	traffic.profile_id[i] = profile
+	traffic.type_id[i] = type
+	return i
+
+
+func _truck(lane: int, s: float, v_kmh: float = 85.0) -> int:
+	return _add(truck_p, semi_t, lane, s, v_kmh)
+
+
+func _record(profile: int, type: int, lane: int, s: float, v_kmh: float) -> SpawnSource.Record:
+	var r := SpawnSource.Record.new()
+	r.s = s
+	r.lane = lane
+	r.v = _kmh(v_kmh)
+	r.v0 = _kmh(v_kmh)
+	r.profile_id = profile
+	r.type_id = type
+	return r
+
+
+## Minimum clearance (m) of the path to the traffic's predicted bodies is not checked
+## here; the path's own consistency is: points at step_s, speeds in range, positions
+## on the grid.
+func _check_path_shape(what: String) -> void:
+	eq(res.path_n, pas.steps() + 1, "%s: the path covers the horizon" % what)
+	var min_v := minf(tuning.scoring.min_speed_mps(), player.v)
+	for k in range(1, res.path_n):
+		var v := (res.path_s[k] - res.path_s[k - 1]) / pas.step_s()
+		if not ge(v, min_v - 1e-6, "%s: speed at step %d stays >= the minimum" % [what, k]):
+			return
+
+
+# ---------------------------------------------------------------- The player check
+
+func test_empty_road_is_passable_and_the_path_drives_on() -> void:
+	_setup()
+	_place_player(1, 0.0, 150.0)
+	check(pas.check_player(traffic, player, params, road, res), "an empty road is passable")
+	_check_path_shape("empty road")
+	gt(res.path_s[res.path_n - 1], player.s + tuning.scoring.min_speed_mps() * tuning.passability.horizon_s - 1.0,
+		"the path moves at least at the minimum speed")
+	eq(res.positions, 2 * LANES - 1, "lane centers and half-lanes: 2 x lanes - 1 positions")
+
+
+func test_truck_wall_across_every_lane_is_impossible() -> void:
+	_setup()
+	_place_player(1, 0.0, 150.0)
+	for lane in LANES:
+		_truck(lane, 35.0)
+	check(not pas.check_player(traffic, player, params, road, res), "trucks side by side in every lane block")
+	lt(res.fail_t, tuning.passability.horizon_s, "every path ends within the horizon")
+	var cut := 0.0
+	for o in res.obstacles:
+		cut += res.blocker_cut[o]
+		check(res.blocker_src[o] >= 0, "blockers are live slots")
+	gt(cut, 0.0, "the trucks are credited with the paths they cut")
+
+
+func test_one_open_lane_is_passable() -> void:
+	_setup()
+	_place_player(1, 0.0, 150.0)
+	_truck(1, 35.0)
+	_truck(2, 35.0)
+	check(pas.check_player(traffic, player, params, road, res), "lane 0 stays open")
+	_check_path_shape("open lane")
+	near(res.path_d[res.path_n - 1], road.lane_center_d(0, 0.0), 1e-6, "the path ends in the open lane")
+
+
+func test_half_lane_threading_gap_is_found() -> void:
+	# Slow bikes at the centers of lanes 0 and 1, a truck in lane 2: every lane is blocked,
+	# but the half-lane position between lanes 0 and 1 clears both bikes.
+	_setup()
+	_place_player(0, 0.0, 120.0)
+	_add(bike_p, bike_t, 0, 30.0, 60.0)
+	_add(bike_p, bike_t, 1, 30.0, 60.0)
+	_truck(2, 30.0, 60.0)
+	check(pas.check_player(traffic, player, params, road, res), "the threading gap is a path")
+	var half := road.lane_center_d(0, 0.0) + road.lane_width(0.0) * 0.5
+	var threads := false
+	for k in res.path_n:
+		if absf(res.path_d[k] - half) < 1e-6 and res.path_s[k] > 30.0 and res.path_s[k] < 60.0:
+			threads = true
+	check(threads, "the path passes the bikes on the half-lane position")
+	# Without half-lanes (lane centers only) the same traffic is a wall.
+	var t: Tuning = tuning.duplicate()
+	t.passability = tuning.passability.duplicate() as PassabilityTuning
+	t.passability.lateral_step_lanes = 1.0
+	var saved := traffic
+	_setup(LANES, t)
+	traffic = saved
+	_place_player(0, 0.0, 120.0)
+	check(not pas.check_player(traffic, player, params, road, res), "lane centers alone: no path")
+
+
+func test_lane_change_capability_limits_the_moves() -> void:
+	_setup()
+	_place_player(0, 0.0, 150.0)
+	# A slow wall close ahead in lanes 0 and 1: lane 2 is two lanes away (four half-lane
+	# moves), too far at this car's capability before contact even at the minimum speed.
+	_truck(0, 20.0)
+	_truck(1, 20.0)
+	check(not pas.check_player(traffic, player, params, road, res), "two lanes away is out of reach")
+	var mt := params.move_time(player.v, road.lane_width(0.0) * 0.5)
+	eq(res.move_steps, ceili(mt / tuning.passability.step_s - 1e-9),
+		"a half-lane move takes the car's move time rounded up to whole steps")
+	# The same wall with the open lane next door: one lane away is reachable.
+	_setup()
+	_place_player(0, 0.0, 150.0)
+	_truck(0, 20.0)
+	_truck(2, 20.0)
+	check(pas.check_player(traffic, player, params, road, res), "one lane away is reachable")
+
+
+func test_minimum_speed_and_the_player_below_it() -> void:
+	_setup()
+	# A player at 110 km/h stuck in lane 0 behind a truck at 85, the other lanes walled:
+	# it may not drop below the minimum speed.
+	_place_player(0, 0.0, 110.0)
+	_truck(0, 30.0)
+	_truck(1, 20.0)
+	_truck(2, 20.0)
+	check(not pas.check_player(traffic, player, params, road, res), "at the minimum speed it still closes in")
+	# A player already at the truck's speed may hold it (the rule of the soak oracle).
+	_place_player(0, 0.0, 85.0)
+	check(pas.check_player(traffic, player, params, road, res), "holding its own speed behind the truck")
+
+
+func test_cars_behind_in_the_players_lane_follow_it() -> void:
+	# A fast car right behind the player in its lane brakes for it (rear-end prevention):
+	# not an obstacle while the player keeps its lane. Walls on both sides.
+	_setup()
+	_place_player(1, 0.0, 110.0)
+	_add(aggressive_p, sports_t, 1, -9.0, 160.0)
+	_truck(0, 0.0, 110.0)
+	_truck(2, 0.0, 110.0)
+	check(pas.check_player(traffic, player, params, road, res), "the follower yields")
+
+
+func test_a_cut_in_needs_a_gap_the_faster_car_behind_can_use() -> void:
+	# Lane 1 is blocked ahead by a slow truck; lane 0 has a fast car just behind the
+	# player: cutting in front of it must leave it room (its hull, the clearance).
+	_setup()
+	_place_player(1, 0.0, 110.0)
+	_truck(1, 22.0)
+	_truck(2, 22.0)
+	_add(aggressive_p, sports_t, 0, -6.0, 190.0)
+	check(pas.check_player(traffic, player, params, road, res), "there is time to let the fast car by")
+	var lane1 := road.lane_center_d(1, 0.0)
+	var h := (reg.length[sports_t] + car.length_m) * 0.5 + tuning.passability.clearance_m
+	var moved := false
+	for k in res.path_n:
+		if res.path_d[k] < lane1 - 1e-6:
+			# The first step off lane 1: the fast car (free road, ~190 km/h) is clear of it.
+			var car_s := -6.0 + _kmh(190.0) * float(k - 1) * pas.step_s()
+			check(absf(car_s - res.path_s[k - 1]) >= h, "the move starts clear of the fast car (%.1f m)" % (car_s - res.path_s[k - 1]))
+			moved = true
+			break
+	check(moved, "the path leaves the blocked lane")
+
+
+# ---------------------------------------------------------------- The batch (arrival) check
+
+func test_batch_wall_fails_and_one_open_lane_passes() -> void:
+	_setup()
+	_place_player(1, 0.0, 150.0)
+	var wall: Array[SpawnSource.Record] = []
+	for lane in LANES:
+		wall.append(_record(truck_p, semi_t, lane, 900.0, 85.0))
+	pas.set_planned(wall)
+	check(not pas.check(traffic, player, params, road, 800.0, 1100.0, res), "a planned wall across every lane fails")
+	ge(res.probes, 1, "probes behind the slow trucks")
+	ge(res.failed_probes, 1, "a failing probe")
+	var planned_blamed := false
+	for o in res.obstacles:
+		if res.blocker_src[o] < 0 and res.blocker_cut[o] > 0.0:
+			planned_blamed = true
+	check(planned_blamed, "planned records are credited as blockers (src < 0)")
+	wall.remove_at(0)
+	pas.set_planned(wall)
+	check(pas.check(traffic, player, params, road, 800.0, 1100.0, res), "one open lane passes")
+	pas.clear_planned()
+
+
+func test_batch_without_slow_vehicles_passes_without_probes() -> void:
+	_setup()
+	_place_player(1, 0.0, 150.0)
+	var batch: Array[SpawnSource.Record] = []
+	for lane in LANES:
+		batch.append(_record(commuter_p, sedan_t, lane, 900.0, 120.0))
+	pas.set_planned(batch)
+	check(pas.check(traffic, player, params, road, 800.0, 1100.0, res), "traffic at or above the minimum speed")
+	eq(res.probes, 0, "nothing slower than the minimum speed: no probe")
+
+
+func test_batch_wall_across_a_boundary_with_live_traffic() -> void:
+	# Live trucks just before the batch start plus a planned truck: still a wall.
+	_setup()
+	_place_player(1, 0.0, 150.0)
+	_truck(0, 790.0)
+	_truck(1, 790.0)
+	var batch: Array[SpawnSource.Record] = [_record(truck_p, semi_t, 2, 790.0, 85.0)]
+	pas.set_planned(batch)
+	check(not pas.check(traffic, player, params, road, 780.0, 1080.0, res), "a wall straddling the start fails")
+	pas.clear_planned()
+
+
+# ---------------------------------------------------------------- Slicing, determinism, cost
+
+func _dense(lanes: int, n: int, seed_value: int) -> void:
+	# n vehicles over [-200, 1100] m at their lanes' flow speeds (a leg-8 like road).
+	var rng := Rng.new(seed_value)
+	var profiles := [commuter_p, truck_p, aggressive_p]
+	var types := [sedan_t, semi_t, sports_t]
+	var k := 0
+	var tries := 0
+	while k < n and tries < 10 * n:
+		tries += 1
+		var lane := rng.int_range(0, lanes - 1)
+		var s := rng.float_range(-200.0, 1100.0)
+		var pick := 0 if lane < lanes - 1 else rng.int_range(0, 1)
+		if lane == 0 and rng.chance(0.3):
+			pick = 2
+		var body_len: float = reg.length[types[pick]]
+		var ok := absf(s - player.s) > 30.0
+		for i in traffic.capacity:
+			if traffic.active[i] == 1 and traffic.lane[i] == lane and absf(traffic.s[i] - s) < body_len + 25.0:
+				ok = false
+				break
+		if not ok:
+			continue
+		var v := tuning.traffic.lane_flow_speed_mps(lane, lanes) / Units.kmh_to_mps(1.0)
+		_add(profiles[pick], types[pick], lane, s, v)
+		k += 1
+
+
+func test_time_sliced_equals_synchronous() -> void:
+	_setup(4)
+	_place_player(2, 0.0, 140.0)
+	_dense(4, 80, 11)
+	pas.check_player(traffic, player, params, road, res)
+	var sync_pass := res.passable
+	var sync_s := res.path_s.duplicate()
+	var r2 := Passability.Result.new()
+	pas.begin_check(traffic, player, params, road, Passability.MODE_PLAYER, player.s, player.s, r2)
+	var slices := 0
+	while not pas.advance(1):
+		slices += 1
+	gt(slices, 5, "the check spans several slices")
+	eq(r2.passable, sync_pass, "same verdict")
+	eq(r2.path_n, res.path_n, "same path length")
+	for k in mini(r2.path_n, res.path_n):
+		if not near(r2.path_s[k], sync_s[k], 0.0, "same path at %d" % k):
+			break
+
+
+func test_deterministic_and_independent_of_history() -> void:
+	_setup(3)
+	_place_player(1, 0.0, 160.0)
+	_dense(3, 70, 5)
+	pas.check_player(traffic, player, params, road, res)
+	var h := _result_hash(res)
+	# Other checks in between, then the same inputs again, and a fresh instance.
+	var other := VehicleState.new()
+	other.copy_from(player)
+	other.s += 100.0
+	pas.check_player(traffic, other, params, road, Passability.Result.new())
+	pas.check_player(traffic, player, params, road, res)
+	eq(_result_hash(res), h, "same inputs, same result")
+	var fresh := Passability.new(tuning, reg, road)
+	fresh.set_player_body(car.length_m, car.width_m)
+	fresh.check_player(traffic, player, params, road, res)
+	eq(_result_hash(res), h, "a fresh instance agrees")
+
+
+func _result_hash(r: Passability.Result) -> int:
+	var h := TraceHash.SEED
+	h = TraceHash.mix_bool(h, r.passable)
+	h = TraceHash.mix_int(h, r.path_n)
+	for k in r.path_n:
+		h = TraceHash.mix_float(h, r.path_s[k])
+		h = TraceHash.mix_float(h, r.path_d[k])
+	return h
+
+
+func test_checks_allocate_nothing() -> void:
+	_setup(4)
+	_place_player(2, 0.0, 140.0)
+	_dense(4, 80, 3)
+	var batch: Array[SpawnSource.Record] = [_record(truck_p, semi_t, 3, 900.0, 85.0)]
+	pas.set_planned(batch)
+	pas.check_player(traffic, player, params, road, res)   # warm-up (Result paths sized)
+	pas.check(traffic, player, params, road, 800.0, 1100.0, res)
+	var before := Performance.get_monitor(Performance.OBJECT_COUNT)
+	for k in 3:
+		pas.check_player(traffic, player, params, road, res)
+		pas.check(traffic, player, params, road, 800.0, 1100.0, res)
+	eq(Performance.get_monitor(Performance.OBJECT_COUNT), before, "no objects created by checks")
+
+
+## Cost at the cap (90 vehicles) on 3 and 4 lanes, for docs/PASSABILITY.md. Budgets are
+## generous (a desktop-class machine does a player check in a few ms); the director
+## spreads its checks over ticks (director_slices_per_tick).
+func test_check_cost_at_the_cap() -> void:
+	for lanes: int in [3, 4]:
+		_setup(lanes)
+		_place_player(1, 0.0, 150.0)
+		_dense(lanes, tuning.traffic.max_active_vehicles, 7 + lanes)
+		var usec := WBBench.usec_per_call(pas.check_player.bind(traffic, player, params, road, res), 3, 1, 3)
+		WBBench.report("passability player check, %d vehicles, %d lanes" % [traffic.count, lanes], usec, 40000.0)
+		le(usec, WBBench.budget(40000.0), "player check usec")
+		var batch: Array[SpawnSource.Record] = []
+		for lane: int in lanes:
+			batch.append(_record(truck_p, semi_t, lane, 900.0 + 60.0 * float(lane), 85.0))
+		pas.set_planned(batch)
+		usec = WBBench.usec_per_call(pas.check.bind(traffic, player, params, road, 800.0, 1100.0, res), 3, 1, 3)
+		WBBench.report("passability batch check (%d probes), %d lanes" % [res.probes, lanes], usec, 60000.0)
+		le(usec, WBBench.budget(60000.0), "batch check usec")
+		# The largest slice a director tick does.
+		var worst := 0
+		pas.begin_check(traffic, player, params, road, Passability.MODE_ARRIVAL, 800.0, 1100.0, res)
+		var done := false
+		while not done:
+			var t0 := Time.get_ticks_usec()
+			done = pas.advance(1)
+			worst = maxi(worst, Time.get_ticks_usec() - t0)
+		WBBench.report("passability largest slice, %d lanes" % lanes, float(worst), 8000.0)
+		pas.clear_planned()
