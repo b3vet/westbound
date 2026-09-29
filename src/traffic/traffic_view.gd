@@ -51,6 +51,9 @@ var tuning: TrafficViewTuning
 ## Vehicles further than this from the camera are skipped (set by setup(); the run may
 ## update it when the quality tier's view distance changes).
 var cull_distance_m: float = 0.0
+## Headlight pools in the glow pass (glow.gdshader). The run turns them off when
+## HeadlightCones (WP5.4) draws the traffic light cones instead. Set before setup().
+var headlight_pools: bool = true
 
 
 class ModelPool:
@@ -216,7 +219,11 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin, registry: Tr
 	_glow_mm.mesh = _build_glow_mesh()
 	_glow_mm.instance_count = total * GLOWS_PER_VEHICLE
 	_glow_mm.visible_instance_count = 0
-	_glow = _make_instance(&"Glow", _glow_mm, GLOW_MATERIAL)
+	var glow_mat := GLOW_MATERIAL
+	if not headlight_pools:
+		glow_mat = GLOW_MATERIAL.duplicate() as ShaderMaterial
+		glow_mat.set_shader_parameter(&"pool_strength", 0.0)
+	_glow = _make_instance(&"Glow", _glow_mm, glow_mat)
 	_shadows = BlobShadowMulti.new()
 	_shadows.name = &"Shadows"
 	add_child(_shadows)
@@ -454,6 +461,12 @@ func model_capacity(index: int) -> int:
 
 func model_triangles(index: int) -> int:
 	return _models[index].tris
+
+
+## True if the slot's vehicle is drawn (live, not hidden by set_slot_hidden). Allocation-free.
+func is_slot_drawn(slot: int, opposite: bool = false) -> bool:
+	var sd := _side(opposite)
+	return sd != null and slot >= 0 and slot < sd.live.size() and sd.live[slot] == 1 and sd.hidden[slot] == 0
 
 
 ## Model index a slot is drawn with (-1 if the slot is not live).

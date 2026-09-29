@@ -30,6 +30,9 @@ extends Node
 signal camera_cycle_requested()
 signal pause_requested()
 signal mute_toggled()
+## The high beams were switched (plan D8: a manual toggle, visual only; it never
+## touches scoring or traffic). Until Events.high_beam_changed exists, listen here.
+signal high_beam_changed(on: bool)
 
 const DRAG := ControlsLayout.DRAG
 const GYRO := ControlsLayout.GYRO
@@ -106,6 +109,10 @@ var curve_scale: float = 1.0
 ## Look settings: touch control size multiplier (clamped) and the drag visual.
 var controls_scale: float = 1.0
 var drag_visual: StringName = RING
+
+## Manual high beams (plan D8): H, gamepad X, or toggle_high_beam() (the HUD button).
+## Kept across runs and release_all() until toggled again.
+var high_beam: bool = false
 
 ## Touch-derived state (overlay).
 var gas_pressed: bool = false
@@ -233,6 +240,19 @@ func request_camera_cycle() -> void:
 	camera_cycle_requested.emit()
 
 
+## Switches the high beams (H, gamepad X; the HUD's high-beam button calls this).
+func toggle_high_beam() -> void:
+	set_high_beam(not high_beam)
+
+
+## Sets the high beams; emits high_beam_changed only on a change.
+func set_high_beam(on: bool) -> void:
+	if on == high_beam:
+		return
+	high_beam = on
+	high_beam_changed.emit(on)
+
+
 ## Whether gyro steering can work on this platform (the settings UI hides it if not).
 func is_gyro_supported() -> bool:
 	return gyro.source.is_supported()
@@ -346,6 +366,8 @@ func _handle_keys(event: InputEvent) -> void:
 		pause_requested.emit()
 	if edges & KeysGamepad.EDGE_MUTE:
 		mute_toggled.emit()
+	if edges & KeysGamepad.EDGE_HIGH_BEAM:
+		toggle_high_beam()
 
 
 func _down(slot: int, pos: Vector2, time_s: float) -> void:
