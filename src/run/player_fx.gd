@@ -16,6 +16,11 @@ extends Node3D
 ## No lights, no StandardMaterial3D: both use src/run/damage_fx.gdshader (unlit, ends
 ## with wb_output). Both stay hidden (0 draw calls) until the first hit. Every number
 ## is in FeelTuning's "Damage look" group (data/tuning/feel.tres).
+##
+## WP7.4 (juice): it also carries the run's JuiceFx (speed lines, tire smoke, barrier
+## sparks: src/fx/juice_fx.gd) and CarFxEvents (publishes hard_braking_changed and
+## barrier_scrape: src/fx/car_fx_events.gd) as children, created once and bound to the
+## same car, so the run needs no extra wiring.
 
 const SHADER := preload("res://src/run/damage_fx.gdshader")
 const SMOKE_NODE := &"HoodSmoke"
@@ -46,6 +51,9 @@ var _ghost_left_s: float = 0.0
 var _t: float = 0.0
 var _visual_was_visible: bool = true
 var _lamp_level: float = -1.0
+## WP7.4: the juice layer and the feel-event adapter (children, created on entering the tree).
+var juice: JuiceFx
+var fx_events: CarFxEvents
 
 
 func _enter_tree() -> void:
@@ -55,6 +63,7 @@ func _enter_tree() -> void:
 	_connect(Events.ghost_ended, stop_ghost)
 	_connect(Events.run_started, _on_run_started)
 	_connect(Events.camera_mode_changed, _on_camera_mode_changed)
+	_add_juice()
 
 
 func _exit_tree() -> void:
@@ -72,6 +81,9 @@ func bind(player_car: PlayerCar) -> void:
 	car = player_car
 	_smoke = null
 	_lamp = null
+	if juice != null:
+		juice.bind(player_car)
+		fx_events.bind(player_car)
 	if car == null or car.model == null or car.model.root == null:
 		return
 	var model := car.model
@@ -242,6 +254,21 @@ func _on_camera_mode_changed(mode: StringName) -> void:
 
 func _on_run_started(_mode: StringName, _seed: int) -> void:
 	reset()
+
+
+## WP7.4: JuiceFx and CarFxEvents, once, sharing this node's FeelTuning.
+func _add_juice() -> void:
+	if juice != null:
+		return
+	juice = JuiceFx.new()
+	juice.feel = _feel()
+	add_child(juice)
+	fx_events = CarFxEvents.new()
+	fx_events.feel = _feel()
+	add_child(fx_events)
+	if car != null:
+		juice.bind(car)
+		fx_events.bind(car)
 
 
 func _feel() -> FeelTuning:

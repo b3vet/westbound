@@ -17,8 +17,13 @@ extends Node
 ## smoothly with physics interpolation.
 ##
 ## A request replaces a weaker (higher) scale that is running, never a stronger one,
-## unless the stronger one has ended. Durations are real (unscaled) seconds.
-## Leaving the tree restores 1.0x and the base tick rate.
+## unless the stronger one has ended; an equal one restarts the duration. Durations
+## are real (unscaled) seconds. Leaving the tree restores 1.0x and the base tick rate.
+##
+## Who asks (WP7.4): the first hit and the crash come from the run (and CrashSequence)
+## on Events.slowmo_requested; the thread's 0.6x for 0.25 s is asked here, on
+## Events.scored(THREAD) (FeelTuning.slowmo_thread_*), so no gameplay code changes.
+## The table therefore resolves as: crash (0.25x) > first hit (0.5x) > thread (0.6x).
 
 const REASON_THREAD := &"thread"
 const REASON_FIRST_HIT := &"first_hit"
@@ -33,6 +38,8 @@ var reason: StringName = &""
 ## Requests honoured / ignored for reduced motion (tests, dev stats).
 var applied_count: int = 0
 var ignored_count: int = 0
+## The slow-motion table (FeelTuning); the default tuning's when unset.
+var feel: FeelTuning
 
 
 func _enter_tree() -> void:
@@ -40,11 +47,15 @@ func _enter_tree() -> void:
 		base_ticks_per_second = Engine.physics_ticks_per_second
 	if not Events.slowmo_requested.is_connected(request):
 		Events.slowmo_requested.connect(request)
+	if not Events.scored.is_connected(_on_scored):
+		Events.scored.connect(_on_scored)
 
 
 func _exit_tree() -> void:
 	if Events.slowmo_requested.is_connected(request):
 		Events.slowmo_requested.disconnect(request)
+	if Events.scored.is_connected(_on_scored):
+		Events.scored.disconnect(_on_scored)
 	restore()
 
 
@@ -95,6 +106,14 @@ func is_slowed() -> bool:
 ## Physics ticks per real second at `s` (at least one).
 func ticks_for(s: float) -> int:
 	return maxi(roundi(float(base_ticks_per_second) * s), 1)
+
+
+func _on_scored(kind: StringName, _points: int, _multiplier: float, _clearance_m: float) -> void:
+	if kind != Events.THREAD:
+		return
+	if feel == null:
+		feel = Tuning.load_default().feel
+	request(feel.slowmo_thread_scale, feel.slowmo_thread_s, REASON_THREAD)
 
 
 func _apply(s: float) -> void:
