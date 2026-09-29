@@ -51,10 +51,11 @@ Per tick, by the independent `TrafficRuleChecker` (it reads only `TrafficState` 
 | `signal_violations` | 0 | Lateral motion less than the profile's signal time after the blinker came on |
 | `unsignaled_moves` | 0 | Lateral motion without a blinker (hit swerves excepted) |
 | `ambush_violations` | 0 | A lateral move started into the player's predicted space (1.5 s, 1.0 m margin) |
-| `decel_violations` | 0 | Deceleration beyond 6 m/s² outside set pieces |
+| `decel_violations` | 0 | Deceleration beyond 6 m/s², except a scripted set-piece vehicle whose piece the checker itself saw first warned ≥ 300 m ahead (rule 4, WP6.2; those count in `set_piece_hard_decels`) |
 | `brake_flag_violations` | 0 | Brake-light flags not matching the deceleration (1 and 4 m/s²) |
 | `rear_end_normal` | 0 | A traffic car touching the player from behind when the player had neither moved sideways nor braked beyond 6 m/s² for `soak_normal_driving_quiet_s` (3 s): "a player driving normally" |
 | `impossible_traffic` | 0 | Impossible windows not caused by the player (below) |
+| `offroad_violations` | 0 | A traffic vehicle's box beyond the drivable lanes (`lanes_left_edge_d` / `lanes_right_edge_d` at its `s`) by more than 0.05 m: e.g. still in a lane that has ended (WP6.2, lane drops) |
 
 Reported, not gated: `contact_episodes` / `rear_end_episodes` (contacts the weaving bot causes by cutting in with an impossible gap: "the resulting contact counts as a hit, because the player caused it"), `impossible_player_induced`, lane moves checked, signals, cancels, director counters, peak and mean active vehicles, tick cost.
 
@@ -97,7 +98,7 @@ Cost: about 6 ms per check (GDScript, 3 lanes, leg 1), so at 1 Hz it is roughly 
 | `gaps_per_km` | Bumper-to-bumper gaps of at least `metrics_gap_min_m` (15 m, a gap the player can enter) between consecutive vehicles in the same lane, per km of lane, over [player s, player s + 750 m], sampled every `metrics_sample_interval_s` (1 s) |
 | `lane_changes_per_vehicle_min` | Completed lane moves / vehicle-minutes simulated |
 | `mean_speed_kmh_lane_<i>` | Sampled mean speed of vehicles in lane *i* (0 = next to the median), not counting vehicles changing lanes |
-| `set_pieces_per_leg` | Set pieces spawned / legs driven: 0 until WP6.3 (the field is kept) |
+| `set_pieces_per_leg` | Set pieces spawned (bound to committed vehicles, `SetPieceSource.spawned`) / legs driven (WP6.2) |
 | `density_per_km_lane` | (context) Vehicles per km per lane in the same window |
 
 **Reference and baseline.** One run is chaotic: from seed to seed its lane changes per vehicle-minute vary by about 17% (coefficient of variation), gaps per km by 8-11%, lane speeds by 1-3%. A ±15% gate on one run would trip on butterfly effects (moving the behind-spawn retries changed one 28 km run's lane-change rate by 24%). So the reference (`TrafficMetricsReference`, `reference`) sums 16 runs on the 3-lane road, legs 1-8 of 1.5 km each (192 km, about 3 minutes), which brings the noise to about 4-5%. It runs in the soak tier (`soak_metrics_reference_matches_baseline`, plan §6); the fast tier checks the pipeline on one short run (`test_metrics_pipeline_on_a_short_run`: every metric present, finite and plausible). A metric beyond `traffic.metrics_tolerance_pct` (15%) of the baseline, or any change from an exact 0, fails. After a deliberate traffic change, rewrite the baseline with `tools/soak.sh --update-baseline` and commit it with the change.
@@ -106,13 +107,13 @@ Baseline (`tests/baselines/traffic_metrics.json`, seed 3303, 16 runs, 3 lanes):
 
 | Metric | Baseline |
 | --- | --- |
-| `gaps_per_km` | 10.53 (WP3.3: 8.34) |
-| `lane_changes_per_vehicle_min` | 0.677 (0.709) |
-| `mean_speed_kmh_lane_0` / `_1` / `_2` | 123.8 / 113.2 / 101.8 (124.6 / 115.4 / 103.4) |
-| `set_pieces_per_leg` | 0 |
-| `density_per_km_lane` | 11.87 (9.67) |
+| `gaps_per_km` | 7.84 (WP4.8: 10.53, WP3.3: 8.34) |
+| `lane_changes_per_vehicle_min` | 0.828 (0.677, 0.709) |
+| `mean_speed_kmh_lane_0` / `_1` / `_2` | 125.9 / 116.6 / 106.3 (123.8 / 113.2 / 101.8; 124.6 / 115.4 / 103.4) |
+| `set_pieces_per_leg` | 0.117 (0, 0) |
+| `density_per_km_lane` | 9.18 (11.87, 9.67) |
 
-(192 km, 5,714 simulated seconds, flow speeds 135 / 115 / 95 km/h.) The baseline was rewritten for WP4.8 (plan D11), a deliberate change. The density ramp now ends at 18 per km per lane, the director tops up and tracks the window, and late legs drive closer (IDM T × 0.8 at leg 8). As a result the density is +23%, gaps per km +26% (more vehicles, so more enterable gaps between them), lane speeds −1 to −2%, and lane changes per vehicle-minute −5%. See docs/SPAWNING.md, *Density (D11)*.
+(192 km, 5,466 simulated seconds, flow speeds 135 / 115 / 95 km/h.) **WP6.2 rewrote the baseline** (a deliberate change; see *WP6.2: the director* below). The earlier values are in brackets. The baseline was rewritten for WP4.8 (plan D11), a deliberate change. The density ramp now ends at 18 per km per lane, the director tops up and tracks the window, and late legs drive closer (IDM T × 0.8 at leg 8). As a result the density is +23%, gaps per km +26% (more vehicles, so more enterable gaps between them), lane speeds −1 to −2%, and lane changes per vehicle-minute −5%. See docs/SPAWNING.md, *Density (D11)*.
 
 ## Results: the 10,000 km soak
 
@@ -231,3 +232,40 @@ Metrics by lane count (whole soak): gaps per km 11.9 / 11.1 / 10.8, density 13.2
 | 146 (leg 1) | 2 | The bot is at 101 km/h, 1.0 s after its own lane change, behind a cruiser at 87 km/h that is signaling into the other lane | The 2-lane "slow wall" of D12: the player may not drop below 100 km/h |
 
 Both follow the bot's own lateral move, like the three 2-lane windows of the WP3.3 soak. The 3-lane one is a cut-in into the path of a car that was already merging: the contact would be the player's doing ("the player caused it"). Under the oracle's pre-registered rule it still counts as a traffic window, because the player was not yet within 0.3 m of the car at t0. **This was not reclassified here** (it would redefine the gate after seeing the result). See *Findings* point 1 for the option already on the table: counting windows that start during or right after the player's own lateral move as player-induced. For this window, the narrower "the player's lateral move is in progress and the other car's lane change started first" would also apply. The orchestrator decides.
+
+## WP6.2: the director (waves, rule 6, set pieces, lane drops)
+
+**What changed in the soak.**
+
+- `TrafficSoakRun` hands the director the run's event buffer, feeds every `set_piece_warning` to the rule checker (rule 4 exception, see *Checks*), and records set pieces: spawned (`set_pieces`, the metric), started, how they ended (`set_pieces_passed`, `_unmet`, `_ended_zone`, `_ended_duration`, `_ended_empty`) and the director's peak counters (`peaks_seen`, `peaks_no_chance`, `peaks_no_kind`, `peaks_missed`, `peaks_unfit`). `tools/soak.sh` prints them on one line.
+- New gate `offroad_violations` (no vehicle outside the driving lanes, which follow a lane drop's taper) and `merges` (mandatory merges out of ending lanes, reported).
+- `soak_canyon_lane_drops` (soak tier): two 28 km journeys on the canyon biome, whose tunnels drop 3 → 2 lanes; every gate, and at least one merge.
+
+**Why the baseline moved** (16-run reference, WP4.8 → WP6.2):
+
+| Metric | WP4.8 | WP6.2 | Change |
+| --- | --- | --- | --- |
+| `density_per_km_lane` | 11.87 | 9.70 | −18 % |
+| `gaps_per_km` | 10.53 | 8.36 | −21 % |
+| `lane_changes_per_vehicle_min` | 0.677 | 0.766 | +13 % |
+| `mean_speed_kmh_lane_0/1/2` | 123.8 / 113.2 / 101.8 | 125.7 / 116.5 / 106.4 | +1.5 / +2.9 / +4.5 % |
+| `set_pieces_per_leg` | 0 | 0.023 (3 pieces in 128 legs) | new |
+
+- **Waves.** Density follows the intensity curve: breathers at `wave_breather_density_pct` (50 %), builds from 87.5 %, peaks at 125 % (capped by IDM at the late legs). The reference drives 1.5 km legs, and every leg ends with a 10-15 s checkpoint breather (440-670 m at the 160 km/h reference pace), so about a third of each reference leg is breather: the reference sees more breather than a real 3.5 km+ leg does.
+- **Rule 6.** Density is capped at 60 % where the player meets traffic just beyond a blind crest or bend (small on the reference's 3-lane road).
+- **Set pieces** clear their zone of hidden traffic (and, in their lanes, of slower traffic they would catch up with).
+- Fewer vehicles give fewer enterable gaps per km and faster lanes; with more room, MOBIL finds more worthwhile lane changes per vehicle.
+- **Set pieces per leg is low in the soak** because the bot is slow for them: pieces run at 105 (truck wall) and 125 km/h (rolling roadblock), and a peak only gets a piece the player would reach within 75 % of its `approach_max_s` at the smoothed pace. The bot's pace in traffic is mostly 100-140 km/h, so most peaks are `peaks_missed`. A player at 170-200 km/h meets one at most peaks (`test_no_set_pieces_in_blind_windows_or_at_checkpoints`, `test_no_set_piece_the_player_would_not_meet`). Before the meet-time check, the soak spawned 5× as many pieces (0.117 per leg) and most were never reached (8 of the first 9 in a 1,000 km soak never started): they only took traffic away.
+- The metric is a count of a few pieces over 128 legs, so ±15 % is one piece: any change that moves one piece fails the comparison. That is deliberate (it is deterministic), but the baseline update will be routine whenever the director changes.
+
+**The 1,000 km soak** (`tools/soak.sh --km=1000 --shards=4`, the final WP6.2 tree merged with the integration branch; a later `--km=112 --shards=2 --compare-with` after the last merge gave identical traces for the 4 common runs):
+
+| | |
+| --- | --- |
+| Distance | **1,008 km** in 36 runs (504 km on 3 lanes, 252 km on 2, 252 km on 4), 8.25 simulated hours, 0 unfinished |
+| Wall time | 1,499 s on 4 shards, on a container shared with other agents (2,421 km per wall hour) |
+| Gates | collisions 0, signal 0, unsignaled 0, no-ambush 0 (16,075 moves checked), decel 0 (min −6.00 m/s²), brake flags 0, rear-end of a normal player 0, impossible (traffic) 0, **offroad 0**: **GATE PASSED** |
+| Reported | 3 impossible windows, all player-induced; 10 contact episodes, all caused by the bot; peak 88 active |
+| Set pieces | 324 peaks: 137 lost the chance roll, 173 missed (the bot too slow to meet a piece), 2 did not fit the road; **11 spawned** (9 truck walls, 2 rolling roadblocks), 3 started, 1 passed, 4 unmet, 2 timed out after starting (the lane-keeping bot stays behind the wall), the rest still live when their runs ended. 0 hard decelerations (neither piece asks for them; rule 4's exception is covered by `test_set_piece_source.gd`). |
+
+`soak_canyon_lane_drops` (2 × 28 km on the canyon road): 91 and 93 mandatory merges, every gate 0, offroad 0, one player-induced window. Cars that find no gap wait at the end of the lane (seen at 0-5 km/h in that window's snapshot, lane 2, 230-250 m ahead of the player).

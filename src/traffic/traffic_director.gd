@@ -27,6 +27,20 @@ extends RefCounted
 ## the sim and to Flow); set_density_scale() is the owner's DEV knob. Phase 6 grows this: intensity waves and blind
 ## caps in _refresh_ctx(), passability and re-rolls in _plan_range(), set pieces as
 ## further sources.
+##
+## Intensity waves, difficulty by leg, blind caps and set pieces (WP6.2,
+## docs/SPAWNING.md "Intensity waves", docs/SET_PIECES.md): `waves` (IntensityWaves)
+## holds the leg's build / peak / breather curve along the road and the meeting map;
+## Flow plans every lane at the wave-shaped, blind-capped density (flow.shaper), the
+## band top-up and behind arrivals follow it, and the density gain tracks the
+## wave-shaped target of the window. `source` is `set_pieces` (SetPieceSource, wrapping
+## Flow): at each wave peak _schedule_set_piece() may put a set piece in the batch being
+## planned, which then goes through the same commit path. Set-piece events go to
+## `events` (the run's buffer).
+
+## force_set_piece(): batches tried (the first one where the piece fits the road and
+## rule 6 gets it) before the request is dropped.
+const FORCED_TRIES := 16
 
 var run: RunContext
 var road: RoadPath
@@ -37,8 +51,21 @@ var state: TrafficState
 ## Default source (Flow, or Daily in Daily Drive); also draws behind spawns and the
 ## opposite carriageway's mix.
 var flow: SpawnSources.Flow
-## Source of ahead batches (Flow by default; later set pieces, Beatmap, HopTargets).
+## Source of ahead batches: set_pieces (which plans Flow around its pieces) by default;
+## later Beatmap, HopTargets. Set pieces are scheduled only while it is set_pieces.
 var source: SpawnSource
+## Intensity waves and the blind-window cap (WP6.2).
+var waves: IntensityWaves
+## The SetPiece source and the set-piece runtime (WP6.2).
+var set_pieces: SetPieceSource
+## Where set-piece events go (the run's ScoreEventBuffer; null = nowhere).
+var events: ScoreEventBuffer:
+	set(buf):
+		events = buf
+		if set_pieces != null:
+			set_pieces.events = buf
+## Dev and tests: wave peaks may get set pieces.
+var set_pieces_enabled: bool = true
 var opposite: OppositeTraffic
 ## Shared, reused planning context (refreshed before each plan).
 var ctx := SpawnSource.Context.new()
@@ -83,6 +110,17 @@ var rejected_overlap: int = 0
 var batches_planned: int = 0
 ## Ahead spawns added by the band top-up (plan D11), included in spawned_ahead.
 var spawned_topup: int = 0
+## Wave-shaped target of the density window (vehicles per km per lane), at the last
+## density control step: the flat target x IntensityWaves.window_mult.
+var window_target: float = 0.0
+## Set-piece scheduling (WP6.2): peaks considered, and why peaks got none.
+var peaks_seen: int = 0
+var peaks_no_chance: int = 0
+var peaks_no_kind: int = 0
+var peaks_missed: int = 0
+var peaks_unfit: int = 0
+## Live vehicles beyond the fog removed to make room for a set piece.
+var despawned_for_set_pieces: int = 0
 
 var _rng: Rng
 var _spawned_to: float = 0.0
@@ -95,6 +133,13 @@ var _prefilling: bool = false
 var _player_s: float = 0.0
 var _control_clock: float = 0.0
 var _last_slot: int = -1   ## the slot of the last successful _commit
+var _batch_a: float = 0.0   ## the batch being planned (ctx.intensity, set_pieces_allowed)
+var _batch_b: float = 0.0
+var _peak_done: int = -1    ## id of the last wave peak handled (IntensityWaves.seg_id)
+var _forced: SetPieceDef    ## dev: the next batch gets this piece (force_set_piece)
+var _forced_tries: int = 0
+var _closing_floor: float
+var _err_smooth: float = 0.0   ## the density error, low-passed (_step_density)
 
 
 func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profiles: Array[DriverProfile],
@@ -110,7 +155,13 @@ func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profil
 	flow = SpawnSources.for_run(run, profiles, types)
 	flow.player_length_m = player_length_m
 	flow.player_width_m = player_width_m
-	source = flow
+	waves = IntensityWaves.new(director_tuning, traffic_tuning, run.tuning.legs, run.rng_traffic.derive(IntensityWaves.STREAM))
+	flow.shaper = waves
+	if sim.has_method(&"closure_ahead"):
+		flow.lane_guard = sim
+	set_pieces = SetPieceSource.new(run, flow, sim, waves, run.rng_traffic.derive(SetPieceSource.STREAM))
+	source = set_pieces
+	_closing_floor = Units.kmh_to_mps(director_tuning.wave_min_closing_kmh)
 	_apply_headway()
 	var q := run.tuning.quality
 	fog_end_m = q.view_distance_m[maxi(q.tier_index(q.default_tier), 0)]
@@ -203,7 +254,12 @@ func window_density_per_km_lane(player_s: float) -> float:
 	for i in state.capacity:
 		if state.active[i] == 1 and state.s[i] >= lo and state.s[i] <= hi:
 			n += 1
-	var lane_km := (hi - lo) / Units.M_PER_KM * float(maxi(road.lane_count(player_s), 1))
+	# Lane-km with the lane count at each s (lane drops, WP6.2).
+	var k := maxi(director_tuning.wave_window_samples, 1)
+	var lanes_sum := 0
+	for j in k:
+		lanes_sum += road.lane_count(lerpf(lo, hi, (float(j) + 0.5) / float(k)))
+	var lane_km := (hi - lo) / Units.M_PER_KM * maxf(float(lanes_sum) / float(k), 1.0)
 	return float(n) / lane_km
 
 
@@ -230,14 +286,28 @@ func reset(player: VehicleState) -> void:
 	rejected_overlap = 0
 	batches_planned = 0
 	spawned_topup = 0
+	peaks_seen = 0
+	peaks_no_chance = 0
+	peaks_no_kind = 0
+	peaks_missed = 0
+	peaks_unfit = 0
+	despawned_for_set_pieces = 0
 	_prefilling = true
 	_player_s = player.s
 	density_gain = 1.0
 	window_density = 0.0
 	_control_clock = 0.0
+	_err_smooth = 0.0
+	set_pieces.clear()
+	waves.reset(player.s, player.v)
+	waves.plan_to(road, player.s + director_tuning.wave_meet_lookahead_m)
+	_peak_done = -1
 	var batch := director_tuning.spawn_batch_length_m
+	_sync_closures(player, player.s + ahead_distance() + batch)
 	var a := player.s
 	while a < player.s + ahead_distance():
+		_batch_a = a
+		_batch_b = a + batch
 		_plan_range(a, a + batch, player)
 		a += batch
 	_spawned_to = a
@@ -250,11 +320,13 @@ func reset(player: VehicleState) -> void:
 ## Per tick, after traffic_sim.step. Allocation-free except when a batch is due.
 func step(dt: float, player: VehicleState) -> void:
 	_player_s = player.s
+	waves.observe_player(dt, player.s, player.v)
 	step_despawn(player.s)
 	_step_density(dt, player)
 	if player.s + ahead_distance() >= _spawned_to:
 		_plan_ahead(player)
 	_step_behind(dt, player)
+	set_pieces.step(dt, player)
 	opposite.step(dt, player.s)
 
 
@@ -262,12 +334,29 @@ func step(dt: float, player: VehicleState) -> void:
 ## Allocation-free.
 func step_despawn(player_s: float) -> void:
 	var back := player_s - traffic_tuning.despawn_behind_m
-	var front := player_s + ahead_distance() + director_tuning.spawn_batch_length_m \
-		+ traffic_tuning.spawn_despawn_ahead_margin_m
+	var front := _despawn_front(player_s)
 	for i in state.capacity:
 		if state.active[i] == 1 and (state.s[i] < back or state.s[i] > front):
 			sim.despawn(i)
 			despawned += 1
+
+
+## Lane closures (WP6.2): the road's lane-count changes ahead become the sim's closures
+## (mandatory merges, spawn guards), and those behind the despawn line are forgotten.
+## Director rate; a sim without closures (a spawn-test fake) is skipped.
+func _sync_closures(player: VehicleState, s_to: float) -> void:
+	if not sim.has_method(&"sync_road_closures"):
+		return
+	var back := player.s - traffic_tuning.despawn_behind_m
+	road.ensure_generated_to(s_to + traffic_tuning.merge_spawn_clear_m)
+	sim.call(&"forget_lane_closures_before", back)
+	sim.call(&"sync_road_closures", back, s_to + traffic_tuning.merge_spawn_clear_m)
+
+
+## Traffic beyond this is despawned (the end of the active window ahead).
+func _despawn_front(player_s: float) -> float:
+	return player_s + ahead_distance() + director_tuning.spawn_batch_length_m \
+		+ traffic_tuning.spawn_despawn_ahead_margin_m
 
 
 # ---------------------------------------------------------------- Density tracking (plan D11)
@@ -283,11 +372,19 @@ func _step_density(dt: float, player: VehicleState) -> void:
 	var interval := _control_clock
 	_control_clock = 0.0
 	window_density = window_density_per_km_lane(player.s)
-	var target := target_density_per_km_lane()
+	# The gain tracks the wave-shaped target (what the window's traffic was planned at),
+	# not the flat one, so it never fights the waves.
+	var target := target_density_per_km_lane() * waves.window_mult(road.lane_count(player.s),
+		dtun.density_window_behind_m, dtun.density_window_ahead_m)
+	window_target = target
 	if target <= 0.0:
 		return
+	# The window lags the plan (its traffic was planned 10-80 s ago, in slow-closing lanes
+	# longer), so its error against the wave-shaped target wiggles with the waves: only
+	# the error's slow part (a low-pass over wave_gain_smoothing_s) is integrated.
 	var err := (target - window_density) / target
-	density_gain = clampf(density_gain + dtun.density_gain_rate_per_s * err * interval,
+	_err_smooth += (err - _err_smooth) * minf(interval / dtun.wave_gain_smoothing_s, 1.0)
+	density_gain = clampf(density_gain + dtun.density_gain_rate_per_s * _err_smooth * interval,
 		dtun.density_gain_min, dtun.density_gain_max)
 
 
@@ -295,9 +392,18 @@ func _step_density(dt: float, player: VehicleState) -> void:
 
 func _plan_ahead(player: VehicleState) -> void:
 	var batch := director_tuning.spawn_batch_length_m
+	waves.forget_before(player.s - director_tuning.wave_meet_lookahead_m)
+	waves.plan_to(road, player.s + director_tuning.wave_meet_lookahead_m)
+	_sync_closures(player, player.s + ahead_distance() + batch * 2.0)
 	while player.s + ahead_distance() >= _spawned_to:
 		var a := maxf(_spawned_to, player.s + min_ahead_m())
+		_batch_a = a
+		_batch_b = a + batch
+		_refresh_ctx(player)
+		_schedule_set_piece(a, a + batch, player)
+		_clear_for_set_piece(a, a + batch, player)
 		_plan_range(a, a + batch, player)
+		set_pieces.bind_committed()
 		_spawned_to = a + batch
 	_top_up_band(player)
 
@@ -346,14 +452,24 @@ func _top_up_band(player: VehicleState) -> void:
 	_refresh_ctx(player)
 	var lanes := road.lane_count(lo)
 	var margin := Units.kmh_to_mps(director_tuning.density_topup_speed_margin_kmh)
-	var want := ctx.density_per_km_lane * (hi - lo) / Units.M_PER_KM
 	var budget := director_tuning.density_topup_max_per_batch
 	for lane in lanes:
 		if budget <= 0:
 			return
-		if traffic_tuning.lane_flow_speed_mps(lane, lanes) + margin > player.v:
+		var v_lane := traffic_tuning.lane_flow_speed_mps(lane, lanes)
+		if v_lane + margin > player.v:
 			continue
-		budget -= _top_up_lane(lane, lo, hi, want, budget, player)
+		budget -= _top_up_lane(lane, lo, hi, _band_want(v_lane, lo, hi), budget, player)
+
+
+## Vehicles a lane at `v_lane` should hold in the band [lo, hi): the wave-shaped,
+## blind-capped planning density integrated over the band (WP6.2).
+func _band_want(v_lane: float, lo: float, hi: float) -> float:
+	var n := maxi(director_tuning.wave_window_samples, 1)
+	var sum := 0.0
+	for k in n:
+		sum += waves.density_at(v_lane, lerpf(lo, hi, (float(k) + 0.5) / float(n)))
+	return sum / float(n) * (hi - lo) / Units.M_PER_KM
 
 
 ## Tops `lane` up toward `want` vehicles in [lo, hi); returns how many it added. Gaps
@@ -377,11 +493,15 @@ func _top_up_lane(lane: int, lo: float, hi: float, want: float, budget: int, pla
 		return 0
 	slots.sort_custom(func(x: int, y: int) -> bool: return state.s[x] < state.s[y])
 	var lanes := road.lane_count(lo)
+	var v_lane := traffic_tuning.lane_flow_speed_mps(lane, lanes)
 	var tried: Dictionary = {}   # follower slot (-1 = the band's start) -> gap already tried
 	var added := 0
 	while added < need:
-		# The largest untried gap overlapping the band: between follower f and leader l
-		# (-1 = open end, bounded by the band).
+		# The largest untried gap overlapping the band, weighted by the wave's density
+		# where it lies (a gap as large as the wave asks for there counts the same
+		# everywhere), and never where the wave is below wave_fill_min_mult (WP6.2:
+		# breathers and blind windows stay thin): between follower f and leader l (-1 =
+		# open end, bounded by the band).
 		var best := -1.0
 		var bf := -2
 		var bl := -1
@@ -393,6 +513,10 @@ func _top_up_lane(lane: int, lo: float, hi: float, want: float, budget: int, pla
 			if b <= lo or a >= hi or tried.has(f):
 				continue
 			var gap := minf(b, hi) - maxf(a, lo)
+			var m := waves.density_mult(v_lane, (minf(b, hi) + maxf(a, lo)) * 0.5)
+			if m < waves.fill_min_mult():
+				continue   # never into a breather or a blind window
+			gap *= m
 			if gap > best:
 				best = gap
 				bf = f
@@ -414,7 +538,8 @@ func _top_up_lane(lane: int, lo: float, hi: float, want: float, budget: int, pla
 		if to <= from:
 			continue
 		_topup_rec.s = (from + to) * 0.5
-		if not flow.fits_between_neighbors_into(ctx, _topup_rec) or not _commit(_topup_rec, player):
+		if not flow.lane_open_for_spawn(road, lane, _topup_rec.s) or not set_pieces.keeps_clear(_topup_rec) \
+				or not flow.fits_between_neighbors_into(ctx, _topup_rec) or not _commit(_topup_rec, player):
 			continue
 		added += 1
 		spawned_ahead += 1
@@ -437,7 +562,8 @@ func _step_behind(dt: float, player: VehicleState) -> void:
 	var lanes := mini(road.lane_count(player.s), _behind_debt.size())
 	var left_lanes := maxi(mini(traffic_tuning.spawn_behind_lane_count, lanes - 1), 1)
 	var margin := Units.kmh_to_mps(traffic_tuning.spawn_behind_speed_margin_kmh)
-	var rate := ctx.density_per_km_lane / Units.M_PER_KM
+	# Arrivals from behind pass the player now: the wave where the player is.
+	var rate := waves.base_density * waves.mult_at(player.s) / Units.M_PER_KM
 	for lane in _behind_debt.size():
 		if lane >= left_lanes:
 			_behind_debt[lane] = 0.0
@@ -545,10 +671,144 @@ func _refresh_ctx(player: VehicleState) -> void:
 	if player != null:
 		ctx.player = player
 	ctx.leg = leg
-	ctx.density_per_km_lane = target_density_per_km_lane() * density_gain
+	# Waves and blind caps (WP6.2): the representative of the batch being planned (its
+	# middle, the middle lane's flow speed); Flow plans each lane and position at the
+	# shaper's own density. Set pieces only for the batch a piece was scheduled into.
+	var base := target_density_per_km_lane() * density_gain
+	waves.base_density = base
+	var lanes := maxi(road.lane_count(_batch_a), 1)
+	var v_mid := traffic_tuning.lane_flow_speed_mps(lanes >> 1, lanes)
+	var s_mid := (_batch_a + _batch_b) * 0.5
+	ctx.intensity = waves.intensity_at(waves.meet_x(v_mid, s_mid))
+	waves.ref_mult = waves.density_mult(v_mid, s_mid)
+	ctx.density_per_km_lane = base * waves.ref_mult
 	ctx.aggressive_share = director_tuning.aggressive_share_frac(leg)
 	ctx.hesitant_allowed = leg >= director_tuning.hesitant_first_leg
-	ctx.intensity = 0.0
-	ctx.set_pieces_allowed = false
+	ctx.set_pieces_allowed = set_pieces.has_pending_in(_batch_a, _batch_b)
 	ctx.is_night = is_night
 	ctx.biome = biome
+
+
+# ---------------------------------------------------------------- Set pieces (WP6.2, director rate)
+
+## Wave peaks get set pieces here, one batch at a time, before the batch is planned.
+## The next peak ahead (IntensityWaves.next_peak) is handled once:
+##   - its seeded chance draw against set_piece_chance_frac(leg), then its seeded kind
+##     draw through SetPieceSource.pick (leg unlocks, the biome's mix, lanes);
+##   - the piece must be met by the player at the peak's middle: planned now at
+##     s = player s + (x - player s) (pace - v) / pace (the meeting map at the piece's
+##     speed v). While that is beyond this batch, wait; if it is already behind the
+##     batch start, the batch start is used as long as the player still meets it in the
+##     peak;
+##   - _set_piece_fits: enough lanes, no vehicle of it hidden beyond a blind crest or bend
+##     while the player drives it (rule 6), met clear of checkpoints, and no lane-count
+##     change, tunnel or fork on the road it drives until it ends.
+## Then SetPieceSource.schedule() and ctx.set_pieces_allowed for this batch.
+func _schedule_set_piece(a: float, b: float, player: VehicleState) -> void:
+	if not set_pieces_enabled or source != set_pieces or _prefilling or not set_pieces.can_schedule():
+		return
+	var lanes := road.lane_count(a)
+	if _forced != null:
+		_schedule_forced(a, b, lanes)
+		return
+	var k := waves.next_peak(player.s, _peak_done)
+	if k < 0:
+		return
+	var id := waves.seg_id[k]
+	if waves.seg_u_chance[k] >= director_tuning.set_piece_chance_frac(leg):
+		_peak_handled(id)
+		peaks_no_chance += 1
+		return
+	var def := set_pieces.pick(leg, biome, waves.seg_u_kind[k], lanes)
+	if def == null:
+		_peak_handled(id)
+		peaks_no_kind += 1
+		return
+	var x0 := waves.seg_x0[k]
+	var x1 := waves.seg_x1[k]
+	var v := def.speed_mps(set_pieces.min_speed_mps)
+	var pace := waves.pace
+	if pace <= v + _closing_floor:
+		if x1 <= player.s + ahead_distance():
+			_peak_handled(id)   # the player is too slow to meet a piece in this peak
+			peaks_missed += 1
+		return
+	var s_req := player.s + ((x0 + x1) * 0.5 - player.s) * (pace - v) / pace
+	if s_req >= b:
+		return   # a later batch
+	_peak_handled(id)
+	s_req = maxf(s_req, a)
+	if waves.meet_x(v, s_req) > x1 or s_req - player.s \
+			> (pace - v) * def.approach_max_s * Units.pct_to_frac(director_tuning.set_piece_meet_max_pct):
+		peaks_missed += 1   # met beyond the peak, or too late at this pace
+		return
+	if not _set_piece_fits(def, v, s_req, lanes):
+		peaks_unfit += 1
+		return
+	set_pieces.schedule(def, s_req, lanes, v)
+
+
+## A set piece scheduled into [a, b) gets its footprint (clear_behind_m .. clear_ahead_m
+## around it) cleared of live traffic that drifted into the new batch, and, ahead of it
+## in its lanes, of slower traffic it would catch up with before it ends (so the
+## formation holds), as long as that traffic is beyond the fog (min_ahead_m(): the same
+## line no ahead spawn may cross, so the removal is as invisible as a spawn there).
+## (The piece's lanes are not known before it is laid out: all of them count then.)
+func _clear_for_set_piece(a: float, b: float, player: VehicleState) -> void:
+	if not set_pieces.has_pending_in(a, b):
+		return
+	var inst: SetPieceSource.Instance = null
+	for x in set_pieces.instances:
+		if x.stage == SetPieceSource.Stage.SCHEDULED and x.s_rear >= a and x.s_rear < b:
+			inst = x
+	var lo := inst.s_rear - inst.def.clear_behind_m
+	var hi := inst.s_front + inst.def.clear_ahead_m
+	var hidden := player.s + min_ahead_m()
+	for i in state.capacity:
+		if state.active[i] == 0 or state.s[i] - state.length[i] * 0.5 < hidden or state.s[i] < lo:
+			continue
+		# The piece's zone in every lane; beyond it, in the piece's lanes, what it would
+		# catch up with before it ends.
+		if state.s[i] <= hi or (set_pieces.occupies(inst, state.lane[i]) and state.s[i] <= inst.s_front
+				+ set_pieces.catch_reach(inst, state.profile_id[i], state.v[i], state.length[i])):
+			sim.despawn(i)
+			despawned_for_set_pieces += 1
+
+
+func _peak_handled(id: int) -> void:
+	_peak_done = id
+	peaks_seen += 1
+
+
+func _schedule_forced(a: float, b: float, lanes: int) -> void:
+	var def := _forced
+	var v := def.speed_mps(set_pieces.min_speed_mps)
+	_forced_tries -= 1
+	if lanes >= def.min_lanes and _set_piece_fits(def, v, a, lanes):
+		_forced = null
+		set_pieces.schedule(def, minf(a, b), lanes, v)
+	elif _forced_tries <= 0:
+		_forced = null   # no stretch within reach fits (e.g. blind all along at this pace)
+
+
+## Rule 6 and the road for a piece of `def` at speed `v` with its rear at `s`
+## (SetPieceSource.fits_road; the source checks again where it finally lays it out).
+func _set_piece_fits(def: SetPieceDef, v: float, s: float, lanes: int) -> bool:
+	return set_pieces.fits_road(def, v, s, def.length_m, lanes, road)
+
+
+## Dev (sandbox) and tests: the next ahead batch where a `id` set piece fits the road
+## and rule 6 gets one, wave or not (dropped after FORCED_TRIES batches). False when
+## there is no such set piece or one is already live.
+func force_set_piece(id: StringName) -> bool:
+	var def: SetPieceDef = set_pieces.defs.get(id)
+	if def == null or SetPieceSource.controller_for(def.kind) == null or not set_pieces.can_schedule():
+		return false
+	_forced = def
+	_forced_tries = FORCED_TRIES
+	return true
+
+
+## The wave intensity the player is in now (0 breather .. 1 peak).
+func intensity_now() -> float:
+	return waves.intensity_at(_player_s)

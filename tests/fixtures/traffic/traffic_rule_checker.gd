@@ -18,11 +18,21 @@ extends RefCounted
 ##   snapshotted road velocity, grown by the margin on every side.
 ## - Collisions: oriented boxes in road space (yaw = atan2(v_lat, v)) inset by
 ##   LivesTuning.collision_inset_m, separating-axis test.
-## - Deceleration clamp and brake-light thresholds, every tick, every car.
+## - On the road (WP6.2, lane drops): every car's body stays between the left edge of
+##   lane 0 and the right edge of the driving lanes at its s (lanes_left_edge_d /
+##   lanes_right_edge_d, which follow a lane drop's taper), within OFFROAD_TOL_M.
+## - Deceleration clamp and brake-light thresholds, every tick, every car. Rule 4's one
+##   exception (WP6.2): "except in set pieces announced at least 300 m ahead". A car may
+##   brake beyond the clamp only if it carries FLAG_SCRIPTED, `set_piece_of` maps it to a
+##   set piece, and that piece's first warning (note_set_piece_warning, from the event
+##   buffer) came when the player was at least DirectorTuning.set_piece_min_warning_m
+##   from the nearest of the piece's cars, as measured here from TrafficState.
 
 const AMBUSH_SAMPLE_S := 0.005
 const LATERAL_EPS := 1e-9
 const MAX_MESSAGES := 8
+## Numerical slack of the on-the-road check (m).
+const OFFROAD_TOL_M := 0.05
 
 var traffic_tuning: TrafficTuning
 var registry: TrafficRegistry
@@ -54,11 +64,19 @@ var rear_end_normal := 0
 var contacts_started := PackedInt32Array()
 var quiet_s: float
 var decel_violations := 0
+## Ticks x cars with a body outside the driving lanes (WP6.2).
+var offroad_violations := 0
 var brake_flag_violations := 0
 var brake_seen := 0
 var brake_strong_seen := 0
 var min_accel := 0.0
 var messages := PackedStringArray()
+## Set pieces (rule 4): slot -> the serial of its set piece (-1 = none). Unset: every
+## deceleration beyond the clamp is a violation. The soak binds
+## SetPieceSource.instance_of.
+var set_piece_of: Callable
+## Beyond-the-clamp decelerations allowed as a warned set piece's (reported).
+var set_piece_hard_decels := 0
 
 var _vid := PackedInt32Array()
 var _blink_t := PackedFloat64Array()
@@ -88,6 +106,8 @@ var _prev_pd := NAN
 var _last_lateral_t := -INF
 var _last_hard_brake_t := -INF
 var _time := 0.0
+var _min_warning: float
+var _warned_m: Dictionary = {}       # set-piece serial -> measured distance at its first warning
 
 
 func _init(t: Tuning, reg: TrafficRegistry, road_path: RoadPath, p_length: float, p_width: float) -> void:
@@ -103,6 +123,25 @@ func _init(t: Tuning, reg: TrafficRegistry, road_path: RoadPath, p_length: float
 	for x in reg.length:
 		_max_len = maxf(_max_len, x)
 	quiet_s = traffic_tuning.soak_normal_driving_quiet_s
+	_min_warning = t.director.set_piece_min_warning_m
+
+
+## A set piece's warning event (SetPieceSource.KIND_WARNING, serial in `points`): the
+## first one per piece records the player's distance to the nearest of the piece's cars
+## (rear box edge), measured here from TrafficState.
+func note_set_piece_warning(serial: int, ts: TrafficState, player: VehicleState) -> void:
+	if _warned_m.has(serial) or not set_piece_of.is_valid():
+		return
+	var d := INF
+	for i in ts.capacity:
+		if ts.active[i] == 1 and int(set_piece_of.call(i)) == serial:
+			d = minf(d, ts.s[i] - ts.length[i] * 0.5 - player.s)
+	_warned_m[serial] = d
+
+
+## The measured distance of a set piece's first warning (-INF = never warned).
+func set_piece_warned_m(serial: int) -> float:
+	return float(_warned_m.get(serial, -INF))
 
 
 ## Time of the player's last lateral motion (-INF = never).
@@ -112,7 +151,7 @@ func player_last_lateral_t() -> float:
 
 func total_violations() -> int:
 	return signal_violations + unsignaled_moves + ambush_violations + collisions + decel_violations \
-		+ brake_flag_violations
+		+ brake_flag_violations + offroad_violations
 
 
 func summary() -> String:
@@ -160,6 +199,12 @@ func observe(time: float, ts: TrafficState, player: VehicleState) -> void:
 
 func _check_car(time: float, ts: TrafficState, i: int, player: VehicleState) -> void:
 	var f := ts.flags[i]
+	var hw := ts.width[i] * 0.5
+	if ts.d[i] + hw > road.lanes_right_edge_d(ts.s[i]) + OFFROAD_TOL_M \
+			or ts.d[i] - hw < road.lanes_left_edge_d(ts.s[i]) - OFFROAD_TOL_M:
+		offroad_violations += 1
+		_msg("t=%.3f slot %d (lane %d, d %.2f) outside the driving lanes at s %.1f (%d lanes, right edge %.2f)" % [
+			time, i, ts.lane[i], ts.d[i], ts.s[i], road.lane_count(ts.s[i]), road.lanes_right_edge_d(ts.s[i])])
 	var blink := (f & (TrafficState.FLAG_BLINKER_LEFT | TrafficState.FLAG_BLINKER_RIGHT)) != 0
 	var hit := (f & TrafficState.FLAG_HIT) != 0
 	var pid := ts.profile_id[i]
@@ -211,9 +256,16 @@ func _check_car(time: float, ts: TrafficState, i: int, player: VehicleState) -> 
 	# Deceleration clamp and brake lights.
 	var a := ts.accel[i]
 	min_accel = minf(min_accel, a)
-	if (f & TrafficState.FLAG_SCRIPTED) == 0 and a < -_clamp - 1e-9:
-		decel_violations += 1
-		_msg("t=%.3f slot %d decel %.3f beyond the clamp" % [time, i, -a])
+	if a < -_clamp - 1e-9:
+		var sp := -1
+		if (f & TrafficState.FLAG_SCRIPTED) != 0 and set_piece_of.is_valid():
+			sp = int(set_piece_of.call(i))
+		if sp >= 0 and set_piece_warned_m(sp) >= _min_warning - 1e-6:
+			set_piece_hard_decels += 1
+		else:
+			decel_violations += 1
+			_msg("t=%.3f slot %d decel %.3f beyond the clamp (%s)" % [time, i, -a,
+				"set piece %d warned at %.1f m" % [sp, set_piece_warned_m(sp)] if sp >= 0 else "not a warned set piece"])
 	var want_brake := -a > _brake
 	var want_strong := -a > _strong
 	if want_brake != ((f & TrafficState.FLAG_BRAKE) != 0) or want_strong != ((f & TrafficState.FLAG_BRAKE_STRONG) != 0):

@@ -106,11 +106,14 @@ if not runs:
     sys.exit(1)
 
 GATES = ["collision_pairs", "signal_violations", "unsignaled_moves", "ambush_violations", "decel_violations",
-         "brake_flag_violations", "rear_end_normal", "impossible_traffic"]
+         "brake_flag_violations", "rear_end_normal", "impossible_traffic", "offroad_violations"]
 COUNTERS = GATES + ["collision_ticks", "impossible_windows", "impossible_player_induced", "impossible_checks",
                     "window_checks", "signals", "moves", "cancels", "lane_moves_checked", "player_contact_ticks",
                     "contact_episodes", "rear_end_episodes", "spawned_ahead", "spawned_behind", "despawned",
                     "rejected_cap", "rejected_ghost", "rejected_visible", "rejected_overlap", "sim_signals",
+                    "set_pieces", "set_pieces_started", "set_piece_hard_decels", "merges", "set_pieces_passed",
+                    "set_pieces_unmet", "set_pieces_ended_zone", "set_pieces_ended_duration", "set_pieces_ended_empty",
+                    "peaks_seen", "peaks_no_chance", "peaks_no_kind", "peaks_missed", "peaks_unfit",
                     "sim_moves", "sim_completed", "sim_cancel_player", "sim_cancel_hesitant", "sim_cancel_unsafe",
                     "ticks"]
 
@@ -187,6 +190,12 @@ print("  contacts with the player: %d episodes (%d rear-end, %d of a normally dr
     total["contact_episodes"], total["rear_end_episodes"], total["rear_end_normal"]))
 print("  lane moves checked %d, signals %d, cancels %d, peak active %d, min accel %.2f m/s^2" % (
     total["lane_moves_checked"], total["signals"], total["cancels"], total["peak_active"], total["min_accel_mps2"]))
+print("  set pieces: %d spawned, %d started, %d passed, %d unmet, %d ended at a road zone, %d timed out, %d emptied; "
+      "hard decels %d; peaks %d (no chance %d, no kind %d, missed %d, unfit %d); merges %d" % (
+    total["set_pieces"], total["set_pieces_started"], total["set_pieces_passed"], total["set_pieces_unmet"],
+    total["set_pieces_ended_zone"], total["set_pieces_ended_duration"], total["set_pieces_ended_empty"],
+    total["set_piece_hard_decels"], total["peaks_seen"], total["peaks_no_chance"], total["peaks_no_kind"],
+    total["peaks_missed"], total["peaks_unfit"], total["merges"]))
 for name, g in by_lanes.items():
     print("  %s: %.0f km, impossible (traffic) %d, collisions %d, violations %d | %s" % (
         name, g["km"], g["impossible_traffic"], g["collision_pairs"],
