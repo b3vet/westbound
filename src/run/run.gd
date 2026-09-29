@@ -856,6 +856,8 @@ func _install_hud() -> void:
 				hud.connect(&"pause_pressed", toggle_pause)
 			if hud.has_signal(&"camera_pressed"):
 				hud.connect(&"camera_pressed", hub.request_camera_cycle)
+			if hud.has_signal(&"high_beam_pressed"):
+				hud.connect(&"high_beam_pressed", hub.toggle_high_beam)
 
 
 ## The in-run screens: they emit intents, the run acts on them (CONTRACTS §14).

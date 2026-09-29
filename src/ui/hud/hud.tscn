@@ -82,6 +82,13 @@ focus_mode = 0
 script = ExtResource("8_button")
 glyph = 1
 
+[node name="HighBeam" type="BaseButton" parent="Root"]
+visible = false
+layout_mode = 3
+focus_mode = 0
+script = ExtResource("8_button")
+glyph = 2
+
 [node name="MinSpeed" type="Control" parent="Root"]
 visible = false
 layout_mode = 3

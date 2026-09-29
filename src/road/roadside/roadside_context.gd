@@ -16,6 +16,8 @@ var props_seed: int = 0
 ## Null outside a run: every cell then belongs to `fallback_biome`.
 var biome_director: BiomeDirector
 var fallback_biome: BiomeDef
+## Landmark and warning-sign zones to keep clear (WP5.5); null = none.
+var clearance: LandmarkClearance
 
 const _MASK31 := 0x7FFFFFFF
 

@@ -10,11 +10,12 @@ add_child(hud)
 hud.bind(feed)                        # the run's HudFeed; null unbinds
 hud.pause_pressed.connect(...)        # [II]
 hud.camera_pressed.connect(...)       # [CAM]
+hud.high_beam_pressed.connect(...)    # the headlamp button (WP5.5): the run toggles hub.toggle_high_beam()
 ```
 
 - The HUD reads the `HudFeed` every frame and listens to `Events`: `scored`, `chain_banked`, `chain_lost`, `hesitated`, `bonus_awarded`, `hit`, `life_restored`, `ghost_started/ended`, `shoulder_penalty_changed`, `night_started`, `gear_shifted`, `run_started` and `settings_changed`. It never writes gameplay state.
 - **Accent:** the HUD follows the `SkyRig` in the tree (`accent_changed`). Without one it uses the theme's run-start accent. `set_accent()` sets it by hand. It redraws only on an 8-bit color change.
-- **Touches:** only the two buttons take touches (`MOUSE_FILTER_STOP`). Everything else ignores them, so `PlayerInput` gets them in `_unhandled_input`.
+- **Touches:** only the buttons take touches (`MOUSE_FILTER_STOP`). Everything else ignores them, so `PlayerInput` gets them in `_unhandled_input`.
 - **Settings read:** `units` (km/h or mph, km or miles), `text_scale` (clamped to `hud.text_scales`, 100% / 125%), and the control settings (for placement).
 - **Tests and previews:** `set_screen(full, safe)` pins the canvas. Set `auto_process = false` and call `advance(dt)` yourself.
 
@@ -24,7 +25,7 @@ hud.camera_pressed.connect(...)       # [CAM]
 
 - **Top-left:** banked total and best.
 - **Top-centre:** the sun bar with the checkpoint distance, then the chain and multiplier (they meet at the centre line), then the 4-line event stack.
-- **Top-right:** the lives panel, [II] and [CAM].
+- **Top-right:** the lives panel, [II] and [CAM], and the high-beam button under [CAM] (WP5.5).
 - **Bottom-left:** the speedometer, with the minimum-speed strip reserved above it.
 - **Bottom-right:** the boost meter.
 
@@ -135,3 +136,24 @@ Spec: *Core loop → Legs and checkpoints* (warning signs, crossing step 5 "a 2.
   tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --state=objective --done=true --tag=objective_done
   tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --state=warning --tag=warning
   ```
+
+## High-beam button (WP5.5)
+
+Plan D8: the player's manual high beams get a HUD control. Spec: *UI, HUD and design system* (top-right cluster, faceted small controls), *World → Night lighting*. docs/NIGHT.md → High beams.
+
+- **Where:** `layout.high_beam`, right-aligned under [CAM], the same size as the other buttons (`button_size_px`, scaled with the text size). It is in `HudLayout.rects()`, so the layout tests keep it clear of the pedals, the safe area, the middle third and every other panel at every handedness, controls scale, aspect and text size. The objective chip's right-side fallback and the raised bottom panels avoid it.
+- **Glyph:** the headlamp symbol (a lamp, flat side left, and four straight beams), drawn with `HudMesh` in the button's plate. Chakra Petch has no such icon. The button is one draw call and draws no text.
+- **Press:** `HudButton` takes the touch (`MOUSE_FILTER_STOP`, the mouse press Godot emulates from the touch) and the Hud emits `high_beam_pressed`. `Run._install_hud` connects it to `hub.toggle_high_beam`. The touch never reaches `PlayerInput`'s steering.
+- **Lit:** it follows `Events.high_beam_changed` (the hub relays H, gamepad X and the button there): a gold fill with an ink glyph. When the Hud first finds the hub, it syncs from `hub.high_beam`. It redraws only when the state changes.
+- **When it shows:** only while headlights matter. The color script's headlight ramp (the `SkyRig` found by group, or `set_headlight_ramp()` in previews and tests) must be at or above `hud.high_beam_min_ramp` (0.3). That is where traffic switches its headlights on (`Run.HEADLIGHTS_ON_RAMP`): sky_t ≈ 0.44, between golden hour and sunset, through dusk and night and into dawn. `NightTuning.visible_min_ramp` (0.05) is reached at sky_t ≈ 0.29, in mid-afternoon, which is too early for a night control. The button fades in and out over `hud.high_beam_fade_s` with modulate only (no redraws). By day it is `visible = false`: no canvas item, no draw call, no touches.
+- **The cluster does not jump:** the slot is reserved whether or not the button shows, so nothing else moves when it appears.
+- **Draw calls** (hud_preview, 1280x720, Compatibility): night 21 (was 20), with the beams on or off. idle 16 and busy 22 are unchanged: the button is hidden at the preview's day sky.
+- **Preview:** `--high_beam=true` lights it. `hud_preview` connects the button to its hub, and `snap_setup` finishes the fade (`Hud.settle_high_beam()`).
+
+  ```
+  tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --state=night --tag=hb_off
+  tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --state=night --high_beam=true --tag=hb_on
+  ```
+- **Tuning:** `hud.tres` group High beams: `high_beam_fade_s`, `high_beam_min_ramp`.
+- **Tests:** `tests/ui/test_hud_high_beam.gd` covers a tap with iOS touch id 1_893_457_201 through `Input.parse_input_event` (the toggle, the lit state, and no steering), the run's wiring, the lit state following the event and the hub, hidden by day and fading in at dusk and night with its slot unchanged and +1 canvas item, following a real `SkyRig`, and clearance of the cluster.
+

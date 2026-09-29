@@ -86,8 +86,8 @@ const PATH := "res://data/tuning/landmarks.tres"
 @export var tunnel_clearance_m: float = 7.2   # not in spec
 ## Inner face of the walls beyond each guardrail.
 @export var tunnel_wall_offset_m: float = 0.6   # not in spec
-## Top of the earth over the shell. Above the median light poles (10.35 m) so they
-## never poke out of the hill (the roadside does not skip landmark ranges yet).
+## Top of the earth over the shell. (Since WP5.5 the roadside skips the median light
+## poles inside the tunnel; the cover still clears their 10.35 m.)
 @export var tunnel_cover_top_m: float = 11.6   # not in spec
 ## The hill falls from the cover top to the ground over this width beyond the walls.
 @export var tunnel_hill_width_m: float = 26.0   # not in spec
@@ -114,6 +114,18 @@ const PATH := "res://data/tuning/landmarks.tres"
 ## By day, a reflective face gets this share of full sunlight whichever way it faces
 ## (sign sheeting is sky-lit; driving into the sun puts every sign face in shadow).
 @export var retro_day_fill_frac: float = 0.55   # not in spec: readability
+
+
+@export_group("Roadside clearance")
+## The roadside keeps props out of every landmark's and warning sign's zones
+## (LandmarkClearance, WP5.5), grown by this much along the road.
+@export var clearance_margin_m: float = 1.0   # not in spec
+## Flat ground cover lower than this (the farmland crop tiles) may run on under a
+## tunnel's hill, which hides it; anything taller (trees, yards, fences, posts) may not.
+@export var clearance_ground_cover_m: float = 1.0   # not in spec
+## A clearance cache refill covers the asked range plus this much on either side (one
+## road feature query per refill).
+@export var clearance_cache_pad_m: float = 500.0   # not in spec
 
 
 static func load_default() -> LandmarkTuning:

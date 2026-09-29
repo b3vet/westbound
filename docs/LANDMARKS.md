@@ -11,13 +11,14 @@ Spec: "Legs and checkpoints" (a landmark at every checkpoint; warning signs at 1
 | `src/world/landmarks/landmark_section.gd` | `LandmarkSection` | The road cross-section a build is made for (cache key) |
 | `src/world/landmarks/landmark_text.gd` | `LandmarkText` | The words: `CHECKPOINT 1 KM`, `LEG 3 — DESERT MESAS`, `NEXT CHECKPOINT 3.5 KM` |
 | `src/world/landmarks/landmark_text_atlas.gd` | `LandmarkTextAtlas` | Sign text rasterised on the CPU into one R8 atlas |
+| `src/world/landmarks/landmark_clearance.gd` | `LandmarkClearance` | WP5.5: the builds' and signs' ground zones, which the roadside keeps clear |
 | `src/world/landmarks/landmark.gdshader` | | The world shader plus bending and atlas text |
 | `src/core/tuning/landmark_tuning.gd`, `data/tuning/landmarks.tres` | `LandmarkTuning` | Every number (spans, heights, clearances, pools, atlas) |
 | `src/world/landmarks/dev/landmark_preview.tscn` | | Review scene |
 
 ## Placement
 
-- Every `CHECKPOINT` feature gets a build **at the checkpoint line**. Its style is the feature's `tag`, else the `landmark_style` of the biome whose leg ends there (`biome_director`), else `default_style`. `style_override` forces one (previews).
+- Every `CHECKPOINT` feature gets a build **at the checkpoint line**. Its style is the feature's `tag`, which the biome director fills from the biome whose leg ends there (WP5.5, see *Checkpoint styles*). Without a director it is `default_style`. `style_override` forces one (previews).
 - Every `SIGN` feature tagged `ProceduralRoadPath.SIGN_CHECKPOINT` gets a panel right of the guardrail (`sign_setback_m`), facing traffic: `CHECKPOINT 1 KM` / the next leg. Legs are named by their biome ("each leg is one biome"): `LEG 2 — FARMLAND PLAINS`, or `LEG 2` without a biome name.
 - The window is `[focus − keep_behind_m, focus + view distance + place_margin_m]`, re-queried every `update_step_m`. A build is placed when any of it enters and recycled when all of it has left. Between steps `update_view` does nothing.
 - If a build reaches past the generated road, the road is generated that far (director rate, as RoadBuilder does).
@@ -62,7 +63,41 @@ tools/snap.sh src/world/landmarks/dev/landmark_preview.tscn --renderer=both \
 
 ## Open items
 
-- **Roadside overlap:** the roadside does not skip landmark ranges. Median light poles every 50 m stand at every checkpoint line, inside the gantries' middle columns, and inside the tunnel's central wall. The tunnel's cover is 11.6 m high so the lamp heads stay inside the hill. Billboards, fences and the farmland fields can intersect the booths and the tunnel hill. Roadside gantries can occasionally land inside a landmark.
-- **Checkpoint tag:** `ProceduralRoadPath` leaves the CHECKPOINT `tag` empty, so the style comes from the biome. Farmland is `toll_gantry`, so until biomes 2–6 exist every run shows toll gantries. The preview shows the others.
+- ~~**Roadside overlap**~~ and ~~**Checkpoint tag**~~: done in WP5.5 (below).
 - **Road under the builds:** the bridge has no water or gap below it, and the tunnel does not lower the road or drop lanes. Both are out of scope (Phase 6).
 - **Units:** sign distances are metric (`KM`/`M`) whatever the `units` setting.
+
+## Roadside clearance (WP5.5)
+
+No roadside prop stands inside a landmark or a warning sign. That includes the median light poles, reflector and guardrail posts, fences, the field grid, scatter props, billboards and roadside sign gantries.
+
+- **Zones:** `LandmarkBuilds.clearance_zones(kind, section, tuning, out)` lists where each build stands on the ground. `sign_clearance_zones(sign_d, tuning, out)` does the same for a warning sign. Each zone is five floats: s from and to (relative to the anchor), d from and to (signed, from the reference line), and a floor height. Only things reaching above the floor collide. The lateral bounds use the builds' own dimensions, which are named constants in `LandmarkBuilds` shared by the build code.
+    - **Toll gantry:** the beam and columns across the whole road (the middle column is on the median), plus both booth islands with their canopies.
+    - **Bridge:** the tower footings, the walkway's outer part with the suspenders, the backstays and their anchor blocks. The median is clear, so the median poles stay under the bridge. Guardrail and reflector posts stay on the walkway.
+    - **Sign gantry:** from the median upright to the outer footing, on the player's side only.
+    - **Tunnel:** the pier and central wall on the median, from the portal plate to the exit face. The walls, shell and hill (with its hipped ends) cover `[wall, hill foot]` from 25 m before the portal to 145 m after it. The hill zone's floor is `clearance_ground_cover_m` (1 m), so the flat crop tiles run on under the hill, which hides them, while trees, yards, fences and posts do not.
+    - **Warning sign:** its two posts from the ground, and the panel above `sign_panel_bottom_m`, so the fence runs on under it.
+- **`LandmarkClearance`:** a pure function of the road's CHECKPOINT and checkpoint SIGN features, each checkpoint's style (`resolve_style`: the tag, which the director fills, else `default_style`) and `LandmarkTuning`. It is deterministic and known before the Landmarks node places anything. Each zone grows by `clearance_margin_m` (1 m) along s.
+    - **Queries:** `blocks_upright(aabb, s, d, yaw, sx, sy, sz)` checks a mesh instance. At yaw 0 or PI it uses the mesh's box. Otherwise it uses the footprint circle. `blocks_segment(aabb, s0, s1, d)` checks fence segments. `zones_in(s0, s1, out)` lists the zones.
+    - **Cache:** zones are cached for the prepared range ± `clearance_cache_pad_m`. A refill is the only allocation: one `features_in` query, generating the road that far first (director rate, as Landmarks does). The cache also refills when `BiomeDirector.plan_version` changes (forks).
+- **`Landmarks.exclusion_zones(s0, s1, out)`** lists them from its own `clearance`.
+- **Roadside:** it builds its own `LandmarkClearance` at setup from the same inputs: the road, `biome_director` and `Tuning.landmarks`. It prepares it for the window (± the longest cell) whenever the window moves. Every placement helper in `RoadsideLayer` (`_place`, `_place_on_grade`, `_place_segment`) asks it and skips blocked instances (`layer.cleared`, `Roadside.cleared_count()`). The skip comes after all of the cell's Rng draws, so everything else is bit-identical to before. `clear_landmarks = false` turns it off. `landmark_style_override` mirrors `Landmarks.style_override` in previews (`landmark_preview --clear=false` shows the old overlap).
+- **StreetLampPools:** they ask the same question for each median pole (the pole mesh's bounds, s = k × spacing, d = 0), so the removed poles get no pools. They build their clearance at setup, finding the director in `BiomeDirector.GROUP` (or in `biome_director`).
+- **Effect:** the median pole at the toll and sign gantries and the three poles through the tunnel are gone, with their pools. Reflector posts are gone at the booths and along the tunnel walls (guardrail posts stay under their rail), and fences at the booths and the tunnel hill. Trees, yards and billboards are gone in the hill, and roadside gantries at any landmark.
+- **Tests:** `tests/world/test_landmark_clearance.gd`:
+    - the zones cover every build's vertices on the median and in the scenery band, at 2, 3 and 4 lanes
+    - zones exist before placement
+    - the cache holds and queries allocate nothing
+    - across 10 checkpoints (every style), no instance footprint lies in a zone, and every instance away from the zones matches the roadside without clearance
+    - the median poles go exactly where expected
+    - same seed, same result whatever the drive
+    - the lamp pools match the kept poles
+
+## Checkpoint styles (WP5.5)
+
+- **Data:** `BiomeDef.landmark_styles: Array[StringName]` (new) lists several styles. When it is empty, the biome uses `landmark_style` as before. Farmland lists all four: toll gantry, sign gantry, suspension bridge, tunnel portal. `landmark_style` stays `toll_gantry`.
+- **Pick:** `BiomeDef.checkpoint_style(leg, seed)` cycles through the list by leg index from a start picked by the run's props stream (`rng_props.derive(&"landmark_styles")`) mixed with the biome id. Any four consecutive farmland legs show all four styles, and two legs in a row never repeat one. The same seed always gives the same styles.
+- **Tag:** `BiomeDirector.checkpoint_style(leg, s)` gives the style of the biome whose leg ends at s. `tag_checkpoints(features)` fills the tag of every untagged CHECKPOINT feature (CONTRACTS §3). The road creates its features per query, so each consumer tags its own copies: Landmarks after its window query, and LandmarkClearance at a refill. `ProceduralRoadPath` is unchanged.
+- **Tests:** `tests/world/test_landmark_styles.gd` covers farmland's four styles, the cycle and its seeded start, single-style biomes, the director tagging the real road's features deterministically (all four in the first four legs), and the landmarks building the tagged style while the clearance resolves the same one.
+- **Snaps:** `tools/snap.sh src/run/run.tscn --renderer=both --s=<cp − 200> --speed_kmh=60 --seconds=3 --sky_t=0.25`. With the snap seed, the first four checkpoints are 3500 sign gantry, 7000 suspension bridge, 10500 tunnel portal and 14000 toll gantry.
+

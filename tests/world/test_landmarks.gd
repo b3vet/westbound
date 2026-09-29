@@ -210,11 +210,15 @@ func test_untagged_checkpoint_uses_the_biome_style() -> void:
 	var origin := _origin()
 	var director := _director(road, origin)
 	var lm := _landmarks(road, origin, director)
-	var style := director.biome_at(LEG_M - 1.0).landmark_style
+	var style := director.checkpoint_style(1, LEG_M)
+	check(director.biome_at(LEG_M - 1.0).landmark_styles.has(style), "one of the biome's styles")
 	_view(lm, road, origin, LEG_M - 50.0)
-	check(lm.find_live(style, LEG_M) != null, "the biome's landmark_style (%s)" % style)
-	# Without a biome director: the default style.
-	var lm2 := _landmarks(road, origin)
+	check(lm.find_live(style, LEG_M) != null, "the biome's style for leg 1 (%s)" % style)
+	# Without a biome director: the default style (a fresh road: the director tagged
+	# the fixture's feature above).
+	var road2 := StraightRoadPath.new(_t.road.lanes_default, _t.road)
+	_add_checkpoint(road2, LEG_M, 1, &"")
+	var lm2 := _landmarks(road2, origin)
 	lm2.update_view(LEG_M - 50.0)
 	check(lm2.find_live(lm2.default_style, LEG_M) != null, "default style")
 
