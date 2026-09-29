@@ -16,9 +16,15 @@ extends RefCounted
 ## `profiles` / `types` are the traffic registry's stable-ordered lists (index =
 ## profile_id / type_id). The director never writes TrafficState itself.
 ##
-## Per tick (after traffic_sim.step): step(dt, player). The despawn scan, behind-spawn
-## bookkeeping and opposite traffic allocate nothing; planning a batch (~every 300 m)
-## is director rate and may allocate. Phase 6 grows this: intensity waves and blind
+## Per tick (after traffic_sim.step): step(dt, player). The despawn scan, the density
+## control (plan D11), behind-spawn bookkeeping and opposite traffic allocate nothing;
+## planning a batch and topping up the band beyond the fog (~every 300 m) is director
+## rate and may allocate.
+##
+## Density (plan D11, docs/SPAWNING.md "Density (D11)"): the effective density in the
+## window around the player tracks the leg's target through a slow planning gain and
+## the band top-up; late legs drive closer (a leg-ramped IDM headway scale passed to
+## the sim and to Flow); set_density_scale() is the owner's DEV knob. Phase 6 grows this: intensity waves and blind
 ## caps in _refresh_ctx(), passability and re-rolls in _plan_range(), set pieces as
 ## further sources.
 
@@ -326,9 +332,9 @@ func _plan_range(a: float, b: float, player: VehicleState) -> void:
 ## live traffic that drifted into it, and a fast live follower or a truck's s* can
 ## leave it thinner than the target, so after each batch every lane the player is
 ## catching (flow speed + density_topup_speed_margin_kmh below the player's speed) is
-## topped up to target x gain in the band: one vehicle at a time in the middle of the
-## lane's largest gap, while Flow's single spawn fits there (s* to both neighbors and
-## the player) and the commit rules pass (beyond the fog, ghost zone, cap). Lanes the
+## topped up to target x gain in the band: one vehicle at a time, largest gap first,
+## where Flow's drawn vehicle keeps s* to both neighbors and the player, through the
+## commit rules (cap, ghost zone, beyond the fog, live gaps). Lanes the
 ## player is not catching are left alone (what spawns there never reaches it; behind
 ## spawns feed the left lanes). Director rate: allocates.
 func _top_up_band(player: VehicleState) -> void:

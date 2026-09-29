@@ -106,13 +106,13 @@ Baseline (`tests/baselines/traffic_metrics.json`, seed 3303, 16 runs, 3 lanes):
 
 | Metric | Baseline |
 | --- | --- |
-| `gaps_per_km` | 8.34 |
-| `lane_changes_per_vehicle_min` | 0.709 |
-| `mean_speed_kmh_lane_0` / `_1` / `_2` | 124.6 / 115.4 / 103.4 |
+| `gaps_per_km` | 10.53 (WP3.3: 8.34) |
+| `lane_changes_per_vehicle_min` | 0.677 (0.709) |
+| `mean_speed_kmh_lane_0` / `_1` / `_2` | 123.8 / 113.2 / 101.8 (124.6 / 115.4 / 103.4) |
 | `set_pieces_per_leg` | 0 |
-| `density_per_km_lane` | 9.67 |
+| `density_per_km_lane` | 11.87 (9.67) |
 
-(192 km, 5,583 simulated seconds, flow speeds 135 / 115 / 95 km/h.)
+(192 km, 5,714 simulated seconds, flow speeds 135 / 115 / 95 km/h.) The baseline was rewritten for WP4.8 (plan D11), a deliberate change. The density ramp now ends at 18 per km per lane, the director tops up and tracks the window, and late legs drive closer (IDM T × 0.8 at leg 8). As a result the density is +23%, gaps per km +26% (more vehicles, so more enterable gaps between them), lane speeds −1 to −2%, and lane changes per vehicle-minute −5%. See docs/SPAWNING.md, *Density (D11)*.
 
 ## Results: the 10,000 km soak
 

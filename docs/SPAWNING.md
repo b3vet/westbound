@@ -165,9 +165,15 @@ The lane profile follows lane discipline: the right lanes are denser (e.g. 14.8 
 ### Cap and tick cost
 
 - **Need:** at leg 8 on 4 lanes the director keeps 80 vehicles on average, with a peak of 90 (at the cap in about 1% of the ticks). On 3 lanes it is 59-60 on average, peak 70-77.
-- **Phone budget:** the sim tick grows roughly linearly with the vehicle count.
-    - Desktop (this container, one process): `test_tick_cost_at_the_cap` (at the tuning's cap, 4 lanes; see *Tick cost at 90* below).
-    - The owner's iPhone measured 0.10 ms per 120 Hz tick at 45 vehicles, about 2.2 µs per vehicle. That extrapolates to about 0.18 ms at 80 vehicles and 0.20 ms at the cap of 90: 0.4 ms of a 16.7 ms frame at 60 fps (2 ticks per frame).
+- **Tick cost:** the sim tick grows roughly linearly with the vehicle count, about 2.6-2.9 µs per vehicle on the dev container.
+    - `soak_tick_cost_report` (one process, Xeon @ 2.1 GHz), median µs per 120 Hz `TrafficSim.step`:
+
+      | Vehicles | 45, 3 lanes | 60, 3 lanes | 60, 4 lanes | 90, 3 lanes | 90, 4 lanes | 90, 4 lanes, all within 200 m | 110, 4 lanes |
+      | --- | --- | --- | --- | --- | --- | --- | --- |
+      | µs per tick | 126 | 199 | 166 | 234 | 260 | 182 | 292 |
+
+      The fast tier's `test_tick_cost_at_the_cap` now benches at the tuning's cap (90, 4 lanes), with a budget of 10 µs per vehicle (15 µs when all are near). The director's step stays at 40-60 µs per tick in the survey.
+    - **Phone:** the owner's iPhone measured 0.10 ms at 45 vehicles, where this container measures 126 µs, so the phone runs at about 0.8× the container's time. That extrapolates to about 0.14 ms at leg 8 on 3 lanes (~60 active), 0.18 ms on 4 lanes (~80 active) and at most 0.21 ms at the cap. At 60 fps that is about 0.4 ms of the 16.7 ms frame (two 120 Hz ticks per frame).
 - **View:** `TrafficView` sizes every MultiMesh from the two states' capacities (`state.capacity`, and the cap follows `max_active_vehicles`), so nothing is hard-coded to 60. Draw calls are per model, not per vehicle, so they do not grow. `test_traffic_view` already benches 120 vehicles at 0.65 ms (day) and 0.73 ms (night) per render.
 
 ### Fairness
