@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://src/ui/hud/dev/hud_run_snap.gd" id="1_snap"]
+[ext_resource type="PackedScene" path="res://src/run/run.tscn" id="2_run"]
+
+[node name="HudRunSnap" type="Node"]
+script = ExtResource("1_snap")
+
+[node name="Run" parent="." instance=ExtResource("2_run")]

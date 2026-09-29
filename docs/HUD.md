@@ -1,4 +1,4 @@
-# HUD and theme (WP4.3)
+# HUD and theme (WP4.3; relayout WP4.9, plan D14)
 
 The gameplay HUD and the design-system theme. Spec: *UI, HUD and design system*, *Scoring → Score feedback / Multiplier / Chain and banking / Boost*, *Sky timeline and sun clock → HUD*. Contract: CONTRACTS §14.
 
@@ -24,17 +24,11 @@ hud.high_beam_pressed.connect(...)    # the headlamp button (WP5.5): the run tog
 `HudLayout` (pure) places everything in canvas pixels inside the display safe area (`DisplayServer.get_display_safe_area()`, converted to canvas coordinates):
 
 - **Top-left:** banked total and best.
-- **Top-centre:** the sun bar with the checkpoint distance, then the chain and multiplier (they meet at the centre line), then the 4-line event stack. The chain row spans the sun bar's width unless a raised bottom panel or the objective chip needs that room (WP5.6: a six-digit chain and its CHAIN label fit its half); the stack and the toast keep `chain_row_size_px.x`. A chain too long for the label as well shows its number alone.
+- **Top-centre:** the sun bar with the checkpoint distance, then the chain and multiplier (they meet at the centre line), then the 4-line event stack. The chain row spans the sun bar's width unless another panel or the objective chip needs that room (WP5.6: a six-digit chain and its CHAIN label fit its half); the stack and the toast keep `chain_row_size_px.x`. A chain too long for the label as well shows its number alone.
 - **Top-right:** the lives panel, [II] and [CAM], and the high-beam button under [CAM] (WP5.5).
-- **Bottom-left:** the speedometer, with the minimum-speed strip reserved above it.
-- **Bottom-right:** the boost meter.
+- **Bottom-centre (plan D14):** the cluster, under the car: the speedometer and the boost meter beside it, with the minimum-speed strip reserved above them. See [Bottom-centre cluster and thumb zones](#bottom-centre-cluster-and-thumb-zones-wp49-d14).
 
-The bottom panels avoid the touch controls: the gas column (gas pedal plus boost cap) and the brake, in either handedness and at any `controls_scale`. Each panel takes the first free spot from this list:
-
-1. its corner
-2. beside the controls, moving inward but not into the middle third of the width
-3. above the controls, clear of the top readouts
-4. beside the controls anyway (only at extreme control scales)
+No readout goes into a thumb zone or onto a pedal (`pedal_clearance_px` apart), in any control layout, hand, `controls_scale` or text size. The objective chip keeps fallbacks (under the lives, then centred under the toast) for canvases so short that a zone reaches it.
 
 The controls' rects come from the `PlayerInput` hub's `ControlsLayout` when a hub exists. The HUD polls `layout_version` and re-places itself when it changes. Without a hub, the rects are built from Settings.
 
@@ -118,7 +112,7 @@ Spec: *Core loop → Legs and checkpoints* (warning signs, crossing step 5 "a 2.
     - **After completing or failing,** it holds `objective_end_hold_s`, then fades (`objective_fade_s`) and hides until the next leg.
     - The pop and fade are scale and modulate only, so they cause no redraws. The text redraws only when the count changes.
     - **Width (WP5.6):** as wide as its caption, icon, text and progress need (`HudObjective.content_width()`), from `objective_chip_size_px.x` up to `objective_chip_max_width_px` (both scaled by the text size). The layout reserves the widest chip (`layout.objective`); the chip sits in it anchored to its side (`objective_anchor`, `objective_fit()`). A label too long even then drops to the label size.
-    - **Placement:** under the score panel. If a raised bottom-left panel needs that space, it moves under the lives and buttons. If both corners are raised (extreme control scales only), it goes centred under the toast slot.
+    - **Placement:** under the score panel. If a thumb zone or the cluster ever needs that space (only on very short canvases since D14), it moves under the lives and buttons, else centred under the toast slot.
 - **Leg toast** (`widgets/hud_leg_toast.gd`, `layout.toast`): the event stack's slot, `leg_toast_size_px.y` tall. At 125% text it still ends above 45% of the height, so the middle third stays clear. It takes no touches and lasts `leg_toast_s` (2.5 s), fading in and out with modulate only, so it draws once per crossing.
     - **Contents:** "LEG 2 COMPLETE", BANKED (the chain banked at the line), then the items flowing over `leg_toast_item_rows` rows: NIGHT ×2, the leg bonuses with their points (already ×2), OBJECTIVE (paid at the line, or earlier in the leg from the summary's `objective_points`), LIFE RESTORED. Under a rule: "LEG 3 — <biome display name>" and the new objective. When the footer is too long, the leg text drops to the label size, then the objective does, then the objective goes (the chip shows it). The place name stays; only a name too long for the card on its own falls back to "LEG 3" (WP5.6).
     - **How it fills:** the Hud starts it on `checkpoint_crossed`. The crossing's other events, which arrive in the same frame (`chain_banked` with reason checkpoint, `bonus_awarded`, `life_restored`, `leg_started`), fill the toast instead of the stack until the next `advance()`.
@@ -162,7 +156,7 @@ No text the HUD or the in-run screens draw runs out of its widget or into anothe
 
 Plan D8: the player's manual high beams get a HUD control. Spec: *UI, HUD and design system* (top-right cluster, faceted small controls), *World → Night lighting*. docs/NIGHT.md → High beams.
 
-- **Where:** `layout.high_beam`, right-aligned under [CAM], the same size as the other buttons (`button_size_px`, scaled with the text size). It is in `HudLayout.rects()`, so the layout tests keep it clear of the pedals, the safe area, the middle third and every other panel at every handedness, controls scale, aspect and text size. The objective chip's right-side fallback and the raised bottom panels avoid it.
+- **Where:** `layout.high_beam`, right-aligned under [CAM], the same size as the other buttons (`button_size_px`, scaled with the text size). It is in `HudLayout.rects()`, so the layout tests keep it clear of the pedals, the safe area, the middle third and every other panel at every handedness, controls scale, aspect and text size. The objective chip's right-side fallback avoids it.
 - **Glyph:** the headlamp symbol (a lamp, flat side left, and four straight beams), drawn with `HudMesh` in the button's plate. Chakra Petch has no such icon. The button is one draw call and draws no text.
 - **Press:** `HudButton` takes the touch (`MOUSE_FILTER_STOP`, the mouse press Godot emulates from the touch) and the Hud emits `high_beam_pressed`. `Run._install_hud` connects it to `hub.toggle_high_beam`. The touch never reaches `PlayerInput`'s steering.
 - **Lit:** it follows `Events.high_beam_changed` (the hub relays H, gamepad X and the button there): a gold fill with an ink glyph. When the Hud first finds the hub, it syncs from `hub.high_beam`. It redraws only when the state changes.
@@ -178,3 +172,42 @@ Plan D8: the player's manual high beams get a HUD control. Spec: *UI, HUD and de
 - **Tuning:** `hud.tres` group High beams: `high_beam_fade_s`, `high_beam_min_ramp`.
 - **Tests:** `tests/ui/test_hud_high_beam.gd` covers a tap with iOS touch id 1_893_457_201 through `Input.parse_input_event` (the toggle, the lit state, and no steering), the run's wiring, the lit state following the event and the hub, hidden by day and fading in at dusk and night with its slot unchanged and +1 canvas item, following a real `SkyRig`, and clearance of the cluster.
 
+
+## Bottom-centre cluster and thumb zones (WP4.9, D14)
+
+Plan D14 (owner, M4 playtest on an iPhone, one thumb per side): the speedometer sat exactly where the left thumb drags the steering. Speed, the minimum-speed strip and boost moved from the bottom corners to a compact cluster on the bottom edge, under the car, and the HUD keeps its readouts out of tuned thumb zones.
+
+- **Thumb zones** (`HudLayout.thumb_zones`, `thumb_zone_rects()`): a rect per side at the canvas's lower-left and lower-right corners, `thumb_zone_size_cm` (3.4 × 4.0 cm) in physical cm through the controls' `px_per_cm` (DPI on native mobile, else the 6.8 cm-tall fallback: 360 × 424 px on the 720 px canvas). They are the same in every steering and throttle mode and for both hands, and do not scale with `controls_scale` or the text size. They start at the canvas edge, not the safe area's: the thumbs hold the phone's physical edges, and a notch inset does not move them. They cover the owner's drag spot over the old speedometer (0.2..2.8 cm in, up to 1.2 cm up).
+- **Thumb areas** (`thumb_areas()`): the zones plus the manual pedals (gas column and brake). Readouts stay `pedal_clearance_px` clear of all of them. Big pedals (drag + manual at 1.2×) reach past their zone; the cluster slides away from them.
+- **The cluster** (`layout.speedo`, `boost`, `min_speed`, `cluster`): `cluster_bottom_margin_px` (8) above the safe area's bottom (above the home indicator), centred on the canvas centre (the car), slid sideways into the free span between the thumb areas. First that fits:
+    1. a row: speed (`speedo_size_px` 192 × 62), then boost (`boost_size_px` 144 × 54), bottom-aligned; the strip (`min_speed_row_px` 24) spans both above them;
+    2. stacked, boost under speed, as wide as the widest of them and `min_speed_row_min_width_px` (`cluster_stacked`);
+    3. stacked and clear of the pedals only (`cluster_squeezed`).
+
+  The row fits every canvas (1280, 1361, 1560 × 720, with and without a notch inset), mode, hand, `controls_scale` 0.8–1.2 and text size; the stacked forms appear only at the setting's 0.6×/1.6× extremes. At 125% text the row is 430 × 116 px with the strip, inside the bottom 20% of the safe height; the car's bumper in the chase view sits just above the strip.
+- **Speedometer:** the tabular speed at `cluster_speed_font_pct` (65%) of the theme's `font_speed_px` (40 px), its unit on the same baseline, the gear in a small ink chip on the right (the GEAR label is gone), and the slanted segment ramp (`speed_bar_segments` 18, `speed_bar_height_px` 14) along the plate's bottom.
+- **Boost:** BOOST and the percentage (or READY) over the 12 segments. While boosting the label reads BOOSTING in gold and the right side is empty (the compact plate has room for one long word).
+- **Design language:** the same chamfered plates, neon edges, accent tabs, gold/hot states and pulses. The widgets are the same three nodes, so the draw calls are unchanged (`hud_preview`, 1280x720):
+
+| State | Compatibility before → after | Mobile before → after |
+| --- | --- | --- |
+| idle | 16 → 16 | 16 → 16 |
+| busy | 22 → 22 | 38 → 38 |
+| too_slow | 23 → 23 | 33 → 33 |
+| night | 21 → 21 | 33 → 33 |
+
+- **Other screens:** the countdown's info column and the dev rows avoid `HudLayout.rects()` as before; the cluster is below both.
+- **Tests:**
+    - `tests/ui/test_hud_layout.gd`: the zones' size, corners and cm sizing (with and without a controls layout) and the owner's drag spot; every readout clear of the zones and pedals, inside the safe area, out of the traffic area (the middle third between 45% of the height and the bottom band) and not overlapping, with the cluster in one row in the bottom 20%, for drag/gyro × auto/manual × both hands × 0.8/1.0/1.2 × 100/125% × the three canvases with and without a notch (288 layouts); the extreme scales clear of the pedals; the cluster bottom-centre under the car and sliding clear of big pedals; the live Hud node against the hub's pedals and zones.
+    - `tests/ui/test_text_fit.gd::test_cluster_text_fits_every_state`: a three-digit speed with the gear, READY, BOOSTING, a percentage and TOO SLOW, in every text-fit setting.
+- **Review:**
+
+  ```
+  tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --sweep=state:idle,busy,too_slow,night
+  tools/snap.sh src/ui/hud/dev/hud_preview.tscn --state=too_slow --zones=true --throttle=manual --controls_scale=1.2 --text_scale=1.25
+  tools/snap.sh src/ui/hud/dev/hud_run_snap.tscn --renderer=both --sweep=cam:chase,cockpit --hand=left --throttle=manual --thumb=true
+  tools/snap.sh src/ui/hud/dev/hud_run_snap.tscn --cam=chase --zones=true --thumb=true
+  ```
+
+    - `--zones=true` (`dev/thumb_zone_overlay.gd`): the zones filled, the pedals' clearance outlined, the safe area, the traffic area and the cluster's bounds.
+    - `hud_run_snap.tscn` wraps the real run (`--cam`, `--sky_t`, `--speed_kmh`, ... pass through) with `--hand`, `--throttle`, `--steering`, `--controls_scale`, `--text_scale`, `--units`; `--thumb=true` rests a steering thumb in its zone, so the drag anchor shows where it landed.

@@ -20,7 +20,7 @@ extends Resource
 ## "12.4×" below this multiplier, whole numbers ("124×") from it.
 @export var multiplier_decimals_below: float = 100.0   # not in spec
 ## Speedometer bar: slanted segments; their height ramps from this share to full.
-@export var speed_bar_segments: int = 26
+@export var speed_bar_segments: int = 18
 @export var speed_bar_ramp_min_pct: float = 38.0
 @export var boost_bar_segments: int = 12
 ## Segments lean like the speed-tilted type (horizontal shift of a segment's top, as a
@@ -75,15 +75,29 @@ extends Resource
 @export var event_line_height_px: float = 29.0
 @export var lives_icon_px: float = 30.0
 @export var button_size_px: Vector2 = Vector2(58.0, 46.0)
-@export var speedo_size_px: Vector2 = Vector2(276.0, 110.0)
-## The minimum-speed strip that appears above the speedometer.
-@export var min_speed_row_px: float = 34.0
-@export var boost_size_px: Vector2 = Vector2(232.0, 72.0)
+## Plan D14, the bottom-centre cluster: the speedometer (number, unit, gear chip, the
+## segment ramp under them) and the boost meter beside it, bottom-aligned.
+@export var speedo_size_px: Vector2 = Vector2(192.0, 62.0)   # not in spec
+## The minimum-speed strip that appears above the cluster, as wide as it...
+@export var min_speed_row_px: float = 24.0   # not in spec
+## ...but at least this wide when the cluster is stacked (boost under speed).
+@export var min_speed_row_min_width_px: float = 270.0   # not in spec
+@export var boost_size_px: Vector2 = Vector2(144.0, 54.0)   # not in spec
+## The cluster sits this far above the safe area's bottom (less than edge_margin_px:
+## it stays low, under the car).
+@export var cluster_bottom_margin_px: float = 8.0   # not in spec
+## The cluster's speed number at this share of font_speed_px (the theme's speed size).
+@export var cluster_speed_font_pct: float = 65.0   # not in spec
+## Plan D14: the thumb zones, the screen's lower-left and lower-right corners (from the
+## canvas edge) where the thumbs rest and drag in every control layout. Physical cm
+## (the controls' px_per_cm; not scaled by controls_scale or the text size). No HUD
+## readout goes into them (or onto the manual pedals), pedal_clearance_px apart.
+@export var thumb_zone_size_cm: Vector2 = Vector2(3.4, 4.0)   # not in spec
 ## Inside the panels: padding, bar sizes, the accent tab on each panel's top edge.
 @export var panel_padding_px: float = 12.0
 @export var sun_track_px: float = 6.0
 @export var sun_marker_px: float = 7.0
-@export var speed_bar_height_px: float = 30.0
+@export var speed_bar_height_px: float = 14.0
 @export var boost_bar_height_px: float = 20.0
 @export var segment_gap_px: float = 3.0
 @export var accent_tab_size_px: Vector2 = Vector2(34.0, 3.0)
