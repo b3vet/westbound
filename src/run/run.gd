@@ -782,6 +782,9 @@ func _enter(to: StringName) -> void:
 		Game.start_run(mode)
 	elif Game.state != to:
 		Game.change_state(to)
+	# The gameplay HUD steps aside for the crash cinematic and the results.
+	if hud != null:
+		(hud as CanvasLayer).visible = to != Game.CRASH and to != Game.RESULTS
 
 
 func _install_hud() -> void:
