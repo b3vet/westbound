@@ -178,7 +178,7 @@ func test_countdown_then_running() -> void:
 	eq(Game.state, Game.COUNTDOWN)
 	eq(_last("run_started"), ["run_started", RunContext.MODE_JOURNEY, SEED])
 	var s0 := r.car.state.s
-	var countdown_ticks := _ticks_for(float(hud.countdown_from) * Run.COUNTDOWN_STEP_S)
+	var countdown_ticks := _ticks_for(float(hud.countdown_from) * hud.countdown_step_s)
 	_run_ticks(r, countdown_ticks - 1)
 	eq(r.state, Game.COUNTDOWN, "one tick before GO")
 	eq(r.car.state.s, s0, "the car waits on the line during the countdown")
@@ -210,7 +210,7 @@ func test_pause_freezes_and_resumes() -> void:
 	eq(r.state, Game.PAUSED)
 	eq(Game.state, Game.PAUSED)
 	check(tree.paused, "the tree is paused")
-	check(r.ui.paused_panel.visible)
+	check(r.screens.pause_screen.visible, "the pause menu shows")
 	r.resume()
 	eq(r.state, Game.RUNNING)
 	eq(Game.state, Game.RUNNING)
@@ -220,14 +220,9 @@ func test_pause_freezes_and_resumes() -> void:
 	eq(r.state, Game.RUNNING, "toggle resumes")
 
 
-func test_hud_is_optional() -> void:
+func test_hud_and_feed() -> void:
 	var r := _make()
-	if ResourceLoader.exists(Run.HUD_SCENE_PATH):
-		check(r.hud != null, "the HUD is installed when its scene exists")
-		check(not r.ui.score_label.visible, "no fallback readouts under the HUD")
-	else:
-		check(r.hud == null)
-		check(r.ui.score_label.visible, "fallback readouts keep the build playable")
+	check(r.hud != null, "the HUD is installed")
 	r.go()
 	_run_ticks(r, 20)
 	gt(r.feed.speed_mps, 0.0, "the feed is filled every frame")
@@ -350,7 +345,7 @@ func test_score_hit_crash_results_retry() -> void:
 	ge(float(res[&"best_chain"]), float(chain), "the lost chain counts as the best chain")
 	gt(float(res[&"distance_m"]), 100.0)
 	gt(float(res[&"top_speed_kmh"]), 150.0)
-	check(r.ui.results_panel.visible, "results screen")
+	check(r.screens.results_screen.visible, "results screen")
 
 	# Retry: back on the road in the same frame, new seed, everything reset.
 	var frames_before := Engine.get_process_frames()
@@ -369,7 +364,7 @@ func test_score_hit_crash_results_retry() -> void:
 	eq(r.stats.hits, 0)
 	near(r.car.state.s, r.start_s_m(), 1e-6, "back on the start line")
 	check(not r.fx.damaged, "damage cleared")
-	check(not r.ui.results_panel.visible)
+	check(not r.screens.results_screen.visible)
 	gt(r.sim.state.count, 0, "traffic refilled")
 	_bot(r)
 	_run_ticks(r, _ticks_for(3.0) + 10)

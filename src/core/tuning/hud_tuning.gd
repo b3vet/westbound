@@ -124,6 +124,52 @@ extends Resource
 @export var layout_grid_px: float = 46.0
 @export var spacing_grid_px: float = 8.0
 
+@export_group("Run screens")
+## Countdown step length (hud.countdown_from steps). A retry counts faster, so the
+## player is driving again inside retry_max_s (Run end: "Retry puts the player back on
+## the road within 2 seconds"); the gyro neutral is still captured during it.
+@export var countdown_step_s: float = 1.0
+@export var retry_countdown_step_s: float = 0.5   # not in spec: 3 × 0.5 s < retry_max_s
+## Each countdown number punches in from this scale, then GO holds and fades.
+@export var countdown_punch_scale_pct: float = 160.0   # not in spec
+@export var countdown_punch_s: float = 0.22   # not in spec
+@export var countdown_go_hold_s: float = 0.3   # not in spec
+@export var countdown_go_fade_s: float = 0.35   # not in spec
+## Screen transitions: fade (and a short slide) in and out.
+@export var screen_fade_in_s: float = 0.18   # not in spec
+@export var screen_fade_out_s: float = 0.12   # not in spec
+@export var screen_slide_px: float = 24.0   # not in spec
+## The game dims under the pause menu and the results (ink at this opacity).
+@export var screen_dim_pct: float = 62.0   # not in spec
+## Results: fade-in, the score count-up, the stat rows' stagger, the NEW BEST pop, and
+## a short guard so the tap that skipped the crash never lands on RETRY.
+@export var results_fade_in_s: float = 0.3   # not in spec
+@export var results_count_s: float = 1.1   # not in spec
+@export var results_row_stagger_s: float = 0.045   # not in spec
+@export var results_badge_pop_s: float = 0.28   # not in spec
+@export var results_input_delay_s: float = 0.35   # not in spec
+## Crash: TAP TO SKIP appears after this delay and pulses.
+@export var crash_hint_delay_s: float = 0.6   # not in spec
+@export var crash_hint_pulse_hz: float = 1.1   # not in spec
+## Pause: how long RECALIBRATE shows its confirmation.
+@export var recalibrated_note_s: float = 1.2   # not in spec
+## Touch targets (canvas px on the 720 px canvas; not scaled by text size).
+@export var touch_target_px: float = 88.0   # not in spec: about 9 mm on a phone
+@export var primary_button_size_px: Vector2 = Vector2(312.0, 104.0)   # not in spec
+@export var menu_button_width_px: float = 360.0   # not in spec
+@export var settings_label_width_px: float = 196.0   # not in spec
+@export var results_stats_width_px: float = 440.0   # not in spec
+@export var results_stat_row_px: float = 40.0   # not in spec
+## Screen type sizes (scaled by text size).
+@export var font_countdown_px: int = 190
+@export var font_title_px: int = 60
+@export var font_results_score_px: int = 92
+@export var font_screen_button_px: int = 24
+@export var font_screen_body_px: int = 20
+## In-run settings choices (multipliers of the tuned control values).
+@export var settings_controls_scales: PackedFloat64Array = [0.8, 1.0, 1.2]   # not in spec
+@export var settings_sensitivities: PackedFloat64Array = [0.75, 1.0, 1.35]   # not in spec
+
 
 ## The text-size setting clamped to the offered range (100%..125%).
 func clamp_text_scale(value: float) -> float:
