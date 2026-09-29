@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE runs SET verification = ?, reject_reason = 'replay' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "41a047d1823559592954a1dfc8a9e660dd0ac12090feb3f1ecbe69632c37f4cb"
+}

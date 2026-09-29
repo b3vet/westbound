@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM leaderboard_entries WHERE run_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "83e92e02988c14708fde1737a54dabbd585fc96cf3c3bcb2a4a65d358440fff1"
+}

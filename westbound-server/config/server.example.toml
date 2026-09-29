@@ -92,6 +92,10 @@ auth_burst = 10
 # Authenticated routes (/me, /account, ...), per account.
 account_per_minute = 120
 account_burst = 30
+# Run submissions (POST /api/v1/runs and /runs/legacy), per account, on top of the
+# account limit.
+runs_per_hour = 30
+runs_burst = 10
 
 [deeplinks]
 # Directory with apple-app-site-association and assetlinks.json. Empty, or a
@@ -146,3 +150,72 @@ room_host_command_burst = 5
 violation_per_sec = 5.0
 violation_burst = 100
 notice_interval_ms = 1000
+
+[leaderboards]
+# Boards, views and the top-N cache (docs/SERVER.md → "Leaderboards & runs API").
+# Until the replay verifier (N8) exists: whether pending runs (awaiting their replay) go
+# on the boards, marked "verifying". false: they wait and N8 writes them once verified.
+show_pending = true
+# view=global: default and largest limit (spec: global top 100).
+global_limit_default = 100
+global_limit_max = 100
+# view=around_me: ranks on each side of the caller, default and largest.
+around_me_default = 10
+around_me_max = 50
+# A run that improves the player's entry and ranks within this many places needs a replay.
+replay_top_n = 100
+# Cached board tops are dropped on every write, and after this many seconds anyway
+# (renames, admin CLI removals). At most cache_max_boards board/period pairs are cached.
+cache_ttl_secs = 60
+cache_max_boards = 256
+# Loop crew: the sum of the best this-many members' season-best Loop runs (spec: 4).
+crew_top_members = 4
+# Legacy personal-best upload caps; above them an item is refused (over_cap).
+legacy_max_journey_score = 50000000
+legacy_max_distance_m = 2000000.0
+
+[runs]
+# Plausibility checks on POST /api/v1/runs. The scoring numbers mirror the game's
+# data/tuning (scoring.tres, legs.tres, lives.tres, vehicle.tres): keep them at or above
+# the game's values.
+# Oldest accepted client build, and the accepted builds (decimal build numbers; empty:
+# every build from min_build on). From the environment: WB_RUNS__SUPPORTED_BUILDS=41,42.
+min_build = 0
+supported_builds = []
+# Score per minute cap (a close pass at x50, 250 km/h, at night pays 6000).
+max_score_per_minute = 200000.0
+# Shorter runs count as this long for the score rate; longer than max_duration_s is refused.
+min_duration_s = 10.0
+max_duration_s = 21600.0
+# Fastest car 300 km/h, +8 % boost, top-gear overshoot.
+max_top_speed_kmh = 360.0
+# Distance may exceed top speed x duration by this fraction and this many metres.
+distance_slack_pct = 5.0
+distance_slack_m = 200.0
+# Each completed leg needs this much distance (3.5 km legs); the coast needs legs_to_coast.
+leg_min_length_m = 3000.0
+legs_to_coast = 8
+# Hits <= lives + legs completed (a clean leg restores a life).
+lives = 2
+# Base points and multiplier gains per event.
+pass_points = 10.0
+close_pass_points = 30.0
+cut_points = 15.0
+thread_points = 50.0
+pass_multiplier_gain = 1.0
+close_pass_multiplier_gain = 3.0
+cut_multiplier_gain = 1.0
+thread_multiplier_gain = 5.0
+multiplier_start = 1.0
+speed_factor_max = 2.0
+night_factor = 2.0
+# Most bonus points per leg (clean 5000 + pace 3000 + threads 3000 + heat 5000 +
+# objective 2500) and the journey bonus at the coast, before the night factor.
+leg_bonus_max_points = 18500.0
+journey_bonus_points = 50000.0
+# Headroom on the score bound from the stats.
+score_slack_pct = 1.0
+# A run's date (UTC) is accepted from date_early_secs before that day starts until
+# date_late_secs after it ends.
+date_early_secs = 3600
+date_late_secs = 21600

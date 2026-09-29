@@ -183,7 +183,10 @@ async fn delete_account_removes_everything() {
         ("self", "account_delete")
     );
     assert_eq!(target, id.to_string());
-    assert_eq!(detail, "refresh_tokens=3");
+    assert_eq!(
+        detail,
+        "refresh_tokens=3 runs=0 leaderboard_entries=0 replays=0"
+    );
     assert!(!detail.contains(&d.profile.display_name));
 
     // Nothing of the account works any more.

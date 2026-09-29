@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO leaderboard_entries\n             (board, period_key, subject_id, account_id, run_id, score, achieved_at,\n              verification, run_date)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)\n         ON CONFLICT (board, period_key, subject_id) DO UPDATE SET\n             account_id = excluded.account_id, run_id = excluded.run_id,\n             score = excluded.score, achieved_at = excluded.achieved_at,\n             verification = excluded.verification, run_date = excluded.run_date\n         WHERE excluded.score > leaderboard_entries.score",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "fdb29c553d72df1e711a6c4b1c14c82e2bbc97b1c58c871feb7d8e973100cab7"
+}

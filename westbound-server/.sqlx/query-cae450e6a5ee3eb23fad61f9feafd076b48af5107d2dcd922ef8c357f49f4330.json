@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT e.subject_id, e.account_id, a.display_name AS \"display_name?: String\",\n                          a.tag AS \"tag?: i64\", e.run_id, e.score, e.achieved_at,\n                          e.verification, e.run_date\n                   FROM leaderboard_entries e LEFT JOIN accounts a ON a.id = e.account_id\n                   WHERE e.board = ?1 AND e.period_key = ?2 AND e.score > ?3\n                   ORDER BY e.score ASC, e.achieved_at DESC, e.subject_id DESC\n                   LIMIT ?4",
+  "describe": {
+    "columns": [
+      {
+        "name": "subject_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "subject_id"
+          }
+        }
+      },
+      {
+        "name": "account_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "display_name?: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "display_name"
+          }
+        }
+      },
+      {
+        "name": "tag?: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "tag"
+          }
+        }
+      },
+      {
+        "name": "run_id",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "run_id"
+          }
+        }
+      },
+      {
+        "name": "score",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "score"
+          }
+        }
+      },
+      {
+        "name": "achieved_at",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "achieved_at"
+          }
+        }
+      },
+      {
+        "name": "verification",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "verification"
+          }
+        }
+      },
+      {
+        "name": "run_date",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "run_date"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "cae450e6a5ee3eb23fad61f9feafd076b48af5107d2dcd922ef8c357f49f4330"
+}

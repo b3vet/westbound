@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT board, period_key, subject_id AS \"subject_id!\" FROM leaderboard_entries\n           WHERE run_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "board",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "board"
+          }
+        }
+      },
+      {
+        "name": "period_key",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "period_key"
+          }
+        }
+      },
+      {
+        "name": "subject_id!",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "leaderboard_entries",
+            "name": "subject_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "9e926e604ec462b0b1edfcfb67ccede4aa7c7561e5ac8a92d88c9eb70776929c"
+}

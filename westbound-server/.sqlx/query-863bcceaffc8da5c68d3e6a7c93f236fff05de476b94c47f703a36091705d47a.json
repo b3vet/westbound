@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(SUM(score), 0) AS \"n!: i64\" FROM (\n               SELECT score FROM leaderboard_entries\n               WHERE board = ?1 AND period_key = ?2\n                 AND subject_id IN (SELECT value FROM json_each(?3))\n               ORDER BY score DESC LIMIT ?4)",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "863bcceaffc8da5c68d3e6a7c93f236fff05de476b94c47f703a36091705d47a"
+}

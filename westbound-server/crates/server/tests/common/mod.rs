@@ -64,6 +64,8 @@ pub fn test_config(dir: &TempDir) -> Config {
     r.auth_burst = 100_000;
     r.account_per_minute = 100_000;
     r.account_burst = 100_000;
+    r.runs_per_hour = 100_000;
+    r.runs_burst = 100_000;
     c.validate().expect("test config is valid");
     c
 }
@@ -346,3 +348,131 @@ pub fn assert_error(r: &Resp, status: u16, code: &str) {
         r.json
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Runs and leaderboards (N7.1)
+// ---------------------------------------------------------------------------------------------
+
+/// T0's UTC date (a Monday, ISO week 2026-W39).
+pub const T0_DATE: &str = "2026-09-21";
+
+/// A plausible Journey submission (defaults of `[runs]`): 400 s at up to 280 km/h, five
+/// legs, room for scores up to about 500 000.
+pub fn journey_run(key: &str, score: u64, distance_m: f64) -> Value {
+    serde_json::json!({
+        "idempotency_key": key,
+        "mode": "journey",
+        "seed": "123456789",
+        "date": T0_DATE,
+        "car": "coupe",
+        "client_build": 1,
+        "score": score,
+        "distance_m": distance_m,
+        "duration_s": 400.0,
+        "legs_completed": 5,
+        "coast_reached": false,
+        "best_chain": 5000,
+        "best_multiplier": 20.0,
+        "passes": 200,
+        "close_passes": 50,
+        "threads": 10,
+        "cuts": 20,
+        "top_speed_kmh": 280.0,
+        "night_time_s": 0.0,
+        "hits": 1,
+        "journey_complete": false,
+        "journey_time_s": 0.0,
+        "journey_distance_m": 0.0
+    })
+}
+
+/// A plausible Daily Drive submission on `date` with that date's seed.
+pub fn daily_run(key: &str, date: &str, score: u64) -> Value {
+    let seed = westbound_server::runs::daily_seed::daily_seed_for_date(date).unwrap();
+    let mut v = journey_run(key, score, 20_000.0);
+    v["mode"] = "daily".into();
+    v["date"] = date.into();
+    v["seed"] = seed.to_string().into();
+    v
+}
+
+impl TestApp {
+    /// A new device account: (id, access token).
+    pub async fn account(&self) -> (i64, String) {
+        let d = self.create_device().await;
+        (
+            d.session.account_id.parse().unwrap(),
+            d.session.access_token,
+        )
+    }
+
+    /// `POST /api/v1/runs`.
+    pub async fn submit(&self, token: &str, body: Value) -> Resp {
+        self.call("POST", "/api/v1/runs", Some(token), Some(body))
+            .await
+    }
+
+    /// `POST /api/v1/runs`, asserting a new receipt (201).
+    pub async fn submit_ok(&self, token: &str, body: Value) -> Value {
+        let r = self.submit(token, body).await;
+        assert_eq!(r.status, 201, "{:?}", r.json);
+        r.json
+    }
+
+    /// `GET /api/v1/boards/<path_and_query>`.
+    pub async fn board(&self, token: Option<&str>, path_and_query: &str) -> Resp {
+        self.call(
+            "GET",
+            &format!("/api/v1/boards/{path_and_query}"),
+            token,
+            None,
+        )
+        .await
+    }
+
+    /// `GET /api/v1/boards/<path_and_query>`, asserting 200.
+    pub async fn board_ok(&self, token: Option<&str>, path_and_query: &str) -> Value {
+        let r = self.board(token, path_and_query).await;
+        assert_eq!(r.status, 200, "{path_and_query}: {:?}", r.json);
+        r.json
+    }
+}
+
+/// `(account_id, score)` of each entry of a board body, in order.
+pub fn ranking(board: &Value) -> Vec<(String, i64)> {
+    board["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["account_id"].as_str().unwrap_or("").to_string(),
+                e["score"].as_i64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+/// The `rank` of each entry of a board body.
+pub fn ranks(board: &Value) -> Vec<u64> {
+    board["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["rank"].as_u64().unwrap())
+        .collect()
+}
+
+/// Access tokens that outlive tests moving the clock by days.
+pub fn long_tokens(c: &mut Config) {
+    c.auth.access_token_ttl_secs = 60 * DAY as u64;
+    c.auth.refresh_token_ttl_secs = 90 * DAY as u64;
+}
+
+/// `app()` with `long_tokens`.
+pub async fn runs_app() -> TestApp {
+    app_with(long_tokens).await
+}
+
+/// 00:00 UTC of T0's date.
+pub const T0_MIDNIGHT: i64 = T0 - T0.rem_euclid(DAY);

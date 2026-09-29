@@ -273,3 +273,56 @@ fn gateway_env_overrides() {
     assert_eq!(c.ws_rate_limits.ping_per_sec, 0.5);
     assert!(!c.ws_rate_limits.enabled);
 }
+
+#[test]
+fn leaderboard_and_runs_defaults_and_validation() {
+    let mut c = Config::default();
+    with_secrets(&mut c);
+    // Spec: global top 100; replay for the top 100; crew = top 4 members; 30 submissions/h.
+    assert_eq!(c.leaderboards.global_limit_max, 100);
+    assert_eq!(c.leaderboards.replay_top_n, 100);
+    assert_eq!(c.leaderboards.crew_top_members, 4);
+    assert!(c.leaderboards.show_pending);
+    assert_eq!(c.rate_limits.runs_per_hour, 30);
+    assert!(c.runs.supported_builds.is_empty());
+    assert!(c.runs.build_supported(0) && c.runs.build_supported(u32::MAX));
+    c.validate().unwrap();
+
+    c.runs.supported_builds = vec!["41".into(), "nope".into()];
+    c.runs.max_score_per_minute = f64::NAN;
+    c.runs.min_duration_s = 0.0;
+    c.leaderboards.global_limit_default = 101;
+    c.leaderboards.crew_top_members = 0;
+    c.rate_limits.runs_per_hour = 0;
+    let errs = c.validate().unwrap_err().0;
+    for key in [
+        "supported_builds",
+        "max_score_per_minute",
+        "min_duration_s",
+        "global_limit_default",
+        "crew_top_members",
+        "rate_limits",
+    ] {
+        assert!(errs.iter().any(|e| e.contains(key)), "{key}: {errs:?}");
+    }
+}
+
+#[test]
+fn runs_env_overrides() {
+    let c = Config::from_toml_and_env(
+        "",
+        env(&[
+            ("WB_RUNS__SUPPORTED_BUILDS", "41, 42"),
+            ("WB_RUNS__MIN_BUILD", "40"),
+            ("WB_LEADERBOARDS__SHOW_PENDING", "false"),
+            ("WB_RATE_LIMITS__RUNS_PER_HOUR", "12"),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(c.runs.supported_build_numbers(), vec![41, 42]);
+    assert!(c.runs.build_supported(42));
+    assert!(!c.runs.build_supported(43));
+    assert!(!c.runs.build_supported(39));
+    assert!(!c.leaderboards.show_pending);
+    assert_eq!(c.rate_limits.runs_per_hour, 12);
+}

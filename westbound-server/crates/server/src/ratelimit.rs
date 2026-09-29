@@ -231,6 +231,8 @@ pub struct RateLimiters {
     pub device_create: Arc<LimiterConfig<IpKey>>,
     pub auth: Arc<LimiterConfig<IpKey>>,
     pub account: Arc<LimiterConfig<AccountKey>>,
+    /// Run submissions per account (N7.1), on top of `account`.
+    pub runs: Arc<LimiterConfig<AccountKey>>,
     metrics: Arc<Metrics>,
 }
 
@@ -256,14 +258,19 @@ impl RateLimiters {
                     .expect("validated non-zero rate and burst"),
             )
         };
-        let account = Arc::new(
-            GovernorConfigBuilder::default()
-                .key_extractor(AccountKey { proxies, keys })
-                .period(period(r.account_per_minute.into(), SECS_PER_MINUTE))
-                .burst_size(r.account_burst.max(1))
-                .finish()
-                .expect("validated non-zero rate and burst"),
-        );
+        let account_key = AccountKey { proxies, keys };
+        let build_account = |per: u32, window: u64, burst: u32| {
+            Arc::new(
+                GovernorConfigBuilder::default()
+                    .key_extractor(account_key.clone())
+                    .period(period(per.into(), window))
+                    .burst_size(burst.max(1))
+                    .finish()
+                    .expect("validated non-zero rate and burst"),
+            )
+        };
+        let account = build_account(r.account_per_minute, SECS_PER_MINUTE, r.account_burst);
+        let runs = build_account(r.runs_per_hour, SECS_PER_HOUR, r.runs_burst);
         Self {
             enabled: r.enabled,
             device_create: build_ip(
@@ -273,6 +280,7 @@ impl RateLimiters {
             ),
             auth: build_ip(r.auth_per_minute, SECS_PER_MINUTE, r.auth_burst),
             account,
+            runs,
             proxies: trusted,
             metrics,
         }
@@ -303,9 +311,10 @@ impl RateLimiters {
             l.retain_recent();
             l.shrink_to_fit();
         }
-        let l = self.account.limiter();
-        l.retain_recent();
-        l.shrink_to_fit();
+        for l in [self.account.limiter(), self.runs.limiter()] {
+            l.retain_recent();
+            l.shrink_to_fit();
+        }
     }
 }
 
