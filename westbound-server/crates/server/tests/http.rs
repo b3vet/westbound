@@ -58,6 +58,7 @@ async fn serves_deep_link_placeholders_and_404() {
         .unwrap();
     assert_eq!(page.status, 200);
     assert!(page.body.contains("new WebSocket(url)"));
+    assert!(page.body.contains("'/ws/echo'") && page.body.contains("'/ws'"));
     let missing = healthcheck::get(s.addr, "/nope", T).await.unwrap();
     assert_eq!(missing.status, 404);
     s.stop().await;

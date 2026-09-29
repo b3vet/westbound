@@ -221,3 +221,55 @@ fn auth_secrets_are_required_outside_dev() {
     assert!(c.is_dev());
     c.validate().unwrap();
 }
+
+#[test]
+fn gateway_defaults_and_validation() {
+    let mut c = Config::default();
+    with_secrets(&mut c);
+    // Spec: 20 Hz tick; per-type WebSocket limits on.
+    assert_eq!(c.gateway.tick_rate_hz, 20);
+    assert!(c.gateway.map_hashes.is_empty());
+    assert!(c.gateway.echo_enabled);
+    assert!(c.ws_rate_limits.enabled);
+    assert_eq!(c.ws_rate_limits.entries().len(), 9);
+    c.validate().unwrap();
+
+    c.gateway.map_hashes = vec!["ab".repeat(32), "AB".repeat(32)];
+    c.validate().unwrap();
+    assert_eq!(
+        westbound_server::config::parse_map_hash(&"0f".repeat(32)).map(|h| h.0),
+        Some([0x0F; 32])
+    );
+
+    c.gateway.map_hashes = vec!["abc".into(), "zz".repeat(32)];
+    c.gateway.hello_timeout_ms = 0;
+    c.gateway.tick_rate_hz = 0;
+    c.gateway.ban_recheck_ms = 0;
+    c.limits.dead_after_ms = 70_000;
+    c.ws_rate_limits.ping_burst = 0;
+    c.ws_rate_limits.player_state_per_sec = f64::NAN;
+    c.ws_rate_limits.violation_per_sec = 0.0;
+    let errs = c.validate().unwrap_err().0;
+    assert_eq!(errs.len(), 9, "{errs:#?}");
+    c.ws_rate_limits.enabled = false;
+    assert_eq!(c.validate().unwrap_err().0.len(), 6);
+}
+
+#[test]
+fn gateway_env_overrides() {
+    let hash = "cd".repeat(32);
+    let c = Config::from_toml_and_env(
+        "",
+        env(&[
+            ("WB_GATEWAY__MAP_HASHES", &format!("{hash}, {hash}")),
+            ("WB_GATEWAY__HELLO_TIMEOUT_MS", "2500"),
+            ("WB_WS_RATE_LIMITS__PING_PER_SEC", "0.5"),
+            ("WB_WS_RATE_LIMITS__ENABLED", "false"),
+        ]),
+    )
+    .unwrap();
+    assert_eq!(c.gateway.map_hashes, vec![hash.clone(), hash]);
+    assert_eq!(c.gateway.hello_timeout_ms, 2_500);
+    assert_eq!(c.ws_rate_limits.ping_per_sec, 0.5);
+    assert!(!c.ws_rate_limits.enabled);
+}

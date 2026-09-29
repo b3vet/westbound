@@ -180,22 +180,61 @@ Load with `NetTuning.load_default()` until `Tuning.net` exists (the orchestrator
 
 ## Live check
 
-`tests/net/live_ws_check.gd` connects `NetWsTransport` to a running server:
+`tests/net/live_ws_check.gd` is a dev tool, not part of the test tiers. It runs the client stack against a running server:
 
 ```
-tools/godot.sh --headless --path . --script res://tests/net/live_ws_check.gd -- ws://127.0.0.1:8080/ws           # Hello → prints Welcome or Error
-tools/godot.sh --headless --path . --script res://tests/net/live_ws_check.gd -- ws://127.0.0.1:8080/ws --echo    # echo endpoint: bytes come back identical
+tools/godot.sh --headless --path . --script res://tests/net/live_ws_check.gd -- ws://127.0.0.1:8080/ws [--duration=20]    # session: account, NetClient, clock, keepalive
+tools/godot.sh --headless --path . --script res://tests/net/live_ws_check.gd -- ws://127.0.0.1:8080/ws --raw              # one Hello, print the decoded answer
+tools/godot.sh --headless --path . --script res://tests/net/live_ws_check.gd -- ws://127.0.0.1:8080/ws/echo --echo        # echo route: bytes come back identical
 ```
 
-Add `--token=...` for a real token, or `--insecure` for a local `wss://` with a self-signed certificate. It exits 0 on success.
+- **Session mode** (the default):
+  - Creates a device account with `POST <api>/api/v1/auth/device`, through `HTTPClient` (no dependency on `session.gd`). The API origin defaults to the socket's. `--api=URL` overrides it, and `--token=T` skips account creation.
+  - Runs `NetClient` over `NetWsTransport`: `Hello` → `Welcome`, then Ping/Pong for `--duration` seconds (default 20, past the 8 s dead window).
+  - Prints one line per Pong: the RTT, the Pong's server tick, `server_now()`, and `err`, which is how far `server_now()` is from the tick that Pong implies (its tick + RTT/2).
+  - Passes (exit 0, last line `LIVE_SESSION ok`) when every ping interval got its Pong, the connection stayed up, and the last `err` is within ±5 ms.
+- **Other options:**
+  - `--map=<64 hex>` sets the map hash (default all zeros, which a dev server accepts);
+  - `--build=N` sets the client build;
+  - `--insecure` accepts a self-signed certificate on local `wss://`.
+- **Tokens are never printed.**
 
-**Run for N2.2**, against the N0 server merged into the integration branch (`dc1cc17`), built and run locally with `cargo run -p server -- --config config/dev.toml` from `westbound-server/`:
+**Run for N2.3.** The gateway server was built from this branch and run in dev mode (`cargo run -p server -- --config config/dev.toml`, here with `WB_SERVER__BIND=127.0.0.1:18233` and a scratch database):
 
 ```
-$ tools/godot.sh --headless --path . --script res://tests/net/live_ws_check.gd -- ws://127.0.0.1:8080/ws --echo
-sent 32 bytes: 04160040e201004e61bc0051ff6903201bd6ff76001efb02020204004d000000
-received 32 bytes: 04160040e201004e61bc0051ff6903201bd6ff76001efb02020204004d000000
-echo matches
+$ tools/godot.sh --headless --path . --script res://tests/net/live_ws_check.gd -- ws://127.0.0.1:18233/ws --duration=20
+account 1 created via POST http://127.0.0.1:18233/api/v1/auth/device (token not shown, 247 chars)
+connecting ws://127.0.0.1:18233/ws (client_build 1, map 00000000...)
+welcome {"account_id":"1","max_frame_bytes":16384,"ping_interval_ms":2000,"protocol_version":1,"server_build":0,"tick_rate_hz":20,"timeout_ms":8000,"type":"welcome"}
+pong 1  rtt 16.62 ms  server_tick 409.615  server_now 409.782  err +0.032 ms  slew +0.000 ms
+pong 2  rtt 16.90 ms  server_tick 449.775  server_now 449.928  err -0.809 ms  slew +0.000 ms
+pong 3  rtt 16.08 ms  server_tick 489.702  server_now 489.922  err +2.963 ms  slew +2.922 ms
+pong 4  rtt 24.11 ms  server_tick 530.020  server_now 530.344  err +4.134 ms  slew +0.000 ms
+pong 5  rtt 17.04 ms  server_tick 570.026  server_now 570.209  err +0.617 ms  slew +0.000 ms
+pong 6  rtt 16.75 ms  server_tick 610.358  server_now 610.536  err +0.508 ms  slew +0.000 ms
+pong 7  rtt 16.77 ms  server_tick 650.692  server_now 650.868  err +0.417 ms  slew +0.000 ms
+pong 8  rtt 16.74 ms  server_tick 691.024  server_now 691.199  err +0.390 ms  slew +0.000 ms
+pong 9  rtt 17.43 ms  server_tick 731.356  server_now 731.545  err +0.721 ms  slew +0.000 ms
+pong 10  rtt 16.92 ms  server_tick 771.355  server_now 771.536  err +0.563 ms  slew +0.000 ms
+LIVE_SESSION ok account=1 pings=10 pongs=10 (expected >= 10 over 20.0 s) best_rtt_ms=16.08 clock_err_ms=+0.563 worst_err_ms=4.134
 ```
 
-That frame is a PlayerState + Ping, the first two messages of the `client_tick` golden frame. The Hello mode needs the handshake wired into the gateway (N0's `/ws` only echoes, so it answers a Hello with the same client frame, which a client decoder reports as `unknown_type`). The in-process WebSocket round trip in `test_transport.gd` covers the same client code in CI.
+- The **RTT of about 16 ms on loopback** is the SceneTree frame: the headless loop polls once per 60 Hz frame, so a Pong waits up to one frame to be read.
+- The **clock** agrees with every Pong within ±5 ms from the first sample, and the slew stays under 3 ms.
+- **Keepalive:** 10 pings and 10 pongs over 20 s, with no timeout on either side.
+- The server log shows `session established ... account=1 session=1 client_build=1` and, after the tool's `close()`, `websocket closed ... reason=ClientClosed`.
+
+The same run against the other paths (commands in docs/SERVER.md → "Realtime gateway → Live cross-side check"):
+
+| Scenario | `NetClient` result |
+| --- | --- |
+| `--token=bogus` | `LIVE_SESSION FAIL auth_failed (Sign-in failed. Please try again.)` |
+| Production-mode server, map `abab…` configured, tool sends zeros | `LIVE_SESSION FAIL map_mismatch (Your map data is out of date. Please update Westbound to play online.)` |
+| Same server, `--map=abab…`, then `westbound-server admin ban 2 1h` from another process (`gateway.ban_recheck_ms = 2000`) | `Welcome`, 4 pongs, then `LIVE_SESSION FAIL banned (This account can't play online.)` |
+| Two tools with one token, the second 4 s later | the first: `LIVE_SESSION FAIL not_allowed`; the second: `LIVE_SESSION ok` |
+| `--raw` without a token | `{"code":"auth_failed","detail":"Sign-in failed. Please try again.","fatal":true,"type":"error"}` |
+| `ws://…/ws/echo --echo` | `echo matches` |
+
+**A client-side finding.** When a fatal `Error` and the close frame arrive in the same `WebSocketPeer.poll()`, Godot goes straight to `STATE_CLOSED` with `get_available_packet_count() == 0`, so the error is lost. `NetClient` then reports `closed` instead of, say, `update_required`. The server works around this by holding its close until the client has closed, up to `gateway.fatal_close_delay_ms`. `NetClient` closes as soon as it reads a fatal error, so it sees every error. `NetWsTransport.poll()` also reads packets only in `OPEN` or `CLOSING`, which is harmless given the engine behavior.
+
+`NetClient.user_message("not_allowed")` falls back to the generic text. The gateway uses a fatal `not_allowed` for "signed in on another device" (docs/SERVER.md → "Sessions"), which deserves its own message.

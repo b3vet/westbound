@@ -23,3 +23,8 @@ cors_allowed_origins = ["*"]
 # Local clients create many accounts while testing.
 device_create_per_hour = 1000
 device_create_burst = 100
+
+[gateway]
+# dev with no map hashes: /ws accepts any Hello.map_hash (tests/net/live_ws_check.gd sends
+# all zeros). N3 adds loop_v1's hash here and to production.
+map_hashes = []

@@ -11,6 +11,81 @@ use axum::http::StatusCode;
 /// HTTP status classes counted by `http_requests_total{class=...}`.
 const STATUS_CLASSES: [&str; 5] = ["1xx", "2xx", "3xx", "4xx", "5xx"];
 
+/// Handshake outcomes counted by `wb_ws_handshakes_total{result=...}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandshakeResult {
+    Ok,
+    UpdateRequired,
+    ServerOutdated,
+    MapMismatch,
+    AuthFailed,
+    Banned,
+    HandshakeRequired,
+    Malformed,
+    /// No `Hello` within `gateway.hello_timeout_ms`.
+    HelloTimeout,
+    /// The client closed (or the socket failed) before its `Hello` was answered.
+    Abandoned,
+    /// Database error while checking the token.
+    Internal,
+}
+
+impl HandshakeResult {
+    pub const ALL: [HandshakeResult; 11] = [
+        HandshakeResult::Ok,
+        HandshakeResult::UpdateRequired,
+        HandshakeResult::ServerOutdated,
+        HandshakeResult::MapMismatch,
+        HandshakeResult::AuthFailed,
+        HandshakeResult::Banned,
+        HandshakeResult::HandshakeRequired,
+        HandshakeResult::Malformed,
+        HandshakeResult::HelloTimeout,
+        HandshakeResult::Abandoned,
+        HandshakeResult::Internal,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            HandshakeResult::Ok => "ok",
+            HandshakeResult::UpdateRequired => "update_required",
+            HandshakeResult::ServerOutdated => "server_outdated",
+            HandshakeResult::MapMismatch => "map_mismatch",
+            HandshakeResult::AuthFailed => "auth_failed",
+            HandshakeResult::Banned => "banned",
+            HandshakeResult::HandshakeRequired => "handshake_required",
+            HandshakeResult::Malformed => "malformed",
+            HandshakeResult::HelloTimeout => "hello_timeout",
+            HandshakeResult::Abandoned => "abandoned",
+            HandshakeResult::Internal => "internal",
+        }
+    }
+
+    /// The outcome for a fatal handshake error code.
+    pub fn from_error(code: protocol::ErrorCode) -> Self {
+        use protocol::ErrorCode as E;
+        match code {
+            E::UpdateRequired => HandshakeResult::UpdateRequired,
+            E::ServerOutdated => HandshakeResult::ServerOutdated,
+            E::MapMismatch => HandshakeResult::MapMismatch,
+            E::AuthFailed => HandshakeResult::AuthFailed,
+            E::Banned => HandshakeResult::Banned,
+            E::HandshakeRequired => HandshakeResult::HandshakeRequired,
+            E::Malformed => HandshakeResult::Malformed,
+            _ => HandshakeResult::Internal,
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|r| *r == self).unwrap_or(0)
+    }
+}
+
+/// Why the gateway ended an established session from outside (`wb_ws_kicks_total{reason}`).
+pub const KICK_REASONS: [&str; 5] = ["replaced", "banned", "revoked", "slow_client", "closed"];
+const HANDSHAKE_RESULTS: usize = HandshakeResult::ALL.len();
+const CLIENT_TYPES: usize = crate::msg_limits::CLIENT_TYPES;
+
 #[derive(Debug, Default)]
 pub struct Metrics {
     pub ws_connections: AtomicU64,
@@ -31,6 +106,18 @@ pub struct Metrics {
     pub auth_refreshes: AtomicU64,
     pub auth_refresh_reuse: AtomicU64,
     pub http_rate_limited: AtomicU64,
+    /// Live, handshaken sessions (the registry's size).
+    pub ws_sessions: AtomicU64,
+    /// Sessions replaced by a second login of the same account.
+    pub ws_sessions_replaced: AtomicU64,
+    ws_handshakes: [AtomicU64; HANDSHAKE_RESULTS],
+    ws_messages_in: [AtomicU64; CLIENT_TYPES],
+    ws_rate_limited: [AtomicU64; CLIENT_TYPES],
+    /// Connections closed for flooding past the violation bucket.
+    pub ws_rate_limit_closed: AtomicU64,
+    ws_kicks: [AtomicU64; KICK_REASONS.len()],
+    /// Echo connections on `/ws/echo`.
+    pub ws_echo_connections_total: AtomicU64,
 }
 
 impl Metrics {
@@ -41,6 +128,53 @@ impl Metrics {
 
     pub fn http_requests(&self, class_index: usize) -> u64 {
         self.http_requests[class_index].load(Ordering::Relaxed)
+    }
+
+    pub fn count_handshake(&self, r: HandshakeResult) {
+        self.ws_handshakes[r.index()].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn handshakes(&self, r: HandshakeResult) -> u64 {
+        self.ws_handshakes[r.index()].load(Ordering::Relaxed)
+    }
+
+    /// Counts one inbound message by client type index (`msg_limits::client_type_index`).
+    pub fn count_message_in(&self, type_index: usize) {
+        if let Some(c) = self.ws_messages_in.get(type_index) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn messages_in(&self, type_index: usize) -> u64 {
+        self.ws_messages_in
+            .get(type_index)
+            .map_or(0, |c| c.load(Ordering::Relaxed))
+    }
+
+    pub fn count_rate_limited(&self, type_index: usize) {
+        if let Some(c) = self.ws_rate_limited.get(type_index) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn rate_limited(&self, type_index: usize) -> u64 {
+        self.ws_rate_limited
+            .get(type_index)
+            .map_or(0, |c| c.load(Ordering::Relaxed))
+    }
+
+    /// Counts a kick by its `KICK_REASONS` label.
+    pub fn count_kick(&self, reason: &str) {
+        if let Some(i) = KICK_REASONS.iter().position(|r| *r == reason) {
+            self.ws_kicks[i].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn kicks(&self, reason: &str) -> u64 {
+        KICK_REASONS
+            .iter()
+            .position(|r| *r == reason)
+            .map_or(0, |i| self.ws_kicks[i].load(Ordering::Relaxed))
     }
 
     pub fn get(counter: &AtomicU64) -> u64 {
@@ -164,6 +298,74 @@ impl Metrics {
             "counter",
             "HTTP requests refused with 429.",
             g(&self.http_rate_limited),
+        );
+        metric(
+            "wb_ws_sessions",
+            "gauge",
+            "Live handshaken sessions (one per account).",
+            g(&self.ws_sessions),
+        );
+        metric(
+            "wb_ws_sessions_replaced_total",
+            "counter",
+            "Sessions replaced by a second login of the same account.",
+            g(&self.ws_sessions_replaced),
+        );
+        metric(
+            "wb_ws_rate_limit_closed_total",
+            "counter",
+            "Connections closed for flooding past the rate limits.",
+            g(&self.ws_rate_limit_closed),
+        );
+        metric(
+            "wb_ws_echo_connections_total",
+            "counter",
+            "Connections to the /ws/echo ops route.",
+            g(&self.ws_echo_connections_total),
+        );
+        let mut labelled =
+            |name: &str, help: &str, label: &str, rows: &mut dyn Iterator<Item = (&str, u64)>| {
+                let _ = writeln!(out, "# HELP {name} {help}");
+                let _ = writeln!(out, "# TYPE {name} counter");
+                for (l, v) in rows {
+                    let _ = writeln!(out, "{name}{{{label}=\"{l}\"}} {v}");
+                }
+            };
+        labelled(
+            "wb_ws_handshakes_total",
+            "Handshakes on /ws by result (ok or the failure reason).",
+            "result",
+            &mut HandshakeResult::ALL
+                .iter()
+                .map(|r| (r.label(), self.handshakes(*r))),
+        );
+        let types = &crate::msg_limits::CLIENT_TYPE_NAMES;
+        labelled(
+            "wb_ws_messages_in_total",
+            "Decoded client messages by type.",
+            "type",
+            &mut types
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (*t, g(&self.ws_messages_in[i]))),
+        );
+        labelled(
+            "wb_ws_rate_limited_total",
+            "Client messages dropped by the per-connection rate limits, by type.",
+            "type",
+            &mut types
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (*t, g(&self.ws_rate_limited[i]))),
+        );
+        labelled(
+            "wb_ws_kicks_total",
+            "Live sessions ended by the server, by reason.",
+            "reason",
+            &mut KICK_REASONS
+                .iter()
+                .enumerate()
+                .map(|(i, r)| (*r, g(&self.ws_kicks[i]))),
         );
         let _ = writeln!(
             out,
