@@ -56,12 +56,18 @@ pub struct Config {
     pub backup: BackupConfig,
     pub auth: AuthConfig,
     pub http: HttpConfig,
+    pub rate_limits: RateLimitsConfig,
     pub deeplinks: DeepLinksConfig,
+    pub gateway: GatewayConfig,
+    pub ws_rate_limits: WsRateLimitsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
+    /// `production` (default) or `dev`. Outside `dev` the auth secrets are required;
+    /// in `dev`, empty secrets fall back to fixed, public development values.
+    pub env: String,
     /// Public listener (HTTP API, `/ws`, deep-link files). The TLS proxy forwards here.
     pub bind: String,
     /// The public `https://` origin clients reach (TLS terminated by the proxy).
@@ -134,12 +140,39 @@ pub struct BackupConfig {
     pub retention_days: u32,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuthConfig {
-    /// HS256 signing secret for access tokens (used from N1). Empty is allowed in
-    /// N0; when set it must be at least `MIN_JWT_SECRET_BYTES` long.
+    /// HS256 signing secret for access tokens. Required outside `server.env = "dev"`,
+    /// at least `MIN_JWT_SECRET_BYTES` long. Environment only, never logged.
     pub jwt_secret: Secret,
+    /// Server pepper for device-secret hashes (HMAC-SHA256 key). Required outside
+    /// `dev`, at least `MIN_JWT_SECRET_BYTES` long, different from `jwt_secret`.
+    /// Never rotate it: stored device-secret hashes depend on it.
+    pub device_secret_pepper: Secret,
+    /// Spec: access tokens live 1 hour.
+    pub access_token_ttl_secs: u64,
+    /// Spec: refresh tokens live 30 days (each rotation issues a fresh 30 days).
+    pub refresh_token_ttl_secs: u64,
+    /// Spec: a display name can be changed once every 30 days.
+    pub rename_cooldown_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RateLimitsConfig {
+    /// Turns every HTTP rate limit off (never in production).
+    pub enabled: bool,
+    /// `POST /api/v1/auth/device` per client IP: this many per hour, refilled
+    /// evenly, with `device_create_burst` available at once.
+    pub device_create_per_hour: u32,
+    pub device_create_burst: u32,
+    /// The other `/api/v1/auth/*` routes (login, refresh, logout, providers) per IP.
+    pub auth_per_minute: u32,
+    pub auth_burst: u32,
+    /// Authenticated routes (`/me`, `/account`, later everything) per account.
+    pub account_per_minute: u32,
+    pub account_burst: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,6 +182,12 @@ pub struct HttpConfig {
     /// origin). `["*"]` allows any origin (local dev); auth uses bearer tokens,
     /// not cookies.
     pub cors_allowed_origins: Vec<String>,
+    /// Largest accepted JSON request body on `/api/*`.
+    pub max_body_bytes: usize,
+    /// CIDRs of reverse proxies whose `X-Forwarded-For` is believed (Coolify's
+    /// proxy reaches the container from a Docker network). A peer outside these
+    /// is the client itself and its `X-Forwarded-For` is ignored.
+    pub trusted_proxies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -159,11 +198,73 @@ pub struct DeepLinksConfig {
     pub dir: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GatewayConfig {
+    /// The first message must be `Hello`, within this long after the upgrade
+    /// (else a fatal `handshake_required`).
+    pub hello_timeout_ms: u64,
+    /// Server tick rate announced in `Welcome` and used by `Pong` (spec: 20 Hz).
+    pub tick_rate_hz: u8,
+    /// Oldest `Hello.client_build` accepted (older → `update_required`).
+    pub min_client_build: u32,
+    /// Accepted `Hello.map_hash` values, 64 hex characters each (the SHA-256 of the loop's
+    /// road-space file; N3 provides `loop_v1`'s). Empty: any hash in `server.env = "dev"`,
+    /// none in production (every `Hello` gets `map_mismatch`).
+    pub map_hashes: Vec<String>,
+    /// How often live sessions are re-checked against the database for bans, deleted
+    /// accounts and revoked tokens (the admin CLI is a separate process).
+    pub ban_recheck_ms: u64,
+    /// After a fatal `Error`, wait up to this long for the client to close before sending
+    /// the close frame, so the error is not read together with the close (some clients,
+    /// Godot's `WebSocketPeer` among them, then drop the error).
+    pub fatal_close_delay_ms: u64,
+    /// Serve the `/ws/echo` ops route (the echo-check page and the echo tools).
+    pub echo_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WsRateLimitsConfig {
+    /// Per-connection limits on every client → server message type (`/ws`).
+    pub enabled: bool,
+    /// Each type: messages per second refilled evenly, and the burst available at once.
+    pub ping_per_sec: f64,
+    pub ping_burst: u32,
+    pub lobby_command_per_sec: f64,
+    pub lobby_command_burst: u32,
+    pub player_state_per_sec: f64,
+    pub player_state_burst: u32,
+    pub score_claim_per_sec: f64,
+    pub score_claim_burst: u32,
+    pub hit_report_per_sec: f64,
+    pub hit_report_burst: u32,
+    pub run_event_per_sec: f64,
+    pub run_event_burst: u32,
+    pub quick_chat_per_sec: f64,
+    pub quick_chat_burst: u32,
+    pub room_host_command_per_sec: f64,
+    pub room_host_command_burst: u32,
+    /// Every dropped message takes one token from this bucket; a client that empties it is
+    /// disconnected with a fatal `rate_limited`.
+    pub violation_per_sec: f64,
+    pub violation_burst: u32,
+    /// After a drop, a non-fatal `rate_limited` error goes out at most this often.
+    pub notice_interval_ms: u64,
+}
+
 /// Production domain (owner, 2026-09-29).
 pub const DEFAULT_PUBLIC_ORIGIN: &str = "https://westbound.sipsakrandevu.com";
 /// The web build on GitHub Pages, until it moves to the production domain.
 pub const WEB_BUILD_ORIGIN: &str = "https://b3vet.github.io";
 pub const MIN_JWT_SECRET_BYTES: usize = 32;
+/// `server.env` values.
+pub const ENV_PRODUCTION: &str = "production";
+pub const ENV_DEV: &str = "dev";
+const SERVER_ENVS: &[&str] = &[ENV_PRODUCTION, ENV_DEV];
+/// Bounds for `http.max_body_bytes`.
+const MIN_BODY_BYTES: usize = 256;
+const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MIN_MESSAGE_BYTES: usize = 1024;
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_WORKER_THREADS: usize = 64;
@@ -172,6 +273,7 @@ const LOG_FORMATS: &[&str] = &["text", "json"];
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            env: ENV_PRODUCTION.into(),
             bind: "0.0.0.0:8080".into(),
             public_origin: DEFAULT_PUBLIC_ORIGIN.into(),
             worker_threads: 2,
@@ -238,8 +340,137 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             cors_allowed_origins: vec![DEFAULT_PUBLIC_ORIGIN.into(), WEB_BUILD_ORIGIN.into()],
+            max_body_bytes: 4 * 1024,
+            // Loopback and the private ranges Docker networks use: Coolify's proxy
+            // reaches the container from one of these. Public peers never match.
+            trusted_proxies: [
+                "127.0.0.0/8",
+                "::1/128",
+                "10.0.0.0/8",
+                "172.16.0.0/12",
+                "192.168.0.0/16",
+                "fc00::/7",
+            ]
+            .map(String::from)
+            .to_vec(),
         }
     }
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            jwt_secret: Secret::default(),
+            device_secret_pepper: Secret::default(),
+            access_token_ttl_secs: 3_600,
+            refresh_token_ttl_secs: 30 * 86_400,
+            rename_cooldown_secs: 30 * 86_400,
+        }
+    }
+}
+
+impl Default for RateLimitsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            device_create_per_hour: 5,
+            device_create_burst: 5,
+            auth_per_minute: 30,
+            auth_burst: 10,
+            account_per_minute: 120,
+            account_burst: 30,
+        }
+    }
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            hello_timeout_ms: 5_000,
+            tick_rate_hz: protocol::handshake::DEFAULT_TICK_RATE_HZ,
+            min_client_build: 0,
+            map_hashes: Vec::new(),
+            ban_recheck_ms: 30_000,
+            fatal_close_delay_ms: 1_000,
+            echo_enabled: true,
+        }
+    }
+}
+
+impl Default for WsRateLimitsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            // The client pings every 2 s.
+            ping_per_sec: 2.0,
+            ping_burst: 5,
+            lobby_command_per_sec: 5.0,
+            lobby_command_burst: 10,
+            // 20 Hz uploads plus jitter bunching.
+            player_state_per_sec: 25.0,
+            player_state_burst: 40,
+            // About two claims a second, more in trains.
+            score_claim_per_sec: 10.0,
+            score_claim_burst: 20,
+            hit_report_per_sec: 5.0,
+            hit_report_burst: 10,
+            run_event_per_sec: 2.0,
+            run_event_burst: 5,
+            quick_chat_per_sec: 1.0,
+            quick_chat_burst: 3,
+            room_host_command_per_sec: 2.0,
+            room_host_command_burst: 5,
+            violation_per_sec: 5.0,
+            violation_burst: 100,
+            notice_interval_ms: 1_000,
+        }
+    }
+}
+
+impl WsRateLimitsConfig {
+    /// `(name, per_sec, burst)` for every limited type and the violation bucket.
+    pub fn entries(&self) -> [(&'static str, f64, u32); 9] {
+        [
+            ("ping", self.ping_per_sec, self.ping_burst),
+            (
+                "lobby_command",
+                self.lobby_command_per_sec,
+                self.lobby_command_burst,
+            ),
+            (
+                "player_state",
+                self.player_state_per_sec,
+                self.player_state_burst,
+            ),
+            (
+                "score_claim",
+                self.score_claim_per_sec,
+                self.score_claim_burst,
+            ),
+            ("hit_report", self.hit_report_per_sec, self.hit_report_burst),
+            ("run_event", self.run_event_per_sec, self.run_event_burst),
+            ("quick_chat", self.quick_chat_per_sec, self.quick_chat_burst),
+            (
+                "room_host_command",
+                self.room_host_command_per_sec,
+                self.room_host_command_burst,
+            ),
+            ("violation", self.violation_per_sec, self.violation_burst),
+        ]
+    }
+}
+
+/// Parses a 64-hex-character map hash.
+pub fn parse_map_hash(s: &str) -> Option<protocol::MapHash> {
+    let s = s.trim();
+    if s.len() != 2 * protocol::types::MAP_HASH_LEN || !s.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; protocol::types::MAP_HASH_LEN];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(protocol::MapHash(out))
 }
 
 /// Validation failures, all of them at once.
@@ -290,6 +521,9 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigErrors> {
         let mut errs = Vec::new();
         let s = &self.server;
+        if !SERVER_ENVS.contains(&s.env.as_str()) {
+            errs.push(format!("server.env must be one of {SERVER_ENVS:?}"));
+        }
         if s.bind.parse::<SocketAddr>().is_err() {
             errs.push(format!(
                 "server.bind `{}` is not an ip:port socket address",
@@ -343,6 +577,43 @@ impl Config {
         if l.max_connections == 0 {
             errs.push("limits.max_connections must be at least 1".into());
         }
+        // `Welcome` carries both as u16 milliseconds.
+        if l.ping_interval_ms > u64::from(u16::MAX) || l.dead_after_ms > u64::from(u16::MAX) {
+            errs.push(format!(
+                "limits.ping_interval_ms and limits.dead_after_ms must be at most {}",
+                u16::MAX
+            ));
+        }
+        let g = &self.gateway;
+        if g.hello_timeout_ms == 0 {
+            errs.push("gateway.hello_timeout_ms must be at least 1".into());
+        }
+        if g.tick_rate_hz == 0 || g.tick_rate_hz > protocol::messages::MAX_TICK_RATE_HZ {
+            errs.push(format!(
+                "gateway.tick_rate_hz must be 1..={}",
+                protocol::messages::MAX_TICK_RATE_HZ
+            ));
+        }
+        for h in &g.map_hashes {
+            if parse_map_hash(h).is_none() {
+                errs.push(format!(
+                    "gateway.map_hashes entry `{h}` must be 64 hex characters (a SHA-256)"
+                ));
+            }
+        }
+        if g.ban_recheck_ms == 0 {
+            errs.push("gateway.ban_recheck_ms must be at least 1".into());
+        }
+        let w = &self.ws_rate_limits;
+        if w.enabled {
+            for (name, per_sec, burst) in w.entries() {
+                if !(per_sec.is_finite() && per_sec > 0.0) || burst == 0 {
+                    errs.push(format!(
+                        "ws_rate_limits.{name}_per_sec must be above 0 and ws_rate_limits.{name}_burst at least 1"
+                    ));
+                }
+            }
+        }
         if self.metrics.enabled {
             match self.metrics.bind.parse::<SocketAddr>() {
                 Ok(a) if a.ip().is_loopback() => {}
@@ -370,11 +641,58 @@ impl Config {
                 errs.push("backup.retention_days must be at least 1".into());
             }
         }
-        let secret = &self.auth.jwt_secret;
-        if !secret.is_empty() && secret.expose().len() < MIN_JWT_SECRET_BYTES {
+        let a = &self.auth;
+        for (key, secret) in [
+            ("auth.jwt_secret", &a.jwt_secret),
+            ("auth.device_secret_pepper", &a.device_secret_pepper),
+        ] {
+            if secret.is_empty() {
+                if !self.is_dev() {
+                    errs.push(format!(
+                        "{key} is required (set WB_{}); only server.env = \"dev\" may leave it empty",
+                        key.to_ascii_uppercase().replace('.', "__")
+                    ));
+                }
+            } else if secret.expose().len() < MIN_JWT_SECRET_BYTES {
+                errs.push(format!(
+                    "{key} must be at least {MIN_JWT_SECRET_BYTES} bytes"
+                ));
+            }
+        }
+        if !a.jwt_secret.is_empty() && a.jwt_secret == a.device_secret_pepper {
+            errs.push("auth.device_secret_pepper must differ from auth.jwt_secret".into());
+        }
+        if a.access_token_ttl_secs == 0 || a.refresh_token_ttl_secs <= a.access_token_ttl_secs {
+            errs.push(
+                "auth.access_token_ttl_secs must be at least 1 and below auth.refresh_token_ttl_secs"
+                    .into(),
+            );
+        }
+        let r = &self.rate_limits;
+        if r.enabled
+            && [
+                r.device_create_per_hour,
+                r.device_create_burst,
+                r.auth_per_minute,
+                r.auth_burst,
+                r.account_per_minute,
+                r.account_burst,
+            ]
+            .contains(&0)
+        {
+            errs.push("rate_limits.* rates and bursts must be at least 1".into());
+        }
+        if !(MIN_BODY_BYTES..=MAX_BODY_BYTES).contains(&self.http.max_body_bytes) {
             errs.push(format!(
-                "auth.jwt_secret must be at least {MIN_JWT_SECRET_BYTES} bytes when set"
+                "http.max_body_bytes must be {MIN_BODY_BYTES}..={MAX_BODY_BYTES}"
             ));
+        }
+        for p in &self.http.trusted_proxies {
+            if crate::ratelimit::Cidr::parse(p).is_none() {
+                errs.push(format!(
+                    "http.trusted_proxies entry `{p}` must be a CIDR like 10.0.0.0/8 or an IP"
+                ));
+            }
         }
         for o in &self.http.cors_allowed_origins {
             if o != "*" && !is_origin(o) {
@@ -388,6 +706,11 @@ impl Config {
         } else {
             Err(ConfigErrors(errs))
         }
+    }
+
+    /// `server.env = "dev"`: development defaults for the auth secrets.
+    pub fn is_dev(&self) -> bool {
+        self.server.env == ENV_DEV
     }
 
     pub fn bind_addr(&self) -> SocketAddr {
@@ -408,6 +731,10 @@ impl Config {
         Duration::from_millis(self.limits.dead_after_ms)
     }
 
+    pub fn hello_timeout(&self) -> Duration {
+        Duration::from_millis(self.gateway.hello_timeout_ms)
+    }
+
     pub fn shutdown_grace(&self) -> Duration {
         Duration::from_millis(self.server.shutdown_grace_ms)
     }
@@ -415,8 +742,10 @@ impl Config {
     /// Effective config as TOML with secrets redacted (for `check-config`).
     pub fn to_redacted_toml(&self) -> String {
         let mut c = self.clone();
-        if !c.auth.jwt_secret.is_empty() {
-            c.auth.jwt_secret = Secret::new("<redacted>");
+        for secret in [&mut c.auth.jwt_secret, &mut c.auth.device_secret_pepper] {
+            if !secret.is_empty() {
+                *secret = Secret::new("<redacted>");
+            }
         }
         toml::to_string_pretty(&c).unwrap_or_else(|e| format!("# cannot render config: {e}"))
     }

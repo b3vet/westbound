@@ -48,7 +48,7 @@ async fn migrations_apply_in_wal_mode_and_are_idempotent() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO refresh_tokens (token_hash, account_id, expires_at, created_at) VALUES (x'01', 1, 10, 0)")
+    sqlx::query("INSERT INTO refresh_tokens (token_hash, account_id, family, expires_at, created_at) VALUES (x'01', 1, x'02', 10, 0)")
         .execute(&pool)
         .await
         .unwrap();

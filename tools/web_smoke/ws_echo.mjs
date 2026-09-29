@@ -72,7 +72,7 @@ async function launch(opts) {
 async function echoInPage({ server, timeout }) {
   const health = await fetch(`${server}/api/v1/health`, { cache: 'no-store' }).then((r) => r.json());
   if (health.status !== 'ok') throw new Error(`health: ${JSON.stringify(health)}`);
-  const wsUrl = server.replace(/^http/, 'ws') + '/ws';
+  const wsUrl = server.replace(/^http/, 'ws') + '/ws/echo';
   const payload = new Uint8Array(1024).map((_, i) => (i * 31 + 7) % 256);
   const text = 'westbound web echo';
   return await new Promise((resolve, reject) => {

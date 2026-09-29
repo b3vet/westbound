@@ -121,8 +121,8 @@ Load test (20 rooms × 8 bots under a 1-vCPU Docker limit: ≤ 50 % CPU, tick p9
 | Milestone | Status |
 | --- | --- |
 | N0 Server foundation | ✅ **gate met on the real VPS** (owner, 2026-09-29): deployed on Coolify at `westbound.sipsakrandevu.com`, reachable, wss echo works from a phone. Image 3.6 MB; CI pushes `ghcr.io/b3vet/westbound-server:edge` |
-| N1 Accounts (device) | 🟡 N1.1 server in progress |
-| N2 Protocol & clock | 🟡 N2.1 protocol crate merged (87 golden vectors, frozen contract docs/PROTOCOL.md); N2.2 client codec + transports + clock merged (all vectors pass both sides; clock within ±5 ms) — **N2 done** except wiring the handshake into the server gateway (next) |
+| N1 Accounts (device) | ✅ server accounts (N1.1) + client session and profile panel (N1.2); autoload `Net` signs in silently on web and release builds (native dev runs stay offline unless `--server=`). **Owner: set `WB_AUTH__JWT_SECRET` and `WB_AUTH__DEVICE_SECRET_PEPPER` in Coolify before redeploying.** The "survives an iOS reinstall / second device" check waits for the Keychain plugin and providers (MP-D2) |
+| N2 Protocol & clock | ✅ protocol crate + golden vectors, GDScript codec/transports/clock (MP-D4), gateway on `/ws` (handshake, auth, bans, map hashes, keepalive, rate limits, newest-login-wins sessions); echo check moved to `/ws/echo`. Production answers `map_mismatch` until N3 sets `WB_GATEWAY__MAP_HASHES` |
 | N3 Loop map | ⬜ (after Phase 6) |
 | N4 Networked traffic | ⬜ |
 | N5 Rooms & players | ⬜ |

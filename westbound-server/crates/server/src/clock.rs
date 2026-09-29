@@ -1,9 +1,48 @@
 //! Wall-clock helpers for the server shell (not the simulation: `sim` never reads a
 //! clock). UTC only; no time-zone database needed.
 
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const SECS_PER_DAY: i64 = 86_400;
+
+/// Unix-seconds wall clock for token expiry, bans and rename cooldowns. Injected
+/// through `AppState` so tests can move time (`ManualClock`).
+pub trait Clock: Send + Sync + 'static {
+    fn now(&self) -> i64;
+}
+
+/// The real clock.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> i64 {
+        unix_now_secs()
+    }
+}
+
+/// A clock that only moves when told to (tests).
+#[derive(Debug)]
+pub struct ManualClock(AtomicI64);
+
+impl ManualClock {
+    pub fn new(start: i64) -> Self {
+        Self(AtomicI64::new(start))
+    }
+    pub fn set(&self, t: i64) {
+        self.0.store(t, Ordering::SeqCst);
+    }
+    pub fn advance(&self, secs: i64) {
+        self.0.fetch_add(secs, Ordering::SeqCst);
+    }
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> i64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
 
 pub fn unix_now_secs() -> i64 {
     SystemTime::now()

@@ -1,14 +1,14 @@
 extends SceneTree
 ## WebSocket echo check against westbound-server (multiplayer N0 gate, docs/SERVER.md).
 ##   tools/godot.sh --headless --script res://tools/net_echo_check.gd -- \
-##       [--url=wss://localhost:8443/ws] [--insecure] [--timeout=10] [--size=1024]
+##       [--url=wss://localhost:8443/ws/echo] [--insecure] [--timeout=10] [--size=1024]
 ## Connects, sends one binary message, expects the same bytes back, closes, prints
 ## "NET_ECHO ok <url> bytes=<n> rtt_ms=<ms>" and exits 0. Any failure prints
 ## "NET_ECHO FAIL <reason>" and exits 1; bad arguments exit 2.
 ## --insecure accepts any certificate (local Caddy `tls internal` is self-signed).
 ## Dev tool only: the game itself always verifies certificates.
 
-const DEFAULT_URL := "wss://localhost:8443/ws"
+const DEFAULT_URL := "wss://localhost:8443/ws/echo"
 const DEFAULT_TIMEOUT_S := 10.0
 const DEFAULT_SIZE := 1024
 ## Largest payload the server accepts (spec: 16 KB inbound max).

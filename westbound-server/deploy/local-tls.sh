@@ -18,6 +18,8 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 ws_root="$(cd "$here/.." && pwd)"
 port="${WB_LOCAL_TLS_PORT:-8443}"
+# Local runs use dev mode (dev auth secrets; the server refuses to start without secrets otherwise).
+export WB_SERVER__ENV="${WB_SERVER__ENV:-dev}"
 mode=docker
 if [[ "${1:-}" == "--native" ]]; then
 	mode=native

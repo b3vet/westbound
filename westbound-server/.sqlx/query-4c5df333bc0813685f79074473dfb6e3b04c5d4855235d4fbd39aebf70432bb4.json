@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account_id, family, used_at, revoked_at, expires_at\n             FROM refresh_tokens WHERE token_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "account_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "family",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "family"
+          }
+        }
+      },
+      {
+        "name": "used_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "used_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "4c5df333bc0813685f79074473dfb6e3b04c5d4855235d4fbd39aebf70432bb4"
+}

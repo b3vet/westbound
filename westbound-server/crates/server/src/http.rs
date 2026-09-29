@@ -104,8 +104,9 @@ pub async fn metrics(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
-/// A static page that runs the WebSocket echo from any browser, so a phone can
-/// verify `wss://` through the TLS proxy before the game has network code (N0 gate).
+/// A static page that runs the WebSocket echo (`/ws/echo`) from any browser and sends a
+/// token-less `Hello` to the gateway (`/ws`), so a phone can verify `wss://` through the
+/// TLS proxy without the game (N0 gate, kept for ops by N2.3).
 pub async fn echo_check() -> Response {
     (
         [
@@ -117,10 +118,7 @@ pub async fn echo_check() -> Response {
         .into_response()
 }
 
+/// 404 in the API error format.
 pub async fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({ "error": "not_found" })),
-    )
-        .into_response()
+    crate::error::ApiError::not_found().into_response()
 }

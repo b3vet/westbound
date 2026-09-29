@@ -78,9 +78,10 @@ pub async fn backup_to(pool: &SqlitePool, dest: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Appends to `admin_log` (actor = who, e.g. `system` or `cli`).
+/// Appends to `admin_log` (actor = who, e.g. `system`, `cli` or `self`). Takes a pool
+/// or a transaction. Never put tokens, secrets, IPs or other PII in it.
 pub async fn admin_log(
-    pool: &SqlitePool,
+    db: impl sqlx::SqliteExecutor<'_>,
     actor: &str,
     action: &str,
     target: &str,
@@ -95,7 +96,7 @@ pub async fn admin_log(
         detail,
         now
     )
-    .execute(pool)
+    .execute(db)
     .await
     .context("writing admin_log")?;
     Ok(())

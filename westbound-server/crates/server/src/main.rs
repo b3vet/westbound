@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use westbound_server::{backup, config, db, healthcheck, shutdown, telemetry, Config, Server};
+use westbound_server::{
+    admin, backup, clock, config, db, healthcheck, shutdown, telemetry, Config, Server,
+};
 
 /// Seconds the `healthcheck` command waits for an answer.
 const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -36,6 +38,21 @@ enum Command {
     Backup { path: PathBuf },
     /// Probe `/api/v1/health` on localhost; exit 0 when healthy (Docker HEALTHCHECK).
     Healthcheck,
+    /// Moderation commands on the live database (each one is logged to admin_log).
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCommand {
+    /// Ban an account for DURATION (`30m`, `12h`, `7d`, `2w`) or `perm`.
+    Ban { account_id: i64, duration: String },
+    /// Lift an account's ban.
+    Unban { account_id: i64 },
+    /// Force-rename an account (name rules and filter apply; a new #tag if needed).
+    Rename { account_id: i64, name: String },
 }
 
 fn long_version() -> &'static str {
@@ -81,6 +98,10 @@ fn main() -> ExitCode {
             telemetry::init(&cfg.log);
             current_thread().and_then(|rt| rt.block_on(backup_cmd(&cfg, &path)))
         }
+        Command::Admin { command } => {
+            telemetry::init(&cfg.log);
+            current_thread().and_then(|rt| rt.block_on(admin_cmd(&cfg, command)))
+        }
         Command::Serve => {
             telemetry::init(&cfg.log);
             tokio::runtime::Builder::new_multi_thread()
@@ -122,6 +143,24 @@ async fn backup_cmd(cfg: &Config, path: &std::path::Path) -> anyhow::Result<()> 
     db::admin_log(&pool, "cli", "backup", &path.display().to_string(), "").await?;
     tracing::info!(path = %path.display(), "backup written");
     db::close(&pool).await;
+    Ok(())
+}
+
+async fn admin_cmd(cfg: &Config, command: AdminCommand) -> anyhow::Result<()> {
+    let pool = db::connect(&cfg.db).await?;
+    let now = clock::unix_now_secs();
+    let result = match command {
+        AdminCommand::Ban {
+            account_id,
+            duration,
+        } => admin::ban(&pool, account_id, &duration, now).await,
+        AdminCommand::Unban { account_id } => admin::unban(&pool, account_id).await,
+        AdminCommand::Rename { account_id, name } => {
+            admin::rename(&pool, account_id, &name, now).await
+        }
+    };
+    db::close(&pool).await;
+    println!("{}", result?);
     Ok(())
 }
 

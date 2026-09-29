@@ -5,6 +5,9 @@
 # Lists from the environment are comma-separated. Reference: docs/SERVER.md.
 
 [server]
+# "production" or "dev". Outside dev, auth.jwt_secret and auth.device_secret_pepper
+# are required; dev falls back to public development values when they are empty.
+env = "production"
 # Public listener: HTTP API, /ws, /.well-known/*. The TLS proxy forwards here.
 bind = "0.0.0.0:8080"
 # Public https origin clients reach through the TLS proxy (invite links from N9).
@@ -53,16 +56,93 @@ time_utc = "03:17"
 retention_days = 7
 
 [auth]
-# Access-token signing secret (used from N1). Set it from the environment
-# (WB_AUTH__JWT_SECRET), never in a committed file. At least 32 bytes when set.
+# Access-token (JWT HS256) signing secret. Required outside dev, at least 32 bytes.
+# Set it from the environment (WB_AUTH__JWT_SECRET), never in a committed file.
 jwt_secret = ""
+# Pepper for device-secret hashes (HMAC-SHA256 key). Required outside dev, at least
+# 32 bytes, different from jwt_secret. Environment only (WB_AUTH__DEVICE_SECRET_PEPPER).
+# Never change it once accounts exist: their device secrets would stop verifying.
+device_secret_pepper = ""
+# Spec: access tokens 1 hour, refresh tokens 30 days, one rename per 30 days.
+access_token_ttl_secs = 3600
+refresh_token_ttl_secs = 2592000
+rename_cooldown_secs = 2592000
 
 [http]
 # CORS allow-list for /api/*: the production domain and the GitHub Pages web
 # build. "*" = any origin (local dev; auth is bearer tokens, no cookies).
 cors_allowed_origins = ["https://westbound.sipsakrandevu.com", "https://b3vet.github.io"]
+# Largest JSON request body accepted on /api/* (413 above it).
+max_body_bytes = 4096
+# Reverse proxies whose X-Forwarded-For is believed, as CIDRs. Coolify's proxy
+# reaches the container over a Docker network (private ranges), so the defaults
+# cover it; a peer outside these is the client and its X-Forwarded-For is ignored.
+trusted_proxies = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+
+[rate_limits]
+# 429 + Retry-After when exceeded. Each limit refills evenly over its window, with
+# its burst available at once. IPv6 clients are keyed by their /64.
+enabled = true
+# POST /api/v1/auth/device, per client IP.
+device_create_per_hour = 5
+device_create_burst = 5
+# Other /api/v1/auth/* routes (sign-in, refresh, logout, providers), per client IP.
+auth_per_minute = 30
+auth_burst = 10
+# Authenticated routes (/me, /account, ...), per account.
+account_per_minute = 120
+account_burst = 30
 
 [deeplinks]
 # Directory with apple-app-site-association and assetlinks.json. Empty, or a
 # missing file, serves the built-in placeholder.
 dir = ""
+
+[gateway]
+# The realtime gateway on /ws (docs/SERVER.md → "Realtime gateway").
+# The first message must be Hello within this long, else a fatal handshake_required.
+hello_timeout_ms = 5000
+# Server tick rate announced in Welcome and used by Pong (spec: 20 Hz).
+tick_rate_hz = 20
+# Oldest Hello.client_build accepted; older clients get update_required.
+min_client_build = 0
+# Accepted Hello.map_hash values: 64 hex characters each, the SHA-256 of the loop's
+# road-space file (N3 provides loop_v1's). Empty: any hash when server.env = "dev",
+# none in production (every Hello gets map_mismatch). From the environment:
+# WB_GATEWAY__MAP_HASHES=<hash>,<hash>.
+map_hashes = []
+# How often live sessions are re-checked for bans, deleted accounts and revoked tokens
+# (the admin CLI is a separate process, so its bans reach open sockets this way).
+ban_recheck_ms = 30000
+# After a fatal Error, wait up to this long for the client to close before sending the
+# close frame (a client reading the error and the close in one read may drop the error).
+fatal_close_delay_ms = 1000
+# Serve the /ws/echo ops route (the /api/v1/echo-check page, tools/net_echo_check.gd).
+echo_enabled = true
+
+[ws_rate_limits]
+# Per-connection token buckets on every client message type on /ws: <type>_per_sec
+# refilled evenly, <type>_burst available at once. A message over its limit is dropped
+# (the client gets a non-fatal rate_limited at most every notice_interval_ms); every drop
+# also takes a token from the violation bucket, and a client that empties it is
+# disconnected with a fatal rate_limited.
+enabled = true
+ping_per_sec = 2.0
+ping_burst = 5
+lobby_command_per_sec = 5.0
+lobby_command_burst = 10
+player_state_per_sec = 25.0
+player_state_burst = 40
+score_claim_per_sec = 10.0
+score_claim_burst = 20
+hit_report_per_sec = 5.0
+hit_report_burst = 10
+run_event_per_sec = 2.0
+run_event_burst = 5
+quick_chat_per_sec = 1.0
+quick_chat_burst = 3
+room_host_command_per_sec = 2.0
+room_host_command_burst = 5
+violation_per_sec = 5.0
+violation_burst = 100
+notice_interval_ms = 1000

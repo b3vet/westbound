@@ -9,7 +9,9 @@
 #     nightly backups in /data/backups, deep-link files in /data/well-known).
 #   - Health check: GET /api/v1/health on port 8080 (the image also has a
 #     HEALTHCHECK that runs `westbound-server healthcheck`).
-#   - Secrets: set WB_AUTH__JWT_SECRET in Coolify's environment variables (N1+).
+#   - Secrets (required, the server refuses to start without them): set WB_AUTH__JWT_SECRET and
+#     WB_AUTH__DEVICE_SECRET_PEPPER in Coolify's environment variables (openssl rand -hex 32 each).
+#     Never change the pepper once accounts exist. Local runs: WB_SERVER__ENV=dev.
 #   - No `ports:` here on purpose: Coolify routes through its proxy network.
 #
 # Local
@@ -35,6 +37,8 @@ services:
       WB_LOG__FORMAT: ${WB_LOG__FORMAT:-json}
       WB_LOG__LEVEL: ${WB_LOG__LEVEL:-info}
       WB_AUTH__JWT_SECRET: ${WB_AUTH__JWT_SECRET:-}
+      WB_AUTH__DEVICE_SECRET_PEPPER: ${WB_AUTH__DEVICE_SECRET_PEPPER:-}
+      WB_SERVER__ENV: ${WB_SERVER__ENV:-production}
       WB_BACKUP__RETENTION_DAYS: ${WB_BACKUP__RETENTION_DAYS:-7}
       WB_BACKUP__TIME_UTC: ${WB_BACKUP__TIME_UTC:-03:17}
     volumes:

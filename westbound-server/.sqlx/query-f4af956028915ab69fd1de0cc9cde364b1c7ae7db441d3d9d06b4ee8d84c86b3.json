@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT device_secret_hash, banned_until, token_version FROM accounts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "device_secret_hash",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "device_secret_hash"
+          }
+        }
+      },
+      {
+        "name": "banned_until",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "banned_until"
+          }
+        }
+      },
+      {
+        "name": "token_version",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "token_version"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "f4af956028915ab69fd1de0cc9cde364b1c7ae7db441d3d9d06b4ee8d84c86b3"
+}
