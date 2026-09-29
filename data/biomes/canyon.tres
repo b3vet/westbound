@@ -1,0 +1,105 @@
+[gd_resource type="Resource" script_class="BiomeDef" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://src/road/biome_def.gd" id="1_biome"]
+[ext_resource type="Script" path="res://src/road/roadside/roadside_prop.gd" id="3_prop"]
+[ext_resource type="Script" path="res://src/road/roadside/cliff_def.gd" id="4_cliff"]
+
+[sub_resource type="Resource" id="Cliffs_canyon"]
+script = ExtResource("4_cliff")
+profile_x_m = PackedFloat64Array(0, 1.2, 3.8, 5.2, 8.5, 9.8, 13.5, 15, 26, 46)
+profile_h_m = PackedFloat64Array(-0.3, 7.5, 8.2, 15.5, 16.2, 24, 24.8, 32, 35, 29)
+band_colors = PackedColorArray(0.56, 0.33, 0.24, 1, 0.86, 0.68, 0.5, 1, 0.78, 0.46, 0.3, 1, 0.86, 0.68, 0.5, 1, 0.93, 0.78, 0.6, 1, 0.86, 0.68, 0.5, 1, 0.74, 0.4, 0.26, 1, 0.84, 0.6, 0.42, 1, 0.66, 0.42, 0.3, 1)
+setback_m = 3.0
+height_jitter_frac = 0.22
+offset_jitter_m = 2.4
+noise_cell_m = 11.0
+run_length_m = 300.0
+presence_right_frac = 0.65
+presence_left_frac = 0.55
+ramp_m = 70.0
+checkpoint_clear_m = 330.0
+sign_clear_m = 30.0
+
+[sub_resource type="Resource" id="Prop_boulders"]
+script = ExtResource("3_prop")
+id = &"boulders"
+mesh_paths = PackedStringArray("res://assets/props/canyon/boulders.res")
+pattern = 0
+sides = 0
+density_per_km = 10.0
+cell_length_m = 200.0
+setback_min_m = 0.0
+setback_max_m = 2.0
+facing = 1
+scale_min_factor = 0.6
+scale_max_factor = 1.2
+
+[sub_resource type="Resource" id="Prop_pines"]
+script = ExtResource("3_prop")
+id = &"pines"
+mesh_paths = PackedStringArray("res://assets/props/canyon/pine.res")
+pattern = 0
+sides = 0
+density_per_km = 14.0
+cell_length_m = 150.0
+setback_min_m = 58.0
+setback_max_m = 160.0
+facing = 1
+scale_min_factor = 0.8
+scale_max_factor = 1.5
+
+[sub_resource type="Resource" id="Prop_spires"]
+script = ExtResource("3_prop")
+id = &"spires"
+mesh_paths = PackedStringArray("res://assets/props/canyon/spire.res")
+pattern = 0
+sides = 0
+density_per_km = 1.5
+cell_length_m = 600.0
+setback_min_m = 70.0
+setback_max_m = 240.0
+facing = 1
+scale_min_factor = 0.8
+scale_max_factor = 1.5
+
+[sub_resource type="Resource" id="Prop_scrub"]
+script = ExtResource("3_prop")
+id = &"scrub"
+mesh_paths = PackedStringArray("res://assets/props/canyon/scrub.res")
+pattern = 0
+sides = 0
+density_per_km = 20.0
+cell_length_m = 100.0
+setback_min_m = 0.0
+setback_max_m = 2.5
+facing = 1
+scale_min_factor = 0.7
+scale_max_factor = 1.3
+
+[resource]
+script = ExtResource("1_biome")
+id = &"canyon"
+display_name = "Canyon Pass"
+order = 3
+lane_count = 3
+curve_frequency_scale = 1.8
+crest_frequency_scale = 1.8
+tunnel_frequency_scale = 1.6
+bend_sight_clearance_m = 6.0
+scatter_props = Array[ExtResource("3_prop")]([SubResource("Prop_boulders"), SubResource("Prop_pines"), SubResource("Prop_spires"), SubResource("Prop_scrub")])
+cliffs = SubResource("Cliffs_canyon")
+world_tint_offset = Color(0.006, 0.0, -0.004, 0)
+fog_tint_offset = Color(0.015, 0.0, -0.01, 0)
+horizon_set = &"canyon_ridges"
+horizon_layer_style = Vector4(3, 2, 3, 3)
+horizon_layer_height_m = Vector4(160, 480, 1300, 3800)
+heat_shimmer = 0.0
+ground_color = Color(0.6, 0.42, 0.3, 1)
+verge_color = Color(0.64, 0.5, 0.36, 1)
+rock_color = Color(0.62, 0.4, 0.29, 1)
+rock_shade_color = Color(0.44, 0.28, 0.21, 1)
+traffic_palette = PackedColorArray(0.94, 0.93, 0.89, 1, 0.6, 0.63, 0.66, 1, 0.11, 0.11, 0.13, 1, 0.64, 0.17, 0.13, 1, 0.13, 0.17, 0.35, 1, 0.1, 0.58, 0.6, 1, 0.96, 0.46, 0.13, 1, 0.12, 0.3, 0.58, 1, 0.3, 0.31, 0.35, 1, 0.23, 0.37, 0.17, 1)
+set_piece_ids = Array[StringName]([&"tunnel_squeeze", &"truck_wall", &"slalom", &"convoy"])
+set_piece_weights = PackedFloat64Array(1.2, 1, 0.8, 0.6)
+landmark_style = &"tunnel_portal"
+landmark_styles = Array[StringName]([&"tunnel_portal", &"suspension_bridge", &"sign_gantry"])
