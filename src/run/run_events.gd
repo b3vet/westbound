@@ -13,6 +13,8 @@ extends Node
 ##
 ## Kinds the run handles at tick time and that are not signals (KIND_SUN_NUDGE ->
 ## SunClock.lift, Scoring.KIND_NEAR_MISS -> TrafficSim.notify_close_pass) are skipped.
+## objective_completed (LegObjectives.KIND_OBJECTIVE_COMPLETED: tag = objective,
+## points = bonus paid) is WP5.2's; the leg_started biome is the one at the leg's start.
 ## checkpoint_crossed's summary Dictionary is built from LegTracker.crossing; its
 ## bonus_points sums the KIND_BONUS records that follow it in the same frame (the
 ## run pays the leg bonuses right after the crossing, per the spec's order).
@@ -36,6 +38,8 @@ const SUMMARY_DISTANCE_M := &"distance_m"
 const SUMMARY_DURATION_S := &"duration_s"
 const SUMMARY_LANDMARK := &"landmark"
 const SUMMARY_COAST := &"coast"
+## WP5.2: the objective bonus paid for the leg (after the night factor; 0 = none).
+const SUMMARY_OBJECTIVE_POINTS := &"objective_points"
 
 ## Scoring: multiplier / chain snapshots (null = none).
 var scoring: ScoringRuleSet
@@ -136,6 +140,8 @@ func _emit(buf: ScoreEventBuffer, i: int) -> void:
 			Events.leg_started.emit(int(v), _biome_id(), legs.objective if legs != null else &"")
 		LegTracker.KIND_COAST_REACHED:
 			Events.coast_reached.emit()
+		LegObjectives.KIND_OBJECTIVE_COMPLETED:
+			Events.objective_completed.emit(buf.tag[i], buf.points[i])
 		TrafficSim.KIND_HORN:
 			Events.traffic_horn.emit(buf.slot[i], _slot_position(buf.slot[i]))
 		TrafficSim.KIND_BRAKE_TAP:
@@ -209,13 +215,14 @@ func _summary(leg_index: int, bonus_points: int) -> Dictionary:
 	out[SUMMARY_DURATION_S] = c.duration_s
 	out[SUMMARY_LANDMARK] = c.landmark
 	out[SUMMARY_COAST] = c.coast
+	out[SUMMARY_OBJECTIVE_POINTS] = c.objective_points
 	return out
 
 
 func _biome_id() -> StringName:
 	if biome_director == null:
 		return &""
-	var b: BiomeDef = biome_director.biome_at(legs.crossing.s) if legs != null else biome_director.current()
+	var b: BiomeDef = biome_director.biome_at(legs.leg_start_s()) if legs != null else biome_director.current()
 	return b.id if b != null else &""
 
 

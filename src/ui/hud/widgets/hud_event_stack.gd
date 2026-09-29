@@ -12,6 +12,13 @@ extends HudWidget
 
 enum Role { TEXT, ACCENT, GOLD, HOT }
 
+## WP5.2: hidden while the leg toast holds this slot. Lines still arrive and age (the
+## Hud keeps animating the stack), so none shows up stale when the toast ends.
+var muted: bool = false:
+	set(value):
+		muted = value
+		visible = not value and _n > 0
+
 var _n: int = 0
 var _cap: int = 0
 var _word := PackedStringArray()
@@ -52,7 +59,7 @@ func push(word: String, points: String, role: Role) -> void:
 	_row[0] = 0.0
 	_n = mini(_n + 1, _cap)
 	changes += 1
-	visible = true
+	visible = not muted
 	queue_redraw()
 
 

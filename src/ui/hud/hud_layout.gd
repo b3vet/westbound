@@ -27,6 +27,13 @@ var camera: Rect2 = Rect2()
 var speedo: Rect2 = Rect2()
 var min_speed: Rect2 = Rect2()
 var boost: Rect2 = Rect2()
+## WP5.2: the leg objective chip, under the score panel (left-anchored like it); under
+## the lives and buttons instead when a raised bottom-left panel needs that space.
+var objective: Rect2 = Rect2()
+## WP5.2: the leg toast. It takes the event stack's slot (the stack hides while it
+## shows): the stack's width, and as tall as leg_toast_size_px (never into the middle
+## third). It overlaps the stack by design, so it is not in rects().
+var toast: Rect2 = Rect2()
 ## The panel rose above the touch controls (no room beside them).
 var speedo_raised: bool = false
 var boost_raised: bool = false
@@ -53,6 +60,7 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	var top := safe.position.y + m
 
 	score = Rect2(Vector2(safe.position.x + m, top), hud.score_size_px * ts)
+	_objective_left = Rect2(Vector2(score.position.x, score.end.y + gap), hud.objective_chip_size_px * ts)
 
 	var button := hud.button_size_px * ts
 	camera = Rect2(Vector2(safe.end.x - m - button.x, top), button)
@@ -69,6 +77,7 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	chain = Rect2(Vector2(cx - row.x * 0.5, sun.end.y + gap), row)
 	stack = Rect2(Vector2(chain.position.x, chain.end.y + gap),
 			Vector2(row.x, hud.event_line_height_px * ts * float(hud.event_stack_lines)))
+	toast = Rect2(stack.position, Vector2(stack.size.x, hud.leg_toast_size_px.y * ts))
 
 	var sp := hud.speedo_size_px * ts
 	var strip := hud.min_speed_row_px * ts
@@ -78,16 +87,17 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	speedo = Rect2(Vector2(block.position.x, block.end.y - sp.y), sp)
 	boost = _place_bottom(hud.boost_size_px * ts, false)
 	boost_raised = _raised
+	objective = _place_objective(hud.objective_chip_size_px * ts)
 
 
 ## Every HUD rect (tests check them against the touch controls and each other).
 func rects() -> Array[Rect2]:
-	return [score, sun, chain, stack, lives, pause, camera, min_speed, speedo, boost]
+	return [score, sun, chain, stack, lives, pause, camera, min_speed, speedo, boost, objective]
 
 
 static func names() -> PackedStringArray:
 	return PackedStringArray(["score", "sun", "chain", "stack", "lives", "pause", "camera",
-			"min_speed", "speedo", "boost"])
+			"min_speed", "speedo", "boost", "objective"])
 
 
 ## The touch controls' rects: the joined gas column (pedal + boost cap) and the brake.
@@ -124,6 +134,7 @@ static func canvas_safe_rect(full_rect: Rect2) -> Rect2:
 
 
 var _raised: bool = false
+var _objective_left: Rect2 = Rect2()
 
 
 ## A bottom-corner panel of `size`, first that fits of: the corner; beside the
@@ -150,6 +161,32 @@ func _place_bottom(size: Vector2, left: bool) -> Rect2:
 	return beside
 
 
+## The objective chip: under the score, else under the lives and buttons (a raised
+## bottom panel took the space), else (both corners raised: extreme control scales
+## only) centred under the toast's slot, else under the score anyway.
+func _place_objective(size: Vector2) -> Rect2:
+	var gap := _hud.spacing_grid_px
+	var left := Rect2(_objective_left.position, size)
+	if _clear_of_bottom(left.grow(gap)):
+		return left
+	var right := Rect2(Vector2(camera.end.x - size.x, maxf(lives.end.y, camera.end.y) + gap), size)
+	if _clear_of_bottom(right.grow(gap)) and not right.intersects(middle_column()):
+		return right
+	var centre := Rect2(Vector2(stack.get_center().x - size.x * 0.5, toast.end.y + gap), size)
+	if _clear_of_bottom(centre.grow(gap)):
+		return centre
+	return left
+
+
+func _clear_of_bottom(r: Rect2) -> bool:
+	if not safe.encloses(r):
+		return false
+	for p: Rect2 in [min_speed, speedo, boost]:
+		if r.intersects(p):
+			return false
+	return not _hits(r, _hud.pedal_clearance_px)
+
+
 ## The middle third of the safe width: the bottom panels stay out of it (the
 ## top-centre readouts live at its top).
 func middle_column() -> Rect2:
@@ -160,7 +197,7 @@ func middle_column() -> Rect2:
 func _clear_of_top(r: Rect2) -> bool:
 	if not safe.encloses(r):
 		return false
-	for top: Rect2 in [score, sun, chain, stack, lives, pause, camera]:
+	for top: Rect2 in [score, sun, chain, stack, lives, pause, camera, toast]:
 		if r.intersects(top):
 			return false
 	return true

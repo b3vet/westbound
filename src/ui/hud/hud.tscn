@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=3]
+[gd_scene load_steps=16 format=3]
 
 [ext_resource type="Script" path="res://src/ui/hud/hud.gd" id="1_hud"]
 [ext_resource type="Script" path="res://src/ui/hud/widgets/hud_score.gd" id="2_score"]
@@ -13,6 +13,8 @@
 [ext_resource type="Script" path="res://src/ui/hud/widgets/hud_boost.gd" id="11_boost"]
 [ext_resource type="Script" path="res://src/ui/hud/widgets/hud_flyer.gd" id="12_flyer"]
 [ext_resource type="Script" path="res://src/ui/hud/widgets/hud_glitter.gd" id="13_glitter"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_objective.gd" id="14_objective"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_leg_toast.gd" id="15_toast"]
 
 [node name="Hud" type="CanvasLayer"]
 layer = 5
@@ -31,6 +33,12 @@ mouse_filter = 2
 layout_mode = 3
 mouse_filter = 2
 script = ExtResource("2_score")
+
+[node name="Objective" type="Control" parent="Root"]
+visible = false
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("14_objective")
 
 [node name="Sun" type="Control" parent="Root"]
 layout_mode = 3
@@ -51,6 +59,12 @@ script = ExtResource("5_mult")
 layout_mode = 3
 mouse_filter = 2
 script = ExtResource("6_stack")
+
+[node name="LegToast" type="Control" parent="Root"]
+visible = false
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("15_toast")
 
 [node name="Lives" type="Control" parent="Root"]
 layout_mode = 3

@@ -105,3 +105,33 @@ tools/parity.sh src/ui/hud/dev/hud_preview.tscn --sweep=state:idle,busy,too_slow
     - `--text_scale`, `--units`
     - `--sky_t`
     - `--world=true` puts the 3D look preview behind the HUD.
+
+## Leg objective and leg toast (WP5.2)
+
+Spec: *Core loop → Legs and checkpoints* (warning signs, crossing step 5 "a 2.5-second leg summary toast that does not pause play", the leg objective shown on entry), *Night*, *UI → Screens* ("Leg summary: a non-blocking toast").
+
+- **Objective chip** (`widgets/hud_objective.gd`, `layout.objective`): "LEG 2 OBJECTIVE" over a diamond, the text ("5 CLOSE PASSES", from `LegObjectives.label`, in the units setting) and the progress ("3/5"). It is read from the feed: `objective`, `objective_progress` / `objective_target` (0 = nothing to count), `objective_done` and `objective_failed`.
+    - **New objective:** it pops in (scale).
+    - **Completed:** the edge, text and icon turn gold with a tick.
+    - **Failed ("no X" broken):** the edge and icon turn hot with a cross, and the text reads FAILED.
+    - **After completing or failing,** it holds `objective_end_hold_s`, then fades (`objective_fade_s`) and hides until the next leg.
+    - The pop and fade are scale and modulate only, so they cause no redraws. The text redraws only when the count changes.
+    - **Placement:** under the score panel. If a raised bottom-left panel needs that space, it moves under the lives and buttons. If both corners are raised (extreme control scales only), it goes centred under the toast slot.
+- **Leg toast** (`widgets/hud_leg_toast.gd`, `layout.toast`): the event stack's slot, `leg_toast_size_px.y` tall. At 125% text it still ends above 45% of the height, so the middle third stays clear. It takes no touches and lasts `leg_toast_s` (2.5 s), fading in and out with modulate only, so it draws once per crossing.
+    - **Contents:** "LEG 2 COMPLETE", BANKED (the chain banked at the line), then the items flowing over `leg_toast_item_rows` rows: NIGHT ×2, the leg bonuses with their points (already ×2), OBJECTIVE (paid at the line, or earlier in the leg from the summary's `objective_points`), LIFE RESTORED. Under a rule: "LEG 3 — <biome display name>" and the new objective. When the footer is too long, the leg text drops to the label size, then the objective does, then the place name goes.
+    - **How it fills:** the Hud starts it on `checkpoint_crossed`. The crossing's other events, which arrive in the same frame (`chain_banked` with reason checkpoint, `bonus_awarded`, `life_restored`, `leg_started`), fill the toast instead of the stack until the next `advance()`.
+    - **The stack while it shows:** `HudEventStack.muted` hides the stack. Lines keep arriving and ageing, so nothing shows up stale afterwards.
+    - **Worst case** (night, all four leg bonuses, the objective, the life): 7 items fit at 100% and 125%. The journey bonus is an 8th item at the coast crossing (WP6.5's finale); it can drop the last item.
+- **Stack messages:** `checkpoint_warning` → "CHECKPOINT 1 KM" / "CHECKPOINT 500 M" ("0.6 MI" / "0.3 MI" in miles), `night_started` → "NIGHT ×2", `dawn_started` → "DAWN", `morning_reached` → "MORNING". A night crossing's DAWN line is under the toast; the sun bar reads DAWN for the whole 6 s.
+- **Tuning:** `hud.tres` group Legs: `leg_toast_size_px`, `leg_toast_in_s` / `leg_toast_out_s`, `leg_toast_item_rows`, `objective_chip_size_px`, `objective_pop_s` / `objective_pop_from_pct`, `objective_end_hold_s` / `objective_fade_s`.
+- **Draw calls:**
+    - The chip is 2 (a plate and the label font). The toast is 3 (a plate, display and label).
+    - Measured with `hud_preview` at 1280x720 on Compatibility: idle 16 (was 14), busy 22 (was 20), night 20 (was 18). With the toast and chip up (`leg_toast`) it is 23; `objective` and `warning` are 20 each.
+    - The preview now shows an objective in every state.
+- **Preview states:** `leg_toast` (`--night=true|false`), `objective` (`--done=true`, `--failed=true`) and `warning`. The review cycle also runs crossings, warnings and objective progress.
+
+  ```
+  tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --state=leg_toast --tag=leg_toast
+  tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --state=objective --done=true --tag=objective_done
+  tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --state=warning --tag=warning
+  ```
