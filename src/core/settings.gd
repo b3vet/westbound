@@ -23,6 +23,14 @@ const DEFAULTS := {
 	&"quality_tier": &"medium",     # &"low" | &"medium" | &"high"
 	&"battery_saver": false,
 	&"text_scale": 1.0,
+	## Audio bus volumes (WP7A): linear 0..1 on top of AudioTuning's bus levels; 0 mutes
+	## the bus. audio_muted mutes everything (the M key flips it).
+	&"volume_master": 1.0,
+	&"volume_music": 1.0,
+	&"volume_sfx": 1.0,
+	&"volume_engine": 1.0,
+	&"volume_ui": 1.0,
+	&"audio_muted": false,
 }
 
 var _values := {}
