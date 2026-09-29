@@ -382,8 +382,6 @@ func test_traffic_director_passability_numbers() -> void:
 	near(tt.spawn_ahead_m, 750.0, EPS)
 	near(tt.spawn_behind_m, 150.0, EPS)
 	near(tt.despawn_behind_m, 200.0, EPS)
-	near(tt.tailgate_high_beam_distance_m, 10.0, EPS)
-	near(tt.tailgate_high_beam_s, 1.0, EPS)
 	near(tt.close_pass_horn_pct, 30.0, EPS)
 	near(tt.cut_in_brake_tap_distance_m, 10.0, EPS)
 	near(tt.blind_spot_horn_s, 3.0, EPS)

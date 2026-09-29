@@ -86,7 +86,7 @@ func populate() -> void:
 
 ## Adds one vehicle (tests that build exact layouts). NAN d = lane center.
 func add(s: float, lane: int, profile: StringName, type: StringName, v_kmh: float, v0_kmh: float = -1.0,
-		d: float = NAN) -> int:
+		d: float = NAN, flags: int = 0) -> int:
 	_rec.s = s
 	_rec.lane = lane
 	_rec.d = d
@@ -94,7 +94,7 @@ func add(s: float, lane: int, profile: StringName, type: StringName, v_kmh: floa
 	_rec.v0 = Units.kmh_to_mps(v0_kmh if v0_kmh > 0.0 else v_kmh)
 	_rec.profile_id = registry.profile_index(profile)
 	_rec.type_id = registry.type_index(type)
-	_rec.flags = 0
+	_rec.flags = flags
 	return sim.spawn(_rec)
 
 

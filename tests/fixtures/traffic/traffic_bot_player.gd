@@ -65,6 +65,18 @@ func keep_lane() -> void:
 	_next_weave = INF
 
 
+## WEAVE with a lane-change decision every [min_s, max_s] seconds (from now).
+func set_weave(min_s: float, max_s: float) -> void:
+	weave_min_s = min_s
+	weave_max_s = max_s
+	_next_weave = _clock + _rng.float_range(min_s, max_s)
+
+
+## True while the bot's own lateral move runs.
+func is_changing_lanes() -> bool:
+	return _lc_t >= 0.0
+
+
 func update(dt: float, traffic: TrafficState) -> void:
 	_clock += dt
 	var a := 0.0

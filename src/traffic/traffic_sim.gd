@@ -41,13 +41,11 @@ extends RefCounted
 ## Event kinds written to the caller's ScoreEventBuffer (slot = TrafficState slot).
 ## The Events adapter maps them to the signal of the same name.
 const KIND_HORN := &"traffic_horn"               ## tag: TAG_*; adapter adds the world position
-const KIND_HIGH_BEAMS := &"traffic_high_beams"   ## night tailgating
 const KIND_BRAKE_TAP := &"traffic_brake_tap"     ## tight cut-in ahead of the car
 const KIND_HAZARDS := &"traffic_hazards"         ## value 1 = on, 0 = off
 const TAG_BLIND_SPOT := &"blind_spot"
 const TAG_CLOSE_PASS := &"close_pass"
 const TAG_HONK := &"honk"
-const TAG_TAILGATE := &"tailgate"
 const TAG_CUT_IN := &"cut_in"
 const TAG_HIT := &"hit"
 
@@ -112,9 +110,6 @@ var _hit_brake_s: float
 var _tap_decel: float
 var _tap_s: float
 var _cut_in_m: float
-var _beam_s: float
-var _tailgate_m: float
-var _tailgate_s: float
 var _blind_m: float
 var _blind_s: float
 var _blind_frac: float
@@ -188,9 +183,7 @@ var _a_raw := PackedFloat64Array()     # IDM acceleration before reactions and c
 var _mobil_t := PackedFloat64Array()   # time to the next MOBIL evaluation (or cooldown)
 var _will_cancel := PackedByteArray()  # Hesitant: this signal ends in a cancel
 var _tap_t := PackedFloat64Array()     # > 0 brake tap active; counts down to -cooldown (re-armed)
-var _tail_t := PackedFloat64Array()    # > 0 time tailgated; < 0 cooldown
 var _blind_t := PackedFloat64Array()   # > 0 time with the player in the blind spot; < 0 cooldown
-var _beam_t := PackedFloat64Array()    # high-beam flash time left
 var _prev_lead_p := PackedByteArray()  # the player was this car's leader last model tick
 var _swerve_dir := PackedFloat64Array()   # hit swerve direction (+1 right, -1 left, 0 none)
 var _swerve_base := PackedFloat64Array()
@@ -239,7 +232,7 @@ func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
 	var max_len := 0.0
 	for x in _tlen:
 		max_len = maxf(max_len, x)
-	_react_range = _tailgate_m + _blind_m + max_len + _plen
+	_react_range = _blind_m + max_len + _plen
 
 	# Packed arrays are values: resize each member directly (never through a loop copy).
 	_ks.resize(_cap + 1)
@@ -257,9 +250,7 @@ func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
 	_a_raw.resize(_cap)
 	_mobil_t.resize(_cap)
 	_tap_t.resize(_cap)
-	_tail_t.resize(_cap)
 	_blind_t.resize(_cap)
-	_beam_t.resize(_cap)
 	_swerve_dir.resize(_cap)
 	_swerve_base.resize(_cap)
 	_acc_n.resize(_cap)
@@ -380,9 +371,7 @@ func spawn(rec: SpawnSource.Record) -> int:
 	_mobil_t[i] = _rng_spawn.float_range(0.0, _peval[pid])
 	_will_cancel[i] = 0
 	_tap_t[i] = -_react_cool
-	_tail_t[i] = 0.0
 	_blind_t[i] = 0.0
-	_beam_t[i] = 0.0
 	_prev_lead_p[i] = 0
 	_swerve_dir[i] = 0.0
 	_swerve_base[i] = d
@@ -660,11 +649,6 @@ func _step_lateral(i: int, out: ScoreEventBuffer) -> void:
 			_mobil_t[i] = mt
 	if (f & TrafficState.FLAG_HIT) != 0:
 		_tick_hit(i, mdt, out)
-	if _beam_t[i] > 0.0:
-		_beam_t[i] -= mdt
-		if _beam_t[i] <= 0.0:
-			_beam_t[i] = 0.0
-			state.set_flag(i, TrafficState.FLAG_HIGH_BEAM, false)
 	if absf(_ks[i] - _ps) < _react_range:
 		_tick_reactions(i, mdt, out)
 	_refresh_interval(i)
@@ -767,21 +751,8 @@ func _tick_hit(i: int, mdt: float, out: ScoreEventBuffer) -> void:
 func _tick_reactions(i: int, mdt: float, out: ScoreEventBuffer) -> void:
 	var rel := _ks[i] - _ps   # car center ahead of the player's center
 	var same_path := _klo[i] < _phi and _khi[i] > _plo
-	# Night tailgating: the player within tailgate_high_beam_distance_m behind the car.
-	var gap := rel - _khl[i] - _plen * 0.5
-	var t := _tail_t[i]
-	if t < 0.0:
-		t = minf(t + mdt, 0.0)
-	elif _headlights and same_path and gap >= 0.0 and gap < _tailgate_m:
-		t += mdt
-		if t >= _tailgate_s:
-			t = -_react_cool
-			_beam_t[i] = _beam_s
-			state.set_flag(i, TrafficState.FLAG_HIGH_BEAM, true)
-			out.push(KIND_HIGH_BEAMS, 0, 0.0, -1.0, i, gap, TAG_TAILGATE)
-	else:
-		t = 0.0
-	_tail_t[i] = t
+	# No night-tailgating high beams (owner decision D8): FLAG_HIGH_BEAM stays defined for
+	# later use (the player's manual high beams), but the sim never sets it.
 	# Blind spot: one lane over, the player's center up to blind_spot_behind_m behind the car's.
 	var bt := _blind_t[i]
 	if bt < 0.0:
@@ -1135,9 +1106,6 @@ func _cache_tuning() -> void:
 	_tap_decel = t.brake_tap_decel_mps2
 	_tap_s = t.brake_tap_s
 	_cut_in_m = t.cut_in_brake_tap_distance_m
-	_beam_s = t.high_beam_flash_s
-	_tailgate_m = t.tailgate_high_beam_distance_m
-	_tailgate_s = t.tailgate_high_beam_s
 	_blind_m = t.blind_spot_behind_m
 	_blind_s = t.blind_spot_horn_s
 	_blind_frac = t.blind_spot_horn_frac()

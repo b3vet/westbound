@@ -124,7 +124,7 @@ func test_tuning_sim_fields_and_invariants() -> void:
 			"lane_split_max_traffic_kmh", "lane_split_max_speed_kmh", "lane_split_scan_m",
 			"lane_split_clearance_m", "lane_split_player_lateral_mps", "lane_split_player_range_m",
 			"hit_swerve_m", "hit_swerve_s", "hit_brake_decel_mps2", "hit_brake_s", "brake_tap_decel_mps2",
-			"brake_tap_s", "high_beam_flash_s", "blind_spot_behind_m", "blind_spot_horn_pct",
+			"brake_tap_s", "blind_spot_behind_m", "blind_spot_horn_pct",
 			"reaction_cooldown_s"]:
 		near(float(tt.get(f)), float(d.get(f)), 1e-12, "traffic.tres %s" % f)
 	eq(tt.far_tick_ratio(), 4, "120 / 30 Hz")
@@ -550,26 +550,25 @@ func test_lane_splitting_rule_checks() -> void:
 
 # ---------------------------------------------------------------- Reactions to the player
 
-func test_night_tailgating_flashes_high_beams() -> void:
-	for night: bool in [false, true]:
-		var sc := _scene(30, 3, 100.0, 2)
-		sc.bot.follow = false
-		sc.sim.set_headlights(night)
-		var car := sc.add(1000.0, 2, &"commuter", &"sedan", 100.0, 100.0)
-		sc.bot.state.s = 1000.0 - 8.0 - (4.8 + sc.bot.length_m) * 0.5
-		var flashed_at := -1.0
-		for k in roundi(1.5 / DT):
-			sc.tick()
-			if flashed_at < 0.0 and sc.sim.state.has_flag(car, TrafficState.FLAG_HIGH_BEAM):
-				flashed_at = sc.time
-		if night:
-			eq(sc.event_counts.get(TrafficSim.KIND_HIGH_BEAMS, 0), 1, "one flash")
-			ge(flashed_at, t.traffic.tailgate_high_beam_s, "after 1 s of tailgating")
-			for k in roundi(1.0 / DT):
-				sc.tick()
-			check(not sc.sim.state.has_flag(car, TrafficState.FLAG_HIGH_BEAM), "flash ends")
-		else:
-			eq(sc.event_counts.get(TrafficSim.KIND_HIGH_BEAMS, 0), 0, "day: no flash")
+## Owner decision D8: no automatic night-tailgating high beams. The player tailgating a
+## car at night (8 m behind, 3 s) sets no FLAG_HIGH_BEAM and emits nothing but the
+## reactions that exist; a record's own FLAG_HIGH_BEAM is kept (later: set pieces).
+func test_no_automatic_high_beams_at_night() -> void:
+	var sc := _scene(30, 3, 100.0, 2)
+	sc.bot.follow = false
+	sc.sim.set_headlights(true)
+	var car := sc.add(1000.0, 2, &"commuter", &"sedan", 100.0, 100.0)
+	sc.bot.state.s = 1000.0 - 8.0 - (4.8 + sc.bot.length_m) * 0.5
+	var flagged := 0
+	for k in roundi(3.0 / DT):
+		sc.tick()
+		if sc.sim.state.has_flag(car, TrafficState.FLAG_HIGH_BEAM):
+			flagged += 1
+	eq(flagged, 0, "the sim never sets FLAG_HIGH_BEAM")
+	eq(sc.event_counts.get(&"traffic_high_beams", 0), 0, "no high-beam event")
+	check(sc.sim.state.has_flag(car, TrafficState.FLAG_HEADLIGHTS), "headlights on at night")
+	var lit := sc.add(1500.0, 0, &"commuter", &"sedan", 130.0, 130.0, NAN, TrafficState.FLAG_HIGH_BEAM)
+	check(sc.sim.state.has_flag(lit, TrafficState.FLAG_HIGH_BEAM), "a record's own FLAG_HIGH_BEAM is kept")
 
 
 func test_tight_cut_in_brake_tap() -> void:
