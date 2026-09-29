@@ -14,6 +14,12 @@ extends Control
 ## FOREVER / CANCEL). Everything talks to a NetSession (NetSession.current unless
 ## bound) and follows its signals; nothing here blocks the game.
 ##
+## N9.2: a tab row on top (ACCOUNT / FRIENDS / CREW, shown when a session exists) swaps
+## this view for the FriendsPanel or the CrewPanel in the same area, with the page
+## controls at the row's right end; REPORT on either opens the shared ReportDialog over
+## the area. The social screens live here rather than as a pause-menu button, so the pause
+## menu's column stays as it is (N7.2 adds LEADERBOARDS there).
+##
 ## Touch: the buttons are ScreenButtons (BaseButton: emulated mouse events, so raw touch
 ## ids never index anything) at least touch_target_px tall; the text field too. While
 ## the field has focus the run's PlayerInput stops reading keys (typing "P" must not
@@ -42,6 +48,12 @@ const TEXT_SAVED := "Name saved."
 const TEXT_DELETING := "Deleting..."
 const TEXT_DELETED := "Account deleted from the server and this device."
 const TEXT_RENAME_HINT := "3–16 characters. One rename every 30 days."
+const TEXT_TAB_ACCOUNT := "ACCOUNT"
+const TEXT_TAB_FRIENDS := "FRIENDS"
+const TEXT_TAB_CREW := "CREW"
+const TEXT_TAB_NEW := "%d NEW"
+
+enum View { ACCOUNT, FRIENDS, CREW }
 
 ## Status chip and note per NetSession.Status.
 const STATUS_LABEL := {
@@ -74,8 +86,16 @@ const SELECTION_A := 0.35   # lint: allow-number look
 var style: HudStyle
 var tuning: HudTuning
 var session: NetSession
-## The run's input hub: its key reading pauses while the name field has focus.
-var hub: PlayerInput
+## The run's input hub: its key reading pauses while a text field has focus.
+var hub: PlayerInput:
+	set(value):
+		hub = value
+		if friends != null:
+			friends.hub = value
+			crew.hub = value
+## The social client (null: NetSocialClient.of the session when a tab opens).
+var social: NetSocialClient
+var view: View = View.ACCOUNT
 var confirming: bool = false
 var busy: bool = false
 
@@ -86,7 +106,7 @@ var tag_text: ScreenText
 var status_text: ScreenText
 var status_note: ScreenText
 var rename_caption: ScreenText
-var name_edit: LineEdit
+var name_edit: SocialField
 var save_button: ScreenButton
 var rename_note: ScreenText
 var retry_button: ScreenButton
@@ -101,6 +121,10 @@ var confirm_text_2: ScreenText
 var confirm_button: ScreenButton
 var cancel_button: ScreenButton
 var delete_note: ScreenText
+var tabs: Array[ScreenButton] = []
+var friends: FriendsPanel
+var crew: CrewPanel
+var report: ReportDialog
 
 var _keys_muted: bool = false
 var _area: Rect2 = Rect2()
@@ -119,11 +143,9 @@ func _init() -> void:
 	status_text = _text("", ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.ACCENT)
 	status_note = _text("", ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.MUTED)
 	rename_caption = _text(TEXT_RENAME, ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.MUTED)
-	name_edit = LineEdit.new()
+	name_edit = SocialField.new()
 	name_edit.name = "NameEdit"
 	name_edit.placeholder_text = TEXT_PLACEHOLDER
-	name_edit.context_menu_enabled = false
-	name_edit.select_all_on_focus = true
 	name_edit.text_submitted.connect(func(_t: String) -> void: save())
 	name_edit.focus_entered.connect(_mute_keys.bind(true))
 	name_edit.focus_exited.connect(_mute_keys.bind(false))
@@ -145,6 +167,23 @@ func _init() -> void:
 	confirm_button = _button(TEXT_DELETE_FOREVER, ScreenButton.Kind.DANGER, confirm_delete)
 	cancel_button = _button(TEXT_CANCEL, ScreenButton.Kind.NORMAL, cancel_delete)
 	delete_note = _text("", ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.MUTED)
+	var labels: Array[String] = [TEXT_TAB_ACCOUNT, TEXT_TAB_FRIENDS, TEXT_TAB_CREW]
+	for i in labels.size():
+		var b := _button(labels[i], ScreenButton.Kind.OPTION, show_view.bind(i))
+		b.name = "Tab" + labels[i].capitalize()
+		tabs.append(b)
+	friends = FriendsPanel.new()
+	friends.visible = false
+	friends.report_requested.connect(_open_report)
+	add_child(friends)
+	crew = CrewPanel.new()
+	crew.visible = false
+	crew.report_requested.connect(_open_report)
+	add_child(crew)
+	report = ReportDialog.new()
+	report.closed.connect(_on_report_closed)
+	report.visibility_changed.connect(_on_report_visibility)
+	add_child(report)
 
 
 func _text(value: String, face: ScreenText.Face, px: int, ink: ScreenText.Ink) -> ScreenText:
@@ -174,6 +213,9 @@ func setup(s: HudStyle, t: HudTuning) -> void:
 			(c as ScreenButton).size_px = t.font_screen_body_px
 		elif c is ScreenPanel:
 			(c as ScreenPanel).setup(s)
+	friends.setup(s, t)
+	crew.setup(s, t)
+	report.setup(s, t)
 	_style_edit()
 	refresh()
 
@@ -214,10 +256,14 @@ func _on_session_signal(_a: Variant = null) -> void:
 	refresh()
 
 
-## Shows the panel fresh (no confirm step, no old messages).
+## Shows the panel fresh (the ACCOUNT tab, no confirm step, no old messages).
 func open() -> void:
 	if session == null:
 		bind(_session())
+	view = View.ACCOUNT
+	report.visible = false
+	friends.visible = false
+	crew.visible = false
 	confirming = false
 	rename_note.text = ""
 	delete_note.text = ""
@@ -298,6 +344,46 @@ func new_account() -> void:
 	refresh()
 
 
+## Switches the tab (View): ACCOUNT, FRIENDS or CREW. The social tabs load from the
+## server as they open.
+func show_view(v: int) -> void:
+	view = v as View
+	report.visible = false
+	var c := _social()
+	friends.bind(c)
+	crew.bind(c)
+	friends.hub = hub
+	crew.hub = hub
+	friends.visible = view == View.FRIENDS
+	crew.visible = view == View.CREW
+	if view == View.FRIENDS:
+		friends.open()
+	elif view == View.CREW:
+		crew.open()
+	refresh()
+
+
+## The session's social client (or the injected one).
+func _social() -> NetSocialClient:
+	if social != null:
+		return social
+	return NetSocialClient.of(_session())
+
+
+func _open_report(p: NetSocialPlayer, context: Dictionary) -> void:
+	report.open_for(_social(), p.account_id, p.full_name, context)
+
+
+## The dialog covers the tab's area: the tab's panel hides under it.
+func _on_report_visibility() -> void:
+	friends.visible = view == View.FRIENDS and not report.visible
+	crew.visible = view == View.CREW and not report.visible
+
+
+func _on_report_closed(_sent: bool) -> void:
+	refresh()
+
+
 func _note(t: ScreenText, value: String, ink: ScreenText.Ink) -> void:
 	t.text = value
 	t.set_ink(ink)
@@ -347,7 +433,32 @@ func refresh() -> void:
 	delete_note.visible = not delete_note.text.is_empty()
 	var nt: NetTuning = s.tuning if s != null else null
 	name_edit.max_length = nt.display_name_max_chars if nt != null else 0
+	name_edit.net_tuning = nt
+	var tabbed := s != null
+	for i in tabs.size():
+		tabs[i].visible = tabbed
+		tabs[i].selected = i == int(view)
+	var c := social if social != null else (NetSocialClient.of(s) if tabbed else null)
+	var waiting := c.incoming.size() if c != null else 0
+	tabs[View.FRIENDS].note = TEXT_TAB_NEW % waiting if waiting > 0 else ""
+	if not tabbed:
+		view = View.ACCOUNT
+	var acct := view == View.ACCOUNT
+	for ci: CanvasItem in [card, caption, name_text, tag_text, status_text, status_note, link_caption,
+			apple_button, google_button]:
+		ci.visible = acct
+	if not acct:
+		for ci in _account_items():
+			ci.visible = false
 	_layout()
+
+
+## The ACCOUNT tab's own widgets.
+func _account_items() -> Array[CanvasItem]:
+	return [card, caption, name_text, tag_text, status_text, status_note, rename_caption, name_edit,
+			save_button, rename_note, retry_button, new_account_button, link_caption, apple_button,
+			google_button, account_caption, delete_button, confirm_text_1, confirm_text_2, confirm_button,
+			cancel_button, delete_note]
 
 
 func _note_quiet(t: ScreenText, value: String, ink: ScreenText.Ink) -> void:
@@ -420,7 +531,22 @@ func _layout() -> void:
 	var cw := (_area.size.x - gap * 2.0) * 0.5
 	var lx := _area.position.x
 	var rx := lx + cw + gap * 2.0
-	var y := _area.position.y
+	var top := _area.position.y
+	if tabs[0].visible:
+		var tx := lx
+		for b in tabs:
+			var w := SocialUi.button_width(b, tuning)
+			_place(b, Vector2(tx, top), Vector2(w, th))
+			tx += w + g
+		var header := Rect2(tx + g, top, _area.end.x - tx - g, th)
+		top += th + gap
+		var body := Rect2(lx, top, _area.size.x, _area.end.y - top)
+		friends.layout(body, header)
+		crew.layout(body, header)
+		report.layout(body)
+		if view != View.ACCOUNT:
+			return
+	var y := top
 	# Player card.
 	var cs := caption.get_combined_minimum_size()
 	var ns := name_text.get_combined_minimum_size()
@@ -461,7 +587,7 @@ func _layout() -> void:
 		y += th + g
 	_place(rename_note, Vector2(lx, y), Vector2(cw, rename_note.get_combined_minimum_size().y))
 	# Right column: linking (coming soon), then the account's deletion.
-	var ry := _area.position.y
+	var ry := top
 	var ls := link_caption.get_combined_minimum_size()
 	_place(link_caption, Vector2(rx, ry), ls)
 	ry += ls.y

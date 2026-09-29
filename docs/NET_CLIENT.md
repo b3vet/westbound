@@ -457,14 +457,6 @@ Once per account, the first time it is online: `POST /runs/legacy` with the loca
 - Pages are cached for `boards_cache_s` (30 s; the server caches 60 s); failures are not cached. One request per page is out at a time. Pull to refresh forces a read at most every `boards_refresh_min_s`.
 - `report(account_id, reason, board, period, run_id)`: `POST /reports` with `reason` `cheating` or `offensive_name` and `context {"source": "leaderboard", board, period, run_id}`. `block(account_id)`: `POST /blocks`, then the cached friends views are dropped (the friendship goes with the block). Both answer through `action_done`.
 
-### Tests
-
-| File | Covers |
-| --- | --- |
-| `tests/net/test_runs_client.gd` | The body from the real `RunStats.results` has exactly the documented keys (integers as integers, the seed's digits, the date, car, build, UUID); the receipt; Daily's date across midnight; Loop and scoreless crashes not sent; the offline queue across a relaunch with the same key; a network failure then a duplicate answer; 429 Retry-After; `build_unsupported`; refused and expired runs dropped; another account's run kept; the legacy upload once (and `already_uploaded`, network failure, nothing to send) |
-| `tests/net/test_boards_client.gd` | The path of every board × period × view; parsing (markers, `me`, crew rows); signed out; cache, force and single flight; report and block bodies |
-| `tests/ui/test_leaderboards_screen.gd` | The screens (SCREENS.md → Leaderboards → Tests) |
-
 ### Tuning (`data/tuning/net.tres`, N7.2 fields)
 
 | Field | Default | Spec |
@@ -529,3 +521,125 @@ LIVE_BOARDS ok (0 failed)
 ```
 
 Every first run is a personal best on some all-time board, so the server asks for its replay and shows it as VERIFYING (`pending`) until N8 verifies it. The preview's live snaps then added a fourth (the preview's own `Net` account): its results read `#1 THIS WEEK · #1 ALL TIME / #4 DISTANCE`, and the Journey board showed the four drivers with the player's row highlighted and Road Runner's `NR` crew tag. The snap run's account files (`user://net/session_<hash>.dat`, `runs_<hash>.dat`) are per server; delete them after.
+
+| `tests/net/test_social_client.gd` | Every call's route and JSON; request errors (unknown and blocked read the same, self, caps, duplicates) and 429 mapping; accept / decline / cancel / remove; blocks; presence by polling (interval, watch on/off, 429 back-off) and over a WebSocket (`tests/net/fake_server.gd` on the loopback link: subscribe after Welcome, snapshot and updates, no polling while live, unknown friend → list refresh, `internal` and a dead link → polling, detach unsubscribes, resubscribe after reconnect); crew create / join / member actions / disband / leave with errors; the standing; the role table; reports and their rate limit; offline and signed-out safety; an account change clearing the lists; friend-code validation |
+| `tests/ui/test_social_screens.gd`, `tests/ui/test_social_text_fit.gd` | The screens (docs/SCREENS.md → Social) |
+
+## Social client (N9.2)
+
+WP N9.2: friends, requests, blocks, presence, crews, the crew's Loop season standing and reports, and their screens. It implements [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Rooms, parties and matchmaking (Friends and presence, Crews (persistent)), Moderation → Report and Client changes (friends list, crew page). The server side is [`SERVER.md`](SERVER.md) → Social API; the screens are [`SCREENS.md`](SCREENS.md) → Social.
+
+| File | Class | What it is |
+| --- | --- | --- |
+| `src/net/social_client.gd` | `NetSocialClient` | Every Social API call over `NetApi`, the cached lists, presence (WebSocket and polling), player texts |
+| `src/net/social_player.gd` | `NetSocialPlayer` | A friend / request / blocked player / crew member, with presence |
+| `src/net/social_crew.gd` | `NetCrew` | A crew (`GET /crews/mine`) and the role table (`allowed_actions`) |
+| `src/net/fake_social.gd` | `NetFakeSocial` | `NetFakeAccounts` plus an in-memory Social API (tests, the snap preview) |
+| `tests/net/live_social_check.gd` | | Two accounts against a running server (below) |
+
+### NetSocialClient
+
+```gdscript
+var social := NetSocialClient.of(NetSession.current)   # one per session; null without one
+social.friends_changed.connect(redraw)                 # also presence_changed(id), blocks_changed, crew_changed, standing_changed
+var r: NetApiResult = await social.send_request("LoneWolf#0007")
+if not r.ok: note.text = NetSocialClient.error_text(r)
+```
+
+| Call | Route | Body |
+| --- | --- | --- |
+| `refresh_friends()` | `GET /friends` | (single flight; a call during a refresh runs it once more) |
+| `send_request(code)` | `POST /friends/requests` | `{"full_name": "name#1234"}` (trimmed; a malformed code fails locally with `invalid_full_name`) |
+| `accept(request_id)` / `decline(request_id)` / `cancel_request(request_id)` | `POST /friends/requests/{id}/accept` / `/decline` | none |
+| `remove_friend(account_id)` | `DELETE /friends/{account_id}` | |
+| `refresh_blocks()` / `block(id)` / `unblock(id)` | `GET /blocks` / `POST /blocks` / `DELETE /blocks/{id}` | `{"account_id": "42"}` |
+| `refresh_presence()` | `GET /presence` | |
+| `refresh_crew()` / `get_crew(id)` | `GET /crews/mine` (`not_in_crew` = no crew) / `GET /crews/{id}` | |
+| `create_crew(name, tag)` | `POST /crews` | `{"name", "tag"}` (trimmed, tag upper case; lengths checked locally) |
+| `join_crew(code)` | `POST /crews/join` | `{"invite_code"}` (spaces and dashes dropped, upper case) |
+| `leave_crew()`, `disband()`, `rotate_invite_code()` | `POST /crews/{id}/leave`, `DELETE /crews/{id}`, `POST /crews/{id}/invite-code` | |
+| `kick` / `promote` / `demote` / `transfer(account_id)` | `POST /crews/{id}/kick` ... | `{"account_id"}` |
+| `refresh_standing()` | `GET /boards/loop_crew?view=around_me&limit=1` | `me` → `standing_rank` / `standing_score` / `standing_period` |
+| `report(target, reason, context)` | `POST /reports` | `{"target_account_id", "reason", "context"}` (context left out when empty; reasons: `REPORT_REASONS`, the server's six) |
+
+- **Offline-safe.** Without a server every call returns `offline`, without a signed-in session `not_signed_in`, both without a request; failures are values, never errors. A different account on the session clears the cached lists.
+- **Errors.** `error_text(r)` maps every Social API code to a short line (`player_not_found` → "No player with that code.", the same when a block stands either way; the caps; the crew name / tag filter and rule codes; `not_permitted` → "Your role can't do that."), a 429 to "Too many tries. Try again in 10 min." (`error_text(r, true)`: "Report limit reached. Try again in 24 h."), and the rest to `NetSession.error_text`. `NetApi` itself retries a 429 whose Retry-After is at most 30 s.
+- **Reports.** A 429 is remembered: `report_wait_s()` counts down to the Retry-After, and the dialog keeps SEND off until then.
+- **Join seam (N5).** `NetSocialClient.join_handler: Callable` (`func(friend: NetSocialPlayer)`). The friends list shows JOIN for a friend `in_room` and `joinable`, disabled (SOON) until it is set.
+
+### Presence
+
+Both sources merge the same way: later entries replace earlier ones (`apply_presence`), the list re-sorts (in a room, online, offline; by name), and an entry for someone not on the list (a request just accepted elsewhere) refreshes the list on the next `poll()`.
+
+- **WebSocket.** `attach_lobby(client: NetClient)` sends `lobby_command.presence_subscribe {enabled: true}` whenever that client is READY (at once, and again after every Welcome, so a reconnect resubscribes), and applies every `lobby_event.presence` (the snapshot, then single updates; `room_id` 0 = none). `detach_lobby()` sends `enabled: false`. The gateway's non-fatal `internal` (it could not read the friends) and a lost socket drop back to polling at once. **N5's always-on lobby connection plugs in with one `attach_lobby` call**; the game has no connection outside rooms yet, so today presence comes from polling.
+- **Polling.** While a screen watches (`watch(true)`: the friends list while it is visible) and no subscription is live, `poll()` (every frame from the panel) calls `GET /presence` every `social_presence_poll_s` (15 s); a 429 waits its Retry-After. Hidden screen: no polls.
+
+### On-screen keyboards
+
+`SocialField` (the friend code, crew name, tag and invite code, and now the rename field): native iOS / Android open the OS keyboard from `LineEdit` (`virtual_keyboard_enabled`). The web export has `html/experimental_virtual_keyboard=false`, so `DisplayServer` has no virtual keyboard there; and even with it on, Godot focuses its hidden input a frame after the tap, outside the gesture, which iOS Safari ignores. So on a touch-screen web page (`NetTuning.web_text_prompt`) a tap on the field opens the browser's `window.prompt` (through `NetJsBridge`; always shows the keyboard, including iOS Safari) and fills the field; SEND / CREATE / JOIN then work as usual. Desktop web and native type in place. While a field has focus the run's `PlayerInput` reads no keys. COPY uses `navigator.clipboard` (with an `execCommand('copy')` fallback) inside the tap on the web, `DisplayServer.clipboard_set` natively; SHARE shows only where `navigator.share` exists (mobile browsers). Native share sheets need a plugin (not in v1).
+
+### Tuning (`data/tuning/net.tres`, N9.2 fields)
+
+| Field | Default | Spec |
+| --- | --- | --- |
+| `social_presence_poll_s` | 15 | not in spec |
+| `friend_code_max_chars` | 21 | name (16) + `#` + 4 digits |
+| `crew_name_min_chars` / `crew_name_max_chars` | 3 / 24 | SERVER.md → Crews |
+| `crew_tag_min_chars` / `crew_tag_max_chars` | 2 / 4 | Crews: a 2–4 character tag |
+| `crew_code_min_chars` / `crew_code_max_chars` | 6 / 16 | the server's `crew_invite_code_len` range |
+| `crew_board_around` | 1 | not in spec (the standing's `limit`) |
+| `social_note_s` | 3 | not in spec ("Code copied." note) |
+| `web_text_prompt` | true | not in spec |
+
+### Tests
+
+| File | Covers |
+| --- | --- |
+| `tests/net/test_runs_client.gd` | The body from the real `RunStats.results` has exactly the documented keys (integers as integers, the seed's digits, the date, car, build, UUID); the receipt; Daily's date across midnight; Loop and scoreless crashes not sent; the offline queue across a relaunch with the same key; a network failure then a duplicate answer; 429 Retry-After; `build_unsupported`; refused and expired runs dropped; another account's run kept; the legacy upload once (and `already_uploaded`, network failure, nothing to send) |
+| `tests/net/test_boards_client.gd` | The path of every board × period × view; parsing (markers, `me`, crew rows); signed out; cache, force and single flight; report and block bodies |
+| `tests/ui/test_leaderboards_screen.gd` | The screens (SCREENS.md → Leaderboards → Tests) |
+
+### Live check
+
+`tests/net/live_social_check.gd` runs two throwaway device accounts (memory stores) against a running server; it refuses the production host.
+
+```sh
+# the server (dev env), from a scratch directory, on free ports
+WB_SERVER__ENV=dev WB_SERVER__BIND=127.0.0.1:18592 WB_METRICS__BIND=127.0.0.1:19592 \
+    <target>/debug/westbound-server --config dev.toml &
+tools/godot.sh --headless --path . --script res://tests/net/live_social_check.gd -- http://127.0.0.1:18592 [--keep]
+```
+
+**Run for N9.2** against `westbound-server` at `5ba93fe` (N9.1 social server), dev env, 2026-09-29:
+
+```
+server http://127.0.0.1:18592/api/v1
+accounts             ok    A WildMirage#2741, B DesertRover#8919
+request              ok    A -> DesertRover#8919: pending
+incoming             ok    B sees WildMirage#2741
+accept               ok    friends both ways
+unknown code         ok    No player with that code.
+ws subscribe         ok    snapshot: B offline
+ws online            ok    A saw B come online (2 presence events)
+poll presence        ok    B's GET /presence: A online
+ws offline           ok    A saw B go offline
+create crew          ok    Live Crew 6759 [L59] code QSCY4SXT
+second crew refused  ok    You're already in a crew.
+bad invite code      ok    That invite code doesn't work.
+join crew            ok    B is a member of Live Crew 6759
+member can't kick    ok    Your role can't do that.
+promote + demote     ok
+rotate code          ok    QSCY4SXT -> KW89P24S
+crew tag on a board  ok    journey/all: WildMirage#2741 [L59]
+season standing      ok    loop_crew 2026-09: not on the board yet
+report               ok    report 1
+block                ok    A's request now reads: No player with that code.
+unblock              ok
+leave crew           ok
+delete               ok    both accounts deleted
+LIVE_SOCIAL ok (0 failed)
+```
+
+- A's WebSocket subscription got the snapshot (B offline: an HTTP-only account has no gateway session), then B's `online` when B's gateway session started, then `offline` when B closed it; the server logged `session established ... account=2` and `websocket closed ... reason=ClientClosed`.
+- The crew tag reached a board through A's legacy Journey best (`POST /runs/legacy`); Loop crew entries need multiplayer runs (N6), so the standing reads "not on the board yet".
+- The server logged `crew created account_id=1 crew_id=1` and `player reported report_id=1 reason="other"`.
