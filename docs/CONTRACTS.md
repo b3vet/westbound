@@ -103,7 +103,7 @@ The generator must keep radius ≥ 1,200 m, grade ≤ 5%, C1 continuity, and the
 - **Geometry:** clothoid transitions give continuous curvature; vertical curves are parabolic. The heading stays within ±[15°, 30°] of the sun (world heading 0). The road switches sides every 15–40 km in one R = 1200 m bend.
 - **Extra tick-safe queries:** `heading_at(s)`, `elevation_at(s)`, `grade_at(s)`.
 - **Lane hook:** `schedule_lane_count(s_start, count, taper_m)`, scheduled in increasing s.
-- **Features:** `features_in` only reports generated ranges, so call `ensure_generated_to(s1)` first. Checkpoint `tag` (the landmark style) is filled in by the biome director.
+- **Features:** `features_in` only reports generated ranges, so call `ensure_generated_to(s1)` first. Checkpoint `tag` (the landmark style) is filled in by the biome director: `BiomeDirector.tag_checkpoints(features)` / `checkpoint_style()`, cycling `BiomeDef.landmark_styles` by leg (WP5.5).
 
 ## 4. Vehicles
 
@@ -286,7 +286,7 @@ These are resource classes only. Their `.tres` files come from later WPs. Class 
 | `CarDef` (`src/vehicle/car_def.gd`) | `data/cars/*.tres` | `id`, `display_name`, `model_scene_path`, `top_speed_kmh` (240–300), `zero_to_200_s`, `braking_mps2`, `handling_scale` (0.9–1.1), `boost_capacity_scale`, body dims, `mass_kg`, `gear_count`, paint and rim defaults and options. WP1.5 adds physics coefficients. |
 | `VehicleType` (`src/vehicle/vehicle_type.gd`) | `data/vehicle_types/*.tres` | `id`, `length_m/width_m/height_m` (truck 16 m, bus 12 m), `blocks_sightlines`, `is_motorbike`, `mass_kg`, `grip_scale`, `lane_change_time_scale`, `shove_strength`, `durability`, `allowed_profiles`, `model_scene_paths` |
 | `DriverProfile` (`src/traffic/driver_profile.gd`) | `data/driver_profiles/*.tres` (8) | Desired speed range (km/h, from the spec's driver-types table); IDM `a_max`, `b_comfort`, `T`, `s0`, `δ = 4`; MOBIL `p`, `Δa_th`, `a_bias` (keep right), `b_safe`; `signal_time_s`; move time range; `lane_change_frequency_scale`; `cancel_probability` (Hesitant ~0.2); `keep_right`; `lane_split` (motorbike); `min_leg` (Hesitant 3) |
-| `BiomeDef` (`src/road/biome_def.gd`) | `data/biomes/*.tres` | `lane_count`, curve/crest/tunnel frequency scales, typed prop sets (`scatter_props: Array[RoadsideProp]`, `field_grid: FieldGridDef`), ground/verge colors, tint offsets, horizon cards, traffic palette, set-piece ids and weights, `landmark_style` (`LANDMARK_*`) |
+| `BiomeDef` (`src/road/biome_def.gd`) | `data/biomes/*.tres` | `lane_count`, curve/crest/tunnel frequency scales, typed prop sets (`scatter_props: Array[RoadsideProp]`, `field_grid: FieldGridDef`), ground/verge colors, tint offsets, horizon cards, traffic palette, set-piece ids and weights, `landmark_style` (`LANDMARK_*`), `landmark_styles` (cycled per leg; overrides `landmark_style` when non-empty) |
 | `SetPieceDef` (`src/traffic/set_piece_def.gd`) | `data/set_pieces/*.tres` | `kind` (8 kinds), `warning` style, `warning_sign_distances_m` (merge 500/250, road works 400, toll 1000/500), length, lanes closed or open, `lane_count_override`, `drops_right_lane`, `hazards`, `allows_hard_decel` (needs ≥ 300 m warning), `min_leg`, `weight` |
 
 Global traffic rules apply on top of every profile: the 6 m/s² clamp, the 0.5 s signal floor, the player `b_safe` of 2 m/s², no-ambush, and the density caps (`TrafficTuning`, `DirectorTuning`).
