@@ -32,7 +32,11 @@ var min_speed: Rect2 = Rect2()
 var boost: Rect2 = Rect2()
 ## WP5.2: the leg objective chip, under the score panel (left-anchored like it); under
 ## the lives and buttons instead when a raised bottom-left panel needs that space.
+## WP5.6: this is the slot for the widest chip (objective_chip_max_width_px); the chip
+## itself is as wide as its content (objective_fit()), anchored to the slot's side.
 var objective: Rect2 = Rect2()
+## Where a narrower chip sits in the slot: 0 left, 0.5 centred, 1 right.
+var objective_anchor: float = 0.0
 ## WP5.2: the leg toast. It takes the event stack's slot (the stack hides while it
 ## shows): the stack's width, and as tall as leg_toast_size_px (never into the middle
 ## third). It overlaps the stack by design, so it is not in rects().
@@ -63,7 +67,9 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	var top := safe.position.y + m
 
 	score = Rect2(Vector2(safe.position.x + m, top), hud.score_size_px * ts)
-	_objective_left = Rect2(Vector2(score.position.x, score.end.y + gap), hud.objective_chip_size_px * ts)
+	var chip := Vector2(maxf(hud.objective_chip_max_width_px, hud.objective_chip_size_px.x),
+			hud.objective_chip_size_px.y) * ts
+	_objective_left = Rect2(Vector2(score.position.x, score.end.y + gap), chip)
 
 	var button := hud.button_size_px * ts
 	camera = Rect2(Vector2(safe.end.x - m - button.x, top), button)
@@ -91,7 +97,16 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	speedo = Rect2(Vector2(block.position.x, block.end.y - sp.y), sp)
 	boost = _place_bottom(hud.boost_size_px * ts, false)
 	boost_raised = _raised
-	objective = _place_objective(hud.objective_chip_size_px * ts)
+	objective = _place_objective(chip)
+	_widen_chain(sun_size.x)
+
+
+## The objective chip at `width` (its content width): clamped between the chip's
+## smallest and the slot's width, anchored in the slot.
+func objective_fit(width: float) -> Rect2:
+	var w := clampf(width, minf(_hud.objective_chip_size_px.x * ts, objective.size.x), objective.size.x)
+	var x := objective.position.x + (objective.size.x - w) * objective_anchor
+	return Rect2(Vector2(x, objective.position.y), Vector2(w, objective.size.y))
 
 
 ## Every HUD rect (tests check them against the touch controls and each other).
@@ -171,15 +186,35 @@ func _place_bottom(size: Vector2, left: bool) -> Rect2:
 func _place_objective(size: Vector2) -> Rect2:
 	var gap := _hud.spacing_grid_px
 	var left := Rect2(_objective_left.position, size)
+	objective_anchor = 0.0
 	if _clear_of_bottom(left.grow(gap)):
 		return left
 	var right := Rect2(Vector2(camera.end.x - size.x, maxf(lives.end.y, high_beam.end.y) + gap), size)
 	if _clear_of_bottom(right.grow(gap)) and not right.intersects(middle_column()):
+		objective_anchor = 1.0
 		return right
 	var centre := Rect2(Vector2(stack.get_center().x - size.x * 0.5, toast.end.y + gap), size)
 	if _clear_of_bottom(centre.grow(gap)):
+		objective_anchor = 0.5
 		return centre
 	return left
+
+
+## WP5.6: the chain row spans the sun bar above it (when that is wider) unless a raised
+## bottom panel or the objective chip needs the room beside it, so a six-digit chain
+## and its CHAIN label fit its half. The stack and the toast keep the tuned row width.
+func _widen_chain(width: float) -> void:
+	if width <= chain.size.x:
+		return
+	var wide := Rect2(Vector2(chain.get_center().x - width * 0.5, chain.position.y), Vector2(width, chain.size.y))
+	if not safe.encloses(wide):
+		return
+	for r: Rect2 in [score, lives, pause, camera, high_beam, min_speed, speedo, boost, objective]:
+		if wide.intersects(r):
+			return
+	if _hits(wide, _hud.pedal_clearance_px):
+		return
+	chain = wide
 
 
 func _clear_of_bottom(r: Rect2) -> bool:

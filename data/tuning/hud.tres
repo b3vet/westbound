@@ -88,6 +88,7 @@ leg_toast_in_s = 0.18
 leg_toast_out_s = 0.45
 leg_toast_item_rows = 3
 objective_chip_size_px = Vector2(244, 50)
+objective_chip_max_width_px = 280.0
 objective_pop_s = 0.25
 objective_pop_from_pct = 80.0
 objective_end_hold_s = 2.0

@@ -136,6 +136,10 @@ extends Resource
 @export var leg_toast_item_rows: int = 3
 ## The leg objective chip, under the score panel (left-anchored, like the score).
 @export var objective_chip_size_px: Vector2 = Vector2(244.0, 50.0)
+## WP5.6: the chip grows to fit its text and progress up to this width (canvas px at
+## 100% text; x of objective_chip_size_px is the narrowest). The layout keeps this much
+## room for it.
+@export var objective_chip_max_width_px: float = 280.0   # not in spec
 ## A new objective pops in (scale from this share of full size)...
 @export var objective_pop_s: float = 0.25
 @export var objective_pop_from_pct: float = 80.0

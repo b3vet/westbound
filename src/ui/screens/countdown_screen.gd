@@ -36,12 +36,16 @@ var gyro: bool = false
 var holding: bool = false
 ## Steps in a countdown (hud.countdown_from): how many calibration segments light.
 var steps_total: int = 3
+## The HUD's panels (canvas rects, HudLayout.rects()) the info column keeps clear of;
+## RunScreens fills it.
+var hud_rects: Array[Rect2] = []
 ## Recalibrations requested since the screen was built (tests).
 var recalibrations: int = 0
 
 var _number: ScreenText
 var _leg_chip: ScreenPanel
 var _leg: ScreenText
+var _place: ScreenText
 var _objective: ScreenText
 var _card: ScreenPanel
 var _card_title: ScreenText
@@ -93,6 +97,8 @@ func _init() -> void:
 	add_child(_leg_chip)
 	_leg = ScreenText.make("", ScreenText.Face.LABEL, 20, ScreenText.Ink.TEXT)
 	_leg_chip.add_child(_leg)
+	_place = ScreenText.make("", ScreenText.Face.LABEL, 16, ScreenText.Ink.MUTED)
+	_leg_chip.add_child(_place)
 	_objective = ScreenText.make("", ScreenText.Face.LABEL, 13, ScreenText.Ink.ACCENT)
 	_leg_chip.add_child(_objective)
 	_number = ScreenText.make("", ScreenText.Face.DISPLAY, 190, ScreenText.Ink.TEXT)
@@ -137,11 +143,19 @@ func _restyled() -> void:
 	_layout()
 
 
-## The leg line above the number ("LEG 1 OF 8" and the leg objective, if any).
-func set_leg(leg_index: int, legs_total: int, objective: String) -> void:
+## The leg chip ("LEG 1 OF 8", the biome's name and the leg objective, each if any).
+func set_leg(leg_index: int, legs_total: int, objective: String, place_name: String = "") -> void:
 	_leg.text = TEXT_LEG % [leg_index, legs_total] if leg_index > 0 else ""
+	_place.text = place_name
 	_objective.text = objective
 	_layout()
+
+
+## The leg chip's lines as shown (tests): leg, place, objective ("" = none).
+func leg_lines() -> PackedStringArray:
+	if not _leg_chip.visible:
+		return PackedStringArray()
+	return PackedStringArray([_leg.text, _place.text, _objective.text])
 
 
 ## Gyro steering is in use: show the calibration card.
@@ -276,6 +290,7 @@ func _layout() -> void:
 	var a := safe.grow(-margin())
 	var pad := tuning.panel_padding_px * style.ts
 	var ls := _leg.get_combined_minimum_size()
+	var pls := _place.get_combined_minimum_size()
 	var os := _objective.get_combined_minimum_size()
 	var ts := _card_title.get_combined_minimum_size()
 	var tx := _card_text.get_combined_minimum_size()
@@ -285,17 +300,21 @@ func _layout() -> void:
 	var bar_h := tuning.boost_bar_height_px
 	var cw := maxf(widest, ts.x) + pad * 2.0
 	var ch := pad + ts.y + tx.y * 2.0 + g + bar_h + pad
-	# The leg chip: LEG n OF 8, the objective (if any) under it.
+	# The leg chip: LEG n OF 8, the biome's name and the objective (each if any) under it.
 	_leg_chip.visible = not _leg.text.is_empty()
+	var plh := pls.y if not _place.text.is_empty() else 0.0
 	var oh := os.y if not _objective.text.is_empty() else 0.0
-	var chip := Vector2(maxf(ls.x, os.x) + pad * 2.0, ls.y + oh + g)
+	var chip := Vector2(maxf(ls.x, maxf(pls.x, os.x)) + pad * 2.0, ls.y + plh + oh + g)
 	var col_h := (chip.y if _leg_chip.visible else 0.0) + (g * 2.0 + ch if _card.visible else 0.0)
-	var y := ny + nh * 0.5 - col_h * 0.5
+	var col_w := maxf(chip.x if _leg_chip.visible else 0.0, cw if _card.visible else 0.0)
+	var y := _clear_of_hud(Rect2(a.position.x, ny + nh * 0.5 - col_h * 0.5, col_w, col_h), a, ny + nh * 0.5)
 	_leg_chip.position = Vector2(a.position.x, y)
 	_leg_chip.size = chip
 	_leg.position = Vector2(pad, g * 0.5)
 	_leg.size = ls
-	_objective.position = Vector2(pad, g * 0.5 + ls.y)
+	_place.position = Vector2(pad, g * 0.5 + ls.y)
+	_place.size = pls
+	_objective.position = Vector2(pad, g * 0.5 + ls.y + plh)
 	_objective.size = os
 	if _leg_chip.visible:
 		y += chip.y + g * 2.0
@@ -322,6 +341,33 @@ func _layout() -> void:
 	_tap_text.size = ps
 	_tap_note.position = Vector2(pad * 2.0, _tap_text.position.y + ps.y)
 	_tap_note.size = pn
+
+
+## The info column's top: centred on the number, but clear of the HUD panels it would
+## overlap (WP5.6: at 125% text with the gyro card it ran into the objective chip).
+## Panels above the number push it down, panels below push it up; the top ones win.
+func _clear_of_hud(col: Rect2, area: Rect2, centre_y: float) -> float:
+	var g := tuning.spacing_grid_px
+	var lo := area.position.y
+	var hi := area.end.y - col.size.y
+	for r in hud_rects:
+		var rl := Rect2(r.position - position, r.size)
+		if rl.position.x >= col.end.x or rl.end.x <= col.position.x:
+			continue
+		if rl.get_center().y < centre_y:
+			lo = maxf(lo, rl.end.y + g)
+		else:
+			hi = minf(hi, rl.position.y - g)
+	return clampf(col.position.y, lo, maxf(lo, hi))
+
+
+## The leg chip's and the gyro card's rects as shown (screen coordinates; tests).
+func info_rects() -> Array[Rect2]:
+	var out: Array[Rect2] = []
+	for c: Control in [_leg_chip, _card]:
+		if c.visible:
+			out.append(Rect2(c.position, c.size))
+	return out
 
 
 ## The number's centre line (share of the safe height) and its box (ems).

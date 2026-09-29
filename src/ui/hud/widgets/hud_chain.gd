@@ -5,7 +5,9 @@ extends HudWidget
 ## tilt on the chain readout). Pulses on every scored event (a scale pop, no redraw).
 ##
 ## Drawn right-aligned to its rect's right edge, so the chain and the multiplier meet
-## at the screen's centre line.
+## at the screen's centre line. The CHAIN label sits left of the number; a number too
+## long for both (millions at the tuned row width) shows alone (WP5.6: nothing is drawn
+## outside the widget).
 
 const LABEL_CHAIN := "CHAIN"
 
@@ -61,7 +63,8 @@ func _paint() -> void:
 	var x := size.x - w
 	var gap := s.px(s.tuning.spacing_grid_px)
 	var lw := HudDraw.text_width(s.label, LABEL_CHAIN, s.size_label)
-	HudDraw.text(self, s.label, Vector2(x - gap - lw, y), LABEL_CHAIN, s.size_label, s.text,
-			s.outline_px, s.outline)
+	if x - gap - lw >= 0.0:
+		HudDraw.text(self, s.label, Vector2(x - gap - lw, y), LABEL_CHAIN, s.size_label, s.text,
+				s.outline_px, s.outline)
 	HudDraw.number(self, s.display, Vector2(x, y), _text, s.size_readout, cell, s.text,
 			s.outline_px, s.outline)
