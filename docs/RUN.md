@@ -31,7 +31,9 @@ Run (Node3D, run.gd; physics priority 50: after PlayerInput, before CameraRig)
 │   added in _ready(), in this order:
 ├─ FloatingOrigin   64-bit origin, update_focus() every tick
 ├─ BiomeDirector, RoadBuilder, Roadside, Landmarks     world nodes: setup(ctx, road, origin), update_view(s)
-├─ TrafficView      traffic rendering (its own headlight pools off: HeadlightCones draws them)
+├─ BiomeFeatures    WP6.4c: WaterRibbon, ElevatedSections, FogCards (docs/BIOMES.md → Wiring)
+├─ TrafficView      traffic rendering (its own headlight pools off: HeadlightCones draws them;
+│                   biome_director set: each new car wears the palette of the biome it appears in)
 ├─ PlayerHeadlights, HeadlightCones, StreetLampPools   night lighting (visual only)
 ├─ PlayerFx         damage look
 ├─ RunScreens       countdown, pause, crash hint, results (intents in, flow calls out)
@@ -70,7 +72,7 @@ stateDiagram-v2
 
 ## Per tick (120 Hz, fixed dt)
 
-`tick()` (from `_physics_process`, or from a test with `manual_ticks`) always integrates `VehicleTuning.physics_dt()`: slow motion changes how many ticks run per real second, never their dt (`TimeScale`). Before the state machine, `_road_ahead()` keeps the road generated a view distance plus two chunks ahead, plans legs a whole leg past that, and trims road memory every 500 m. RUNNING runs, in the CONTRACTS §4 order:
+`tick()` (from `_physics_process`, or from a test with `manual_ticks`) always integrates `VehicleTuning.physics_dt()`: slow motion changes how many ticks run per real second, never their dt (`TimeScale`). Before the state machine, `_road_ahead()` keeps the road generated a view distance plus two chunks ahead, plans legs a whole leg past that, and trims road memory every 500 m, keeping `reach_behind_m()` behind the car: the larger of the roadside's reach and the biome features' (the coast's sea level averages the road over ±1.6 km, WP6.4c). RUNNING runs, in the CONTRACTS §4 order:
 
 1. `car.tick(dt)`: the controller (`PlayerController` on the hub, or a test bot), `VehiclePhysics.step`
 2. `traffic_sim.step` (the player as participant), `director.step`, `traffic_view.capture_tick()`. The director's behind spawns ask its own pure view test, `TrafficDirector.is_visible(s, d)` ("no visible pop-in"). It uses a fixed virtual view volume, anything ahead of the player's s minus `director.behind_spawn_view_margin_m` (25 m), and never the camera. So neither the camera mode, the screen aspect nor when the engine last drew a frame can change traffic (WP4.8, orchestrator decision; `test_behind_spawn_view_check_is_camera_independent`)
@@ -89,7 +91,7 @@ COUNTDOWN only counts; CRASH steps traffic (braking) and, without the cinematic,
 1. the crash clock: `CrashSequence.advance(real_dt)` (or the fallback timer)
 2. `RunEvents.drain()`: every buffered record becomes its `Events` signal, then the change-only values (`multiplier_changed`, `chain_changed`, `boost_started` / `boost_ended`, `boost_meter_changed`)
 3. the frame-rate reactions queued by the tick: the first hit's slow-motion request; the fallback crash's `crash_started` and slow motion (the cinematic emits its own)
-4. the views: `sky.sky_t = sun.sky_t`, `update_view(s)` on the biome director, road builder, roadside, landmarks, sky and traffic view, then the night lights (headlights follow `hub.high_beam`; they switch off in the crash)
+4. the views: `sky.sky_t = sun.sky_t`, `update_view(s)` on the biome director, road builder, roadside, landmarks, biome features, sky and traffic view, then the night lights (headlights follow `hub.high_beam`; they switch off in the crash)
 5. `HudFeed` (speed, sun bar, checkpoint distance, objective progress, lives, chain, multiplier, ...) and the dev stats
 
 Children process after the run, so the sky pushes its globals and the HUD reads the feed after this. The camera rig follows the car at physics priority 100.
@@ -106,6 +108,7 @@ Children process after the run, so the sky pushes its globals and the HUD reads 
 | Damage look | `PlayerFx` listens to `hit`, `ghost_started`, `ghost_ended`, `run_started`; numbers in `FeelTuning` "Damage look" | this page |
 | Night lighting | `PlayerHeadlights`, `HeadlightCones` (bound to the traffic view and both traffic states), `StreetLampPools`: `setup(ctx, road, origin)` per run, `update_view(s)` per frame | [NIGHT.md](NIGHT.md) |
 | Landmarks, signs, biomes | world nodes: `setup(ctx, road, origin)` per run, `update_view(s)` per frame | [LANDMARKS.md](LANDMARKS.md) |
+| Biome features (WP6.4c) | `BiomeFeatures`: `bind(builder, sky)` once in `_ready` (the road mesher's ground drop, the horizon's sea mask), `setup` per run before `builder.build_all_now`, `update_view(s)` per frame; retries reuse the nodes | [BIOMES.md](BIOMES.md) |
 | Leg objectives | `LegObjectives.start_leg` at each leg start, `step` / `notify_scored` per tick, `_pay_objective()` (bonus + `objective_completed`) | [CORE_LOOP.md](CORE_LOOP.md) |
 
 The HUD, screens, camera, audio, haptics and particles only listen (rule 8). `tests/integration/test_fairness.gd` checks that the camera mode, removing the HUD, the control layout, the throttle mode and the high beams leave the run's trace hash unchanged.
@@ -120,7 +123,7 @@ DEV (top-left, under the score block): row 0 DEV ±, HUD (the dev HUD), CAM; row
 
 Run hooks for tools and tests: `force_hit(source, slot, away_side)` (a contact at the next tick's collision step), `dev_teleport(s, v)` (car to `s`, traffic respawned, the leg keeps counting), `dev_reset_car()`, `set_leg_override(leg)`, `infinite_lives`, `trace_hash()` (car, traffic, scoring, lives, legs, objective, sun, stats), `manual_ticks` (tests call `tick()` and `frame()`).
 
-**Snaps:** `tools/snap.sh src/run/run.tscn --state=countdown|running|paused|results --sky_t=… --s=… --speed_kmh=… --car=0..2 --cam=… --damaged --ghost --high_beam --seed=…` (default seed `Run.SNAP_SEED`).
+**Snaps:** `tools/snap.sh src/run/run.tscn --state=countdown|running|paused|results --sky_t=… --s=… --speed_kmh=… --car=0..2 --cam=… --damaged --ghost --high_beam --seed=…` (default seed `Run.SNAP_SEED`), `--leg=N [--leg_s=M]` (M metres into leg N, default 600; negative: before its checkpoint), and since WP6.4c `--at=elevated` (the middle of the next elevated stretch), `--at=lane_ends [--at_m=150]` (before the next lane-ends sign) and `--hud=false` (no HUD, dev HUD, dev buttons or touch overlay: look reviews).
 
 ## Tests
 

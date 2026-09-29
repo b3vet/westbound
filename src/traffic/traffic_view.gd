@@ -7,8 +7,9 @@ extends Node3D
 ## World → Night lighting. Contracts: docs/CONTRACTS.md §2 (road space → world),
 ## §5 (TrafficState readers interpolate between ticks), §13 (look, floating origin).
 ##
+##   view.biome_director = director        # optional: per-biome palettes (below)
 ##   view.setup(ctx, road, origin, registry, sim.state, director.opposite.state)
-##   view.set_palette(biome.traffic_palette)
+##   view.set_palette(biome.traffic_palette) # without a director: one palette for all
 ##   # every 120 Hz tick, right after traffic_sim.step / director.step:
 ##   view.capture_tick()
 ##   # _process draws from the last two captures at the physics interpolation fraction.
@@ -20,6 +21,14 @@ extends Node3D
 ## palette); lamps, wheel spin and body roll/pitch come from per-instance custom data
 ## (see assets/shaders/traffic.gdshader and TrafficLights).
 ##
+## Biome palettes (WP6.4c): the biome slots of the uniform hold PALETTE_BANKS banks of
+## BANK_SLOTS colours. With a `biome_director`, a vehicle takes a bank when the view
+## first captures it (a new vehicle_id in the slot): the bank of the biome at its s,
+## loaded on demand into a bank not holding the focus's biome. It keeps that bank for
+## life, so crossing a checkpoint never repaints a car: new spawns wear the new biome's
+## colours, cars already on the road keep theirs. Same uniform, same draw calls; a bank
+## load (a few per leg at most) is the only upload.
+##
 ## Allocation-free after setup(): capture_tick() and render() only write preallocated
 ## packed arrays and MultiMesh instances. World transforms are rebuilt every frame
 ## from road space (64-bit) with the floating origin, so origin shifts need nothing
@@ -27,8 +36,12 @@ extends Node3D
 
 const TRAFFIC_MATERIAL := preload("res://assets/shaders/materials/traffic.tres")
 const GLOW_MATERIAL := preload("res://assets/shaders/materials/glow.tres")
-## Paint slots [0, BIOME_SLOTS) hold the biome palette; model palettes follow.
+## Paint slots [0, BIOME_SLOTS) hold the biome palettes; model palettes follow.
 const BIOME_SLOTS := 32
+## Biome palette banks in the biome slots (outgoing and incoming biome), each
+## BANK_SLOTS colours: a biome's traffic_palette beyond that wraps.
+const PALETTE_BANKS := 2
+const BANK_SLOTS := BIOME_SLOTS >> 1   # BIOME_SLOTS / PALETTE_BANKS
 ## Glow instances per vehicle: the front pair and the rear pair.
 const GLOWS_PER_VEHICLE := 2
 ## Triangles per glow instance: two sprites and the headlight pool.
@@ -51,6 +64,9 @@ var tuning: TrafficViewTuning
 ## Vehicles further than this from the camera are skipped (set by setup(); the run may
 ## update it when the quality tier's view distance changes).
 var cull_distance_m: float = 0.0
+## Optional (WP6.4c): each new vehicle takes the traffic palette of the biome at its s
+## (see the header); null = set_palette's one palette for every vehicle.
+var biome_director: BiomeDirector
 ## Headlight pools in the glow pass (glow.gdshader). The run turns them off when
 ## HeadlightCones (WP5.4) draws the traffic light cones instead. Set before setup().
 var headlight_pools: bool = true
@@ -101,6 +117,8 @@ class Carriageway:
 	var wheel: PackedFloat64Array
 	var blink_mask: PackedInt32Array
 	var blink_start: PackedFloat64Array
+	## Palette bank taken when the vehicle was first captured.
+	var bank: PackedByteArray
 
 	func _init(st: TrafficState, direction: float) -> void:
 		state = st
@@ -123,6 +141,7 @@ class Carriageway:
 		wheel.resize(n)
 		blink_mask.resize(n)
 		blink_start.resize(n)
+		bank.resize(n)
 
 
 var _road: RoadPath
@@ -137,7 +156,11 @@ var _palette := PackedColorArray()
 ## The palette as the shader gets it: plain vectors, so no renderer applies a color
 ## space conversion to array uniforms (Mobile did to a PackedColorArray).
 var _palette_v4 := PackedVector4Array()
-var _biome_count: int = 0
+## Colours in each bank (0 = the fallback paint) and the biome loaded in it.
+var _bank_count := PackedInt32Array()
+var _bank_biome: Array[BiomeDef] = []
+## Bank loads so far (tests, dev).
+var bank_loads: int = 0
 var _next_palette_slot: int = BIOME_SLOTS
 var _glow: MultiMeshInstance3D
 var _glow_mm: MultiMesh
@@ -210,7 +233,10 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin, registry: Tr
 	_material = TRAFFIC_MATERIAL.duplicate() as ShaderMaterial
 	_palette.resize(TrafficLights.PALETTE_SLOTS)
 	_palette.fill(FALLBACK_PAINT)
-	_biome_count = 0
+	_bank_count.resize(PALETTE_BANKS)
+	_bank_count.fill(0)
+	_bank_biome.resize(PALETTE_BANKS)
+	_bank_biome.fill(null)
 	_load_models(total)
 	_push_palette()
 	_glow_mm = MultiMesh.new()
@@ -243,14 +269,47 @@ func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin, registry: Tr
 		Events.origin_shifted.connect(_on_origin_shifted)
 
 
-## Biome traffic palette (sRGB): TrafficState.color_index -> color (wraps around).
-## Models with a fixed palette (motorbikes, the coach livery) keep theirs.
+## Biome traffic palette (sRGB): TrafficState.color_index -> color (wraps around),
+## into bank 0, which every vehicle uses when there is no biome_director (after
+## setup). Models with a fixed palette (motorbikes, the coach livery) keep theirs.
 func set_palette(colors: PackedColorArray) -> void:
-	_biome_count = mini(colors.size(), BIOME_SLOTS)
-	for i in BIOME_SLOTS:
-		_palette[i] = colors[i] if i < _biome_count else FALLBACK_PAINT
+	_fill_bank(0, colors)
+	_bank_biome[0] = null
 	if _material != null:
 		_push_palette()
+
+
+## Palette bank of a vehicle first seen at s: the bank holding the biome there, loaded
+## into the other bank if neither does (never over the focus biome's bank). Director
+## rate: a load happens once per biome; the lookup itself is allocation-free.
+func bank_at(s: float) -> int:
+	if biome_director == null:
+		return 0
+	var b := biome_director.biome_at(s)
+	for k in PALETTE_BANKS:
+		if _bank_biome[k] == b and b != null:
+			return k
+	var focus := biome_director.biome_at(_focus_s) if _has_focus else null
+	var k := 0
+	for j in PALETTE_BANKS:
+		if _bank_biome[j] == null:
+			k = j
+			break
+		if _bank_biome[j] != focus:
+			k = j
+	_fill_bank(k, b.traffic_palette if b != null else PackedColorArray())
+	_bank_biome[k] = b
+	bank_loads += 1
+	_push_palette()
+	return k
+
+
+func _fill_bank(k: int, colors: PackedColorArray) -> void:
+	var n := mini(colors.size(), BANK_SLOTS)
+	_bank_count[k] = n
+	var base := k * BANK_SLOTS
+	for i in BANK_SLOTS:
+		_palette[base + i] = colors[i] if i < n else FALLBACK_PAINT
 
 
 ## Uploads the palette (sRGB values; the shader linearizes) as plain vec4s.
@@ -547,6 +606,7 @@ func _capture(sd: Carriageway, t_start: float) -> void:
 			sd.pitch[i] = 0.0
 			sd.wheel[i] = 0.0
 			sd.blink_mask[i] = 0
+			sd.bank[i] = bank_at(s)
 		if fresh or absf(s - sd.s1[i]) > _teleport:
 			# New vehicle or a jump (recycle, reposition): no interpolation across it.
 			sd.s0[i] = s
@@ -617,8 +677,10 @@ func _finish(sd: Carriageway, i: int, t: float) -> void:
 	var paint := 0
 	if m.palette_base >= 0:
 		paint = m.palette_base + posmod(st.color_index[i], m.palette_size)
-	elif _biome_count > 0:
-		paint = posmod(st.color_index[i], _biome_count)
+	else:
+		var bank := sd.bank[i]
+		var n := _bank_count[bank]
+		paint = bank * BANK_SLOTS + (posmod(st.color_index[i], n) if n > 0 else 0)
 	_custom = Color(sd.wheel[i], sd.roll[i], sd.pitch[i], float(b + TrafficLights.PALETTE_STRIDE * paint))
 
 

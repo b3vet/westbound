@@ -44,6 +44,9 @@ extends Resource
 @export var smoke_size_m: float = 0.55   # not in spec
 @export var smoke_scale_birth: float = 0.6   # not in spec
 @export var smoke_scale_death: float = 1.8   # not in spec
+## Camera modes that never show the hood smoke: from the hood and the cockpit it covers
+## the road (owner, M4/M5 playtest). The damage still shows in the other cameras.
+@export var smoke_hidden_camera_modes: Array[StringName] = [&"hood", &"cockpit"]   # not in spec
 ## The flickering headlight: flicker steps per second and the share of steps that are lit.
 @export var lamp_flicker_hz: float = 14.0   # not in spec
 @export var lamp_lit_share: float = 0.35   # not in spec

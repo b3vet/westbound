@@ -229,11 +229,13 @@ func test_ground_color_setter_rebuilds_within_budget() -> void:
 
 func test_ground_colors_follow_biome_director() -> void:
 	var road := StraightRoadPath.new(3, t)
+	var farmland := load(BiomeDirector.DEFAULT_BIOME_PATH) as BiomeDef
 	var director := BiomeDirector.new()
+	var leg_m := Tuning.load_default().legs.leg_length_m()
+	director.plan = BiomePlan.uniform(farmland, leg_m)
 	tree.root.add_child(director)
 	_nodes.append(director)
 	director.setup(RunContext.new(1), road, null)
-	var farmland := director.current()
 	_origin = FloatingOrigin.new()
 	_origin.setup(t.floating_origin_shift_km)
 	tree.root.add_child(_origin)
@@ -245,24 +247,31 @@ func test_ground_colors_follow_biome_director() -> void:
 	_nodes.append(_builder)
 	_builder.setup(RunContext.new(1), road, _origin)
 	var b := _builder
-	b.build_all_now(0.0)
+	var focus := leg_m - 300.0
+	b.build_all_now(focus)
 	for k in range(b.needed_range_min(), b.needed_range_max() + 1):
 		eq(b.get_chunk(k).field, farmland.ground_color, "chunk %d: biome ground color" % k)
 		eq(b.get_chunk(k).verge, farmland.verge_color, "chunk %d: biome verge color" % k)
-	# A different biome from s = 400 on: chunks from there rebuild, the others don't.
+	# A different biome from leg 2 on: the chunks around the checkpoint rebuild (the
+	# blend reaches back biome_blend_before_m), the others don't.
 	var other := farmland.duplicate() as BiomeDef
 	other.ground_color = Color(0.8, 0.4, 0.3)
 	other.verge_color = Color(0.5, 0.3, 0.2)
-	director.set_biome_from(400.0, other)
-	Events.biome_changed.emit(&"test")
+	director.set_biome_from_leg(2, other)
 	var builds0 := b.builds_total
-	for i in 20:
-		b.update_view(0.0)
-	var k_other := floori(400.0 / t.chunk_length_m)
-	eq(b.builds_total - builds0, b.needed_range_max() - k_other + 1, "only the chunks in the new biome rebuilt")
-	eq(b.get_chunk(0).field, farmland.ground_color)
-	eq(b.get_chunk(k_other).field, other.ground_color)
-	eq(b.get_chunk(b.needed_range_max()).verge, other.verge_color)
+	for i in 30:
+		b.update_view(focus)
+	var legs := Tuning.load_default().legs
+	var k_first := floori((leg_m - legs.biome_blend_before_m) / t.chunk_length_m)
+	eq(b.builds_total - builds0, b.needed_range_max() - k_first + 1, "only the chunks reached by the new biome rebuilt")
+	eq(b.get_chunk(b.needed_range_min()).field, farmland.ground_color)
+	var k_after := floori((leg_m + legs.biome_blend_after_m) / t.chunk_length_m) + 1
+	if k_after <= b.needed_range_max():
+		eq(b.get_chunk(k_after).field, other.ground_color, "past the blend: the new biome")
+	# At the checkpoint line the colours are half-way (smoothstep centre of the blend).
+	var mid := director.ground_color_at(leg_m - legs.biome_blend_before_m
+		+ 0.5 * (legs.biome_blend_before_m + legs.biome_blend_after_m))
+	near(mid.r, lerpf(farmland.ground_color.r, other.ground_color.r, 0.5), 1e-6, "blend mid-point")
 
 
 # ---------------------------------------------------------------- Floating origin
@@ -379,3 +388,41 @@ func test_blob_shadow_node_and_multimesh() -> void:
 	for i in 64:
 		multi.place(i, smp, 1.0 + 0.1 * i, 0.0, 4.5, 1.9, origin)
 	multi.hide_instance(3)
+
+
+## WP6.4c: set_ground_drop makes the mesher lower the ground ribbon (both sides by
+## drop_at, one side's field by field_drop_at); set after setup it rebuilds the live
+## chunks within the budget. Without it the ground stays at road level.
+func _drop_both(_s: float) -> float:
+	return 6.0
+
+
+func _drop_right_field(_s: float, side: float) -> float:
+	return 20.0 if side > 0.0 else 0.0
+
+
+func _lowest_ground(b: RoadBuilder, k: int, side: float) -> float:
+	var c := b.get_chunk(k)
+	var verts: PackedVector3Array = c.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var lowest := 0.0
+	for v in verts:
+		if v.x * side > 0.0:
+			lowest = minf(lowest, v.y)
+	return lowest
+
+
+func test_ground_drop_hook() -> void:
+	var road := StraightRoadPath.new(3, t)
+	var b := _make(road)
+	b.build_all_now(0.0)
+	check(not b.has_ground_drop(), "no hook: the plain mesher")
+	gt(_lowest_ground(b, 1, 1.0), -0.5, "ground at road level")
+	b.set_ground_drop(_drop_both, _drop_right_field)
+	check(b.has_ground_drop())
+	b.build_all_now(0.0)
+	near(_lowest_ground(b, 1, 1.0), -20.0, 0.01, "the right field below the sea")
+	near(_lowest_ground(b, 1, -1.0), -6.0, 0.01, "the left ground under the viaduct")
+	b.set_ground_drop(Callable(), Callable())
+	check(not b.has_ground_drop(), "cleared: the plain mesher again")
+	b.build_all_now(0.0)
+	gt(_lowest_ground(b, 1, 1.0), -0.5, "ground back at road level")

@@ -39,6 +39,10 @@ var out_grade: float = 0.0
 ## (sqrt(h1) + sqrt(h2))^2 of the crest sight rule.
 var sight_c: float
 
+## Optional: per-leg crest frequency (WP6.4a). The crest chance is scaled by the
+## leg's BiomeDef.crest_frequency_scale (clamped to 1); same draws, identical at 1.
+var biome_rules: BiomeRoadRules
+
 var _rng: Rng
 var _cursor: int = 0
 var _e: float = 0.0
@@ -143,7 +147,12 @@ func _add_step() -> void:
 	var g1 := _g
 	var g2: float
 	var radius: float
-	if _pending_crest or _rng.chance(_crest_chance):
+	var chance := _crest_chance
+	if biome_rules != null:
+		var scale := biome_rules.crest_scale_at(end_s)
+		if scale != 1.0:
+			chance = clampf(_crest_chance * scale, 0.0, 1.0)
+	if _pending_crest or _rng.chance(chance):
 		if g1 >= _crest_grade_min:
 			# Over the top: the deliberate crest.
 			g2 = -_rng.float_range(_crest_grade_min, _grade_max)

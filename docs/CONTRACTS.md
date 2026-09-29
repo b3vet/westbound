@@ -102,7 +102,8 @@ The generator must keep radius ≥ 1,200 m, grade ≤ 5%, C1 continuity, and the
 
 - **Geometry:** clothoid transitions give continuous curvature; vertical curves are parabolic. The heading stays within ±[15°, 30°] of the sun (world heading 0). The road switches sides every 15–40 km in one R = 1200 m bend.
 - **Extra tick-safe queries:** `heading_at(s)`, `elevation_at(s)`, `grade_at(s)`.
-- **Lane hook:** `schedule_lane_count(s_start, count, taper_m)`, scheduled in increasing s.
+- **Lane hook:** `schedule_lane_count(s_start, count, taper_m)`, in any order (WP6.4a). `lanes_right_edge_d` and `guardrail_d` follow the taper.
+- **Biomes (WP6.4a):** `set_biome_plan(plan: BiomePlan)`. Each leg's road rules (lanes, curve/crest/tunnel frequency, bend sight clearance) are fixed the first time the generator reaches the leg. Features gained `TUNNEL` (`value` = length) and `SIGN` tagged `lane_ends`. See docs/BIOMES.md.
 - **Features:** `features_in` only reports generated ranges, so call `ensure_generated_to(s1)` first. Checkpoint `tag` (the landmark style) is filled in by the biome director: `BiomeDirector.tag_checkpoints(features)` / `checkpoint_style()`, cycling `BiomeDef.landmark_styles` by leg (WP5.5).
 
 ## 4. Vehicles
@@ -386,6 +387,8 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | Date | Change | Decision |
 | --- | --- | --- |
 | 2026-09-29 | §7 `objective_completed` kind (WP5.2); §13 `wb_player_light_dir` length = fake-light reach, `wb_retro_light()` in the world include (WP5.4) | WP4.5 docs refresh, recording merged behaviour |
+| 2026-09-29 | §3 sun side per leg (`BiomeRoadRules.sun_side_for_leg`, `WaterDef.road_sun_side`: the sun sets over the sea at the coast), `SIGN lane_ends` rendered; §13 `SkyRig.horizon_material()`, one horizon shader with the biome extensions, `RoadBuilder.set_ground_drop` (WP6.4c) | Orchestrator merge review |
+| 2026-09-29 | §3 biome plan, any-order lane scheduling, tapered edges, TUNNEL/lane_ends features; §10 BiomeDef look/road fields (cliffs, horizon layers, heat shimmer, rock colours, bend sight clearance); SkyRig `set_fog_tint_offset` / `set_horizon_blend` / `set_heat_shimmer` (WP6.4a) | Orchestrator merge review |
 | 2026-09-29 | Cap 90; camera-independent behind-spawn view check (WP4.8, D11) | Orchestrator merge review |
 | 2026-09-29 | §14 Run, HudFeed, Hud, theme path, screens, CrashSequence (Phase 4) | Orchestrator, pre-Phase 4 |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |

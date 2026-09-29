@@ -101,3 +101,8 @@ No roadside prop stands inside a landmark or a warning sign. That includes the m
 - **Tests:** `tests/world/test_landmark_styles.gd` covers farmland's four styles, the cycle and its seeded start, single-style biomes, the director tagging the real road's features deterministically (all four in the first four legs), and the landmarks building the tagged style while the clearance resolves the same one.
 - **Snaps:** `tools/snap.sh src/run/run.tscn --renderer=both --s=<cp − 200> --speed_kmh=60 --seconds=3 --sky_t=0.25`. With the snap seed, the first four checkpoints are 3500 sign gantry, 7000 suspension bridge, 10500 tunnel portal and 14000 toll gantry.
 
+
+
+## Lane-ends signs (WP6.4c)
+
+The warning-sign pool (4 panels) also serves the `SIGN` features tagged `lane_ends` before tunnel lane drops ("LANE ENDS / MERGE LEFT"). Landmark clearance and canyon cliffs keep clear of them.

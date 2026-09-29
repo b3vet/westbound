@@ -496,6 +496,57 @@ func test_palette_colors_and_fixed_model_palettes() -> void:
 	eq(_view.slot_paint(bike), own[1], "motorbikes keep their fixed palette")
 
 
+## WP6.4c: with a biome director each new vehicle wears the traffic palette of the
+## biome where it appears and keeps it: crossing a checkpoint repaints no car, cars
+## appearing past it wear the next biome's colours, and nothing about the draw changes
+## (the same palette uniform, the same pools).
+func test_per_biome_palettes_keep_each_cars_paint() -> void:
+	var leg := _ctx.tuning.legs.leg_length_m()
+	var farm := load("res://data/biomes/farmland.tres") as BiomeDef
+	var desert := load("res://data/biomes/desert.tres") as BiomeDef
+	var city := load("res://data/biomes/city.tres") as BiomeDef
+	var legs: Array[BiomeDef] = [farm, desert]
+	var dir := BiomeDirector.new()
+	dir.plan = BiomePlan.new(leg, legs, city)
+	_view.biome_director = dir
+	# A colour index where the two palettes differ.
+	var ci := 0
+	while farm.traffic_palette[ci] == desert.traffic_palette[ci]:
+		ci += 1
+	_view.update_view(leg - 300.0)
+	var a := _spawn(_state, &"sedan", 1, leg - 250.0, 30.0, 0, 0, ci)
+	var b := _spawn(_state, &"sedan", 0, leg + 400.0, 30.0, 0, 0, ci)
+	_view.capture_tick()
+	eq(_view.slot_paint(a), farm.traffic_palette[ci], "a car in the farmland wears its palette")
+	eq(_view.slot_paint(b), desert.traffic_palette[ci], "a car past the line wears the desert's")
+	# The player crosses the line; the farmland car drives on with it.
+	_view.update_view(leg + 100.0)
+	_state.s[a] = leg + 50.0
+	for k in 10:
+		_view.capture_tick()
+	eq(_view.slot_paint(a), farm.traffic_palette[ci], "no repaint at the checkpoint")
+	eq(_view.slot_paint(b), desert.traffic_palette[ci])
+	# A new car in the same slot (a new vehicle_id) takes the desert's palette.
+	_state.free_slot(a)
+	var c := _spawn(_state, &"sedan", 1, leg + 60.0, 30.0, 0, 0, ci)
+	eq(c, a, "the slot is reused")
+	_view.capture_tick()
+	eq(_view.slot_paint(c), desert.traffic_palette[ci], "a new spawn wears the current biome's palette")
+	# The next biome loads into the bank the player left, never over the current one.
+	var d := _spawn(_state, &"sedan", 2, 2.0 * leg + 300.0, 30.0, 0, 0, ci)
+	_view.capture_tick()
+	eq(_view.slot_paint(d), city.traffic_palette[posmod(ci, city.traffic_palette.size())], "city palette ahead")
+	eq(_view.slot_paint(b), desert.traffic_palette[ci], "the current biome's cars keep theirs")
+	eq(_view.bank_loads, 3, "one load per biome")
+	_view.render(1.0)
+	var pools := 0
+	for k in _view.model_count():
+		if _view.model_instances(k) > 0:
+			pools += 1
+	eq(pools, 1, "cars of three palettes share one model pool (one draw call)")
+	dir.free()
+
+
 func test_render_budget_bench() -> void:
 	_spawn_mix(_state.capacity, 100.0)
 	for i in _opp.capacity:

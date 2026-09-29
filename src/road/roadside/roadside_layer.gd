@@ -18,6 +18,10 @@ extends RefCounted
 ## (LandmarkClearance) whether the instance's footprint lies in a checkpoint landmark's
 ## or warning sign's zone, and skips it if so. The skip comes after every Rng draw, so
 ## everything else in the cell stays exactly where it was.
+##
+## Water (WP6.4c): likewise, nothing is placed whose footprint reaches over a sea slope
+## or a river's water on the water's side (RoadsideContext.water_blocks): no billboard
+## over the coast's sea. Biome props that already keep to the land side never trip it.
 
 var id: StringName
 var cell_length_m: float
@@ -34,6 +38,11 @@ var anchor_z: float = 0.0
 var needs_rebase: bool = false
 ## Instances skipped for a landmark's clearance (dev HUD, tests).
 var cleared: int = 0
+## Instances skipped because they would stand over water (tests).
+var water_cleared: int = 0
+## Zone kinds this layer keeps clear of (LandmarkClearance.ZONE_*): cliffs ignore road
+## tunnels, whose hill they run on through.
+var clearance_mask: int = LandmarkClearance.ZONE_ALL
 
 var ctx: RoadsideContext
 var _seed: int = 0
@@ -153,9 +162,15 @@ func _sample(s: float) -> void:
 ## relative to the road; `sx/sy/sz` scale the mesh's local axes.
 func _place(pool: int, d: float, yaw: float, sx: float = 1.0, sy: float = 1.0, sz: float = 1.0) -> void:
 	var smp := ctx.sample
-	if ctx.clearance != null and ctx.clearance.blocks_upright(pools[pool].aabb, smp.s, d, yaw, sx, sy, sz):
+	if ctx.clearance != null and ctx.clearance.blocks_upright(pools[pool].aabb, smp.s, d, yaw, sx, sy, sz,
+			clearance_mask):
 		cleared += 1
 		return
+	if ctx.water != null:
+		var r := pools[pool].radius * maxf(sx, sz)
+		if ctx.water_blocks(smp.s, d - r, d + r):
+			water_cleared += 1
+			return
 	var b := Basis(Vector3.UP, smp.godot_yaw(yaw))
 	b.x *= sx
 	b.y *= sy
@@ -167,9 +182,16 @@ func _place(pool: int, d: float, yaw: float, sx: float = 1.0, sy: float = 1.0, s
 func _place_on_grade(pool: int, d: float, flip: bool, sx: float, sy: float, sz: float) -> void:
 	var smp := ctx.sample
 	if ctx.clearance != null and ctx.clearance.blocks_upright(pools[pool].aabb, smp.s, d, PI if flip else 0.0,
-			sx, sy, sz):
+			sx, sy, sz, clearance_mask):
 		cleared += 1
 		return
+	if ctx.water != null:
+		var a := pools[pool].aabb
+		var lo := d - a.end.x * sx if flip else d + a.position.x * sx
+		var hi := d - a.position.x * sx if flip else d + a.end.x * sx
+		if ctx.water_blocks(smp.s, lo, hi):
+			water_cleared += 1
+			return
 	var b := Basis(smp.right, smp.up, -smp.tangent)
 	if flip:
 		b = Basis(-smp.right, smp.up, smp.tangent)
@@ -182,9 +204,16 @@ func _place_on_grade(pool: int, d: float, flip: bool, sx: float, sy: float, sz: 
 ## A segment mesh (authored from z = 0 to z = -length) stretched from
 ## (s0, d) to (s1, d): continuous end to end on curves and grades.
 func _place_segment(pool: int, s0: float, s1: float, d: float, mesh_length_m: float) -> void:
-	if ctx.clearance != null and ctx.clearance.blocks_segment(pools[pool].aabb, s0, s1, d):
+	if ctx.clearance != null and ctx.clearance.blocks_segment(pools[pool].aabb, s0, s1, d, clearance_mask):
 		cleared += 1
 		return
+	if ctx.water != null:
+		var a := pools[pool].aabb
+		var d_lo := d + a.position.x if d >= 0.0 else d - a.end.x
+		var d_hi := d + a.end.x if d >= 0.0 else d - a.position.x
+		if ctx.water_blocks(s0, d_lo, d_hi) or ctx.water_blocks(s1, d_lo, d_hi):
+			water_cleared += 1
+			return
 	ctx.road.sample_into(s1, ctx.sample_b)
 	ctx.road.sample_into(s0, ctx.sample)
 	var p0 := ctx.sample.local_point(d, anchor_x, anchor_y, anchor_z)

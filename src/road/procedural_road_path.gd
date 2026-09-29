@@ -26,6 +26,20 @@ extends RoadPath
 ## the Hermite heading halfway to s (the table integrates with the same rule, so
 ## position is continuous across grid points).
 ##
+## Biomes (WP6.4a, docs/BIOMES.md): set_biome_plan(plan) (the run's BiomeDirector does
+## it at setup) restarts generation with per-leg road rules latched from the plan
+## (BiomeRoadRules): curve and crest frequency, bend sight clearance, the leg's lane
+## count (changed biome_lane_change_after_m past the checkpoint, tapered) and road
+## tunnels (TUNNEL features, tunnel_lanes inside with a taper before the first portal
+## and the lanes back after the last exit, a "lane ends" SIGN before the drop). Legs
+## are latched in order, one leg past the generated table. Without a plan the road is
+## exactly the plain generator: 3 lanes, no tunnels.
+##
+## Lane tapers: lane_count(s) steps at a change's s_start; the right lane edge
+## (lanes_right_edge_d, and so shoulder_outer_d / guardrail_d) follows a smoothstep
+## over the change's taper, like the road mesh, so the barrier the player can hit is
+## the one drawn.
+##
 ## Determinism: curvature, heading, grade, elevation, lane counts and every feature
 ## come from Rng draws (PCG32, integer-exact) combined with + - * / only; branches
 ## never depend on sin/cos/atan/sqrt results (the one sqrt, in the crest constant,
@@ -38,6 +52,9 @@ const STREAM_PROFILE := &"profile"
 const SIGN_CHECKPOINT := &"checkpoint"
 const SIGN_BEND := &"bend"
 const SIGN_CREST := &"crest"
+## A lane drop ahead (value = distance to the taper's start).
+const SIGN_LANE_ENDS := &"lane_ends"
+const STREAM_TUNNELS := &"tunnels"
 ## Hermite basis coefficient (h01 = u^2 (3 - 2u)).
 const _HERMITE_3 := 3.0   # lint: allow-number cubic Hermite basis coefficient
 
@@ -60,13 +77,27 @@ var _z := PackedFloat64Array()
 var _leg_length: float
 var _checkpoint_warnings := PackedFloat64Array()
 
+## The per-leg biome rules (null without a plan).
+var biome_rules: BiomeRoadRules
+
+var _ctx: RunContext
+var _tuning: RoadTuning
+## Lanes before the first retained change.
 var _lanes_default: int
 var _lanes_min: int
 var _lanes_max: int
 var _lane_taper: float
+## Lane changes, sorted by s: from _lane_change_s[i] on the count is _lane_change_count[i],
+## the edge tapering over _lane_change_taper[i].
 var _lane_change_s := PackedFloat64Array()
 var _lane_change_count := PackedInt32Array()
+var _lane_change_taper := PackedFloat64Array()
 var _lane_features: Array[RoadFeature] = []
+var _tunnel_features: Array[RoadFeature] = []
+var _lane_signs: Array[RoadFeature] = []
+## Legs whose lanes and tunnels are scheduled (with a plan).
+var _latched_leg: int = 0
+var _tunnel_seed: int = 0
 
 var _forgotten_s: float = 0.0
 ## Hazard signs are generated with their bend / crest, which starts this much later.
@@ -76,6 +107,9 @@ var _sign_lookahead: float
 func _init(ctx: RunContext) -> void:
 	super(ctx.tuning.road)
 	var t := ctx.tuning.road
+	_ctx = ctx
+	_tuning = t
+	_tunnel_seed = ctx.rng_road.derive(STREAM_TUNNELS).get_seed()
 	_plan = RoadPlanGen.new(ctx.rng_road.derive(STREAM_PLAN), t)
 	_profile = RoadProfileGen.new(ctx.rng_road.derive(STREAM_PROFILE), t)
 	_dx = t.sample_spacing_m
@@ -91,6 +125,39 @@ func _init(ctx: RunContext) -> void:
 	_lane_taper = t.lane_taper_length_m
 	_sign_lookahead = t.hazard_sign_distance_m
 	ensure_generated_to(0.0)
+
+
+## Road rules per leg from `plan` (null = the plain generator). Restarts generation
+## from s = 0 (same seed, same streams) and regenerates as far as before, and clears
+## every scheduled lane change: call it once, before anything samples beyond the start
+## straight or schedules lanes (the run's BiomeDirector does it at setup). Director rate.
+func set_biome_plan(plan: BiomePlan) -> void:
+	var gen_to := length_generated()
+	biome_rules = BiomeRoadRules.new(plan, _tuning) if plan != null else null
+	_plan = RoadPlanGen.new(_ctx.rng_road.derive(STREAM_PLAN), _tuning)
+	_profile = RoadProfileGen.new(_ctx.rng_road.derive(STREAM_PROFILE), _tuning)
+	_plan.biome_rules = biome_rules
+	_profile.biome_rules = biome_rules
+	_base_i = 0
+	_n = 0
+	_h.clear()
+	_k.clear()
+	_e.clear()
+	_g.clear()
+	_x.clear()
+	_z.clear()
+	_forgotten_s = 0.0
+	_lanes_default = _tuning.lanes_default
+	if biome_rules != null:
+		_lanes_default = biome_rules.lanes_for_leg(1)
+	_lane_change_s.clear()
+	_lane_change_count.clear()
+	_lane_change_taper.clear()
+	_lane_features.clear()
+	_tunnel_features.clear()
+	_lane_signs.clear()
+	_latched_leg = 0
+	ensure_generated_to(gen_to)
 
 
 # ---------------------------------------------------------------- Reference line (tick rate)
@@ -190,21 +257,46 @@ func lane_count(s: float) -> int:
 	return _lanes_default if i == 0 else _lane_change_count[i - 1]
 
 
+## Right edge of the driving lanes, following the smoothstep taper of the lane change
+## in force (the road mesh draws the same edge). Tick-safe.
+func lanes_right_edge_d(s: float) -> float:
+	var i := _lane_change_s.bsearch(s, false)
+	var n := float(_lanes_default)
+	if i > 0:
+		var j := i - 1
+		n = float(_lane_change_count[j])
+		var s0 := _lane_change_s[j]
+		var taper := _lane_change_taper[j]
+		if taper > 0.0 and s < s0 + taper:
+			var n0 := float(_lanes_default if j == 0 else _lane_change_count[j - 1])
+			n = lerpf(n0, n, smoothstep(s0, s0 + taper, s))
+	return lanes_left_edge_d(s) + n * lane_width(s)
+
+
 ## Schedules a lane-count change: from `s_start` on the player carriageway has
-## `count` lanes (the opposite side mirrors it), tapering over `taper_m` (default
-## lane_taper_length_m). Hook for the director / biomes (farmland keeps
-## lanes_default). Changes must be scheduled in increasing s, ahead of any s
-## already sampled, and in the same order for the same seed (determinism is the
-## caller's). Director rate. Returns false (and ignores it) if out of order.
+## `count` lanes (the opposite side mirrors it), the edge tapering over `taper_m`
+## (default lane_taper_length_m). Hook for the director / set pieces (biomes and road
+## tunnels schedule their own, BiomeRoadRules). Changes may come in any order (they are
+## kept sorted) but must lie ahead of any s already sampled, and come in the same order
+## for the same seed (determinism is the caller's). A change at an s that already has
+## one replaces it. Director rate. Returns false (and ignores it) before the retained road.
 func schedule_lane_count(s_start: float, count: int, taper_m: float = -1.0) -> bool:
-	if not _lane_change_s.is_empty() and s_start <= _lane_change_s[_lane_change_s.size() - 1]:
-		push_error("ProceduralRoadPath.schedule_lane_count: changes must be in increasing s")
+	if s_start < _forgotten_s:
+		push_error("ProceduralRoadPath.schedule_lane_count: s %.1f is behind the retained road" % s_start)
 		return false
 	var c := clampi(count, _lanes_min, _lanes_max)
 	var taper := _lane_taper if taper_m < 0.0 else taper_m
-	_lane_change_s.append(s_start)
-	_lane_change_count.append(c)
-	_lane_features.append(RoadFeature.make(RoadFeature.Kind.LANE_COUNT_CHANGE, s_start, s_start + taper, float(c)))
+	var f := RoadFeature.make(RoadFeature.Kind.LANE_COUNT_CHANGE, s_start, s_start + taper, float(c))
+	var i := _lane_change_s.bsearch(s_start, true)
+	if i < _lane_change_s.size() and _lane_change_s[i] == s_start:
+		_lane_change_count[i] = c
+		_lane_change_taper[i] = taper
+		_lane_features[i] = f
+		return true
+	_lane_change_s.insert(i, s_start)
+	_lane_change_count.insert(i, c)
+	_lane_change_taper.insert(i, taper)
+	_lane_features.insert(i, f)
 	return true
 
 
@@ -220,7 +312,7 @@ func features_in(s0: float, s1: float, out: Array[RoadFeature]) -> void:
 	_profile.generate_to(hi + _sign_lookahead)
 	var found: Array[RoadFeature] = []
 	for list: Array[RoadFeature] in [_plan.bends, _plan.blind_bends, _plan.signs, _profile.crests,
-			_profile.signs, _lane_features]:
+			_profile.signs, _lane_features, _tunnel_features, _lane_signs]:
 		for f in list:
 			if f.s_start >= hi:
 				break
@@ -287,11 +379,17 @@ func forget_before(s: float) -> void:
 	_forgotten_s = float(new_base) * _dx
 	_plan.forget_before(_forgotten_s)
 	_profile.forget_before(_forgotten_s)
-	RoadPlanGen.drop_features_before(_lane_features, _forgotten_s)
-	var keep := _lane_change_s.bsearch(_forgotten_s, false) - 1   # the change in force at _forgotten_s
+	RoadPlanGen.drop_features_before(_tunnel_features, _forgotten_s)
+	RoadPlanGen.drop_features_before(_lane_signs, _forgotten_s)
+	# Keep the change in force at _forgotten_s (its taper may still run) and fold the
+	# ones before it into the base count.
+	var keep := _lane_change_s.bsearch(_forgotten_s, false) - 1
 	if keep > 0:
+		_lanes_default = _lane_change_count[keep - 1]
 		_lane_change_s = _lane_change_s.slice(keep)
 		_lane_change_count = _lane_change_count.slice(keep)
+		_lane_change_taper = _lane_change_taper.slice(keep)
+		_lane_features.assign(_lane_features.slice(keep))
 
 
 ## First s still sampleable after forget_before().
@@ -311,7 +409,8 @@ func retained_element_count() -> int:
 
 func retained_feature_count() -> int:
 	return _plan.bends.size() + _plan.blind_bends.size() + _plan.signs.size() \
-		+ _profile.crests.size() + _profile.signs.size() + _lane_features.size()
+		+ _profile.crests.size() + _profile.signs.size() + _lane_features.size() \
+		+ _tunnel_features.size() + _lane_signs.size()
 
 
 ## Crest sight distance (m) for a convex vertical curve with grade change `a` and
@@ -324,6 +423,7 @@ func _build_block() -> void:
 	var first := _base_i + _n   # global index of the first new sample
 	var count := _block_n + 1 if _n == 0 else _block_n
 	var last_s := float(first + count - 1) * _dx
+	_latch_to(last_s + _leg_length)
 	_plan.generate_to(last_s + _dx)
 	_profile.generate_to(last_s + _dx)
 	var size := _n + count
@@ -351,3 +451,83 @@ func _build_block() -> void:
 			_x[j] = _x[j - 1] + _dx * sin(mid_h)
 			_z[j] = _z[j - 1] - _dx * cos(mid_h)
 	_n = size
+
+
+# ---------------------------------------------------------------- Biome legs (WP6.4a)
+
+## Schedules the lanes and tunnels of every leg up to the one containing `s`, in leg
+## order (director rate; only with a plan).
+func _latch_to(s: float) -> void:
+	if biome_rules == null:
+		return
+	var last := biome_rules.leg_at(s)
+	while _latched_leg < last:
+		_latched_leg += 1
+		_latch_leg(_latched_leg)
+
+
+## Leg k: its biome's lane count (after the checkpoint that starts it) and its tunnels.
+func _latch_leg(k: int) -> void:
+	var t := _tuning
+	var s0 := float(k - 1) * _leg_length
+	var lanes := biome_rules.lanes_for_leg(k)
+	if k > 1 and lanes != biome_rules.lanes_for_leg(k - 1):
+		_schedule_internal(s0 + t.biome_lane_change_after_m, lanes, t.biome_lane_taper_m)
+	_latch_tunnels(k, s0, lanes)
+
+
+## Road tunnels of leg k (seeded per leg: the same whatever else was generated). The
+## tunnels share one narrowed section: tunnel_lanes from the drop's taper (ending
+## tunnel_lane_lead_m before the first portal) to tunnel_lane_trail_m after the last exit.
+func _latch_tunnels(k: int, s0: float, lanes: int) -> void:
+	var t := _tuning
+	var mean := biome_rules.tunnel_scale_for_leg(k) * t.tunnels_per_leg
+	if mean <= 0.0 or t.tunnel_max_per_leg_count <= 0:
+		return
+	var rng := Rng.new(TraceHash.mix_int(_tunnel_seed, k))
+	var n := int(floor(mean))
+	if rng.chance(mean - float(n)):
+		n += 1
+	n = mini(n, t.tunnel_max_per_leg_count)
+	var narrow := lanes > t.tunnel_lanes
+	var taper := _lane_taper if narrow else 0.0
+	var lead := t.tunnel_lane_lead_m + taper
+	var trail := t.tunnel_lane_trail_m + taper
+	var max_warning := 0.0
+	for w in _checkpoint_warnings:
+		max_warning = maxf(max_warning, w)
+	var lo := s0 + t.tunnel_leg_margin_after_m
+	var hi := s0 + _leg_length - max_warning - t.tunnel_leg_margin_before_m
+	var lengths := PackedFloat64Array()
+	var gaps := PackedFloat64Array()
+	for i in n:
+		lengths.append(rng.float_range(t.tunnel_length_min_m, t.tunnel_length_max_m))
+		gaps.append(rng.float_range(t.tunnel_gap_min_m, t.tunnel_gap_max_m))
+	var slack_u := rng.unit()
+	# Drop tunnels from the end until the section fits the leg's window.
+	while n > 0:
+		var need := lead + trail
+		for i in n:
+			need += lengths[i] + (gaps[i] if i > 0 else 0.0)
+		if need <= hi - lo:
+			var start := lo + slack_u * (hi - lo - need)
+			var portal := start + lead
+			if narrow:
+				_schedule_internal(start, t.tunnel_lanes, taper)
+				if start - t.lane_ends_sign_distance_m >= 0.0:
+					_lane_signs.append(RoadFeature.make(RoadFeature.Kind.SIGN, start - t.lane_ends_sign_distance_m,
+						start - t.lane_ends_sign_distance_m, t.lane_ends_sign_distance_m, SIGN_LANE_ENDS))
+			var s_exit := portal
+			for i in n:
+				if i > 0:
+					portal = s_exit + gaps[i]
+				s_exit = portal + lengths[i]
+				_tunnel_features.append(RoadFeature.make(RoadFeature.Kind.TUNNEL, portal, s_exit, lengths[i]))
+			if narrow:
+				_schedule_internal(s_exit + t.tunnel_lane_trail_m, lanes, taper)
+			return
+		n -= 1
+
+
+func _schedule_internal(s_start: float, count: int, taper_m: float) -> void:
+	schedule_lane_count(s_start, count, taper_m)
