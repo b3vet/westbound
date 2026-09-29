@@ -11,12 +11,23 @@ As of N0 the server has:
 - the deep-link files;
 - graceful shutdown.
 
+N1.1 adds device accounts (MP-D2: no Apple / Google yet):
+
+- tokens with refresh rotation;
+- profiles with display names and a profanity filter;
+- account deletion and bans;
+- rate limits;
+- the `admin` CLI.
+
+See "Accounts API".
+
 | Path | What |
 | --- | --- |
 | `westbound-server/crates/server/` | The binary (`westbound-server`) and its library, with integration tests in `tests/` |
 | `westbound-server/migrations/` | sqlx migrations (SQLite) |
 | `westbound-server/.sqlx/` | Offline query metadata for the `sqlx::query!` macros (committed) |
 | `westbound-server/config/` | `server.example.toml` (every key with its default), `dev.toml`, deep-link placeholders |
+| `westbound-server/data/profanity.txt` | The display-name word list (compiled into the binary; format in the file) |
 | `westbound-server/Dockerfile`, `docker-compose.yml`, `deploy/` | Image, compose file (Coolify and local), local TLS (`Caddyfile`, `local-tls.sh`) |
 | `.github/workflows/server.yml` | CI: fmt, clippy, tests, image build, GHCR push |
 | `tools/net_echo_check.gd`, `tools/web_smoke/ws_echo.mjs` | Echo checks from Godot and from Chromium |
@@ -29,7 +40,8 @@ As of N0 the server has:
 | `GET /ws` | public | WebSocket. N0 echoes text and binary frames. Limits: 16 KB max inbound message (close 1009), a 64-frame outbound queue (a slow client is dropped), a ping every 2 s, and a close after 8 s of silence. Past 400 connections, the upgrade gets HTTP 503 |
 | `GET /api/v1/echo-check` | public | A small HTML page that runs the WebSocket echo from any browser, used to check a phone (see "Verify a phone connects") |
 | `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files, read from `deeplinks.dir`, with built-in empty placeholders |
-| `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, `wb_http_requests_total{class}`, backups, `wb_build_info` |
+| `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API" |
+| `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info` |
 
 ## Local development
 
@@ -37,7 +49,7 @@ Rust 1.94 (`rustup`); everything runs from `westbound-server/`.
 
 ```sh
 cd westbound-server
-cargo run -p server -- --config config/dev.toml          # http://127.0.0.1:8080, DB in dev-data/
+cargo run -p server -- --config config/dev.toml          # http://127.0.0.1:8080, DB in dev-data/, server.env = dev
 curl http://127.0.0.1:8080/api/v1/health
 cargo run -p server -- --config config/dev.toml check-config
 
@@ -54,6 +66,9 @@ Subcommands:
 | `check-config` | Validates the config and prints the effective TOML with secrets redacted. Exits 2 on invalid config |
 | `backup <path>` | Writes a consistent online copy of the live database (`VACUUM INTO`) while the server runs. Refuses an existing file |
 | `healthcheck` | Probes `/api/v1/health` on the configured port on localhost. This is the image's `HEALTHCHECK` |
+| `admin ban <id> <duration>` | Bans an account for `30m`, `12h`, `7d`, `2w`, or `perm`. See "Admin CLI" |
+| `admin unban <id>` | Lifts a ban |
+| `admin rename <id> <name>` | Force-renames an account |
 
 Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` environment variables.
 
@@ -62,7 +77,10 @@ Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` 
 - **Engine:** SQLite in WAL mode, with `synchronous=NORMAL`, foreign keys on and a busy timeout.
 - **Times:** stored as unix seconds.
 - **Secrets and tokens:** stored only as hashes.
-- **Tables:** migration `0001` creates the tables N1 needs: `accounts`, `refresh_tokens` and `admin_log`. The other data-model tables come with their milestones.
+- **Tables:**
+  - Migration `0001` creates `accounts`, `refresh_tokens` and `admin_log`.
+  - `0002` adds `accounts.token_version` and rebuilds `refresh_tokens` with its rotation state (`family`, `rotated_from`, `used_at`, `revoked_at`).
+  - The other data-model tables come with their milestones.
 
 Queries written with `sqlx::query!` are checked at compile time against `westbound-server/.sqlx/`, and CI builds with `SQLX_OFFLINE=true`. After you add or change a `query!`, or change the schema, regenerate that data:
 
@@ -101,12 +119,230 @@ node tools/web_smoke/ws_echo.mjs --server https://localhost:8443 --insecure
 
 `--insecure` accepts Caddy's self-signed certificate. It uses `TLSOptions.client_unsafe()` in Godot and `--ignore-certificate-errors` in Chromium, and exists in these dev tools only. Against the real domain, drop `--insecure`.
 
+## Accounts API
+
+N1.1 implements device accounts only (MP-D2). All routes are under `/api/v1`, take and return JSON, and are covered by CORS for the web build.
+
+### Tokens and secrets
+
+| Thing | Form | Lifetime | Stored as |
+| --- | --- | --- | --- |
+| Device secret | 32 random bytes, base64url (43 chars) | Forever (per account) | HMAC-SHA256 with the server pepper. Returned once, by `POST /auth/device` |
+| Access token | JWT HS256. Claims: `sub` (account id string), `iat`, `exp`, `jti`, `ver` (token version), `iss` `westbound`, `aud` `westbound-api` | 1 h | Not stored |
+| Refresh token | 32 random bytes, base64url (43 chars) | 30 days, renewed by each rotation. Single use | SHA-256 |
+
+- **Access tokens.** Send them as `Authorization: Bearer <token>`, and in the WebSocket `Hello`.
+- **Account ids.** Always decimal strings (`"42"`); see docs/PROTOCOL.md.
+- **Client storage** of the device secret: the iOS Keychain, Android encrypted storage, or local storage on the web. Native builds use an encrypted `user://` file until the Keychain plugin lands (MP-D2).
+- **Why HMAC and not argon2 for the device secret.**
+  - The secret has 256 bits of entropy, so a slow password hash adds nothing against guessing.
+  - Argon2 would cost CPU on every sign-in on a 1-vCPU budget, and hand attackers a cheap way to burn it.
+  - Because the HMAC is keyed with the pepper, a leaked database alone cannot even test a guess.
+  - Comparisons are constant-time.
+- **Refresh tokens** are looked up by their SHA-256. A timing difference there reveals nothing usable, because nobody can choose a preimage.
+
+**Revocation:**
+
+- Every access token carries `ver`, which must equal `accounts.token_version`.
+- "Log out everywhere" bumps it, which kills every outstanding access token at once.
+- Account deletion does the same.
+- Bans need no bump: every authenticated request reads `banned_until`.
+
+### Errors
+
+Every error is JSON:
+
+```json
+{"error": "<code>", "message": "<English text>"}
+```
+
+- Some errors add one extra field: `banned_until`, `next_rename_at` or `retry_after_secs`.
+- Clients switch on `error`. `message` is for logs.
+- 401s carry `WWW-Authenticate: Bearer error="invalid_token"`.
+- Error responses are `Cache-Control: no-store`.
+
+| Status | `error` | When |
+| --- | --- | --- |
+| 400 | `invalid_body` | Malformed JSON, missing or unknown fields, wrong types, a malformed `account_id` |
+| 400 | `invalid_name` / `name_not_allowed` / `name_unchanged` | Rename: the name breaks the rules, the filter rejects it, or it is the current name |
+| 401 | `unauthorized` | No `Authorization: Bearer` header |
+| 401 | `invalid_token` | A bad access token, or an unknown refresh token |
+| 401 | `token_expired` | Access token: refresh it. Refresh token: sign in with the device secret |
+| 401 | `token_revoked` | Logged out, or the account is gone. Sign in again |
+| 401 | `token_reused` | The refresh token was already used. Its whole session family is now revoked. Sign in again |
+| 401 | `invalid_credentials` | Device sign-in: an unknown account or the wrong secret. The two cases are indistinguishable |
+| 403 | `banned` | With `banned_until` (unix seconds; `253402300799` = permanent). Returned by sign-in, refresh and every authenticated route |
+| 404 / 405 | `not_found` / `method_not_allowed` | |
+| 409 | `rename_cooldown` | With `next_rename_at` |
+| 409 | `name_unavailable` | All 10,000 tags of that name are taken |
+| 413 | `body_too_large` | The body is over `http.max_body_bytes` (4 KB) |
+| 415 | `unsupported_media_type` | The body is not `Content-Type: application/json` |
+| 429 | `rate_limited` | With `retry_after_secs` and a `Retry-After` header (exposed to CORS) |
+| 501 | `provider_not_enabled` | Apple / Google routes (MP-D2) |
+| 500 | `internal` | Details are logged, never returned |
+
+### Routes
+
+**`POST /api/v1/auth/device`**
+
+- No body. Creates an account with a generated name (e.g. `SwiftFalcon#0042`).
+- Response `201`:
+
+```json
+{
+  "account_id": "42",
+  "access_token": "eyJ…", "token_type": "Bearer", "expires_in": 3600, "expires_at": 1790003600,
+  "refresh_token": "…43 chars…", "refresh_expires_at": 1792592000,
+  "device_secret": "…43 chars…",
+  "profile": { …as GET /me… }
+}
+```
+
+**`POST /api/v1/auth/device/login`**
+
+- Body: `{"account_id": "42", "device_secret": "…"}`.
+- Response `200`: the same session fields plus `profile`, without `device_secret`.
+- Each sign-in starts a new refresh-token family: one per device session.
+- This is how a reinstall that kept its secret, or a web client with its stored secret, recovers the account.
+- Errors: `invalid_credentials`, `banned`.
+
+**`POST /api/v1/auth/refresh`**
+
+- Body: `{"refresh_token": "…"}`.
+- Response `200`: the session fields (`account_id`, `access_token`, `token_type`, `expires_in`, `expires_at`, `refresh_token`, `refresh_expires_at`).
+- Rotation:
+  - The presented token is marked used.
+  - A new one is stored with `rotated_from` = the old hash, in the same family.
+  - Of two concurrent refreshes with one token, exactly one wins.
+- Reuse:
+  - Presenting a used token revokes the whole family (`token_reused`), so the thief and the owner are both signed out of that session.
+  - The owner signs in again with the device secret.
+  - A client that lost a refresh response should also do that: its next refresh gets `token_reused`.
+- Banned: `403 banned`. The token is not consumed, so it works again after the ban ends.
+
+**`POST /api/v1/auth/logout`**
+
+- Body: `{"refresh_token": "…", "all_devices": false}`.
+- Response `204`, always, even for an unknown token.
+- Revokes that token's family.
+- With `all_devices: true`, it revokes every refresh token of the account and bumps its token version (every access token dies).
+- Access tokens of the logged-out session otherwise stay valid until they expire (at most 1 h).
+
+**`GET /api/v1/me`** (bearer)
+
+```json
+{"account_id": "42", "display_name": "Şahin 34", "name_tag": 42, "full_name": "Şahin 34#0042",
+ "created_at": 1790000000, "name_changed_at": 1790000000, "next_rename_at": 1792592000,
+ "linked": {"apple": false, "google": false}}
+```
+
+`next_rename_at` is `null` when a rename is allowed now.
+
+**`PATCH /api/v1/me`** (bearer)
+
+- Body: `{"display_name": "New Name"}`. Returns the profile.
+- The account keeps its tag when that tag is free for the new name. Otherwise it gets a random free one.
+- **Display-name rules** (the part before `#`, after trimming surrounding spaces):
+  - 3–16 characters.
+  - Allowed: `A–Z a–z`, the Turkish letters `Ç ç Ğ ğ İ ı Ö ö Ş ş Ü ü`, digits, and the separators space, `_`, `-`, `.`. Composed characters only.
+  - Starts and ends with a letter or digit, never has two separators in a row, and contains at least one letter.
+  - Passes the profanity filter.
+  - At most one rename per 30 days. The generated first name does not count.
+  - `name#tag` is unique, case-insensitively for ASCII letters (SQLite `NOCASE`).
+
+**`DELETE /api/v1/account`** (bearer; allowed while banned)
+
+- Response `204`.
+- In one transaction, deletes the account and its refresh tokens.
+- `accounts::delete` lists the tables later milestones add to that transaction: friends, blocks, crew memberships, leaderboard entries, runs and replays, reports, and Apple token revocation.
+- Logs `account_delete` to `admin_log` with the account id and row counts only.
+
+**`POST /api/v1/auth/link/{apple,google}`, `POST /api/v1/auth/signin/{apple,google}`**
+
+- Response `501 provider_not_enabled` until MP-D2.
+- The `apple_sub` / `google_sub` columns are already in the schema.
+
+### Profanity filter
+
+`westbound-server/data/profanity.txt` is a small, curated English and Turkish list. Its format is documented in the file, and it is compiled into the binary.
+
+**Normalization** of both the list and the name:
+
+- lowercase;
+- Turkish letters folded (`ç→c ğ→g ı/İ→i ö→o ş→s ü→u`);
+- leetspeak mapped (`0→o 1→i/l 3→e 4→a 5→s 7→t 8→b 9/6→g @→a $→s !→i`);
+- separators dropped;
+- repeated letters tolerated (`fuuuck`).
+
+**Entry kinds:**
+
+- `word`: banned anywhere in the name.
+- `=word`: banned only as a whole word of the name, for short words that hide inside ordinary ones. `ass` is banned in `Big Ass` and `BigAss`, but `Classic` passes.
+- `!word`: an allow-list entry for Scunthorpe-style false positives (`Scunthorpe`, `Essex`, `cocktail`, `therapist`, `Nazım`, `sıkışık`).
+
+It catches the obvious words and the usual disguises, not every insult. Moderators use `admin rename` for the rest.
+
+### Rate limits
+
+Rate limits use `tower_governor`. Each bucket refills evenly over its window, with the burst available at once.
+
+| Routes | Key | Default |
+| --- | --- | --- |
+| `POST /auth/device` | client IP | 5 per hour, burst 5 |
+| other `/auth/*` | client IP | 30 per minute, burst 10 |
+| `/me`, `/account` (and later authenticated routes) | account | 120 per minute, burst 30 |
+
+- **Keys:**
+  - IPv6 clients are keyed by their /64.
+  - The account key comes from the access token's signature alone (no database hit, expiry ignored).
+  - A request without a valid token falls back to its IP key.
+- **Response:** `429 rate_limited`, with `Retry-After` in whole seconds, rounded up.
+- **Memory:** idle buckets are dropped every minute.
+- **Logs:** IPs are never logged. The WebSocket gateway logs a keyed hash of the client IP (`client=<12 hex>`, HMAC under the pepper).
+
+### Client IPs behind the proxy
+
+- The TCP peer is the client, unless the peer is in `http.trusted_proxies`.
+- A trusted peer is a proxy. The client is then the right-most address in `X-Forwarded-For` that is not itself a trusted proxy.
+- A client that connects directly cannot choose its IP with that header.
+
+**Coolify:**
+
+- Coolify's proxy (Traefik or Caddy) sets `X-Forwarded-For`. It reaches the container over a Docker network in `10.0.0.0/8`, `172.16.0.0/12` or `192.168.0.0/16`.
+- The container has no published port (Ports Mappings is empty). So only the proxy can connect, and the default trusted ranges are right.
+- If you ever publish the port directly, set `WB_HTTP__TRUSTED_PROXIES` to the proxy's network only. Find it with `docker network inspect coolify`, for example `WB_HTTP__TRUSTED_PROXIES=10.0.1.0/24`.
+- Setting it to empty makes every client share the proxy's bucket. Five device accounts per hour would then apply to everyone together.
+
+### Admin CLI
+
+Admin commands run inside the container against the live database, from Coolify's **Terminal** or `docker exec`. Each prints one line, exits non-zero on failure, and is logged to `admin_log` with actor `cli`.
+
+```sh
+westbound-server admin ban 42 7d           # 30m, 12h, 7d, 2w, or perm
+westbound-server admin unban 42
+westbound-server admin rename 42 "Road Runner"
+```
+
+- **`rename`:**
+  - applies the name rules and the filter, but not the cooldown;
+  - keeps the tag when it is free for the new name;
+  - restarts the player's 30-day cooldown.
+- **Bans:**
+  - A ban applies from the next request: HTTP routes return `403 banned`, and the WebSocket `Hello` gets `banned`.
+  - Connections that are already open are not dropped yet (N5 / N10).
+
+### Local runs
+
+- `config/dev.toml` sets `server.env = "dev"`, so no secrets are needed.
+- The Docker image defaults to `production`. For `deploy/local-tls.sh` and `docker compose`, pass `WB_SERVER__ENV=dev`, or real `WB_AUTH__JWT_SECRET` and `WB_AUTH__DEVICE_SECRET_PEPPER` values.
+
 ## Configuration reference
 
 Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`), then environment variables named `WB_<SECTION>__<KEY>` (double underscore). Each environment value is parsed as the key's type. Lists are comma-separated. Unknown keys or bad values in the file or the environment stop startup with every error listed. `RUST_LOG` overrides `log.level`. The defaults are production values: `config/server.example.toml` lists them all, and a test keeps it in sync.
 
 | Key | Env | Default | Meaning |
 | --- | --- | --- | --- |
+| `server.env` | `WB_SERVER__ENV` | `production` | `production` or `dev`. Outside `dev` the two auth secrets are required; `dev` falls back to public development values when they are empty |
 | `server.bind` | `WB_SERVER__BIND` | `0.0.0.0:8080` | Public listener (API, `/ws`, deep links) |
 | `server.public_origin` | `WB_SERVER__PUBLIC_ORIGIN` | `https://westbound.sipsakrandevu.com` | Public https origin behind the proxy (invite links from N9) |
 | `server.worker_threads` | `WB_SERVER__WORKER_THREADS` | `2` | tokio workers (spec: 2) |
@@ -130,8 +366,18 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `backup.dir` | `WB_BACKUP__DIR` | `/data/backups` | Where dated backups go |
 | `backup.time_utc` | `WB_BACKUP__TIME_UTC` | `03:17` | Nightly run time, UTC `HH:MM` |
 | `backup.retention_days` | `WB_BACKUP__RETENTION_DAYS` | `7` | Dated files kept |
-| `auth.jwt_secret` | `WB_AUTH__JWT_SECRET` | empty | Access-token secret from N1; at least 32 bytes when set. Environment only, never logged |
+| `auth.jwt_secret` | `WB_AUTH__JWT_SECRET` | empty | **Required** outside dev. HS256 access-token secret, at least 32 bytes. Environment only, never logged. Changing it signs everyone out of their access tokens (clients refresh) |
+| `auth.device_secret_pepper` | `WB_AUTH__DEVICE_SECRET_PEPPER` | empty | **Required** outside dev. HMAC key for device-secret hashes, at least 32 bytes, different from the JWT secret. Environment only. **Never change it** once accounts exist: their device secrets would stop verifying |
+| `auth.access_token_ttl_secs` | `WB_AUTH__ACCESS_TOKEN_TTL_SECS` | `3600` | Access-token lifetime (spec: 1 h) |
+| `auth.refresh_token_ttl_secs` | `WB_AUTH__REFRESH_TOKEN_TTL_SECS` | `2592000` | Refresh-token lifetime (spec: 30 days), renewed by each rotation |
+| `auth.rename_cooldown_secs` | `WB_AUTH__RENAME_COOLDOWN_SECS` | `2592000` | Time between renames (spec: 30 days) |
 | `http.cors_allowed_origins` | `WB_HTTP__CORS_ALLOWED_ORIGINS` | `https://westbound.sipsakrandevu.com,https://b3vet.github.io` | CORS allow-list for `/api/*`; `*` = any (local dev) |
+| `http.max_body_bytes` | `WB_HTTP__MAX_BODY_BYTES` | `4096` | Largest JSON request body on `/api/*` (413 `body_too_large` above it) |
+| `http.trusted_proxies` | `WB_HTTP__TRUSTED_PROXIES` | `127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7` | CIDRs whose `X-Forwarded-For` is believed; see "Client IPs behind the proxy" |
+| `rate_limits.enabled` | `WB_RATE_LIMITS__ENABLED` | `true` | All HTTP rate limits (keep on in production) |
+| `rate_limits.device_create_per_hour` / `_burst` | `WB_RATE_LIMITS__DEVICE_CREATE_PER_HOUR` / `__DEVICE_CREATE_BURST` | `5` / `5` | `POST /auth/device` per client IP |
+| `rate_limits.auth_per_minute` / `_burst` | `WB_RATE_LIMITS__AUTH_PER_MINUTE` / `__AUTH_BURST` | `30` / `10` | The other `/auth/*` routes per client IP |
+| `rate_limits.account_per_minute` / `_burst` | `WB_RATE_LIMITS__ACCOUNT_PER_MINUTE` / `__ACCOUNT_BURST` | `120` / `30` | Authenticated routes per account |
 | `deeplinks.dir` | `WB_DEEPLINKS__DIR` | empty (image: `/data/well-known`) | Directory with `apple-app-site-association` and `assetlinks.json` |
 
 The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLINKS__DIR` to the values above. It needs no config file.
@@ -143,12 +389,13 @@ The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLI
 - **User:** runs as the non-root user `65532`.
 - **Ports and volumes:** `EXPOSE 8080`, `VOLUME /data`.
 - **Health check:** `HEALTHCHECK` runs `westbound-server healthcheck`.
-- **Size:** 3.6 MB compressed (what a registry pull downloads), 15 MB unpacked. The stripped binary is 5.9 MB.
+- **Size** (as of N1.1): about 4 MB compressed (what a registry pull downloads), 17 MB unpacked. The stripped binary is 6.9 MB.
 
 ```sh
 cd westbound-server
 docker build --build-arg WB_BUILD=$(git rev-parse --short HEAD) -t westbound-server:local .
-docker run --rm -p 127.0.0.1:8080:8080 -v westbound-data:/data westbound-server:local
+docker run --rm -p 127.0.0.1:8080:8080 -v westbound-data:/data -e WB_SERVER__ENV=dev westbound-server:local
+# production-like: -e WB_AUTH__JWT_SECRET=$(openssl rand -hex 32) -e WB_AUTH__DEVICE_SECRET_PEPPER=$(openssl rand -hex 32)
 docker exec <container> westbound-server backup /data/backups/manual.db
 ```
 
@@ -182,7 +429,9 @@ Coolify already has a GHCR registry token for the owner's other projects, so pri
 5. **Persistent storage.** Go to Persistent Storage, then **+ Add**, then **Volume**. Name it `westbound-data` and set the destination path to `/data`. The database, `/data/backups` and `/data/well-known` all live there. A new named volume inherits the image's ownership (uid 65532).
 6. **Environment variables:**
    - `WB_LOG__FORMAT=json`
-   - `WB_AUTH__JWT_SECRET=<openssl rand -hex 32>`: mark it as a secret. It is optional in N0 and required from N1.
+   - `WB_AUTH__JWT_SECRET=<openssl rand -hex 32>`: mark it as a secret. **Required from N1**: without it the server refuses to start (`invalid config`).
+   - `WB_AUTH__DEVICE_SECRET_PEPPER=<openssl rand -hex 32>`, a different value: mark it as a secret. **Required from N1.** Back it up with the database: if it is lost or changed, no device secret verifies again. Clients could still refresh, but a reinstall could not recover its account.
+   - `WB_HTTP__TRUSTED_PROXIES` can stay at its default. Coolify's proxy reaches the container from a private Docker network, which the default ranges cover. See "Client IPs behind the proxy".
    - Optionally `WB_SERVER__PUBLIC_ORIGIN` and `WB_HTTP__CORS_ALLOWED_ORIGINS` (`https://westbound.sipsakrandevu.com,https://b3vet.github.io`). Both default to these values.
 7. **Health check.** The image's own `HEALTHCHECK` (`westbound-server healthcheck`, a GET of `/api/v1/health` on port 8080) is what Docker and Coolify report, and the proxy starts routing once it is healthy.
    - Coolify's UI health check runs `curl`/`wget` inside the container, and this image has neither. Leave Coolify's own health check **disabled**. If you enable it, the settings are: path `/api/v1/health`, port `8080`, scheme `http`, expected status `200`.

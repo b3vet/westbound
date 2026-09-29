@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE accounts SET display_name = ?, tag = ?, name_changed_at = ?\n             WHERE id = ? AND (name_changed_at IS NULL OR name_changed_at <= ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "4c4617435d502588041e05c8e850600a08284cbba343a91fdf5a6e59e2004c28"
+}

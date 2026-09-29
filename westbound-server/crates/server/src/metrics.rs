@@ -26,6 +26,11 @@ pub struct Metrics {
     http_requests: [AtomicU64; 5],
     pub backups_ok: AtomicU64,
     pub backups_failed: AtomicU64,
+    pub accounts_created: AtomicU64,
+    pub auth_logins: AtomicU64,
+    pub auth_refreshes: AtomicU64,
+    pub auth_refresh_reuse: AtomicU64,
+    pub http_rate_limited: AtomicU64,
 }
 
 impl Metrics {
@@ -129,6 +134,36 @@ impl Metrics {
             "counter",
             "Failed scheduled backups.",
             g(&self.backups_failed),
+        );
+        metric(
+            "wb_accounts_created_total",
+            "counter",
+            "Device accounts created.",
+            g(&self.accounts_created),
+        );
+        metric(
+            "wb_auth_logins_total",
+            "counter",
+            "Successful device sign-ins.",
+            g(&self.auth_logins),
+        );
+        metric(
+            "wb_auth_refreshes_total",
+            "counter",
+            "Refresh-token rotations.",
+            g(&self.auth_refreshes),
+        );
+        metric(
+            "wb_auth_refresh_reuse_total",
+            "counter",
+            "Refresh-token reuse detections (session family revoked).",
+            g(&self.auth_refresh_reuse),
+        );
+        metric(
+            "wb_http_rate_limited_total",
+            "counter",
+            "HTTP requests refused with 429.",
+            g(&self.http_rate_limited),
         );
         let _ = writeln!(
             out,

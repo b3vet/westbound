@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE refresh_tokens SET used_at = ?\n           WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?\n           RETURNING account_id AS \"account_id!\", family AS \"family!\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "account_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "family!",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "refresh_tokens",
+            "name": "family"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f63b5a1328524fa30874d4ac8842920693cddba946f35404061f75ee3abe474b"
+}

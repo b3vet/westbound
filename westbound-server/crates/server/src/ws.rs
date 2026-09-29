@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::{SplitSink, StreamExt};
 use futures_util::SinkExt;
@@ -80,15 +80,23 @@ impl Drop for ConnectionSlot {
 pub async fn upgrade(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
+    // Logs carry a keyed hash of the client IP, never the IP itself.
+    let client = state.auth.ip_tag(
+        state
+            .rate_limiters
+            .proxies
+            .client_ip_from(peer.ip(), &headers),
+    );
     if state.shutdown.is_cancelled() {
         return (StatusCode::SERVICE_UNAVAILABLE, "shutting down").into_response();
     }
     let limits = &state.config.limits;
     let Some(slot) = ConnectionSlot::try_acquire(&state.metrics, limits.max_connections) else {
         Metrics::inc(&state.metrics.ws_rejected_full);
-        tracing::warn!(%peer, "connection cap reached; upgrade refused");
+        tracing::warn!(%client, "connection cap reached; upgrade refused");
         return (StatusCode::SERVICE_UNAVAILABLE, "server full").into_response();
     };
     let max = limits.max_message_bytes;
@@ -98,7 +106,7 @@ pub async fn upgrade(
             let tasks = state.tasks.clone();
             tasks.track_future(async move {
                 let reason = run(socket, &state).await;
-                tracing::info!(%peer, ?reason, "websocket closed");
+                tracing::info!(%client, ?reason, "websocket closed");
                 drop(slot);
             })
         })

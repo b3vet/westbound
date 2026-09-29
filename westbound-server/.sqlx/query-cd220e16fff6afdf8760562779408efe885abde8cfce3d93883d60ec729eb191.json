@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT token_version, banned_until FROM accounts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "token_version",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "token_version"
+          }
+        }
+      },
+      {
+        "name": "banned_until",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "banned_until"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "cd220e16fff6afdf8760562779408efe885abde8cfce3d93883d60ec729eb191"
+}
