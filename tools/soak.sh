@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sharded traffic soak: the spec's 10,000 simulated km (docs/SOAK.md).
 #
-#   tools/soak.sh [--km=10000] [--shards=4] [--seed=N] [--legs=8] [--leg-km=3.5] [--no-windows]
+#   tools/soak.sh [--km=10000] [--shards=4] [--seed=N] [--legs=8] [--leg-km=3.5] [--no-windows] [--all-pieces] [--canyon]
 #                 [--out=tests/out/soak] [--compare-with=OTHER/summary.json]
 #   tools/soak.sh --update-baseline      # rewrite tests/baselines/traffic_metrics.json (deliberately)
 #   tools/soak.sh --merge [--out=DIR]    # re-summarize existing shard files in DIR
@@ -14,7 +14,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-km=""; shards=4; seed=""; legs=""; leg_km=""; out="tests/out/soak"; windows=1
+km=""; shards=4; seed=""; legs=""; leg_km=""; out="tests/out/soak"; windows=1; all_pieces=0; canyon=0
 update_baseline=0; merge_only=0; compare_with=""
 for a in "$@"; do
   case "$a" in
@@ -25,6 +25,8 @@ for a in "$@"; do
     --leg-km=*) leg_km="${a#*=}" ;;
     --out=*) out="${a#*=}" ;;
     --no-windows) windows=0 ;;
+    --all-pieces) all_pieces=1 ;;
+    --canyon) canyon=1 ;;
     --update-baseline) update_baseline=1 ;;
     --merge) merge_only=1 ;;
     --compare-with=*) compare_with="${a#*=}" ;;
@@ -59,6 +61,8 @@ if [[ $merge_only -eq 0 ]]; then
     [[ -n "$legs" ]] && args+=(--legs="$legs")
     [[ -n "$leg_km" ]] && args+=(--leg-km="$leg_km")
     [[ $windows -eq 0 ]] && args+=(--no-windows)
+    [[ $all_pieces -eq 1 ]] && args+=(--all-pieces)
+    [[ $canyon -eq 1 ]] && args+=(--canyon)
     tools/godot.sh --headless --path . --script res://tests/soak/soak_main.gd -- "${args[@]}" \
       >"$out/shard_$i.log" 2>&1 &
     pids+=($!)
@@ -106,14 +110,15 @@ if not runs:
     sys.exit(1)
 
 GATES = ["collision_pairs", "signal_violations", "unsignaled_moves", "ambush_violations", "decel_violations",
-         "brake_flag_violations", "rear_end_normal", "impossible_traffic", "offroad_violations"]
-COUNTERS = GATES + ["collision_ticks", "impossible_windows", "impossible_player_induced", "impossible_checks",
+         "brake_flag_violations", "rear_end_normal", "impossible_traffic", "offroad_violations", "closed_area_violations"]
+COUNTERS = GATES + ["collision_ticks", "collisions_at_pieces", "impossible_windows", "impossible_player_induced", "impossible_checks",
                     "window_checks", "signals", "moves", "cancels", "lane_moves_checked", "player_contact_ticks",
                     "contact_episodes", "rear_end_episodes", "spawned_ahead", "spawned_behind", "despawned",
                     "rejected_cap", "rejected_ghost", "rejected_visible", "rejected_overlap", "sim_signals",
                     "set_pieces", "set_pieces_started", "set_piece_hard_decels", "merges", "set_pieces_passed",
                     "set_pieces_unmet", "set_pieces_ended_zone", "set_pieces_ended_duration", "set_pieces_ended_empty",
-                    "peaks_seen", "peaks_no_chance", "peaks_no_kind", "peaks_missed", "peaks_unfit",
+                    "peaks_seen", "peaks_no_chance", "peaks_no_kind", "peaks_missed", "peaks_unfit", "peaks_busy",
+                    "prop_hits",
                     "sim_moves", "sim_completed", "sim_cancel_player", "sim_cancel_hesitant", "sim_cancel_unsafe",
                     "ticks"]
 
@@ -127,6 +132,12 @@ def summed(rs):
     d["min_accel_mps2"] = min(r["min_accel"] for r in rs)
     d["sim_usec_per_tick"] = round(sum(r["sim_usec_per_tick"] * r["ticks"] for r in rs) / max(1, d["ticks"]), 1)
     d["mean_active"] = round(sum(r["mean_active"] * r["ticks"] for r in rs) / max(1, d["ticks"]), 2)
+    kinds = {}
+    for r in rs:
+        for k, v in r.get("set_pieces_by_kind", {}).items():
+            kinds[k] = kinds.get(k, 0) + int(v)
+    d["set_pieces_by_kind"] = kinds
+    d["set_pieces_per_leg"] = round(d["set_pieces"] / max(1, sum(int(r.get("legs", 0)) for r in rs)), 4)
     return d
 
 def metrics(rs):
@@ -196,6 +207,9 @@ print("  set pieces: %d spawned, %d started, %d passed, %d unmet, %d ended at a 
     total["set_pieces_ended_zone"], total["set_pieces_ended_duration"], total["set_pieces_ended_empty"],
     total["set_piece_hard_decels"], total["peaks_seen"], total["peaks_no_chance"], total["peaks_no_kind"],
     total["peaks_missed"], total["peaks_unfit"], total["merges"]))
+print("  set pieces per leg %.3f, by kind: %s; prop hits (the bot) %d; collision pairs at a live piece %d" % (
+    total["set_pieces_per_leg"], json.dumps(total["set_pieces_by_kind"], sort_keys=True), total["prop_hits"],
+    total["collisions_at_pieces"]))
 for name, g in by_lanes.items():
     print("  %s: %.0f km, impossible (traffic) %d, collisions %d, violations %d | %s" % (
         name, g["km"], g["impossible_traffic"], g["collision_pairs"],

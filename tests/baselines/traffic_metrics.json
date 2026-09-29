@@ -1,33 +1,33 @@
 {
   "reference": {
     "config": {
-      "km": 192.002822863994,
+      "km": 192.002848150222,
       "lanes": 3,
       "leg_m": 1500.0,
       "legs": 8,
       "runs": 16,
       "seed": 3303,
-      "sim_s": 5170.50833333126
+      "sim_s": 5137.20833333129
     },
     "metrics": {
-      "density_per_km_lane": 10.0032293483175,
-      "gaps_per_km": 8.64750586664944,
-      "lane_changes_per_vehicle_min": 1.02852644074038,
-      "mean_speed_kmh_lane_0": 139.189660436831,
-      "mean_speed_kmh_lane_1": 127.144212166985,
-      "mean_speed_kmh_lane_2": 115.612288946786,
-      "set_pieces_per_leg": 0.03125
+      "density_per_km_lane": 9.90301612064483,
+      "gaps_per_km": 8.55165539954931,
+      "lane_changes_per_vehicle_min": 1.04000183883808,
+      "mean_speed_kmh_lane_0": 140.359486659393,
+      "mean_speed_kmh_lane_1": 127.649430730273,
+      "mean_speed_kmh_lane_2": 116.587981168272,
+      "set_pieces_per_leg": 0.0234375
     },
     "traces": [
       2026672981,
       995702417,
-      3319413557,
+      83421930,
       3393685776,
-      3207281067,
+      684850973,
       343272250,
       444994140,
       1157623020,
-      649550931,
+      1551600442,
       2563556073,
       3792021771,
       916512504,

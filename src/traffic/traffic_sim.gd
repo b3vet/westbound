@@ -52,6 +52,10 @@ const TAG_HIT := &"hit"
 ## Lane closures (WP6.2): at most this many at once; the road's own carry this tag.
 const MAX_LANE_CLOSURES := 32
 const ROAD_CLOSURE_TAG := -1
+## Set-piece zones (WP6.3): lane speed limits (toll booth lanes) and headway zones
+## (tunnel squeeze), live at once.
+const MAX_SPEED_ZONES := 8
+const MAX_HEADWAY_ZONES := 4
 
 const _PEND_HAZARD_ON := 1
 const _PEND_HORN := 2
@@ -197,6 +201,7 @@ var _lc_target_d := PackedFloat64Array()   # d the signaled / moving lateral mov
 var _lc_split := PackedInt32Array()    # the move enters a lane split (-1 left / +1 right boundary), 0 = no
 var _split := PackedInt32Array()       # riding the lane boundary on this side of `lane` (motorbikes), 0 = no
 var _hard_ok := PackedByteArray()      # set pieces: may brake beyond the clamp (announced >= 300 m ahead)
+var _hold := PackedByteArray()         # set pieces (WP6.3): held out of the mandatory merge
 # Lane closures (WP6.2): lane, [s0, s1], tag
 var _cl_lane := PackedInt32Array()
 var _cl_s0 := PackedFloat64Array()
@@ -207,6 +212,20 @@ var _cl_road_to := -INF
 var _merge_zone: float
 var _merge_urg: float
 var _merge_stop: float
+# Set-piece zones (WP6.3): speed limits per lane over [s0, s1], headway scales over [s0, s1].
+var _sz_lane := PackedInt32Array()
+var _sz_s0 := PackedFloat64Array()
+var _sz_s1 := PackedFloat64Array()
+var _sz_v := PackedFloat64Array()
+var _sz_tag := PackedInt32Array()
+var _sz_keep_s1 := PackedFloat64Array()   # vehicles in the lane keep it until here ...
+var _sz_keep_v := PackedFloat64Array()    # ... while slower than this (0: no keep)
+var _sz_n := 0
+var _hz_s0 := PackedFloat64Array()
+var _hz_s1 := PackedFloat64Array()
+var _hz_k := PackedFloat64Array()
+var _hz_tag := PackedInt32Array()
+var _hz_n := 0
 var _pending := PackedInt32Array()     # _PEND_* bits emitted at the next step
 var _pending_tag: Array[StringName] = []
 var _n_pending := 0
@@ -280,10 +299,22 @@ func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
 	_lc_split.resize(_cap)
 	_split.resize(_cap)
 	_hard_ok.resize(_cap)
+	_hold.resize(_cap)
 	_cl_lane.resize(MAX_LANE_CLOSURES)
 	_cl_s0.resize(MAX_LANE_CLOSURES)
 	_cl_s1.resize(MAX_LANE_CLOSURES)
 	_cl_tag.resize(MAX_LANE_CLOSURES)
+	_sz_lane.resize(MAX_SPEED_ZONES)
+	_sz_s0.resize(MAX_SPEED_ZONES)
+	_sz_s1.resize(MAX_SPEED_ZONES)
+	_sz_v.resize(MAX_SPEED_ZONES)
+	_sz_tag.resize(MAX_SPEED_ZONES)
+	_sz_keep_s1.resize(MAX_SPEED_ZONES)
+	_sz_keep_v.resize(MAX_SPEED_ZONES)
+	_hz_s0.resize(MAX_HEADWAY_ZONES)
+	_hz_s1.resize(MAX_HEADWAY_ZONES)
+	_hz_k.resize(MAX_HEADWAY_ZONES)
+	_hz_tag.resize(MAX_HEADWAY_ZONES)
 	_pending_tag.resize(_cap)
 	_pending_tag.fill(&"")
 	_edge = road.lanes_left_edge_d(0.0)
@@ -416,6 +447,7 @@ func spawn(rec: SpawnSource.Record) -> int:
 	_lc_split[i] = 0
 	_split[i] = 0
 	_hard_ok[i] = 0
+	_hold[i] = 0
 
 	_ks[i] = rec.s
 	_kv[i] = rec.v
@@ -564,6 +596,24 @@ func hard_decel_allowed(slot: int) -> bool:
 	return _hard_ok[slot] == 1
 
 
+## WP6.3 (merge zone ramp traffic): while on, a FLAG_SCRIPTED vehicle starts no
+## mandatory merge (it still stops at the end of its lane). release_scripted clears it.
+func set_merge_hold(slot: int, on: bool) -> void:
+	if state.is_active(slot):
+		_hold[slot] = 1 if on and (state.flags[slot] & TrafficState.FLAG_SCRIPTED) != 0 else 0
+
+
+func merge_held(slot: int) -> bool:
+	return _hold[slot] == 1
+
+
+## WP6.3 (convoy): a scripted vehicle's hazard lights on or off (a hit's own hazards
+## are left alone).
+func set_hazards(slot: int, on: bool) -> void:
+	if state.is_active(slot) and (state.flags[slot] & TrafficState.FLAG_HIT) == 0:
+		state.set_flag(slot, TrafficState.FLAG_HAZARD, on)
+
+
 ## Ends scripted control: FLAG_SCRIPTED off, desired speed `v0`, no hard decel, and
 ## MOBIL resumes after the lane-change cooldown.
 func release_scripted(slot: int, v0: float) -> void:
@@ -572,6 +622,7 @@ func release_scripted(slot: int, v0: float) -> void:
 	state.flags[slot] &= ~TrafficState.FLAG_SCRIPTED
 	state.v0[slot] = v0
 	_hard_ok[slot] = 0
+	_hold[slot] = 0
 	_mobil_t[slot] = _cooldown
 
 
@@ -706,6 +757,140 @@ func _consider_merge(i: int) -> void:
 	stat_merges += 1
 
 
+# ---------------------------------------------------------------- Set-piece zones (WP6.3)
+# Additive scripting hooks for road-anchored set pieces (docs/SET_PIECES.md):
+#   - a speed zone caps the desired speed of every vehicle in `lane` over [s0, s1] at
+#     v_max (toll booth lanes: "traffic slows at the booths"); before s0 a vehicle's
+#     allowed speed is the one it can brake from to v_max at s0 at its profile's
+#     comfortable deceleration (IDM free road toward it), so it slows smoothly, never
+#     beyond the 6 m/s^2 clamp. MOBIL sees the zone in a target lane too.
+#     With keep_v > 0 the zone's slow traffic keeps its lane: a vehicle in the lane
+#     from the lookahead before s0 to s1 + keep_after_m makes no discretionary lane
+#     change while slower than keep_v (booth traffic does not pull out into the express
+#     lanes at booth speed; it rejoins once back up to speed or past the keep).
+#   - a headway zone scales every vehicle's IDM time headway T over [s0, s1]
+#     (tunnel squeeze: "tighter traffic").
+# Zones are grouped by tag (the set piece's serial) for removal. Director rate to add or
+# remove; the tick reads them allocation-free.
+
+## Caps lane `lane`'s speed at v_max (m/s) over [s0, s1]; with keep_v > 0 its traffic
+## keeps the lane up to s1 + keep_after_m while slower than keep_v (m/s). False when
+## MAX_SPEED_ZONES are live.
+func add_speed_zone(lane: int, s0: float, s1: float, v_max: float, tag: int, keep_after_m: float = 0.0,
+		keep_v: float = 0.0) -> bool:
+	if _sz_n >= MAX_SPEED_ZONES:
+		return false
+	_sz_lane[_sz_n] = lane
+	_sz_s0[_sz_n] = s0
+	_sz_s1[_sz_n] = s1
+	_sz_v[_sz_n] = v_max
+	_sz_tag[_sz_n] = tag
+	_sz_keep_s1[_sz_n] = s1 + keep_after_m
+	_sz_keep_v[_sz_n] = keep_v
+	_sz_n += 1
+	return true
+
+
+## True when vehicle i keeps its lane for a speed zone (see add_speed_zone). Allocation-free.
+func kept_by_zone(i: int) -> bool:
+	var si := _ks[i]
+	var lane := state.lane[i]
+	for z in _sz_n:
+		if _sz_lane[z] == lane and _kv[i] < _sz_keep_v[z] and si <= _sz_keep_s1[z] and _sz_s0[z] - si < _look:
+			return true
+	return false
+
+
+## Scales every vehicle's IDM time headway by `scale` over [s0, s1]. False when full.
+func add_headway_zone(s0: float, s1: float, scale: float, tag: int) -> bool:
+	if _hz_n >= MAX_HEADWAY_ZONES:
+		return false
+	_hz_s0[_hz_n] = s0
+	_hz_s1[_hz_n] = s1
+	_hz_k[_hz_n] = scale
+	_hz_tag[_hz_n] = tag
+	_hz_n += 1
+	return true
+
+
+## Removes every speed and headway zone with this tag. Director rate.
+func remove_zones(tag: int) -> void:
+	var w := 0
+	for z in _sz_n:
+		if _sz_tag[z] != tag:
+			_sz_lane[w] = _sz_lane[z]
+			_sz_s0[w] = _sz_s0[z]
+			_sz_s1[w] = _sz_s1[z]
+			_sz_v[w] = _sz_v[z]
+			_sz_tag[w] = _sz_tag[z]
+			_sz_keep_s1[w] = _sz_keep_s1[z]
+			_sz_keep_v[w] = _sz_keep_v[z]
+			w += 1
+	_sz_n = w
+	w = 0
+	for z in _hz_n:
+		if _hz_tag[z] != tag:
+			_hz_s0[w] = _hz_s0[z]
+			_hz_s1[w] = _hz_s1[z]
+			_hz_k[w] = _hz_k[z]
+			_hz_tag[w] = _hz_tag[z]
+			w += 1
+	_hz_n = w
+
+
+func speed_zone_count() -> int:
+	return _sz_n
+
+
+func headway_zone_count() -> int:
+	return _hz_n
+
+
+## The speed a vehicle of profile p at `front` (its front bumper) in `lane` may drive:
+## v_max inside a zone of the lane, the speed it can comfortably brake from to reach
+## v_max at the zone before one, INF with none ahead within the lookahead.
+## Allocation-free.
+func speed_limit_at(lane: int, front: float, p: int) -> float:
+	var lim := INF
+	for z in _sz_n:
+		if _sz_lane[z] != lane or front > _sz_s1[z]:
+			continue
+		var ahead := _sz_s0[z] - front
+		if ahead <= 0.0:
+			lim = minf(lim, _sz_v[z])
+		elif ahead < _look:
+			lim = minf(lim, sqrt(_sz_v[z] * _sz_v[z] + 2.0 * _pb[p] * ahead))
+	return lim
+
+
+## The headway scale at s (1 outside every headway zone). Allocation-free.
+func headway_scale_at(s: float) -> float:
+	var k := 1.0
+	for z in _hz_n:
+		if s >= _hz_s0[z] and s <= _hz_s1[z]:
+			k = minf(k, _hz_k[z])
+	return k
+
+
+## IDM free-road acceleration toward the lane's speed limit and, before a zone, at
+## least the constant deceleration that brings the vehicle to the zone's speed at its
+## start (INF: no zone ahead). IDM alone lags a falling limit by about b v / (delta a):
+## a truck (a 0.6, b 1.5) would come into the zone far above its speed.
+func _speed_zone_accel(lane: int, i: int, vi: float, v0: float, p: int) -> float:
+	var front := _ks[i] + _khl[i]
+	var lim := speed_limit_at(lane, front, p)
+	if lim >= v0:
+		return INF
+	var a := Idm.free_accel(vi, lim, _pa[p], _pdl[p])
+	for z in _sz_n:
+		if _sz_lane[z] != lane or vi <= _sz_v[z]:
+			continue
+		var ahead := _sz_s0[z] - front
+		if ahead > 0.0 and ahead < _look:
+			a = minf(a, (_sz_v[z] * _sz_v[z] - vi * vi) / (2.0 * ahead))
+	return a
+
+
 # ---------------------------------------------------------------- Tick
 
 ## Advances traffic by dt (called at 120 Hz after vehicle physics). `player` is the
@@ -801,13 +986,16 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 	var p := state.profile_id[i]
 	var a: float
 	var gap := INF
+	var hw_t := _pT[p] if _hz_n == 0 else _pT[p] * headway_scale_at(si)   # WP6.3 headway zones
 	if lead >= 0:
 		gap = _ks[lead] - si - _khl[lead] - _khl[i]
-		a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor)
+		a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor)
 	else:
 		a = Idm.free_accel(vi, v0, _pa[p], _pdl[p])
 	if _cl_n > 0:
 		a = minf(a, _closure_wall_accel(i, vi, v0, p))
+	if _sz_n > 0:
+		a = minf(a, _speed_zone_accel(state.lane[i], i, vi, v0, p))   # WP6.3 speed zones
 	_lead[i] = lead
 	_lead_gap[i] = gap
 	_a_raw[i] = a
@@ -854,7 +1042,7 @@ func _step_lateral(i: int, out: ScoreEventBuffer) -> void:
 		_tick_signaling(i, mdt)
 	elif st == _MOVING:
 		_tick_moving(i, mdt)
-	elif (f & TrafficState.FLAG_HIT) == 0 and _cl_n > 0 \
+	elif (f & TrafficState.FLAG_HIT) == 0 and _cl_n > 0 and _hold[i] == 0 \
 			and closure_ahead(state.lane[i], _ks[i] + _khl[i]) < _merge_zone:
 		# Mandatory merge: every model tick, or a MOBIL interval after a cancelled one.
 		var mt := minf(_mobil_t[i], _peval[state.profile_id[i]]) - mdt
@@ -868,6 +1056,8 @@ func _step_lateral(i: int, out: ScoreEventBuffer) -> void:
 			_mobil_t[i] = _peval[p]
 			if _split[i] != 0:
 				_consider_split_exit(i)
+			elif _sz_n > 0 and kept_by_zone(i):
+				pass   # WP6.3: slow zone traffic keeps its lane
 			else:
 				_consider_lane_change(i)
 				if _psplit[p] == 1 and state.lc_state[i] == _NONE:
@@ -1014,6 +1204,8 @@ func _consider_split(i: int) -> void:
 	if _cl_n > 0 and (_closes_soon(state.lane[i], i) or _closes_soon(state.lane[i] - 1, i) \
 			or _closes_soon(state.lane[i] + 1, i)):
 		return   # no lane splitting next to a lane that ends
+	if _sz_n > 0 and _slow_zone_beside(i):
+		return   # WP6.3: nor beside a slow zone (a toll's booth lane next to the express lanes)
 	var lead := _lead[i]
 	if lead < 0 or lead == _P or _kv[lead] >= _split_max_v or _lead_gap[i] > _split_scan \
 			or state.v0[i] <= _split_max_v:
@@ -1028,11 +1220,27 @@ func _consider_split(i: int) -> void:
 		_start_signal(i, cur, _lane_d(cur) + half, 1)
 
 
+## True when a speed zone (WP6.3) lies within the lookahead in vehicle i's lane or one
+## beside it. Allocation-free.
+func _slow_zone_beside(i: int) -> bool:
+	var front := _ks[i] + _khl[i]
+	var cur := state.lane[i]
+	for z in _sz_n:
+		if absi(_sz_lane[z] - cur) <= 1 and front <= _sz_s1[z] and _sz_s0[z] - front < _look:
+			return true
+	return false
+
+
 ## A splitting bike returns to a lane center once nothing slow is left ahead of it.
 func _consider_split_exit(i: int) -> void:
 	var si := _ks[i]
 	var di := state.d[i]
 	var kk := _rank[i] + 1
+	# WP6.3: a slow zone beside it ends the split whatever is ahead (between a slow lane
+	# and a fast one a splitting bike would hide the fast lane's traffic from cars
+	# leaving the slow one: MOBIL's safety check sees the nearest follower only).
+	if _sz_n > 0 and _slow_zone_beside(i):
+		kk = _n
 	while kk < _n:
 		var j := _ord[kk]
 		if _ks[j] - si > _split_scan:
@@ -1152,6 +1360,8 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool) -> float:
 			return -INF
 	else:
 		a_c_new = Idm.free_accel(vi, v0, _pa[p], _pdl[p])
+	if _sz_n > 0:
+		a_c_new = minf(a_c_new, _speed_zone_accel(t, i, vi, v0, p))   # WP6.3: a slow zone in the target lane
 	var a_n_new := 0.0
 	if foll >= 0:
 		var gf := si - _ks[foll] - _khl[i] - _khl[foll]
