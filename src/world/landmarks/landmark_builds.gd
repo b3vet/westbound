@@ -143,6 +143,25 @@ static func clearance_zones(kind: StringName, x: LandmarkSection, t: LandmarkTun
 			_zone(out, -foot, foot, -foot, g + t.sign_gantry_upright_offset_m + foot, 0.0)
 
 
+## Where a road tunnel (WP6.4a: a TUNNEL feature, built into the road chunks by
+## RoadChunkMesher with this file's tunnel proportions) stands on the ground, anchored
+## at its portal (s = 0) and `length_m` long: the central wall on the median through the
+## bore (so no median pole or gantry stands in it), and walls, shell and hill with its
+## hipped ends past both portals ([wall, hill foot], low ground cover allowed under it).
+static func road_tunnel_clearance_zones(x: LandmarkSection, length_m: float, t: LandmarkTuning,
+		out: PackedFloat64Array) -> void:
+	var wall := x.guardrail_d + t.tunnel_wall_offset_m
+	var foot := wall + TUNNEL_SHELL_M + t.tunnel_hill_width_m
+	var hill := t.tunnel_hill_width_m
+	_zone(out, 0.0, length_m, -x.median_barrier_d, x.median_barrier_d, 0.0)
+	_zone_pair(out, -hill, length_m + hill, wall, foot, t.clearance_ground_cover_m)
+
+
+## How far a road tunnel's zones reach before its portal and after its exit.
+static func road_tunnel_reach_m(t: LandmarkTuning) -> float:
+	return t.tunnel_hill_width_m
+
+
 ## A warning sign's zones (right side, anchored at `sign_d` from the reference line):
 ## its two posts from the ground, and the panel above its bottom edge.
 static func sign_clearance_zones(sign_d: float, t: LandmarkTuning, out: PackedFloat64Array) -> void:

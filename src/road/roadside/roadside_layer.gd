@@ -34,6 +34,9 @@ var anchor_z: float = 0.0
 var needs_rebase: bool = false
 ## Instances skipped for a landmark's clearance (dev HUD, tests).
 var cleared: int = 0
+## Zone kinds this layer keeps clear of (LandmarkClearance.ZONE_*): cliffs ignore road
+## tunnels, whose hill they run on through.
+var clearance_mask: int = LandmarkClearance.ZONE_ALL
 
 var ctx: RoadsideContext
 var _seed: int = 0
@@ -153,7 +156,8 @@ func _sample(s: float) -> void:
 ## relative to the road; `sx/sy/sz` scale the mesh's local axes.
 func _place(pool: int, d: float, yaw: float, sx: float = 1.0, sy: float = 1.0, sz: float = 1.0) -> void:
 	var smp := ctx.sample
-	if ctx.clearance != null and ctx.clearance.blocks_upright(pools[pool].aabb, smp.s, d, yaw, sx, sy, sz):
+	if ctx.clearance != null and ctx.clearance.blocks_upright(pools[pool].aabb, smp.s, d, yaw, sx, sy, sz,
+			clearance_mask):
 		cleared += 1
 		return
 	var b := Basis(Vector3.UP, smp.godot_yaw(yaw))
@@ -167,7 +171,7 @@ func _place(pool: int, d: float, yaw: float, sx: float = 1.0, sy: float = 1.0, s
 func _place_on_grade(pool: int, d: float, flip: bool, sx: float, sy: float, sz: float) -> void:
 	var smp := ctx.sample
 	if ctx.clearance != null and ctx.clearance.blocks_upright(pools[pool].aabb, smp.s, d, PI if flip else 0.0,
-			sx, sy, sz):
+			sx, sy, sz, clearance_mask):
 		cleared += 1
 		return
 	var b := Basis(smp.right, smp.up, -smp.tangent)
@@ -182,7 +186,7 @@ func _place_on_grade(pool: int, d: float, flip: bool, sx: float, sy: float, sz: 
 ## A segment mesh (authored from z = 0 to z = -length) stretched from
 ## (s0, d) to (s1, d): continuous end to end on curves and grades.
 func _place_segment(pool: int, s0: float, s1: float, d: float, mesh_length_m: float) -> void:
-	if ctx.clearance != null and ctx.clearance.blocks_segment(pools[pool].aabb, s0, s1, d):
+	if ctx.clearance != null and ctx.clearance.blocks_segment(pools[pool].aabb, s0, s1, d, clearance_mask):
 		cleared += 1
 		return
 	ctx.road.sample_into(s1, ctx.sample_b)

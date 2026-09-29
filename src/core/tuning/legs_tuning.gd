@@ -10,6 +10,23 @@ extends Resource
 @export var checkpoint_warning_distances_m: PackedFloat64Array = [1000.0, 500.0]
 @export var fork_sign_distance_m: float = 1000.0
 
+@export_group("Biome plan (WP6.4a, docs/BIOMES.md)")
+## The journey's biome per leg (1-based order), by BiomeDef id (data/biomes/<id>.tres).
+## Spec: "Each leg is one biome"; the coast is the destination after legs_to_coast legs.
+## A missing file falls back to the leg before it (BiomePlan).
+@export var leg_biome_ids: Array[StringName] = [&"farmland", &"desert", &"desert", &"canyon", &"canyon",
+		&"city", &"city", &"valley_fog"]   # not in spec: the default order, the coast kept as the destination (BIOMES.md)
+## Every leg after the list: the endless coastal highway ("The road continues as an
+## endless coastal highway").
+@export var endless_biome_id: StringName = &"coast"
+## Ground, verge, rock and the world / fog tint offsets blend from one biome to the
+## next over [checkpoint - before, checkpoint + after]; roadside props swap at the line.
+@export var biome_blend_before_m: float = 250.0   # not in spec: blend over a distance
+@export var biome_blend_after_m: float = 350.0   # not in spec
+## The horizon silhouettes crossfade over [checkpoint - before, checkpoint + after].
+@export var horizon_blend_before_m: float = 600.0   # not in spec: far layers change slowly
+@export var horizon_blend_after_m: float = 900.0   # not in spec
+
 @export_group("Run start")
 ## The rolling start: the car waits on the line in this lane (0 = next to the median)
 ## and leaves it at this speed when the countdown ends (above the minimum speed, so
@@ -54,6 +71,14 @@ extends Resource
 
 @export_group("Journey")
 @export var journey_bonus_points: int = 50000   # not in spec
+
+
+## The id of leg `leg`'s biome (1-based) in the default plan.
+func biome_id_for_leg(leg: int) -> StringName:
+	var i := maxi(leg, 1) - 1
+	if i < leg_biome_ids.size():
+		return leg_biome_ids[i]
+	return endless_biome_id
 
 
 func leg_length_m() -> float:

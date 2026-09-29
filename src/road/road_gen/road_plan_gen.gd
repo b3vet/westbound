@@ -24,6 +24,13 @@ extends RefCounted
 ##
 ## Generation is sequential and draws only from its own stream, so the element list
 ## is the same however far ahead or in whatever increments generate_to() is called.
+##
+## Biomes (WP6.4a): with `biome_rules` (the latched per-leg biome rules), each
+## section reads the curve frequency scale of the leg it starts in: straights are drawn / scale (desert < 1: long straights;
+## canyon > 1: more bends) and, above 1, bend radii come from the tighter
+## [min, min + (max - min) / scale]. The bend sight clearance for BLIND_BEND is the
+## biome's (cliffs). The number of draws never changes, and at scale 1 (or without a
+## plan) every value is bit-identical to the plain generator.
 
 ## Plan-view sight distance past an obstruction `m` inside the driving line on an
 ## arc of radius R (middle-ordinate rule): S^2 = 8 R m.
@@ -46,6 +53,9 @@ var signs: Array[RoadFeature] = []
 ## Output of eval().
 var out_heading: float = 0.0
 var out_curvature: float = 0.0
+
+## Optional: per-leg curve frequency and bend sight clearance (null = the defaults).
+var biome_rules: BiomeRoadRules
 
 var _rng: Rng
 var _cursor: int = 0
@@ -73,6 +83,7 @@ var _sharp_radius: float
 var _sign_distance: float
 var _bend_sight_sq_min: float
 var _bend_sight_factor: float
+var _bend_sight_clearance: float
 
 
 func _init(rng: Rng, t: RoadTuning) -> void:
@@ -97,7 +108,8 @@ func _init(rng: Rng, t: RoadTuning) -> void:
 	_sharp_radius = t.sharp_bend_radius_m
 	_sign_distance = t.hazard_sign_distance_m
 	# Bend sight distance, compared squared (no sqrt in the branch).
-	_bend_sight_factor = MIDDLE_ORDINATE_FACTOR * t.bend_sight_clearance_m
+	_bend_sight_clearance = t.bend_sight_clearance_m
+	_bend_sight_factor = MIDDLE_ORDINATE_FACTOR * _bend_sight_clearance
 	_bend_sight_sq_min = t.blind_sight_distance_m * t.blind_sight_distance_m
 	assert(_band_hi - _band_lo >= 2.0 * _defl_min, "sun band narrower than two minimum bends")
 	assert(_band_lo + _switch_ramp_margin < _band_hi, "switch transitions do not fit in the sun band")
@@ -162,7 +174,13 @@ func _start() -> void:
 
 ## One straight followed by one bend.
 func _add_section() -> void:
-	_push(_rng.float_range(_straight_min, _straight_max), 0.0, 0.0, _h)
+	var scale := biome_rules.curve_scale_at(end_s) if biome_rules != null else 1.0
+	if scale <= 0.0:
+		scale = 1.0
+	_push(_rng.float_range(_straight_min, _straight_max) / scale, 0.0, 0.0, _h)
+	var r_max := _radius_max
+	if scale > 1.0:
+		r_max = _radius_min + (_radius_max - _radius_min) / scale
 	var off := _side * _h   # current sun offset, in [band_lo, band_hi]
 	var ramp := _rng.float_range(_ramp_min, _ramp_max)
 	if end_s >= _next_switch_s:
@@ -172,7 +190,7 @@ func _add_section() -> void:
 		# Too close to the zone for a clean switch: first bend away from the sun,
 		# far enough that the switch can start on the next section.
 		var target := _rng.float_range(_band_lo + _switch_ramp_margin, _band_hi)
-		_add_bend(_side * (target - off), _rng.float_range(_radius_min, _radius_max), ramp)
+		_add_bend(_side * (target - off), _rng.float_range(_radius_min, r_max), ramp)
 		return
 	var room_up := _band_hi - off
 	var room_down := off - _band_lo
@@ -187,7 +205,7 @@ func _add_section() -> void:
 		return   # unreachable with a valid band (asserted in _init)
 	var room := room_up if dir > 0.0 else room_down
 	var mag := _rng.float_range(_defl_min, minf(_defl_max, room))
-	_add_bend(_side * dir * mag, _rng.float_range(_radius_min, _radius_max), ramp)
+	_add_bend(_side * dir * mag, _rng.float_range(_radius_min, r_max), ramp)
 
 
 func _add_side_switch(ramp: float) -> void:
@@ -226,9 +244,14 @@ func _add_bend(dh: float, radius: float, ramp: float) -> void:
 	_push(ramp, k, -k / ramp, h)
 	_h = h_start + dh
 	bends.append(RoadFeature.make(RoadFeature.Kind.BEND, s_start, end_s, k))
-	if _bend_sight_factor * eff_radius < _bend_sight_sq_min:
+	var sight_factor := _bend_sight_factor
+	if biome_rules != null:
+		var clearance := biome_rules.bend_sight_clearance_at(s_start, _bend_sight_clearance)
+		if clearance != _bend_sight_clearance:
+			sight_factor = MIDDLE_ORDINATE_FACTOR * clearance
+	if sight_factor * eff_radius < _bend_sight_sq_min:
 		blind_bends.append(RoadFeature.make(RoadFeature.Kind.BLIND_BEND, s_start, end_s,
-			sqrt(_bend_sight_factor * eff_radius)))
+			sqrt(sight_factor * eff_radius)))
 	var sign_s := s_start - _sign_distance
 	if eff_radius <= _sharp_radius and sign_s >= 0.0:
 		signs.append(RoadFeature.make(RoadFeature.Kind.SIGN, sign_s, sign_s, _sign_distance,

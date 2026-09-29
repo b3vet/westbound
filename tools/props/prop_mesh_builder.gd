@@ -21,6 +21,9 @@ const EMISSIVE_STREETLAMP := 2
 const WORLD_MATERIAL := "res://assets/shaders/materials/world.tres"
 
 var palette: WBPalette
+## Named sRGB colours not (yet) in the palette, e.g. a biome's (BiomeColors). Looked up
+## after the palette.
+var extra_colors: Dictionary = {}
 var xform := Transform3D.IDENTITY
 
 var _v := PackedVector3Array()
@@ -33,6 +36,14 @@ func _init(p: WBPalette) -> void:
 	palette = p
 
 
+## The named colour: the palette's, else `extra_colors`' (an unknown name is an
+## authoring error: WBPalette.color reports it).
+func color_of(color_name: StringName) -> Color:
+	if not palette.has_color(color_name) and extra_colors.has(color_name):
+		return extra_colors[color_name]
+	return palette.color(color_name)
+
+
 func triangle_count() -> int:
 	return int(_v.size() / 3.0)
 
@@ -42,7 +53,7 @@ func triangle_count() -> int:
 ## Convex polygon (fan). `outward` picks the front side (any vector on that side).
 func face(points: PackedVector3Array, outward: Vector3, color_name: StringName,
 		emissive: int = EMISSIVE_NONE) -> void:
-	var col := palette.color(color_name)
+	var col := color_of(color_name)
 	var pts := PackedVector3Array()
 	for p in points:
 		pts.append(xform * p)
