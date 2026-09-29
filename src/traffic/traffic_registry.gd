@@ -2,9 +2,10 @@ class_name TrafficRegistry
 extends RefCounted
 ## The loaded DriverProfile and VehicleType lists in a stable order, so
 ## TrafficState.profile_id / type_id are plain indices. Spec: Traffic → Driver types
-## (8 profiles, IDM/MOBIL parameters per profile in data/driver_profiles/); Traffic
-## roster (vehicle types). docs/CONTRACTS.md §5 ("indices into the registries, load
-## order") and §10. Built once per run (never in a tick).
+## (the spec's 8 profiles + Racer, plan D15; IDM/MOBIL parameters per profile in
+## data/driver_profiles/); Traffic roster (vehicle types). docs/CONTRACTS.md §5
+## ("indices into the registries, load order") and §10. Built once per run (never in
+## a tick).
 ##
 ##   var reg := TrafficRegistry.load_default(ctx.tuning.traffic)
 ##   var pid := reg.profile_index(&"aggressive")
@@ -18,6 +19,7 @@ extends RefCounted
 ## stored in traces and saves).
 const PROFILE_IDS: Array[StringName] = [
 	&"cruiser", &"commuter", &"aggressive", &"truck", &"bus", &"van", &"motorbike", &"hesitant",
+	&"racer",   # plan D15 (WP6.6)
 ]
 const TYPE_IDS: Array[StringName] = [
 	&"sedan", &"hatchback", &"suv", &"pickup", &"van", &"semi", &"coach", &"motorbike",

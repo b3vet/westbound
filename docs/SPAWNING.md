@@ -14,12 +14,13 @@ Each lane is planned as a renewal process at `DirectorTuning.density_per_km_lane
 
 - **Minimum spacing:** half the two lengths plus the follower's IDM desired gap, `s* = s0 + max(0, vT + v·Δv / 2√(ab))`. At `s*` the IDM interaction term is 1, so no vehicle is placed where it would have to brake harder than its comfortable deceleration.
 - **Live traffic:** vehicles already on the road (in the lane or changing into it) act as renewal points, so every new vehicle also keeps `s*` to its live leader and follower.
-- **Driver mix:** each lane draws from its own mix.
-    - The aggressive share (5 → 20 %) applies wherever the aggressive profile may drive.
+- **Driver mix:** each lane draws from its own mix (`Flow.draw_into`).
+    - The racer share (10 → 15 %, plan D15) and the aggressive share (5 → 20 %) apply wherever each may drive: together the fast share rises from 15 % at leg 1 to 35 % at leg 8.
+    - A lane that only fast profiles fit (none of the others reaches its flow band) is all fast; the racer and the aggressive driver share it in proportion to their shares.
     - Hesitant appears only from `hesitant_first_leg` and the profile's own `min_leg`.
-    - The other profiles are weighted by `traffic.spawn_profile_weights_pct`.
-- **Which lanes a profile may use:** a profile may spawn in a lane only if its top desired speed reaches the lane's flow speed minus `spawn_lane_speed_tolerance_kmh`. `keep_right` profiles use only the rightmost `spawn_keep_right_lane_count` lanes.
-- **Speeds:** `v0` is drawn inside the profile's range, clipped to the lane's band. Every vehicle spawns at its lane's flow speed (`v` = flow).
+    - The other profiles are weighted by `traffic.spawn_profile_weights_pct` (cruiser 22, commuter 40, truck 12, bus 4, van 10, motorbike 6, Hesitant 6; D15 moved 4 points from cruisers and 4 from Hesitant drivers to commuters and motorbikes).
+- **Which lanes a profile may use:** a profile may spawn in a lane only if its top desired speed reaches the lane's flow speed minus `spawn_lane_speed_tolerance_kmh`. `keep_right` profiles use only the rightmost `spawn_keep_right_lane_count` lanes. A profile with `spawn_left_lane_count` N (the racer: 2) uses only the leftmost N lanes and never the rightmost one.
+- **Speeds:** `v0` is drawn inside the profile's range, clipped to the lane's band, then jittered by up to ±`spawn_v0_jitter_pct` (5 %, D15) inside the profile's range and above a behind spawn's minimum, so a lane whose band clipped a range (Hesitant drivers in the middle lane) does not want one speed. Every vehicle spawns at its lane's flow speed (`v` = flow).
 - **Type and looks:** the vehicle type is any type whose `allowed_profiles` lists the profile. The model variant is uniform. `color_index` indexes the biome's `traffic_palette`, or `spawn_palette_fallback_count` if the biome has none.
 - **Randomness:** everything comes from `ctx.rng`. A re-roll calls `plan_batch` again and draws new numbers. `draw_into` and `plan_single` allocate nothing.
 
@@ -104,8 +105,8 @@ All knobs live in `DirectorTuning` (`data/tuning/director.tres`), groups *Densit
 | Change | What it does |
 | --- | --- |
 | **Band top-up** (`density_topup_*`) | After each batch, every lane the player is catching (flow speed + 10 km/h below the player) is topped up to target × gain in the planned band beyond the fog, `[player + fog end + margin, spawned_to)`. Vehicles go in one at a time, into the largest gaps: in the middle of the stretch where Flow's drawn vehicle keeps s* (closing speed included) to both live neighbors. Every top-up goes through `_commit`: cap, ghost zone, beyond the fog, live gaps. At most 16 per batch. 6-22% of the ahead spawns are top-ups. Director rate. |
-| **Density gain** (`density_gain_*`, `density_control_interval_s`) | Every 0.25 s, the relative shortfall of the window's effective density is integrated into a planning gain (0.05 per s per unit error, clamped to [0.7, 1.5]). Batches, top-ups and behind arrivals use target × gain. It corrects slow drifts both ways: 0.8-0.9 at legs 1-2, where the window runs over target, and 1.2-1.45 at legs 5-8. It is allocation-free (one capacity scan every 0.25 s). |
-| **Closer following in late legs** (`headway_scale_first` 1.0 → `headway_scale_last` 0.8) | This is the only lever that raises the IDM ceiling (cause 2). It is ramped like the density: at leg 8 every driver profile's time headway T is 0.8 × its value (commuter 1.3 → 1.04 s, truck 1.8 → 1.44 s, aggressive 1.0 → 0.8 s). The director applies it on each leg change through `TrafficSim.set_headway_scale()` (director rate, three lines in the sim), and uses the same scale for Flow's spawn s*. With it the leg-8 ceiling rises from ~13 to ~16.5/km. Measured alternatives at leg 8 with target 20 on 3 lanes: T × 0.75 → 17.3, T × 0.6 → 18.4, and lane flow speeds 10-15 km/h lower → only 14.5-14.7. |
+| **Density gain** (`density_gain_*`, `density_control_interval_s`) | Every 0.25 s, the relative shortfall of the window's effective density is integrated into a planning gain (0.05 per s per unit error, clamped to [0.7, 1.5]; plan D17: [0.7, 1.8]). Batches, top-ups and behind arrivals use target × gain. It corrects slow drifts both ways: 0.8-0.9 at legs 1-2, where the window runs over target, and 1.2-1.45 at legs 5-8. It is allocation-free (one capacity scan every 0.25 s). |
+| **Closer following in late legs** (`headway_scale_first` 1.0 → `headway_scale_last` 0.8; plan D17: 0.55) | This is the only lever that raises the IDM ceiling (cause 2). It is ramped like the density: at leg 8 every driver profile's time headway T is 0.8 × its value (commuter 1.3 → 1.04 s, truck 1.8 → 1.44 s, aggressive 1.0 → 0.8 s). The director applies it on each leg change through `TrafficSim.set_headway_scale()` (director rate, three lines in the sim), and uses the same scale for Flow's spawn s*. With it the leg-8 ceiling rises from ~13 to ~16.5/km. Measured alternatives at leg 8 with target 20 on 3 lanes: T × 0.75 → 17.3, T × 0.6 → 18.4, and lane flow speeds 10-15 km/h lower → only 14.5-14.7. |
 | **Leg ramp** | `density_last_per_km_lane` goes from 16 to **18** (leg 1 stays 8). |
 | **Cap** | `max_active_vehicles` goes from 60 to **90**, sized from the 4-lane leg-8 need (80 active on average, peak 90). |
 | **Dev knob** | `TrafficDirector.set_density_scale(f)` multiplies the target for batches, top-ups, behind arrivals and the opposite side. The run's DEV row 5 **DENS** cycles ×1.0 / ×1.25 / ×1.5 / ×0.75 and survives RETRY. DevStats gets `density` (effective, in the window), `density_target`, `density_scale` and `density_gain`. |
@@ -194,7 +195,7 @@ The waves are laid out **along the road**, as the intensity (0 breather … 1 pe
 - The leg's last breather is the **checkpoint breather** (`checkpoint_breather_min_s`–`_max_s`, 10–15 s) and ends exactly at the checkpoint; the next leg starts with a build. At the reference pace a 3.5 km leg (79 s) holds one cycle: build ~45 s, peak ~20 s, breather ~12 s; a longer leg holds two.
 - Everything is drawn in road order from one stream, `run.rng_traffic.derive(&"waves")`, so the curve depends only on the seed and the checkpoints: the same for every player (Daily Drive). Each peak also carries its two set-piece draws (chance, kind).
 - **Why distance:** the checkpoint breather has to end at the checkpoint whatever the player's speed, and a curve along the road is the same for everyone. A slower player takes longer to drive a cycle (a 60 s cycle at 160 km/h is 74 s at 130 km/h), a faster one less.
-- Density multiplier at intensity *I*: `lerp(wave_breather_density_pct, wave_peak_density_pct, I)` = 50 % … 125 % of the leg's target (build 87.5 % → 125 %). A cycle averages ~99 %.
+- Density multiplier at intensity *I*: `lerp(wave_breather_density_pct, wave_peak_density_pct, I)` = 70 % … 125 % of the leg's target (build 97.5 % → 125 %; WP6.2 had 50 % breathers, plan D17 raised them, see *Fast traffic and density*). A cycle plans ~107 % on average; at leg 8 the peaks are capped by IDM.
 
 ### The meeting map: what traffic belongs to which part of the wave
 
@@ -222,6 +223,7 @@ Measured (fast tier, `test_traffic_director_waves.gd`, leg 4, the player at 170 
 | --- | --- | --- | --- |
 | Density | 8 | 18 (D11) vehicles per km per lane | `density_*_per_km_lane` |
 | Aggressive share | 5 % | 20 % | `aggressive_share_*_pct` |
+| Racer share (D15) | 10 % | 15 % | `racer_share_*_pct` (block *Fast traffic*) |
 | Hesitant | no | from leg 3 | `hesitant_first_leg` (and the profile's `min_leg`) |
 | Set-piece kinds unlocked | 1 | 7 | `set_piece_unlock_order`, `set_pieces_unlocked_by_leg` = 1, 2, 3, 4, 5, 6, 7, 7 |
 | Chance a peak gets a set piece | 50 % | 80 % | `set_piece_chance_*_pct` |
@@ -267,4 +269,73 @@ The D11 survey (`--density --lanes=3 --legs=8 --profile=scripted`, 3 seeds × 7 
 | WP6.2, waves, no set pieces | 14.9 (83 %) | 13.8 / 15.2 / 15.6 |
 | WP6.2, waves and set pieces (default) | 13.2–13.4 (73–74 %) | 11.8 / 13.6 / 14.6 |
 
-At leg 8 the lanes sit at IDM's ceiling (T × 0.8), so peaks cannot go above it: the waves take density away in breathers and early builds, and set pieces clear their zone (and, in their lanes, the slower traffic they would catch up with). Leg 4 delivers 92–94 % of its target. See the WP6.2 handoff for the open question to the owner.
+At leg 8 the lanes sit at IDM's ceiling (T × 0.8), so peaks cannot go above it: the waves take density away in breathers and early builds, and set pieces clear their zone (and, in their lanes, the slower traffic they would catch up with). Leg 4 delivers 92–94 % of its target. See the WP6.2 handoff for the open question to the owner. Plan D17 (WP6.6) rebalanced it: *Fast traffic and density* below.
+
+## Fast traffic and density (D15, D17; WP6.6)
+
+Plan D15 (owner, M5: "the traffic is quite slow ... a variety of fast cars") and D17 (WP6.2's waves and set-piece clearing brought leg 8 down to 74 % of its target; the owner wants late legs crowded). The driver side is in docs/TRAFFIC.md, *Fast traffic (D15)*.
+
+### What changed
+
+| | Before | After | Where |
+| --- | --- | --- | --- |
+| Lane flows (from the right) | 95 / 115 / 135 / 150 km/h | **95 / 120 / 145 / 160** | `traffic.lane_flow_speeds_from_right_kmh` |
+| Racer share (new, 190-250 km/h) | – | **10 → 15 %** (two left lanes) | `director.racer_share_*_pct` |
+| Aggressive share | 5 → 20 % (spec) | unchanged; fast total **15 → 35 %** | `director.aggressive_share_*_pct` |
+| Commuter / aggressive speeds | 100–130 / 150–190 km/h | **95–145 / 140–200** | `data/driver_profiles/` |
+| Desired-speed jitter | – | **±5 %** | `traffic.spawn_v0_jitter_pct` |
+| Mix of the others | cruiser 26, commuter 34, truck 12, bus 4, van 10, motorbike 4, Hesitant 10 | **22, 40, 12, 4, 10, 6, 6** | `traffic.spawn_profile_weights_pct` |
+| Breather density | 50 % | **70 %** (peak stays 125 %) | `director.wave_breather_density_pct` |
+| Late-leg headway (T ×, leg 8) | 0.8 | **0.55** | `director.headway_scale_last` |
+| Density gain range | 0.7–1.5 | **0.7–1.8** | `director.density_gain_max` |
+
+Why the density levers: at leg 8 the lanes sit at IDM's ceiling (the equilibrium gap `(s0 + vT) / √(1 − (v/v0)⁴)`), so the waves' peaks cannot rise above it and deep breathers only took density away; faster lanes lower the ceiling further (a lane at 145 km/h holds fewer cars at the same headway than one at 135). Closer following in late legs raises the ceiling (commuters 1.3 s → 0.72 s at leg 8, trucks 1.8 → 1.0 s, racers 0.9 → 0.5 s), shallower breathers lose less, and the gain may go higher where the window still falls short. Raising the leg-8 target instead made it worse (target 22: 12.6 per km per lane, more vehicles packed at s* brake and stretch their lanes); `wave_fill_min_mult` below the breather (refilling breathers) erased the waves.
+
+### Before / after
+
+`--density --profile=scripted --seeds=4 --run-legs=4` (4 runs × 14 km per cell at one fixed leg; the observer at 150–250 km/h, redrawn every 15 s). "Before" is the integration branch with WP6.2 (6e486c7). The survey's procedural road has no forks and asks for no breathers (WP6.5's hooks stay idle), so neither is in these numbers. Effective density in the window [−150, +600 m], vehicles per km per lane:
+
+| Lanes | Leg | Target | Before | After |
+| --- | --- | --- | --- | --- |
+| 3 | 1 | 8.0 | 7.75 (97 %) | **7.93 (99 %)** |
+| 3 | 4 | 12.3 | 11.42 (93 %) | **12.11 (99 %)** |
+| 3 | 8 | 18.0 | 13.36 (74 %) | **14.94 (83 %)** |
+| 4 | 1 | 8.0 | 7.91 (99 %) | **8.10 (101 %)** |
+| 4 | 4 | 12.3 | 11.67 (95 %) | **12.16 (99 %)** |
+| 4 | 8 | 18.0 | 14.66 (81 %) | **15.99 (89 %)** |
+
+(D11, before WP6.2: 16.3 and 16.8 at leg 8.) Zero rule violations in every cell; peak active 90 at leg 8 on 4 lanes, at the cap under 1 % of the time.
+
+Speeds of the traffic in the window (same cells; lane means from the median):
+
+| Lanes, leg | Before: mean, per lane | Before: > 150 / 180 / 200 | After: mean, per lane | After: > 150 / 180 / 200 |
+| --- | --- | --- | --- | --- |
+| 3, leg 1 | 112; 126 / 117 / 102 | 1 / 0 / 0 % | **121; 138 / 127 / 106** | 4 / 0 / 0 % |
+| 3, leg 4 | 111; 123 / 113 / 101 | 0 / 0 / 0 % | **122; 134 / 127 / 108** | 3 / 1 / 0 % |
+| 3, leg 8 | 112; 122 / 115 / 101 | 0 / 0 / 0 % | **123; 136 / 127 / 110** | 5 / 1 / 0 % |
+| 4, leg 8 | 120; 135 / 128 / 117 / 103 | 2 / 0 / 0 % | **128; 147 / 140 / 127 / 104** | 10 / 1 / 0 % |
+
+The window undercounts fast traffic: what is faster than the observer leaves it ahead and only comes back from behind when the player is slower than the lane. Over every active vehicle, racers average **186 km/h at leg 1** and 143 km/h at leg 8 (crowded, they weave), aggressive drivers 138 and 144 km/h (3 lanes).
+
+### The waves at the player (D17)
+
+Density within [−100, +200 m] of the player by the phase it is in, and vehicles it passes per km driven per lane (WP6.2's "met per km"), 3 lanes:
+
+| Leg | | Build | Peak | Breather |
+| --- | --- | --- | --- | --- |
+| 4 | before: at the player / passed | 12.5 / 4.9 | 10.3 / 4.5 | 9.8 / 4.2 |
+| 4 | after | **12.9 / 4.2** | **11.0 / 4.6** | **10.1 / 3.7** |
+| 8 | before | 14.5 / 5.6 | 11.6 / 5.1 | 12.8 / 5.4 |
+| 8 | after | **16.3 / 5.6** | **12.9 / 5.5** | **11.4 / 4.4** |
+
+4 lanes after: leg 4 12.9 / 11.6 / 10.6 (passed 4.1 / 4.6 / 3.4), leg 8 15.4 / 16.9 / 15.9 (4.9 / 6.8 / 6.0). Breathers stay the thinnest phase and are more distinct at leg 8 than before (the D17 levers put the density back into builds and peaks).
+
+**Finding (open, for the director's owner):** with the real sim, peaks at the player are *thinner* than builds (before and after, 3 lanes). A peak planned above IDM's ceiling places its vehicles at s*, where IDM brakes (`s*` at Δv = 0 is below the equilibrium gap). They slow down and the player meets them earlier, in the build: the peak slides into the build. Planning each lane at no more than its equilibrium density at its speed (the gap `(s0 + vT) / √(1 − (v/v0)⁴)` instead of `s*`) would keep peaks where they are planned. The meeting map also uses the lane's flow speed, while fast profiles run above it and platoons below it. Not changed here (Flow's shaping and the meeting map are WP6.2's code).
+
+### The trade-off (what the owner may want to decide)
+
+Faster lanes hold fewer cars at the same headways. Measured at leg 8, 3 lanes, before the D17 levers: flows 95 / 115 / 135 → 16.5 per km per lane (flat waves), 95 / 130 / 165 → 12.7 (−23 %; traffic 148 km/h, 42 % above 150 km/h, racers 174 km/h at leg 8, 196 at leg 1). With every D17 lever, 95 / 120 / 145 gives 83 % of the target and the pre-D15 flows 86 %. So the fast lane gained +10 km/h, not the +35-45 km/h of a 170-180 km/h fast lane, and the extra speed comes from the racers and the wider spreads. A fast lane at 165+ km/h needs either a lower late-leg density or closer following than T × 0.55.
+
+### Tools
+
+`tests/soak/density_survey.gd` also reports the speed distribution (share above 150 / 180 / 200 km/h, mean per lane, racer and aggressive means), the density by wave phase (window, at the player, passed per km), the director's refused and behind shares; profile `steady` holds the observer at 200 km/h. `soak_main.gd -- --density` what-ifs: `--racer=`, `--aggressive=`, `--jitter=`, `--tolerance=`, `--lookahead=`, `--breather=`, `--peak=`, `--fill=`, `--set-pieces=`, `--set=profile.field=X;...`.

@@ -20,6 +20,11 @@ const EPS := 1e-6
 ## coarse step of the blind test (the fake sim and the director are dt-exact enough).
 const BLIND_SEEDS: Array[int] = [18, 20, 24, 21, 28, 6, 25, 14]
 const COARSE_DT := 1.0 / 30.0
+## Share of the planned peak / breather contrast the met counts must show, and of the
+## planned mid-build / breather contrast (x MET_CONTRAST_SHARE; builds rise from their
+## start and smear more). With WP6.2's 125 % / 50 % these are the 1.8x and 1.4x it pinned.
+const MET_CONTRAST_SHARE := 0.53
+const BUILD_CONTRAST_SHARE := 0.67
 
 var reg: SpawnFixtureRegistry
 var tuning: Tuning
@@ -176,8 +181,9 @@ func test_meeting_map() -> void:
 func test_density_the_player_meets_follows_the_waves() -> void:
 	# Constant 170 km/h past traffic that holds its lanes' speeds (fake sim), leg 4: the
 	# vehicles the player passes per km driven, by the phase it is in when it passes
-	# them. Planned: breather 50%, build 87.5-125%, peak 125% of the leg's density. (At
-	# leg 8 peaks saturate: IDM gaps cap a lane near the target, docs/SPAWNING.md.)
+	# them. Planned: DirectorTuning.wave_density_mult (breather, build rising to the peak)
+	# x the leg's density. (At leg 8 peaks saturate: IDM gaps cap a lane near the target,
+	# docs/SPAWNING.md.)
 	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), 170.0, 4)
 	var met := PackedFloat64Array([0.0, 0.0, 0.0])
 	var driven := PackedFloat64Array([0.0, 0.0, 0.0])
@@ -200,9 +206,18 @@ func test_density_the_player_meets_follows_the_waves() -> void:
 		gt(driven[ph], 500.0, "driven in phase %d" % ph)
 		per_km.append(met[ph] / driven[ph] * Units.M_PER_KM)
 	print("      vehicles met per km: build %.1f, peak %.1f, breather %.1f" % [per_km[0], per_km[1], per_km[2]])
-	gt(per_km[1], per_km[2] * 1.8, "peaks meet far more traffic than breathers (planned 125% vs 50%)")
+	# The planned contrast comes from the tuning (plan D17 rebalanced it): the peak and a
+	# mid-build against the breather. Met counts smear it (lanes at their own closing
+	# speeds, IDM gaps, the fill rule), so at least MET_CONTRAST_SHARE of it must show.
+	var d := tuning.director
+	var breather := d.wave_density_mult(0.0)
+	var peak_ratio := d.wave_density_mult(1.0) / breather
+	var build_ratio := d.wave_density_mult(lerpf(d.wave_build_start_intensity, 1.0, 0.5)) / breather
+	gt(per_km[1], per_km[2] * (1.0 + (peak_ratio - 1.0) * MET_CONTRAST_SHARE),
+		"peaks meet far more traffic than breathers (planned %.0f%% vs %.0f%%)" % [100.0 * d.wave_density_mult(1.0), 100.0 * breather])
 	gt(per_km[1], per_km[0], "the build leads up to the peak")
-	gt(per_km[0], per_km[2] * 1.4, "and starts well above the breather")
+	gt(per_km[0], per_km[2] * (1.0 + (build_ratio - 1.0) * MET_CONTRAST_SHARE * BUILD_CONTRAST_SHARE),
+		"and starts well above the breather")
 
 
 func test_gain_tracks_the_wave_shaped_target() -> void:

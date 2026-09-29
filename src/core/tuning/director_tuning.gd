@@ -23,8 +23,9 @@ extends Resource
 ## Intensity at the start of a build (it rises linearly to 1 at the peak; a breather is 0).
 @export var wave_build_start_intensity: float = 0.5   # not in spec
 ## Density at intensity 0 (a breather) and 1 (a peak), % of the leg's target density.
-## Linear in between. With the defaults a cycle averages ~99% of the target.
-@export var wave_breather_density_pct: float = 50.0   # not in spec
+## Linear in between. Plan D17 (WP6.6): breathers 50 -> 70 % (at leg 8 the peaks sit at
+## IDM's ceiling, so deep breathers only took density away: 74 % of the leg-8 target).
+@export var wave_breather_density_pct: float = 70.0   # not in spec
 @export var wave_peak_density_pct: float = 125.0   # not in spec
 ## The meeting map (which part of the wave a vehicle planned now belongs to): the
 ## player meets a vehicle ahead in a lane slower than itself at its closing speed. The
@@ -102,7 +103,8 @@ extends Resource
 @export var density_gain_rate_per_s: float = 0.05   # not in spec: slow (spawns reach the window 10-40 s later)
 ## Planning gain range (1 = the target density exactly).
 @export var density_gain_min: float = 0.7   # not in spec
-@export var density_gain_max: float = 1.5   # not in spec
+## Plan D17 (WP6.6): 1.5 -> 1.8 (the leg-8 gain sat at 1.5 with the waves and faster lanes).
+@export var density_gain_max: float = 1.8   # not in spec
 ## After each batch, lanes the player is catching (their flow speed + this below the
 ## player's speed) are topped up to target x gain in the band beyond the fog.
 @export var density_topup_speed_margin_kmh: float = 10.0   # not in spec
@@ -115,7 +117,8 @@ extends Resource
 ## can stay at its flow speed (~13-14 vehicles per km per lane with the profiles' own
 ## T around a fast player); denser late legs need closer following.
 @export var headway_scale_first: float = 1.0   # not in spec
-@export var headway_scale_last: float = 0.8   # not in spec
+## Plan D17 (WP6.6): 0.8 -> 0.55, the ceiling for waves and faster lanes (D15) at leg 8.
+@export var headway_scale_last: float = 0.55   # not in spec
 
 @export_group("Behind spawns: the view test (orchestrator, D11; not in spec)")
 ## Fairness rule 5 ("behind the camera frustum") as a fixed virtual view volume, not the
@@ -162,3 +165,20 @@ func set_pieces_unlocked(leg: int) -> int:
 ## Density multiplier (x the leg's target) at wave intensity `intensity` (0..1).
 func wave_density_mult(intensity: float) -> float:
 	return Units.pct_to_frac(lerpf(wave_breather_density_pct, wave_peak_density_pct, clampf(intensity, 0.0, 1.0)))
+
+
+# ---------------------------------------------------------------- Fast traffic (plan D15, WP6.6)
+
+## The Racer's share (190-250 km/h sports cars, plan D15; owner, M5 playtest), ramped
+## like the aggressive share, wherever it may spawn (its profile's left lanes). With
+## the aggressive share (5 -> 20 %) the fast traffic rises from 15 % at leg 1 to 35 %
+## at leg 8 of the lanes both may use. A lane only fast profiles fit (the leftmost
+## lane, see TrafficTuning.lane_flow_speeds_from_right_kmh) is all fast: the two share
+## it in proportion.
+@export_group("Fast traffic (plan D15; not in spec)")
+@export var racer_share_first_pct: float = 10.0   # not in spec
+@export var racer_share_last_pct: float = 15.0   # not in spec
+
+
+func racer_share_frac(leg: int) -> float:
+	return Units.pct_to_frac(lerpf(racer_share_first_pct, racer_share_last_pct, leg_ramp(leg)))

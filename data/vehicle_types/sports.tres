@@ -12,5 +12,5 @@ height_m = 1.2
 blocks_sightlines = false
 is_motorbike = false
 mass_kg = 1450.0
-allowed_profiles = Array[StringName]([&"aggressive", &"hesitant"])
+allowed_profiles = Array[StringName]([&"aggressive", &"racer", &"hesitant"])
 model_scene_paths = PackedStringArray("res://assets/traffic/sports_a.tscn", "res://assets/traffic/sports_b.tscn")

@@ -57,17 +57,18 @@ func _tuning_copy() -> Tuning:
 
 func test_registry_profiles_match_spec() -> void:
 	var reg := TrafficRegistry.load_default(t.traffic)
-	eq(reg.profile_count(), 8, "eight driver profiles")
+	eq(reg.profile_count(), 9, "the spec's eight driver profiles + Racer (plan D15)")
 	eq(reg.type_count(), 10, "ten vehicle types")
 	for i in TrafficRegistry.PROFILE_IDS.size():
 		eq(reg.profiles[i].id, TrafficRegistry.PROFILE_IDS[i], "profile order = load order")
 	for i in TrafficRegistry.TYPE_IDS.size():
 		eq(reg.types[i].id, TrafficRegistry.TYPE_IDS[i], "type order = load order")
-	# Desired speeds from the spec's driver-types table (km/h).
+	# Desired speeds from the spec's driver-types table (km/h); plan D15 widened commuter
+	# (100-130) and aggressive (150-190) and added the racer.
 	var speeds := {
-		&"cruiser": [80.0, 100.0], &"commuter": [100.0, 130.0], &"aggressive": [150.0, 190.0],
+		&"cruiser": [80.0, 100.0], &"commuter": [95.0, 145.0], &"aggressive": [140.0, 200.0],
 		&"truck": [80.0, 90.0], &"bus": [85.0, 95.0], &"van": [95.0, 110.0],
-		&"motorbike": [110.0, 150.0], &"hesitant": [90.0, 120.0],
+		&"motorbike": [110.0, 150.0], &"hesitant": [90.0, 120.0], &"racer": [190.0, 250.0],
 	}
 	for p in reg.profiles:
 		var r: Array = speeds[p.id]
@@ -75,9 +76,10 @@ func test_registry_profiles_match_spec() -> void:
 		near(p.desired_speed_max_kmh, r[1], 1e-9, "%s max speed" % p.id)
 		near(p.idm_delta, t.traffic.idm_delta, 0.0, "%s delta = 4" % p.id)
 		ge(p.signal_time_s, t.traffic.signal_time_floor_s, "%s signal >= floor" % p.id)
-		var sig := t.traffic.signal_time_aggressive_s if p.id == &"aggressive" else t.traffic.signal_time_s
+		var fast := p.id == &"aggressive" or p.id == &"racer"   # the racer telegraphs like aggressive (D15)
+		var sig := t.traffic.signal_time_aggressive_s if fast else t.traffic.signal_time_s
 		near(p.signal_time_s, sig, 1e-9, "%s signal time" % p.id)
-		if p.id == &"aggressive":
+		if fast:
 			near(p.lane_change_move_min_s, t.traffic.lane_change_move_aggressive_s, 1e-9)
 			near(p.lane_change_move_max_s, t.traffic.lane_change_move_aggressive_s, 1e-9)
 		else:

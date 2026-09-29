@@ -31,6 +31,8 @@ extends Node3D
 ##   HUD     dev HUD (COPY report)
 ##   WALL / BLOCK / WAVES (top right, second row; SetPieceControls, WP6.2): force a set
 ##           piece into the next ahead batch; show the intensity curve (IntensityPlot)
+##   FAST xK / RACER (top right, third row; FastTrafficControls, WP6.6): scale the fast
+##           shares (aggressive + racer); spawn a racer behind the player
 ## Tap a vehicle to select it (all MOBIL terms in a side panel).
 ## Keys: Space pause, . step, N +1 s, [ ] time scale, V camera mode, B driver,
 ## X clear, 1-5 layers (IDM, MOBIL, BLINK, OCC, PASS), backtick dev HUD, C rig camera.
@@ -115,6 +117,8 @@ var bot: SandboxBot
 var events: ScoreEventBuffer
 ## Set-piece triggers and the intensity curve (WP6.2).
 var set_piece_controls: SetPieceControls
+## The fast-traffic controls (plan D15, WP6.6).
+var fast_controls: FastTrafficControls
 
 var _ctx: RunContext
 var _biome: BiomeDirector
@@ -216,6 +220,10 @@ func _ready() -> void:
 	add_child(set_piece_controls)
 	_place_slider()
 	get_viewport().size_changed.connect(_place_slider)
+	fast_controls = FastTrafficControls.new()
+	fast_controls.name = "FastTrafficControls"
+	fast_controls.sandbox = self
+	add_child(fast_controls)
 	if Game.can_change_to(Game.COUNTDOWN):
 		Game.change_state(Game.COUNTDOWN)
 	if Game.can_change_to(Game.RUNNING):
@@ -658,6 +666,7 @@ func refresh_stats() -> void:
 	lines.append("lane changes %.1f/min  signals %d  cancels P%d H%d U%d" % [lc_min, sim.stat_signals,
 		sim.stat_cancel_player, sim.stat_cancel_hesitant, sim.stat_cancel_unsafe])
 	lines.append("mean km/h" + lane_txt)
+	lines.append("speeds " + DevReport.traffic_line(sim))
 	lines.append("sim tick %.0f us avg 1 s (max %d)  frame %.1f ms" % [tick_avg,
 		DevStats.get_sim_tick_max_usec(), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0)])
 	lines.append("player %.0f km/h  lane %d  %s" % [Units.mps_to_kmh(p.v), road.lane_index_at(p.d, p.s),
@@ -997,6 +1006,7 @@ func snap_setup(args: Dictionary) -> void:
 		var ti := TAB_NAMES.find(String(args["tab"]).to_upper())
 		_tab = Tab.NONE
 		_open_tab(maxi(ti, 0) as Tab)
+	fast_controls.snap_run(args)   # racer=true, fast=K (WP6.6)
 	paused = not bool(args.get("run", false))
 	view.call(&"capture_tick")
 	rig.snap_to_target()
