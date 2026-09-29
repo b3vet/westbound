@@ -1,0 +1,79 @@
+[gd_resource type="Resource" script_class="LoopMapDef" format=3]
+
+[ext_resource type="Script" path="res://src/road/loop/loop_map_def.gd" id="1_def"]
+[ext_resource type="Script" path="res://src/road/loop/loop_section_def.gd" id="2_sec"]
+
+[sub_resource type="Resource" id="Resource_desert"]
+script = ExtResource("2_sec")
+biome_id = &"desert"
+lanes = 4
+bend_deflection_deg = PackedFloat64Array(-72)
+bend_radius_min_m = PackedFloat64Array(1450)
+bend_radius_max_m = PackedFloat64Array(1600)
+straight_weights = PackedFloat64Array(6, 1)
+grade_max_pct = 1.5
+pvi_spacing_min_m = 1000.0
+pvi_spacing_max_m = 1600.0
+lane_flow_speeds_from_right_kmh = PackedFloat64Array(100, 135, 170, 185)
+
+[sub_resource type="Resource" id="Resource_canyon"]
+script = ExtResource("2_sec")
+biome_id = &"canyon"
+lane_change_offset_m = -550.0
+bend_deflection_deg = PackedFloat64Array(-20, 20, -72)
+bend_radius_min_m = PackedFloat64Array(1250, 1250, 1350)
+bend_radius_max_m = PackedFloat64Array(1350, 1350, 1450)
+straight_weights = PackedFloat64Array(2, 1, 1, 1)
+grade_max_pct = 2.5
+pvi_spacing_min_m = 550.0
+pvi_spacing_max_m = 900.0
+crest_count = 2
+lane_flow_speeds_from_right_kmh = PackedFloat64Array(90, 120, 150, 165)
+
+[sub_resource type="Resource" id="Resource_coast"]
+script = ExtResource("2_sec")
+biome_id = &"coast"
+bend_deflection_deg = PackedFloat64Array(-6, 6, -72)
+bend_radius_min_m = PackedFloat64Array(2400, 2400, 1550)
+bend_radius_max_m = PackedFloat64Array(2700, 2700, 1700)
+straight_weights = PackedFloat64Array(1, 1, 1, 1)
+pvi_spacing_max_m = 1300.0
+crest_count = 1
+lane_flow_speeds_from_right_kmh = PackedFloat64Array(95, 125, 155, 170)
+
+[sub_resource type="Resource" id="Resource_city"]
+script = ExtResource("2_sec")
+biome_id = &"city"
+lanes = 4
+bend_deflection_deg = PackedFloat64Array(8, -8, -72)
+bend_radius_min_m = PackedFloat64Array(2400, 2400, 1450)
+bend_radius_max_m = PackedFloat64Array(2700, 2700, 1600)
+straight_weights = PackedFloat64Array(1, 1, 1, 1)
+grade_max_pct = 1.0
+pvi_spacing_min_m = 1000.0
+pvi_spacing_max_m = 1600.0
+lane_flow_speeds_from_right_kmh = PackedFloat64Array(85, 110, 135, 150)
+
+[sub_resource type="Resource" id="Resource_farmland"]
+script = ExtResource("2_sec")
+biome_id = &"farmland"
+bend_deflection_deg = PackedFloat64Array(-14, 14, -72)
+bend_radius_min_m = PackedFloat64Array(2500, 2500, 1700)
+bend_radius_max_m = PackedFloat64Array(2800, 2800, 1900)
+straight_weights = PackedFloat64Array(1, 1, 1, 1)
+crest_count = 1
+lane_flow_speeds_from_right_kmh = PackedFloat64Array(95, 130, 165, 180)
+
+[resource]
+script = ExtResource("1_def")
+sections = Array[ExtResource("2_sec")]([SubResource("Resource_desert"), SubResource("Resource_canyon"), SubResource("Resource_coast"), SubResource("Resource_city"), SubResource("Resource_farmland")])
+closure_sections = PackedInt32Array(1, 4)
+tunnel_portal_min_m = PackedFloat64Array(1400, 4250)
+tunnel_portal_max_m = PackedFloat64Array(1600, 4350)
+tunnel_length_min_m = PackedFloat64Array(400, 400)
+tunnel_length_max_m = PackedFloat64Array(550, 500)
+tunnel_lanes = PackedInt32Array(2, 0)
+sector_styles = Array[StringName]([&"toll_gantry", &"sign_gantry", &"tunnel_portal", &"suspension_bridge", &"sign_gantry", &"sign_gantry"])
+ramp_sections = PackedInt32Array(3, 4)
+ramp_window_start_m = PackedFloat64Array(600, 900)
+ramp_window_end_m = PackedFloat64Array(4400, 4300)

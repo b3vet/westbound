@@ -279,6 +279,44 @@ func _add_section() -> void:
 	_add_bend(_side * dir * mag, _rng.float_range(_radius_min, r_max), ramp)
 
 
+# ---------------------------------------------------------------- Hand-built alignments (N3.1)
+# LoopRoadPath (docs/LOOP_MAP.md) lays a closed loop out of the same elements instead of
+# the seeded section stream: begin_alignment(heading), then add_straight / add_bend in
+# driving order. No random draws; the element math, the BEND / BLIND_BEND / SIGN features
+# and eval() are this generator's own. Nothing here is used by the procedural road.
+
+## Starts a hand-built alignment at s = 0 with `heading` (instead of _start()).
+func begin_alignment(heading: float) -> void:
+	_started = true
+	_h = heading
+
+
+func add_straight(length: float) -> void:
+	_push(length, 0.0, 0.0, _h)
+
+
+## One bend exactly as the generator lays it (see _add_bend).
+func add_bend(dh: float, radius: float, ramp: float) -> void:
+	_add_bend(dh, radius, ramp)
+
+
+## Heading at end_s.
+func heading_end() -> float:
+	return _h
+
+
+## Plan length of add_bend(dh, radius, ramp) (the same rule as _add_bend, whose short
+## bends lengthen their transitions to at least `ramp_min`).
+static func bend_length(dh: float, radius: float, ramp: float, ramp_min: float) -> float:
+	var mag := absf(dh)
+	if mag <= 0.0:
+		return 0.0
+	var arc := mag * radius - ramp
+	if arc < 0.0:
+		return 2.0 * maxf(mag * radius, ramp_min)
+	return 2.0 * ramp + arc
+
+
 ## The sun side required by the first leg overlapping [a, b] that requires one (0 when
 ## none, or without biome rules).
 func _sun_side_ahead(a: float, b: float) -> int:

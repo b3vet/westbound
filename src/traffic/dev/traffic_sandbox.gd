@@ -6,7 +6,7 @@ extends Node3D
 ## incentive values, blinker timers, the player's predicted occupancy, and the
 ## passability paths the director found"); Tech stack → dev HUD; plan WP3.2.
 ##
-## The real stack of a run: ProceduralRoadPath, FloatingOrigin, RoadBuilder, Roadside,
+## The real stack of a run: ProceduralRoadPath (or road_override), FloatingOrigin, RoadBuilder, Roadside,
 ## BiomeDirector, SkyRig; TrafficSim + TrafficDirector (+ opposite carriageway); the
 ## real PlayerCar, driven either by PlayerInput (touch / keys, PlayerController) or by
 ## SandboxBot (lane keeping or weaving). The player takes part in the sim as in a run
@@ -98,7 +98,14 @@ var spawn_lane: int = 1
 var spawn_ahead: bool = true
 
 var tuning: Tuning
-var road: ProceduralRoadPath
+var road: RoadPath
+## Road injection (N3.1, the loop editor's PREVIEW TRAFFIC): set before the node enters
+## the tree to run the sandbox on another RoadPath (e.g. LoopRoadPath) instead of the
+## procedural road; with biome_plan_override the look follows that plan. start_s: where
+## the car starts.
+var road_override: RoadPath
+var biome_plan_override: BiomePlan
+var start_s: float = 0.0
 var origin: FloatingOrigin
 var sky: SkyRig
 var car: PlayerCar
@@ -161,7 +168,7 @@ func _ready() -> void:
 	tuning = Tuning.load_default()
 	_ctx = RunContext.new(run_seed, RunContext.MODE_JOURNEY, tuning)
 	_inset = tuning.lives.collision_inset_m
-	road = ProceduralRoadPath.new(_ctx)
+	road = road_override if road_override != null else ProceduralRoadPath.new(_ctx)
 	registry = TrafficRegistry.load_default(tuning.traffic)
 	events = ScoreEventBuffer.new(tuning.scoring.event_buffer_capacity)
 	_lc_ring.resize(LC_WINDOW_S + 1)
@@ -189,14 +196,15 @@ func _ready() -> void:
 	hub = $PlayerInput
 	rig = $CameraRig
 	hub.camera_cycle_requested.connect(rig.cycle_mode)
-	road.ensure_generated_to(_view_ahead(0.0))
-	road.sample_into(0.0, _smp)
+	road.ensure_generated_to(_view_ahead(start_s))
+	road.sample_into(start_s, _smp)
 	origin.update_focus(_smp.pos_x, _smp.pos_y, _smp.pos_z)
+	_biome.plan = biome_plan_override
 	_biome.setup(_ctx, road, origin)
 	_builder.setup(_ctx, road, origin)
 	_roadside.setup(_ctx, road, origin)
 	sky.setup(_ctx, road, origin)
-	_builder.build_all_now(0.0)
+	_builder.build_all_now(start_s)
 
 	_spawn_car()
 	_player_ctl = PlayerController.new(hub)
@@ -596,7 +604,7 @@ func _spawn_car() -> void:
 	car.self_tick = false
 	add_child(car)
 	car.setup(_ctx, road, origin, car_def)
-	car.place_at(0.0, road.lane_center_d(START_LANE, 0.0), Units.kmh_to_mps(START_SPEED_KMH))
+	car.place_at(start_s, road.lane_center_d(START_LANE, start_s), Units.kmh_to_mps(START_SPEED_KMH))
 	rig.set_target(car, car.state, car.params.top_speed_mps)
 	rig.snap_to_target()
 
