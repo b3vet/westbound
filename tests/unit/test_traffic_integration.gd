@@ -21,7 +21,6 @@ func _run(seconds: float, leg: int, weave: bool, seed_value: int) -> Dictionary:
 	var director := TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types,
 		bot.length_m, bot.width_m)
 	# Behind the player counts as outside the camera frustum.
-	director.frustum_check = func(s: float, _d: float) -> bool: return s > bot.state.s - 10.0
 	director.set_leg(leg, bot.state.s)
 	var checker := TrafficRuleChecker.new(ctx.tuning, registry, road, bot.length_m, bot.width_m)
 	var events := ScoreEventBuffer.new(ctx.tuning.scoring.event_buffer_capacity)

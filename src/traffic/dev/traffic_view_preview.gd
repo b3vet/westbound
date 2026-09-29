@@ -268,7 +268,6 @@ func _setup_drive() -> void:
 	_sim.set_player_body(_tuning.traffic.player_length_m, _tuning.traffic.player_width_m)
 	_traffic = TrafficDirector.new(_ctx, _road, _sim, _registry.profiles, _registry.types,
 		_tuning.traffic.player_length_m, _tuning.traffic.player_width_m)
-	_traffic.frustum_check = func(s: float, _d: float) -> bool: return s > _player.s - _tuning.traffic.player_length_m
 	_traffic.set_biome(load("res://data/biomes/farmland.tres") as BiomeDef)
 	_traffic.set_leg(3, _player.s)
 	_traffic.set_night(_night)

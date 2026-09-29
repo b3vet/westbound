@@ -4,7 +4,7 @@
 
 [resource]
 script = ExtResource("1_script")
-max_active_vehicles = 60
+max_active_vehicles = 90
 near_radius_m = 200.0
 near_tick_hz = 120
 far_tick_hz = 30

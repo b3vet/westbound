@@ -145,7 +145,6 @@ var _headlight_lut := PackedByteArray()
 var _headlights: bool = false
 var _director_leg: int = 1
 var _next_forget_s: float = 0.0
-var _frustum_smp := RoadSample.new()
 var _resets: int = 0
 var _best_before: int = 0
 
@@ -705,7 +704,6 @@ func _start_run() -> void:
 	sim = TrafficSim.new(ctx, road, registry)
 	director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types,
 		car_def.length_m, car_def.width_m)
-	director.frustum_check = _in_frustum
 	director.set_fog_end(builder.view_distance_m())
 	traffic_view.setup(ctx, road, origin, registry, sim.state, director.opposite.state)
 	var biome := biome_director.current()
@@ -912,24 +910,6 @@ func _update_night_lights(s: float) -> void:
 ## bar distance) is always queued. Director rate: allocates only when the road grows.
 func _plan_ahead_to(s: float) -> float:
 	return _view_ahead(s) + tuning.legs.leg_length_m()
-
-
-## The director's "no visible pop-in" test for behind spawns: is the road point (s, d)
-## inside the gameplay camera's view? It uses the camera's simulated pose (its
-## global_transform as the last physics tick left it) and its projection. Not
-## Camera3D.is_position_in_frustum(): outside a physics frame (manual ticks, tools) that
-## reads the render-interpolated pose, which depends on when the engine last drew a
-## frame, and made traffic (so the run) differ between identical runs (WP4.5 soak).
-## Inside a physics frame (the game) both give the same answer. Allocation-free.
-func _in_frustum(s: float, d: float) -> bool:
-	road.sample_into(s, _frustum_smp)
-	var p := _frustum_smp.local_point(d, origin.origin_x, origin.origin_y, origin.origin_z)
-	var cam := rig.camera()
-	var v := cam.global_transform.orthonormalized().affine_inverse() * p
-	if -v.z < cam.near or -v.z > cam.far:
-		return false
-	var clip := cam.get_camera_projection() * Vector4(v.x, v.y, v.z, 1.0)
-	return clip.w > 0.0 and absf(clip.x) <= clip.w and absf(clip.y) <= clip.w
 
 
 # ---------------------------------------------------------------- Determinism

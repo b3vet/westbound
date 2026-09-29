@@ -236,6 +236,26 @@ func test_idm_consistent_gaps_within_plan() -> void:
 	gt(checked, 1000)
 
 
+func test_headway_scale_scales_spawn_gaps() -> void:
+	# Plan D11: Flow's s* uses the same headway scale as the sim (late legs drive closer).
+	var flow := _flow()
+	var v := Units.kmh_to_mps(110.0)
+	for p in reg.profiles.size():
+		var base := flow.desired_gap(p, v, 0.0)
+		flow.headway_scale = 0.8
+		near(flow.desired_gap(p, v, 0.0), base - 0.2 * v * reg.profiles[p].idm_headway_s, 1e-9, reg.profiles[p].id)
+		flow.headway_scale = 1.0
+
+
+func test_headway_scale_ramps_by_leg() -> void:
+	var d := tuning.director
+	near(d.headway_scale(1), d.headway_scale_first, 1e-9)
+	near(d.headway_scale(d.ramp_last_leg), d.headway_scale_last, 1e-9)
+	near(d.headway_scale(d.ramp_last_leg + 4), d.headway_scale_last, 1e-9, "holds after the last leg")
+	le(d.headway_scale_last, d.headway_scale_first, "late legs drive closer, never looser")
+	gt(d.headway_scale_last, 0.5, "still IDM-safe headways")
+
+
 func test_idm_consistent_gaps_to_live_traffic() -> void:
 	# Live traffic already in the batch range (e.g. it drifted in faster than the
 	# player advanced), some of it changing lanes: new vehicles keep s* both ways.

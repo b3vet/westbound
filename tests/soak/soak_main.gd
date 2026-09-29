@@ -7,6 +7,10 @@ extends SceneTree
 ##       --shard=0 --shards=4 --km=10000 [--seed=N] [--legs=8] [--leg-km=3.5] \
 ##       [--out=tests/out/soak/shard_0.json] [--no-windows]
 ##   godot ... -- --metrics=fast|reference --out=FILE     # a metrics reference run only
+##   godot ... -- --density [--lanes=3,4] [--legs=1,...,8] [--profile=scripted|bot|soak] [--seeds=3]
+##       [--run-legs=2] [--out=FILE]                   # the D11 density survey (DensitySurvey)
+##       [--cap=N] [--density-last=X] [--headway-last=X] [--before] [--gain-min=X] [--gain-max=X]
+##       [--weights=PCT,...] [--flows=KMH,...] [--gain-rate=X]   # what-ifs
 ##
 ## Runs are numbered 0..ceil(km / run_km)-1; shard i runs every r with
 ## (r + r / N) % N == i: round robin, rotated by one every N runs, so the lane-count
@@ -48,6 +52,9 @@ func _main() -> void:
 		args[kv[0]] = kv[1] if kv.size() > 1 else "true"
 	if args.has("metrics"):
 		quit(_metrics(String(args["metrics"]), String(args.get("out", ""))))
+		return
+	if args.has("density"):
+		quit(_density(args))
 		return
 	var shard := int(args.get("shard", "0"))
 	var shards := maxi(1, int(args.get("shards", "1")))
@@ -123,4 +130,68 @@ func _metrics(which: String, out: String) -> int:
 		return 1
 	f.store_string(JSON.stringify(doc, "  ", true))
 	f.close()
+	return 0 if _errors.messages.is_empty() else 1
+
+
+## The D11 density survey (DensitySurvey): one line per (lanes, leg) cell, JSON to `out`.
+func _density(args: Dictionary) -> int:
+	var lane_counts: Array[int] = []
+	for x in String(args.get("lanes", "3,4")).split(","):
+		lane_counts.append(int(x))
+	var legs: Array[int] = []
+	for x in String(args.get("legs", "1,2,3,4,5,6,7,8")).split(","):
+		legs.append(int(x))
+	var profile := StringName(String(args.get("profile", String(DensitySurvey.SCRIPTED))))
+	var seeds := int(args.get("seeds", "3"))
+	var run_legs := int(args.get("run-legs", "2"))
+	# Overrides for exploring numbers (tuning stays the source of truth).
+	var base := Tuning.load_default()
+	var t: Tuning = base.duplicate()
+	t.traffic = base.traffic.duplicate() as TrafficTuning
+	t.director = base.director.duplicate() as DirectorTuning
+	if args.has("cap"):
+		t.traffic.max_active_vehicles = int(args["cap"])
+	if args.has("density-last"):
+		t.director.density_last_per_km_lane = float(args["density-last"])
+	if args.has("before"):
+		# The WP3.3 director (plan D11 "before"): no gain, no top-up, the spec's ramp and cap.
+		t.director.density_gain_min = 1.0
+		t.director.density_gain_max = 1.0
+		t.director.density_topup_max_per_batch = 0
+		t.director.headway_scale_last = 1.0
+		t.director.density_last_per_km_lane = 16.0
+		t.traffic.max_active_vehicles = 60
+	if args.has("headway-last"):
+		t.director.headway_scale_last = float(args["headway-last"])
+	if args.has("weights"):
+		var w := PackedFloat64Array()
+		for x in String(args["weights"]).split(","):
+			w.append(float(x))
+		t.traffic.spawn_profile_weights_pct = w
+	if args.has("flows"):
+		var fl := PackedFloat64Array()
+		for x in String(args["flows"]).split(","):
+			fl.append(float(x))
+		t.traffic.lane_flow_speeds_from_right_kmh = fl
+	if args.has("gain-min"):
+		t.director.density_gain_min = float(args["gain-min"])
+	if args.has("gain-max"):
+		t.director.density_gain_max = float(args["gain-max"])
+	if args.has("gain-rate"):
+		t.director.density_gain_rate_per_s = float(args["gain-rate"])
+	var rows: Array[Dictionary] = []
+	var t0 := Time.get_ticks_msec()
+	for lanes in lane_counts:
+		for leg in legs:
+			var row := DensitySurvey.cell(lanes, leg, profile, seeds, run_legs, t)
+			rows.append(row)
+			print(DensitySurvey.format_row(row))
+	print("density survey: %d cells, %.0f s" % [rows.size(), (Time.get_ticks_msec() - t0) / 1000.0])
+	var out := String(args.get("out", ""))
+	if not out.is_empty():
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out).get_base_dir())
+		var f := FileAccess.open(out, FileAccess.WRITE)
+		if f != null:
+			f.store_string(JSON.stringify(rows, "  "))
+			f.close()
 	return 0 if _errors.messages.is_empty() else 1

@@ -232,7 +232,7 @@ func test_features_in_overlap() -> void:
 func test_traffic_state_slots() -> void:
 	var cap := Tuning.load_default().traffic.max_active_vehicles
 	var ts := TrafficState.new(cap)
-	eq(ts.capacity, 60)
+	eq(ts.capacity, cap)
 	eq(ts.s.size(), cap)
 	eq(ts.flags.size(), cap)
 	eq(ts.count, 0)
