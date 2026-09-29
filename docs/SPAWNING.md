@@ -48,9 +48,9 @@ Each lane is planned as a renewal process at `DirectorTuning.density_per_km_lane
 
 ## Growing it (Phase 6)
 
-- Intensity waves and blind-window caps go in `_refresh_ctx()`.
-- Passability and re-rolls go between `plan_batch` and the commit in `_plan_range()`.
-- Set pieces become further sources assigned to `source`. Flow stays in charge of behind spawns and the opposite side's mix.
+- Intensity waves and blind-window caps: WP6.2, below (*Intensity waves*, *Blind crests and bends*).
+- Passability and re-rolls go between `plan_batch` and the commit in `_plan_range()` (WP6.1).
+- Set pieces: `source` is `SetPieceSource` (WP6.2, [SET_PIECES.md](SET_PIECES.md)), which plans Flow around its pieces. Flow stays in charge of behind spawns and the opposite side's mix.
 
 
 ## Hardening (WP3.3)
@@ -179,3 +179,92 @@ The lane profile follows lane discipline: the right lanes are denser (e.g. 14.8 
 ### Fairness
 
 The top-up is an ahead spawn like any other. Soak results are in docs/SOAK.md, *D11 soak*.
+
+
+## Intensity waves (WP6.2)
+
+Spec: *Traffic director*: "Intensity waves. Tension and release in cycles of 45–90 s: build, peak (often a set piece), then a 10–15 s breather. Every leg ends with a short breather before the checkpoint." `src/traffic/intensity_waves.gd` (`IntensityWaves`, owned by the director as `waves`); numbers in `DirectorTuning`, group *Intensity waves*.
+
+### The curve: timed by distance at a reference pace
+
+The waves are laid out **along the road**, as the intensity (0 breather … 1 peak) at the **player's** road position `x`:
+
+- Each leg (checkpoint to checkpoint; on a road without CHECKPOINT features, `LegsTuning`'s grid of `leg_length_m`) is filled with *n* whole cycles. A cycle lasts `wave_period_min_s`–`wave_period_max_s` (45–90 s) and its seconds become meters at `wave_reference_pace_kmh` (160 km/h, a typical sun-chasing speed). *n* is drawn among the counts that fit the leg; the durations are drawn and scaled to fill it exactly.
+- A cycle is a **build** (intensity rising linearly from `wave_build_start_intensity`, 0.5, to 1), a **peak** (1; `wave_peak_min_pct`–`wave_peak_max_pct`, 25–40 %, of the build + peak) and a **breather** (0; `breather_min_s`–`breather_max_s`, 10–15 s).
+- The leg's last breather is the **checkpoint breather** (`checkpoint_breather_min_s`–`_max_s`, 10–15 s) and ends exactly at the checkpoint; the next leg starts with a build. At the reference pace a 3.5 km leg (79 s) holds one cycle: build ~45 s, peak ~20 s, breather ~12 s; a longer leg holds two.
+- Everything is drawn in road order from one stream, `run.rng_traffic.derive(&"waves")`, so the curve depends only on the seed and the checkpoints: the same for every player (Daily Drive). Each peak also carries its two set-piece draws (chance, kind).
+- **Why distance:** the checkpoint breather has to end at the checkpoint whatever the player's speed, and a curve along the road is the same for everyone. A slower player takes longer to drive a cycle (a 60 s cycle at 160 km/h is 74 s at 130 km/h), a faster one less.
+- Density multiplier at intensity *I*: `lerp(wave_breather_density_pct, wave_peak_density_pct, I)` = 50 % … 125 % of the leg's target (build 87.5 % → 125 %). A cycle averages ~99 %.
+
+### The meeting map: what traffic belongs to which part of the wave
+
+Traffic is planned ~780 m ahead, beyond the fog, and the player meets a vehicle of a slower lane only when it catches up with it. A vehicle planned now at `s` in a lane of speed `v` is met at
+
+```
+x_meet = player s + (s − player s) · pace / max(pace − v, wave_min_closing_kmh)     (clamped to wave_meet_lookahead_m, 4 km)
+```
+
+with `pace` the player's speed smoothed over `wave_pace_smoothing_s` (5 s). Flow plans every vehicle at the wave's density **where the player will meet it**, so the density the player meets follows the curve in every lane, whatever the lane's speed (a batch spans 14–30 s of meeting time in the slow lanes, far more in the fast ones). For a vehicle holding its speed `x_meet` does not change as time passes, which the tests use as a check.
+
+### How the director uses it
+
+- **Flow** (`SpawnSources.Flow.shaper`): each spacing is the wave's where the next vehicle will be (`1000 / (ctx density × density_mult / ref_mult)`, taken half a spacing on). `ctx.density_per_km_lane` and `ctx.intensity` are the batch's representative (its middle, the middle lane's flow speed): other sources can read the level from the context as the contract says.
+- **Overlapping batches:** each batch overlaps traffic of earlier batches that drove into it, and Flow used to fill any gap between live vehicles that the renewal draw fit into. That kept lanes full as IDM stretched them (D11), but it also filled every breather. Now Flow puts a vehicle between live ones only where the wave's multiplier is at least `wave_fill_min_mult` (0.75): builds and peaks stay topped up, breathers and blind windows stay thin. The band top-up follows the same rule, fills lanes to the wave's integral over the band (`_band_want`), and takes the largest gap weighted by the wave's multiplier there.
+- **Behind arrivals** use the wave at the player (`mult_at(player s)`); they pass the player now.
+- **The density gain (D11)** tracks the **wave-shaped** target: the flat target × `window_mult`, the mean multiplier the window's traffic was planned at (for lanes the player is not catching: the wave at the player). Its error is low-passed over `wave_gain_smoothing_s` (20 s) before it is integrated, because the window follows the waves with a lag and the gain must not swing with them. `TrafficDirector.window_target` is the target.
+- **Night:** the same density as day (`set_night` changes nothing else).
+
+Measured (fast tier, `test_traffic_director_waves.gd`, leg 4, the player at 170 km/h past traffic that holds its speed): the player meets **14 vehicles per km in peaks, 13 in builds, 6.6 in breathers**.
+
+## Difficulty by leg (WP6.2)
+
+| | Leg 1 | Leg 8 and on | Where |
+| --- | --- | --- | --- |
+| Density | 8 | 18 (D11) vehicles per km per lane | `density_*_per_km_lane` |
+| Aggressive share | 5 % | 20 % | `aggressive_share_*_pct` |
+| Hesitant | no | from leg 3 | `hesitant_first_leg` (and the profile's `min_leg`) |
+| Set-piece kinds unlocked | 1 | 7 | `set_piece_unlock_order`, `set_pieces_unlocked_by_leg` = 1, 2, 3, 4, 5, 6, 7, 7 |
+| Chance a peak gets a set piece | 50 % | 80 % | `set_piece_chance_*_pct` |
+
+All ramp linearly from leg 1 to leg 8 and hold (`leg_ramp`); `test_difficulty_ramps_by_leg` and `test_flow_mix_follows_the_leg` pin them.
+
+## Blind crests and bends (WP6.2, fairness rule 6)
+
+"Within 150 m after a blind crest or bend, the director caps density at 60% and allows no set pieces." IntensityWaves keeps the BLIND_CREST and BLIND_BEND features ahead (`[start, end]`). The traffic hidden by a blind feature `[a, b]` is what is within `[p, b + blind_window_m]` ahead of the player at some moment while it drives `p ∈ [a, b]`. In the meeting map that is exactly the vehicles met at
+
+```
+a ≤ x_meet ≤ a + (b − a + blind_window_m) · pace / closing speed
+```
+
+so `density_mult` caps them at `blind_density_cap_pct` (60 %), in every lane at its own closing speed, and no fill or top-up goes there. A set piece is only scheduled where none of it (rear, middle, front) is in such a window (`SetPieceSource.fits_road`). Tests on real procedural roads (`test_blind_windows_cap_density_on_real_roads`, 8 crests): every vehicle in a blind window was planned at ≤ 60 %, and the density there is 0.59 of the density elsewhere; `test_no_set_pieces_in_blind_windows_or_at_checkpoints`: none of 9 set pieces is in one.
+
+## Lane drops and lane closures (WP6.2)
+
+WP6.4a's canyon tunnels drop the road from 3 to 2 lanes (a LANE_COUNT_CHANGE with a 250 m taper; `lane_count` steps at its start, `lanes_right_edge_d` follows the taper) and add the lane back after. Traffic merges before the drop instead of riding the shoulder:
+
+- **Closures** (`TrafficSim`, block *Lane closures and mandatory merges*): lane *l* cannot be driven over `[s0, s1]`. The director turns the road's lane-count changes ahead into closures (`sync_road_closures`, director rate; the dropped lanes over the change's start and taper, and a widening's new lane while its taper runs) and forgets them behind. WP6.3's merge zone and road works add their own by tag: `add_lane_closure(lane, s0, s1, tag)`, `remove_lane_closures(tag)`.
+- **Mandatory merge:** a vehicle in a lane that closes within `merge_zone_m` (600 m) evaluates, every model tick, MOBIL for the lanes beside it with an incentive bonus ramping from 0 to `merge_urgency_mps2` (2 m/s²) at the closure. Safety and no-ambush apply as always, the blinker runs the profile's signal time, and a Hesitant driver never cancels it. Set-piece vehicles merge too.
+- **Waiting at the end of the lane:** until it has started moving out, the vehicle brakes (IDM) for a standing obstacle `merge_stop_margin_m` (15 m) before the closure. One that finds no gap stops there and waits for one.
+- **Nobody moves into** a lane that closes within `merge_zone_m`, and no motorbike lane-splits next to one.
+- **Spawns** (`Flow.lane_open_for_spawn`): never in a lane that ends within `merge_spawn_clear_m` (400 m) ahead, is being narrowed by a taper, or has a closure within that distance. Behind spawns and the band top-up check the same.
+- **Density:** the effective density divides by the lane count along the window, not at the player.
+- **Set pieces** are never scheduled across a lane-count change, tunnel or fork, and end (merging like any traffic) if they roll within `clear_ahead_m` of one.
+
+Tests: `tests/unit/test_traffic_director_lane_drops.gd` (merging, waiting, no moves into a closing lane, no ambush, spawns, determinism, and a canyon tunnel with the soak's director, sim and bot) and the soak tier's `soak_canyon_lane_drops` (two canyon journeys). The rule checker now fails any tick where a car's body leaves the driving lanes (`offroad_violations`, a soak gate).
+
+## Daily Drive (WP6.2)
+
+Daily is Flow on the date-seeded run context (`RunContext.daily(y, m, d)` → `run.rng_traffic`); `SetPieceSource` wraps it like Flow, and the waves, set-piece draws and piece layouts derive from the same stream. Two players on the same date driving the same inputs get the same road, traffic and set pieces (`test_daily_source.gd`: identical traces and set pieces for the same date, different for another).
+
+## Density at leg 8 with waves, rule 6 and set pieces (WP6.2)
+
+The D11 survey (`--density --lanes=3 --legs=8 --profile=scripted`, 3 seeds × 7 km):
+
+| Configuration | Leg 8, 3 lanes | Per lane (left → right) |
+| --- | --- | --- |
+| D11 (flat, before WP6.2) | 16.3 (91 %) | 14.8 / 16.7 / 17.4 |
+| WP6.2, flat waves, no set pieces, no blind cap | 16.3 (91 %) | same (bit-identical) |
+| WP6.2, waves, no set pieces | 14.9 (83 %) | 13.8 / 15.2 / 15.6 |
+| WP6.2, waves and set pieces (default) | 13.2–13.4 (73–74 %) | 11.8 / 13.6 / 14.6 |
+
+At leg 8 the lanes sit at IDM's ceiling (T × 0.8), so peaks cannot go above it: the waves take density away in breathers and early builds, and set pieces clear their zone (and, in their lanes, the slower traffic they would catch up with). Leg 4 delivers 92–94 % of its target. See the WP6.2 handoff for the open question to the owner.

@@ -11,6 +11,9 @@ extends Node
 ## chain_changed (ScoringRuleSet), boost_started / boost_ended and
 ## boost_meter_changed (the player's VehicleState) fire only when they changed.
 ##
+## Set pieces (WP6.2): SetPieceSource's KIND_WARNING / KIND_STARTED / KIND_ENDED (the
+## director writes them; tag = the SetPieceDef id, value = the warning distance) become
+## set_piece_warning / set_piece_started / set_piece_ended.
 ## Kinds the run handles at tick time and that are not signals (KIND_SUN_NUDGE ->
 ## SunClock.lift, Scoring.KIND_NEAR_MISS -> TrafficSim.notify_close_pass) are skipped.
 ## objective_completed (LegObjectives.KIND_OBJECTIVE_COMPLETED: tag = objective,
@@ -148,6 +151,12 @@ func _emit(buf: ScoreEventBuffer, i: int) -> void:
 			Events.traffic_brake_tap.emit(buf.slot[i])
 		TrafficSim.KIND_HAZARDS:
 			Events.traffic_hazards.emit(buf.slot[i], v != 0.0)
+		SetPieceSource.KIND_WARNING:
+			Events.set_piece_warning.emit(buf.tag[i], v)
+		SetPieceSource.KIND_STARTED:
+			Events.set_piece_started.emit(buf.tag[i])
+		SetPieceSource.KIND_ENDED:
+			Events.set_piece_ended.emit(buf.tag[i])
 		_:
 			return   # tick-time kinds (sun nudge, near miss) and unknown kinds
 	emitted_last += 1

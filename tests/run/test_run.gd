@@ -344,7 +344,9 @@ func test_score_hit_crash_results_retry() -> void:
 	eq(res[&"score"], r.scoring.banked())
 	ge(float(res[&"best_chain"]), float(chain), "the lost chain counts as the best chain")
 	gt(float(res[&"distance_m"]), 100.0)
-	gt(float(res[&"top_speed_kmh"]), 150.0)
+	# The bot accelerated from the rolling start (how far depends on the traffic it met
+	# before scoring; WP6.2's waves changed that).
+	gt(float(res[&"top_speed_kmh"]), t.legs.start_speed_kmh)
 	check(r.screens.results_screen.visible, "results screen")
 
 	# Retry: back on the road in the same frame, new seed, everything reset.

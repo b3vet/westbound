@@ -1,0 +1,37 @@
+[gd_resource type="Resource" script_class="SetPieceDef" format=3]
+
+[ext_resource type="Script" uid="uid://cc0n7yjgviyxv" path="res://src/traffic/set_piece_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"truck_wall"
+kind = 0
+display_name = "Truck wall"
+warning = 2
+warning_sign_distances_m = PackedFloat64Array(600)
+length_m = 20.0
+lanes_closed_min = 0
+lanes_closed_max = 0
+open_lanes = 1
+lane_count_override = 0
+drops_right_lane = false
+hazards = false
+allows_hard_decel = false
+min_leg = 1
+weight = 1.0
+is_checkpoint_landmark = false
+min_lanes = 2
+profile_ids = Array[StringName]([&"truck", &"bus"])
+profile_weights = PackedFloat64Array(3, 1)
+speed_kmh = 105.0
+rows = 1
+row_stagger_m = 1.5
+start_distance_m = 50.0
+end_margin_m = 40.0
+duration_max_s = 60.0
+approach_max_s = 150.0
+clear_behind_m = 80.0
+clear_ahead_m = 80.0
+shift_interval_s = 8.0
+shift_min_player_gap_m = 60.0
+shift_retry_s = 1.0

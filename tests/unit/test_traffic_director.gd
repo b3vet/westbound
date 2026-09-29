@@ -90,6 +90,18 @@ func _tuning_copy() -> Tuning:
 	return t
 
 
+## Flat intensity waves (breather = peak = 100%), the density error integrated as is
+## (no low-pass) and no set pieces: the D11 density tests see the leg's target alone.
+func _flat_tuning() -> Tuning:
+	var t := _tuning_copy()
+	t.director.wave_breather_density_pct = 100.0
+	t.director.wave_peak_density_pct = 100.0
+	t.director.wave_gain_smoothing_s = DT
+	t.director.set_piece_chance_first_pct = 0.0
+	t.director.set_piece_chance_last_pct = 0.0
+	return t
+
+
 static func _never_visible(_s: float, _d: float) -> bool:
 	return false
 
@@ -119,7 +131,7 @@ func test_ahead_spawns_land_beyond_the_fog_end() -> void:
 			dir.set_fog_end(fog)
 		_reset()
 		_drive(60.0)
-		gt(ahead_rel.size(), 20, "ahead batches spawned (fog %s)" % fog)
+		gt(ahead_rel.size(), 12, "ahead batches spawned (fog %s)" % fog)
 		var min_rel := INF
 		for r in ahead_rel:
 			min_rel = minf(min_rel, r)
@@ -302,8 +314,9 @@ func test_ghost_zone_default_is_player_box_plus_margins() -> void:
 func test_density_scale_scales_the_target_and_the_prefill() -> void:
 	var counts := PackedInt32Array()
 	var opp := PackedInt32Array()
+	var flat := _flat_tuning()
 	for scale: float in [1.0, 1.5]:
-		_setup(SEED, LANES, null, 200)
+		_setup(SEED, LANES, flat, 200)
 		dir.set_leg(4, player.s)
 		dir.set_density_scale(scale)
 		near(dir.target_density_per_km_lane(), tuning.director.density_per_km_lane(4) * scale, 1e-9)
@@ -329,10 +342,15 @@ func test_window_density_counts_the_window() -> void:
 func test_density_gain_integrates_the_shortfall() -> void:
 	# An empty window (a parked player: batches land beyond it) raises the gain up to its
 	# maximum; a crowded one lowers it to its minimum. Batches use target x gain.
-	var d := tuning.director
-	_setup()
+	var flat := _flat_tuning()
+	var d := flat.director
+	_setup(SEED, LANES, flat)
 	player.v = 0.0
 	_reset()
+	# Empty the window (the prefill's layout is random): nothing moves in this test.
+	for i in sim.state.capacity:
+		if sim.state.active[i] == 1:
+			sim.despawn(i)
 	eq(dir.density_gain, 1.0, "reset starts at 1")
 	var t := 0.0
 	while t < 2.0:

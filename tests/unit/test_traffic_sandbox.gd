@@ -177,7 +177,14 @@ func test_driver_modes_and_overlay_toggles() -> void:
 func test_bot_weave_changes_lanes_smoothly() -> void:
 	var sb := await _boot()
 	sb.set_driver(sb.Driver.BOT_WEAVE)
-	sb.advance_ticks(120 * 20)
+	# A slow truck ahead in its lane, three times, on an otherwise empty road (the
+	# director's traffic around the start varies with the intensity waves, WP6.2).
+	sb.auto_spawn = false
+	sb.clear_traffic()
+	for k in 3:
+		var lane: int = sb.road.lane_index_at(sb.car.state.d, sb.car.state.s)
+		sb.spawn_vehicle(sb.registry.profile_index(&"truck"), 0, lane, true)
+		sb.advance_ticks(120 * 7)
 	gt(sb.bot.lane_changes, 1, "the weaving bot changes lanes")
 	lt(absf(sb.car.state.yaw), 0.2, "and stays stable")
 

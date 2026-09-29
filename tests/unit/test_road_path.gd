@@ -367,6 +367,9 @@ func test_blind_bend_hook() -> void:
 	# With a close sight obstruction (clearance m) a bend of radius R is blind when
 	# sqrt(8 R m) < blind_sight_distance_m: the hook fires for exactly those bends.
 	var tuned: Tuning = Tuning.load_default().duplicate(true)
+	# duplicate(true) keeps external sub-resources (data/tuning/road.tres) shared: copy it,
+	# or every later test sees blind bends (WP6.2).
+	tuned.road = tuned.road.duplicate() as RoadTuning
 	tuned.road.bend_sight_clearance_m = 1.0
 	var r := _make(SEED, tuned)
 	r.ensure_generated_to(20000.0)

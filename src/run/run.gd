@@ -38,8 +38,9 @@ const DRIVE_SCENE := "res://src/dev/car_drive.tscn"
 const SANDBOX_SCENE := "res://src/traffic/dev/traffic_sandbox.tscn"
 ## The journey bonus kind (paid on the crossing that reaches the coast).
 const BONUS_JOURNEY := &"journey"
-## Sims sharing the run's event buffer: traffic, lives, scoring, sun clock, legs.
-const EVENT_SOURCES := 5
+## Sims sharing the run's event buffer: traffic, lives, scoring, sun clock, legs, the
+## traffic director (set pieces).
+const EVENT_SOURCES := 6
 ## Headlight lookup over sky_t (built once from the color script).
 const HEADLIGHT_LUT_SIZE := 1024
 ## Road memory is trimmed at most this often (m).
@@ -450,6 +451,7 @@ func _sim_tick(dt: float) -> void:
 	if leg_override <= 0 and legs.leg_index != _director_leg:
 		_director_leg = legs.leg_index
 		director.set_leg(_director_leg, st.s)
+		director.set_biome(biome_director.biome_at(st.s))
 	stats.observe_tick(dt, st.v, st.s, sun.is_night(), scoring.multiplier())
 	stats.consume(events, from, events.size())
 	_safety_net()
@@ -729,6 +731,8 @@ func _start_run() -> void:
 	director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types,
 		car_def.length_m, car_def.width_m)
 	director.set_fog_end(builder.view_distance_m())
+	director.events = events
+	director.set_biome(biome_director.current())
 	traffic_view.setup(ctx, road, origin, registry, sim.state, director.opposite.state)
 
 	headlights.setup(ctx, road, origin)

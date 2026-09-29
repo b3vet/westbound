@@ -23,6 +23,9 @@ const BOT_T := 0.7              ## s headway (a pushy player)
 const BOT_S0 := 2.0
 const LANE_CHANGE_S := 1.0      ## the car's lane change (Physics: 0.8-1.15 s)
 const SIDE_CLEAR_M := 1.0       ## required free length beside it in the target lane
+## Lane drops (WP6.2): a lane that ends within this far ahead is left for the next lane
+## to the left as soon as it is clear beside the bot, and weaving never picks it.
+const DROP_LOOK_M := 350.0
 
 var state := VehicleState.new()
 var mode: Mode
@@ -103,6 +106,13 @@ func update(dt: float, traffic: TrafficState) -> void:
 	state.accel_long = a
 	state.s += state.v * dt
 
+	if _lc_t < 0.0 and lane > 0 and lane >= road.lane_count(state.s + DROP_LOOK_M) and _side_clear(traffic, lane - 1):
+		if mode == Mode.WEAVE:
+			_lc_t = 0.0
+			_from_d = state.d
+			_to_d = road.lane_center_d(lane - 1, state.s)
+		lane -= 1
+		lane_changes += 1
 	if mode == Mode.WEAVE:
 		if _lc_t < 0.0 and _clock >= _next_weave:
 			_next_weave = _clock + _rng.float_range(weave_min_s, weave_max_s)
@@ -127,7 +137,7 @@ func update(dt: float, traffic: TrafficState) -> void:
 
 
 func _pick_lane(traffic: TrafficState) -> int:
-	var lanes := road.lane_count(state.s)
+	var lanes := mini(road.lane_count(state.s), road.lane_count(state.s + DROP_LOOK_M))
 	var best := lane
 	var best_gap := _free_ahead(traffic, lane)
 	var order := [lane - 1, lane + 1]
