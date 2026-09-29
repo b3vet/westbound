@@ -13,6 +13,11 @@ extends RunScreen
 ## staggers the stat rows in. RETRY (primary, bottom-right thumb reach; mirrored when
 ## left-handed) emits `retry`; GARAGE is disabled until Phase 8. Taps are ignored for
 ## results_input_delay_s, so the tap that skipped the crash never lands on RETRY.
+## N7.2 (multiplayer handoff → Leaderboards): with an online session (NetRunsClient), the
+## run's submission shows under the tiles (ResultsOnline: placements, NEW PB, VERIFYING,
+## OFFLINE — WILL SUBMIT, UPDATE REQUIRED) and animates in when the server answers; the
+## results never wait for it. LEADERBOARDS (on the side away from RETRY) opens the
+## LeaderboardsScreen over this one.
 
 signal retry()
 signal garage()
@@ -25,6 +30,7 @@ const TEXT_OVER := "+%s OVER YOUR BEST"
 const TEXT_FIRST := "FIRST RECORD"
 const TEXT_RETRY := "RETRY"
 const TEXT_GARAGE := "GARAGE"
+const TEXT_LEADERBOARDS := "LEADERBOARDS"
 const TEXT_SOON := "SOON"
 const TEXT_COAST := "COAST REACHED"
 const TEXT_TO_COAST := "OF %d TO THE COAST"
@@ -73,12 +79,20 @@ var compare: ScreenText
 var retry_button: ScreenButton
 var garage_button: ScreenButton
 var stats_panel: ScreenPanel
+## N7.2: the online line, LEADERBOARDS, and the runs client they follow.
+var online: ResultsOnline
+var boards_button: ScreenButton
+var runs: NetRunsClient
+var leaderboards: LeaderboardsScreen
+## This run's submission (null: not submitted, or no session).
+var submission: NetRunSubmission
 
 var _shown: int = 0
 var _badge_popped: bool = false
 var _tiles: Array[Tile] = []
 var _rows: Array[StatRow] = []
 var _guard_left: float = 0.0
+var _shown_done: bool = false
 
 
 ## One hero tile: label, big value + unit, a sub-line.
@@ -159,10 +173,38 @@ func _init() -> void:
 	retry_button.name = "Retry"
 	retry_button.pressed.connect(_on_retry)
 	add_child(retry_button)
+	online = ResultsOnline.new()
+	online.visible = false
+	add_child(online)
+	boards_button = ScreenButton.make(TEXT_LEADERBOARDS, ScreenButton.Kind.NORMAL, 24)
+	boards_button.name = "Leaderboards"
+	boards_button.visible = false
+	boards_button.pressed.connect(open_leaderboards)
+	add_child(boards_button)
 
 
 func _ready() -> void:
 	set_process(false)
+	if runs == null:
+		bind_runs(NetRunsClient.ensure())
+
+
+## The runs client whose submissions show here (null: none, offline builds).
+func bind_runs(client: NetRunsClient) -> void:
+	if runs != null and is_instance_valid(runs) and runs.submission_changed.is_connected(_on_submission):
+		runs.submission_changed.disconnect(_on_submission)
+	runs = client
+	if runs != null and not runs.submission_changed.is_connected(_on_submission):
+		runs.submission_changed.connect(_on_submission)
+	boards_button.visible = runs != null
+	if leaderboards != null:
+		leaderboards.bind(runs)
+	_refresh_online()
+
+
+func _exit_tree() -> void:
+	if runs != null and is_instance_valid(runs) and runs.submission_changed.is_connected(_on_submission):
+		runs.submission_changed.disconnect(_on_submission)
 
 
 func _restyled() -> void:
@@ -171,6 +213,9 @@ func _restyled() -> void:
 	badge_text.use_tilt(TILT_SHADER, tuning.speed_tilt_rad())
 	retry_button.size_px = tuning.font_screen_button_px
 	garage_button.size_px = tuning.font_screen_button_px
+	boards_button.size_px = tuning.font_screen_button_px
+	if leaderboards != null:
+		leaderboards.setup(style, tuning)
 	dim.color = Color(style.ink, Units.pct_to_frac(tuning.screen_dim_pct))
 	_layout()
 
@@ -192,6 +237,10 @@ func set_results(payload: Dictionary, legs_to_coast: int, in_miles: bool) -> voi
 				else ScreenText.Ink.TEXT)
 	compare.text = compare_text()
 	compare.set_ink(ScreenText.Ink.GOLD if new_best else ScreenText.Ink.MUTED)
+	if leaderboards != null:
+		leaderboards.close(false)
+	submission = runs.submission_for(payload) if runs != null else null
+	_refresh_online()
 	_set_shown(0.0)
 	_layout()
 
@@ -221,6 +270,8 @@ func open() -> void:
 		slide_in(t.panel, dx, tuning.results_fade_in_s, tuning.results_fade_in_s + float(i) * tuning.results_row_stagger_s)
 		i += 1
 	slide_in(stats_panel, -dx, tuning.results_fade_in_s, tuning.results_fade_in_s)
+	if online.visible:
+		slide_in(online, dx, tuning.results_fade_in_s, tuning.results_fade_in_s + float(i) * tuning.results_row_stagger_s)
 	for r in _rows:
 		slide_in(r.label, -dx * 0.5, tuning.results_fade_in_s, tuning.results_fade_in_s + float(i) * tuning.results_row_stagger_s)
 		slide_in(r.value, -dx * 0.5, tuning.results_fade_in_s, tuning.results_fade_in_s + float(i) * tuning.results_row_stagger_s)
@@ -256,6 +307,7 @@ func _apply_accepting() -> void:
 	var f := Control.MOUSE_FILTER_STOP if accepting else Control.MOUSE_FILTER_IGNORE
 	retry_button.mouse_filter = f
 	garage_button.mouse_filter = f
+	boards_button.mouse_filter = f
 
 
 func _on_retry() -> void:
@@ -299,6 +351,55 @@ func shown_score() -> int:
 
 func badge_visible() -> bool:
 	return badge.visible
+
+
+# ---------------------------------------------------------------- Online (N7.2)
+
+## A submission changed: this run's shows (and slides in when its placements arrive).
+func _on_submission(sub: NetRunSubmission) -> void:
+	var ours := sub == submission or (not results.is_empty() and is_same(sub.results, results))
+	if not ours:
+		return
+	var was_done := submission == sub and _shown_done
+	submission = sub
+	_refresh_online()
+	if _open and online.visible and sub.is_done() and not was_done and not leaderboards_open():
+		slide_in(online, -tuning.screen_slide_px, runs.tuning.boards_reveal_s, 0.0)
+		if online.pb_chip.visible:
+			punch(online.pb_chip, Units.pct_to_frac(tuning.countdown_punch_scale_pct), tuning.results_badge_pop_s)
+
+
+func _refresh_online() -> void:
+	if online == null or leaderboards_open():
+		return   # shown again when the leaderboards close
+	online.show_submission(submission if runs != null else null, _today())
+	_shown_done = submission != null and submission.is_done()
+	_layout()
+
+
+func _today() -> String:
+	return NetRunPayload.utc_date(runs.now_unix() if runs != null else Time.get_unix_time_from_system())
+
+
+## LEADERBOARDS: the boards over this screen, on the run's own board.
+func open_leaderboards() -> void:
+	if runs == null or not accepting:
+		return
+	var first := leaderboards == null
+	leaderboards = LeaderboardsScreen.attach(self, leaderboards, runs)
+	if first:
+		leaderboards.closed_by_player.connect(_on_leaderboards_closed)
+	var mode := String(results.get(RunStats.MODE, NetBoards.JOURNEY))
+	leaderboards.open_over(self, mode if NetBoards.BOARDS.has(mode) else "")
+
+
+func leaderboards_open() -> bool:
+	return leaderboards != null and leaderboards.is_open()
+
+
+func _on_leaderboards_closed() -> void:
+	badge.visible = _badge_popped
+	_refresh_online()
 
 
 ## "BEST 2,010,000  ·  725,500 TO BEAT" / "+336,900 OVER YOUR BEST" / "FIRST RECORD".
@@ -447,6 +548,12 @@ func _layout() -> void:
 		t.sub.position = Vector2(pad, pad + lsz.y + vsz.y)
 		t.sub.size = subsz
 		x += tile_w + g * 2.0
+	# N7.2: the online line under the tiles, LEADERBOARDS away from RETRY.
+	online.layout_panel()
+	online.position = Vector2(left, tile_top + tile_h + g * 2.0)
+	var lbw := maxf(gw, HudDraw.text_width(style.label, boards_button.text, boards_button.font_px()) + g * 5.0)
+	boards_button.size = Vector2(lbw, th)
+	boards_button.position = Vector2(a.end.x - lbw if mirrored else left, a.end.y - th)
 
 
 ## GARAGE: a share of the menu width. Stats panel: how much it grows with the text
