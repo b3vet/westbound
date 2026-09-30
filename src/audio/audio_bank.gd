@@ -6,7 +6,9 @@ extends RefCounted
 ## tools/audio/gen_audio.py rebuilds them. To swap a sound, replace the file at the
 ## same path (or change the path here / the music list in AudioTuning).
 ##
-## Loops (engine, intake, wind, tire hum) are imported with loop on (their .import).
+## Loops (engine, intake, wind, tire hum) and music are OGG Vorbis, imported with loop
+## on (their .import). One-shots are WAV imported with QOA compression (WP7.6): an OGG
+## one-shot builds a Vorbis decoder on every play() (~0.6 ms), a WAV starts in µs.
 
 const DIR := "res://assets/audio/"
 const ENGINE_ON_FMT := "res://assets/audio/engine_on_%d.ogg"
@@ -33,25 +35,25 @@ const CRASH_GLASS := &"crash_glass"
 const SCRAPE := &"scrape"
 const UI_CLICK := &"ui_click"
 
-var whoosh: AudioStream = preload("res://assets/audio/whoosh.ogg")
-var zip: AudioStream = preload("res://assets/audio/zip.ogg")
-var thump: AudioStream = preload("res://assets/audio/thump.ogg")
-var horn: AudioStream = preload("res://assets/audio/horn.ogg")
-var air_brake: AudioStream = preload("res://assets/audio/air_brake.ogg")
-var boost_whoosh: AudioStream = preload("res://assets/audio/boost_whoosh.ogg")
-var sting_pass: AudioStream = preload("res://assets/audio/sting_pass.ogg")
-var sting_close: AudioStream = preload("res://assets/audio/sting_close.ogg")
-var sting_cut: AudioStream = preload("res://assets/audio/sting_cut.ogg")
-var sting_thread: AudioStream = preload("res://assets/audio/sting_thread.ogg")
-var chime_tick: AudioStream = preload("res://assets/audio/chime_tick.ogg")
-var chime_bank: AudioStream = preload("res://assets/audio/chime_bank.ogg")
-var sting_hesitated: AudioStream = preload("res://assets/audio/sting_hesitated.ogg")
-var sting_hit: AudioStream = preload("res://assets/audio/sting_hit.ogg")
-var hit_impact: AudioStream = preload("res://assets/audio/hit_impact.ogg")
-var crash_metal: AudioStream = preload("res://assets/audio/crash_metal.ogg")
-var crash_glass: AudioStream = preload("res://assets/audio/crash_glass.ogg")
-var scrape: AudioStream = preload("res://assets/audio/scrape.ogg")
-var ui_click: AudioStream = preload("res://assets/audio/ui_click.ogg")
+var whoosh: AudioStream = preload("res://assets/audio/whoosh.wav")
+var zip: AudioStream = preload("res://assets/audio/zip.wav")
+var thump: AudioStream = preload("res://assets/audio/thump.wav")
+var horn: AudioStream = preload("res://assets/audio/horn.wav")
+var air_brake: AudioStream = preload("res://assets/audio/air_brake.wav")
+var boost_whoosh: AudioStream = preload("res://assets/audio/boost_whoosh.wav")
+var sting_pass: AudioStream = preload("res://assets/audio/sting_pass.wav")
+var sting_close: AudioStream = preload("res://assets/audio/sting_close.wav")
+var sting_cut: AudioStream = preload("res://assets/audio/sting_cut.wav")
+var sting_thread: AudioStream = preload("res://assets/audio/sting_thread.wav")
+var chime_tick: AudioStream = preload("res://assets/audio/chime_tick.wav")
+var chime_bank: AudioStream = preload("res://assets/audio/chime_bank.wav")
+var sting_hesitated: AudioStream = preload("res://assets/audio/sting_hesitated.wav")
+var sting_hit: AudioStream = preload("res://assets/audio/sting_hit.wav")
+var hit_impact: AudioStream = preload("res://assets/audio/hit_impact.wav")
+var crash_metal: AudioStream = preload("res://assets/audio/crash_metal.wav")
+var crash_glass: AudioStream = preload("res://assets/audio/crash_glass.wav")
+var scrape: AudioStream = preload("res://assets/audio/scrape.wav")
+var ui_click: AudioStream = preload("res://assets/audio/ui_click.wav")
 var wind_loop: AudioStream = preload("res://assets/audio/wind_loop.ogg")
 var tire_hum_loop: AudioStream = preload("res://assets/audio/tire_hum_loop.ogg")
 var intake_loop: AudioStream = preload("res://assets/audio/intake_loop.ogg")

@@ -501,7 +501,36 @@ func test_loops_are_imported_looping() -> void:
 		check(s != null and (s as AudioStreamOggVorbis).loop, "engine loop %s" % (s.resource_path if s != null else "missing"))
 	for s: AudioStream in [b.wind_loop, b.tire_hum_loop, b.intake_loop]:
 		check((s as AudioStreamOggVorbis).loop, "%s loops" % s.resource_path)
-	check(not (b.whoosh as AudioStreamOggVorbis).loop, "one-shots don't loop")
+	check((b.whoosh as AudioStreamWAV).loop_mode == AudioStreamWAV.LOOP_DISABLED, "one-shots don't loop")
+
+
+## WP7.6: an OGG Vorbis one-shot sets up a Vorbis decoder on every play() (~0.6 ms on the
+## main thread; a 20-event frame took ~20 ms). Every sound the bank holds is either a
+## looping OGG (engine, wind, tire hum, intake) or a non-looping QOA WAV one-shot, which
+## starts in microseconds (docs/AUDIO.md → Assets). The scan covers every AudioStream
+## member, so a new one-shot is checked without editing this test.
+func test_one_shots_are_wav() -> void:
+	var b := AudioBank.new(t)
+	var one_shots := 0
+	for p: Dictionary in b.get_property_list():
+		if not (p.usage & PROPERTY_USAGE_SCRIPT_VARIABLE) or p.type != TYPE_OBJECT:
+			continue
+		var s := b.get(p.name) as AudioStream
+		if s == null:
+			continue
+		var ogg := s as AudioStreamOggVorbis
+		if ogg != null:
+			check(ogg.loop, "%s is OGG, so it must be a loop (one-shots are WAV)" % s.resource_path)
+			continue
+		var wav := s as AudioStreamWAV
+		check(wav != null, "%s: a one-shot is an AudioStreamWAV (%s)" % [s.resource_path, s.get_class()])
+		if wav == null:
+			continue
+		one_shots += 1
+		eq(wav.format, AudioStreamWAV.FORMAT_QOA, "%s imported with QOA (compress/mode=2)" % s.resource_path)
+		eq(wav.loop_mode, AudioStreamWAV.LOOP_DISABLED, "%s doesn't loop" % s.resource_path)
+		gt(wav.get_length(), 0.0, "%s has audio" % s.resource_path)
+	eq(one_shots, 19, "every one-shot in the bank was scanned")
 
 
 # ---------------------------------------------------------------- Budget
