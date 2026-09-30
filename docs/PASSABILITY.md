@@ -77,7 +77,7 @@ The minimum speed only bites behind vehicles slower than it: a player at ≥ v_l
 
 ## The director (the commit path)
 
-`TrafficDirector.set_player_params(params)` enables it (run.gd must call it, see *Open*). Then:
+`TrafficDirector.set_player_params(params)` enables it (`run.gd` calls it at every run start and on a dev teleport; so do `car_drive.gd` and the sandbox). Then:
 
 1. **Commit, then check while invisible.** A batch is planned and committed as before (`_plan_ahead` → `_plan_range` → `_commit`, band top-up included), beyond `min_ahead_m()` (fog end + 30 m). The range just committed, `[player s + min_ahead_m(), spawned_to)` with every vehicle spawned since (`vehicle_id >= mark`), is queued and checked by `Passability.check` (batch mode), **time-sliced**: `director_slices_per_tick` (1 since the merge; WP6.1 measured with 2) slices per 120 Hz tick. A check takes 16-22 ticks (0.13-0.18 s); a re-roll storm stays well within a second.
 2. **Re-roll.** Without a path: the range's own vehicles still beyond `min_ahead_m()` are despawned and the range is planned again with the same source on a derived stream (`rng_traffic.derive("passability")`), through the usual commit rules; up to `max_rerolls` (5).
@@ -159,7 +159,7 @@ The earlier soaks (before the merges, 10,024 km each) are in the same file.
 - **CONTRACTS §5** says passability "works on its own `copy_from` copy". It copies the vehicles that matter into its own structure-of-arrays storage instead (a full `copy_from` plus stepping 90 slots would cost more and the step is its own); the published state is still only read.
 - **The batch check reads the spec's "the next ~300 m" as "the batch as a player arriving at it meets it"**, with probes behind the slow vehicles, and checks it after committing it beyond the fog (nothing failing is ever visible). For the plan's deviations table.
 
-- **run.gd** (not in WP6.1's paths) must call `director.set_player_params(car.params)` after creating the director, and `src/dev/car_drive.gd` likewise; until then the game runs without the check (the soak, the sandbox and the tests have it).
+- ~~**run.gd** must call `director.set_player_params(car.params)`~~ Done: `src/run/run.gd` calls it at every run start (`_start_run`) and on a dev teleport, and `src/dev/car_drive.gd` likewise (WP9.5 checked; the game runs with the check).
 - **New MOBIL decisions are not predicted** by the forward sim (above). The checks are repeated often enough (every batch; the bot every 0.5 s) for this not to matter in the soak.
 - **Lane-count changes inside the horizon**: a lane that ends is modeled (road obstacles, above); a lane that *opens* inside the horizon is not added to the grid (conservative). Only the right edge moves (lane drops are on the right). Forks (WP6.5) are not modeled.
 - **The braking relaxation at the WP6.6 / D17 speeds.** The search allows any speed down to the minimum at once (the spec's "anywhere from minimum speed to current speed plus possible acceleration"). At 230-250 km/h a path may drop to 100 km/h within one 0.25 s step, which no car can do. The bot drives such paths as they are: it braked 238 → 100 km/h in 0.3 s approaching a toll in an `--all-pieces` spot check, then ended in a window in a booth lane. A braking-limited lower bound per step (the car's braking from the current speed, floored at the minimum) would be a stricter reading than the spec's text. It would also make the director re-roll more at high speed. For the orchestrator.
