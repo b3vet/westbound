@@ -294,15 +294,9 @@ func min_ahead_m() -> float:
 	return fog_end_m + traffic_tuning.spawn_fog_margin_m
 
 
-## How far ahead batches are kept planned (~750 m, never inside the fog end). When the fog
-## end (the simulation horizon, N8.2: 800 m on every tier) pushes past spawn_ahead_m, the
-## planning edge stays one fog margin beyond the first allowed spawn point, so the next
-## batch still starts where the last one ended (no holes of a tick's travel between them).
+## How far ahead batches are kept planned (~750 m, never inside the fog end).
 func ahead_distance() -> float:
-	var lo := min_ahead_m()
-	if lo >= traffic_tuning.spawn_ahead_m:
-		return lo + traffic_tuning.spawn_fog_margin_m
-	return traffic_tuning.spawn_ahead_m
+	return maxf(traffic_tuning.spawn_ahead_m, min_ahead_m())
 
 
 ## The leg's target density around the player (vehicles per km per lane): the leg
@@ -477,7 +471,12 @@ func _plan_ahead(player: VehicleState) -> void:
 	waves.plan_to(road, player.s + director_tuning.wave_meet_lookahead_m)
 	_sync_closures(player, player.s + ahead_distance() + batch * 2.0)
 	while player.s + ahead_distance() >= _spawned_to:
-		var a := maxf(_spawned_to, player.s + min_ahead_m())
+		# The next batch starts where the last one ended. N8.2: with the fog end at the
+		# simulation horizon (800 m on every tier) min_ahead_m passes spawn_ahead_m, and
+		# the planning edge would jump a tick's travel past the last batch; within one fog
+		# margin of the edge the batch stays contiguous (still past the fog end).
+		var lo := player.s + min_ahead_m()
+		var a := _spawned_to if _spawned_to >= lo - traffic_tuning.spawn_fog_margin_m else lo
 		_batch_a = a
 		_batch_b = a + batch
 		_refresh_ctx(player)

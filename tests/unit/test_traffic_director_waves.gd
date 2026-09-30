@@ -27,11 +27,10 @@ const MET_CONTRAST_SHARE := 0.53
 const BUILD_CONTRAST_SHARE := 0.67
 ## The leg of the set-piece rule tests: the WP6.2 kinds only (truck wall, roadblock).
 const PIECE_LEG := 2
-## N8.2: the spawn distance is RoadTuning.sim_horizon_m (800 m) on every tier. The met-contrast
-## and fast-player piece checks below pin numbers tuned (WP6.2, D17) at the medium tier's
-## 700 m fog end, where the director spawned before; they run there. At 800 m the planned
-## contrast still shows, smeared more (170 km/h, leg 4: peak / build / breather 12.7 / 11.6 /
-## 9.6 met per km vs 14.1 / 12.4 / 9.6 at 700 m; docs/DETERMINISM.md, handoff).
+## N8.2: the spawn distance is RoadTuning.sim_horizon_m (800 m) on every tier. The
+## fast-player set-piece check below pins a count tuned (WP6.2) at the medium tier's 700 m
+## fog end, where the director spawned before; it runs there (at 800 m the 190 km/h player
+## meets 1 piece instead of 2 on this seed; docs/SOAK.md → N8.2).
 const TUNED_FOG_END_M := 700.0
 
 var reg: SpawnFixtureRegistry
@@ -195,7 +194,7 @@ func test_density_the_player_meets_follows_the_waves() -> void:
 	# them. Planned: DirectorTuning.wave_density_mult (breather, build rising to the peak)
 	# x the leg's density. (At leg 8 peaks saturate: IDM gaps cap a lane near the target,
 	# docs/SPAWNING.md.)
-	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), 170.0, 4, null, TUNED_FOG_END_M)
+	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), 170.0, 4)
 	var met := PackedFloat64Array([0.0, 0.0, 0.0])
 	var driven := PackedFloat64Array([0.0, 0.0, 0.0])
 	var seen := {}
