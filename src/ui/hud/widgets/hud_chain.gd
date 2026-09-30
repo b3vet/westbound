@@ -2,7 +2,8 @@ class_name HudChain
 extends HudWidget
 ## The unbanked chain, top-centre under the sun bar (left of the multiplier). Spec:
 ## Scoring → Chain and banking ("shown big at the top center"); Design system (speed
-## tilt on the chain readout). Pulses on every scored event (a scale pop, no redraw).
+## tilt on the chain readout). Pulses on every scored event (a scale pop, no redraw;
+## none with reduced motion, WP9.3).
 ##
 ## Drawn right-aligned to its rect's right edge, so the chain and the multiplier meet
 ## at the screen's centre line. The CHAIN label sits left of the number; a number too
@@ -52,6 +53,9 @@ func animate(dt: float) -> bool:
 	if _pulse_t >= dur:
 		_pulse_t = -1.0
 		scale = Vector2.ONE
+		return false
+	if style.reduced_motion:
+		scale = Vector2.ONE   # WP9.3: no pop (the event stack's line is the response)
 		return false
 	var k := sin(PI * _pulse_t / dur)
 	scale = Vector2.ONE * (1.0 + Units.pct_to_frac(style.tuning.chain_pulse_scale_pct) * k)

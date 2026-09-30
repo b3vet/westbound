@@ -23,6 +23,10 @@ extends CanvasLayer
 ## out (modulate only), hidden (no draw call) by day. Its slot is always reserved, so
 ## the cluster never moves.
 ##
+## Reduced motion (WP9.3, Settings `reduced_motion`, live): HudStyle.reduced_motion; the
+## widgets fade only (no pops, slides, flights, glitter, wobble or pulses) and turning it
+## on settles any running motion (docs/ACCESSIBILITY.md).
+##
 ## Cooling (WP9.1): a small snowflake icon under [II] while the adaptive governor holds a
 ## thermal step (Quality.is_cooling(), re-read on Events.governor_changed and
 ## thermal_state_changed). Its slot is always reserved; hidden, it draws nothing.
@@ -69,6 +73,7 @@ const MINUS := "-"
 
 const SET_UNITS := &"units"
 const SET_TEXT_SCALE := &"text_scale"
+const SET_REDUCED_MOTION := &"reduced_motion"
 const UNITS_MPH := &"mph"
 ## Settings that move the touch controls (the HUD re-places around them).
 const CONTROL_SETTINGS: Array[StringName] = [&"steering_mode", &"throttle_mode", &"left_handed",
@@ -149,6 +154,9 @@ var _cooling := HudCooling.new()
 var _cooling_pinned: bool = false
 var _cooling_pin: bool = false
 var _journey_bonus: int = 0
+## N6.2 (rooms): points added to every banked total shown (the official score's eased
+## correction, NetScoreClient.display_offset()); 0 outside rooms.
+var _score_offset: int = 0
 var _widgets: Array[HudWidget] = []
 
 
@@ -286,6 +294,18 @@ func cooling_rect() -> Rect2:
 func set_headlight_ramp(ramp: float) -> void:
 	_ramp_pinned = not is_nan(ramp)
 	_pinned_ramp = ramp
+
+
+## N6.2 (rooms): the official score's correction, added to the banked total shown. A
+## lower value shows at once (the caller eases it down), a higher one counts up.
+func set_score_offset(points: int) -> void:
+	_score_offset = points
+
+
+## N6.2 (rooms): a line on the event stack from outside the run's events (TRAIN ×n, an
+## official sector bonus).
+func push_event(word: String, value: String, role: HudEventStack.Role) -> void:
+	_stack.push(word, value, role)
 
 
 ## The high-beam button is showing (fully or fading).
@@ -531,7 +551,7 @@ func _read_feed() -> void:
 	_mult.set_multiplier(f.multiplier)
 	_set_chain_row_visible(f.chain > 0 or f.multiplier >= 1.0 + MULT_SHOWN)
 	_score.set_best(f.best)
-	_feed_banked(f.banked)
+	_feed_banked(f.banked + _score_offset)
 	_read_objective(f)
 
 
@@ -676,8 +696,8 @@ func _on_chain_banked(amount: int, reason: StringName, banked_total: int) -> voi
 		_stack.push(WORD_BANKED, pts, HudEventStack.Role.GOLD)
 	_flyer.fly(pts, _chain.number_center(), _score.number_target() + Vector2(_flyer.size.x * 0.25, 0.0),
 			tuning.bank_fly_s)
-	if banked_total > _banked_target or not _counted:
-		_start_count(banked_total, tuning.bank_fly_s)
+	if banked_total + _score_offset > _banked_target or not _counted:
+		_start_count(banked_total + _score_offset, tuning.bank_fly_s)
 
 
 func _on_chain_lost(amount: int, reason: StringName) -> void:
@@ -701,8 +721,8 @@ func _on_bonus(kind: StringName, points: int, banked_total: int) -> void:
 			_toast.add_item(word, PLUS + HudFormat.thousands(points), HudLegToast.Role.GOLD)
 	else:
 		_stack.push(word, PLUS + HudFormat.thousands(points), HudEventStack.Role.GOLD)
-	if banked_total > _banked_target:
-		_start_count(banked_total, 0.0)
+	if banked_total + _score_offset > _banked_target:
+		_start_count(banked_total + _score_offset, 0.0)
 
 
 func _on_hit(_source: StringName, lives_left: int) -> void:
@@ -884,6 +904,11 @@ func _on_setting_changed(key: StringName) -> void:
 		_relayout()
 		if feed != null:
 			_read_feed()
+	elif key == SET_REDUCED_MOTION:
+		_read_settings()
+		if style.reduced_motion:
+			for w in _widgets:
+				w.settle_motion()
 	elif key in CONTROL_SETTINGS and _hub == null:
 		_relayout()
 
@@ -893,6 +918,7 @@ func _on_setting_changed(key: StringName) -> void:
 func _read_settings() -> void:
 	_miles = StringName(_setting(SET_UNITS, &"kmh")) == UNITS_MPH
 	_text_scale = tuning.clamp_text_scale(float(_setting(SET_TEXT_SCALE, 1.0)))
+	style.reduced_motion = bool(_setting(SET_REDUCED_MOTION, false))
 
 
 func _restyle() -> void:

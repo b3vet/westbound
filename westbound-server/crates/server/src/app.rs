@@ -34,6 +34,7 @@ use crate::presence::PresenceHub;
 use crate::ratelimit::{RateLimiters, CLEANUP_INTERVAL};
 use crate::rooms::Rooms;
 use crate::sessions::Sessions;
+use crate::social::parties::{Parties, PartyParams};
 use crate::tick::{MonotonicTickClock, TickClock};
 use crate::{accounts, leaderboards, profile, runs, ws};
 
@@ -73,6 +74,8 @@ pub struct AppState {
     pub replay_jobs: Arc<Notify>,
     /// The rooms registry (N5.1): room tasks, codes, seats, Quick Join, the browser.
     pub rooms: Arc<Rooms>,
+    /// Parties (N9.3): in memory; the gateway's party commands and the party moves.
+    pub parties: Arc<Parties>,
 }
 
 impl AppState {
@@ -98,7 +101,7 @@ impl AppState {
         clock: Arc<dyn Clock>,
         tick_clock: Arc<dyn TickClock>,
     ) -> anyhow::Result<Self> {
-        let deeplinks = DeepLinks::load(&config.deeplinks)?;
+        let deeplinks = DeepLinks::load(&config.deeplinks, &config.server.public_origin)?;
         if config.is_dev()
             && (config.auth.jwt_secret.is_empty() || config.auth.device_secret_pepper.is_empty())
         {
@@ -118,6 +121,12 @@ impl AppState {
             presence.clone(),
             shutdown.clone(),
         )?);
+        let room_codes = rooms.clone();
+        let parties = Arc::new(Parties::new(
+            sessions.clone(),
+            PartyParams::from_config(&config),
+            Arc::new(move |c| room_codes.find_code(c).is_some()),
+        ));
         let boards = Arc::new(Leaderboards::new(
             db.clone(),
             config.leaderboards.clone(),
@@ -146,6 +155,7 @@ impl AppState {
             presence,
             map,
             replay_jobs: Arc::new(Notify::new()),
+            parties,
             rooms,
         })
     }
@@ -324,6 +334,8 @@ pub fn router(state: AppState) -> Router {
             get(http::apple_app_site_association),
         )
         .route("/.well-known/assetlinks.json", get(http::assetlinks))
+        // N9.3: invite links (room and party codes).
+        .route("/r/{code}", get(http::invite))
         .fallback(http::not_found)
         .layer(middleware::from_fn_with_state(state.clone(), count_requests))
         .layer(

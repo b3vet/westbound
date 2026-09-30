@@ -102,9 +102,24 @@ social_per_hour = 60
 social_burst = 20
 
 [deeplinks]
-# Directory with apple-app-site-association and assetlinks.json. Empty, or a
-# missing file, serves the built-in placeholder.
+# Invite links https://<domain>/r/<code> and the deep-link association files
+# (docs/SERVER.md → "Invite links and deep links").
+# Directory with apple-app-site-association and assetlinks.json. A file there wins; a
+# missing one is generated from the app ids below, or (no ids) the built-in placeholder.
 dir = ""
+# The invite page's button: the web build with the code ({code}; {origin} = public_origin).
+web_join_url = "https://b3vet.github.io/westbound/?room={code}"
+# iOS Universal Links (TEAMID.bundle.id), e.g. ["ABCDE12345.com.sipsakrandevu.westbound"].
+apple_app_ids = []
+# Android App Links: package name and signing-certificate SHA-256 fingerprints, e.g.
+# "com.sipsakrandevu.westbound" and ["AA:BB:...:FF"] (32 pairs).
+android_package = ""
+android_cert_sha256 = []
+# Store links on the invite page (empty: "coming soon").
+app_store_url = ""
+play_store_url = ""
+# A custom URL scheme the native app registers (<scheme>://r/<code>); empty: no button.
+app_scheme = ""
 
 [gateway]
 # The realtime gateway on /ws (docs/SERVER.md → "Realtime gateway").
@@ -239,6 +254,10 @@ crew_invite_code_len = 8
 # Reports per account per rolling 24 hours, and the largest report context (compact JSON).
 reports_per_day = 10
 report_context_max_bytes = 1024
+# Parties (N9.3): members per party, the leader included (spec: up to 8; at most 16), and
+# how long a member whose connection ended keeps their place (a new session takes it back).
+party_max_members = 8
+party_member_hold_ms = 15000
 
 [replays]
 # Replay uploads and the verification queue (docs/SERVER.md → "Replays and verification").

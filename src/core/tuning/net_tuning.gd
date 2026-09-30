@@ -157,6 +157,10 @@ const PATH := "res://data/tuning/net.tres"
 	Color(0.2, 0.85, 1.0), Color(1.0, 0.45, 0.3), Color(0.55, 1.0, 0.35), Color(1.0, 0.8, 0.2),
 	Color(0.85, 0.45, 1.0), Color(1.0, 0.35, 0.65), Color(0.35, 1.0, 0.8), Color(0.95, 0.95, 0.95),
 ])   # not in spec
+## The loop strip's dot shape per crew color (facets; same index, wrapping): the second
+## channel for crews, so colors a color-blind player confuses never share a shape (WP9.3,
+## tests/a11y/test_color_independence.gd). A player's own dot is the larger hexagon.
+@export var room_crew_dot_facets: PackedInt32Array = PackedInt32Array([6, 6, 3, 4, 4, 3, 4, 3])   # not in spec
 ## The car model remote players are drawn with (index into Run.CAR_PATHS; the protocol
 ## carries no car).
 @export var room_remote_car: int = 0   # not in spec
@@ -357,6 +361,53 @@ const PATH := "res://data/tuning/net.tres"
 ## It extrapolates the player's latest report at most this long (the server's
 ## player_max_extrapolation_s, mp_traffic.json).
 @export var test_authority_extrapolation_s: float = 0.5   # not in spec
+
+@export_group("Room scoring (N6.2)")
+## N6.2 (docs/ROOMS_CLIENT.md → Scoring in a room): claims, the official score, the crew and
+## train HUD. Claims waiting for the next frame's send (a tick scores a few at most).
+@export var score_claim_queue: int = 32   # not in spec
+## Recent passes kept to name a thread's first car, and how far apart (s, by the claims'
+## ticks) its pass may complete from the second one's (the thread window is 0.5 s between
+## the centres crossing; completions spread by the car lengths over the closing speed).
+@export var score_recent_passes: int = 8   # not in spec
+@export var score_thread_match_s: float = 1.5   # not in spec
+## The local score kept per room tick, to compare with score_sync (the official timeline
+## runs 1.5 s behind the room; plus the round trip and slack).
+@export var score_history_s: float = 8.0   # not in spec
+## The displayed total eases to the official one at banking moments (spec: "the client
+## eases its display to the server's values at banking moments"): up within this long,
+## down (score taken away) more slowly, never in one jump.
+@export var score_ease_up_s: float = 0.6   # not in spec
+@export var score_ease_down_s: float = 2.0   # not in spec
+## Crew proximity (spec): +bonus per crewmate within range along the loop, capped.
+@export var crew_range_m: float = 30.0
+@export var crew_bonus_per_mate: float = 0.25
+@export var crew_factor_cap: float = 2.0
+## The TRAIN ×n badge shows this long after a link (not in spec).
+@export var train_show_s: float = 2.5   # not in spec
+## A server sector bonus the local run already paid (same kind, within this long) was
+## shown in the sector toast; a missing one goes on the event stack.
+@export var sector_match_s: float = 6.0   # not in spec
+## States, hits and claims are stamped with a room clock that never stalls across a step
+## back of the clock estimate up to this large (RunRoom._room_now: the server's `distance`
+## check); a larger step back is taken as it is.
+@export var room_stamp_max_hold_ms: float = 250.0   # not in spec
+
+@export_group("Parties (N9.3)")
+## N9.3 (docs/ROOMS_CLIENT.md → Parties): a party invite stays answerable this long.
+@export var party_invite_show_s: float = 120.0   # not in spec
+## Party invites kept at once (the newest replaces the oldest).
+@export var party_invites_max: int = 4   # not in spec
+## Spec: parties of up to 8 (the server's `social.party_max_members`).
+@export var party_max_members: int = 8
+## A lobby connection that drops while in a party reconnects every this long, for as long
+## as the server holds the party place (its `party_member_hold_ms`).
+@export var party_reconnect_retry_s: float = 2.0   # not in spec
+@export var party_reconnect_window_s: float = 15.0   # not in spec
+## The path of an invite link on the server's origin (`https://<domain>/r/<code>`, spec).
+@export var invite_path: String = "/r/"
+## A kick in the room menu or the party panel waits for a second tap this long.
+@export var confirm_tap_s: float = 3.0   # not in spec
 
 func ping_interval_usec() -> int:
 	return roundi(ping_interval_s * 1.0e6)   # lint: allow-number s -> usec

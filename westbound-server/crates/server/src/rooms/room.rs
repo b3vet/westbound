@@ -117,6 +117,8 @@ pub struct JoinReq {
     pub session: SessionHandle,
     pub identity: Identity,
     pub crew_tag: CrewTag,
+    /// N9.3: the joiner's party (one crew in public rooms).
+    pub party: Option<u32>,
     pub reply: oneshot::Sender<Result<Joined, Refusal>>,
 }
 
@@ -198,6 +200,8 @@ struct Seat {
     identity: Identity,
     crew_tag: CrewTag,
     crew_slot: u8,
+    /// N9.3: the party the player joined with (public rooms: the crew).
+    party: Option<u32>,
     /// The live connection; `None` while the seat is held.
     session: Option<SessionHandle>,
     active: Arc<AtomicBool>,
@@ -348,7 +352,7 @@ impl Room {
     pub fn on_cmd(&mut self, cmd: Cmd, now: u32) {
         match cmd {
             Cmd::Join(req) => {
-                let r = self.join(req.session, req.identity, req.crew_tag, now);
+                let r = self.join(req.session, req.identity, req.crew_tag, req.party, now);
                 // The connection may have gone meanwhile; its cleanup handles the seat.
                 let _ = req.reply.send(r);
             }
@@ -449,6 +453,7 @@ impl Room {
         session: SessionHandle,
         identity: Identity,
         crew_tag: CrewTag,
+        party: Option<u32>,
         now: u32,
     ) -> Result<Joined, Refusal> {
         if self.closed {
@@ -465,12 +470,20 @@ impl Room {
             return Err(Refusal::new(ErrorCode::RoomFull, DETAIL_ROOM_FULL));
         }
         let player_id = self.alloc_player_id();
-        // Private room: everyone is one crew. Public room: the party you joined with (N9);
-        // until parties exist, each player is a crew of one.
+        // Private room: everyone is one crew. Public room: the party you joined with (N9.3:
+        // a seat of the same party gives its crew slot); alone, a crew of one.
         let crew_slot = if self.is_public() {
-            (0..protocol::messages::MAX_CREWS)
-                .find(|c| self.seats.iter().all(|s| s.crew_slot != *c))
-                .unwrap_or(0)
+            let party_slot = party.and_then(|p| {
+                self.seats
+                    .iter()
+                    .find(|s| s.party == Some(p))
+                    .map(|s| s.crew_slot)
+            });
+            party_slot.unwrap_or_else(|| {
+                (0..protocol::messages::MAX_CREWS)
+                    .find(|c| self.seats.iter().all(|s| s.crew_slot != *c))
+                    .unwrap_or(0)
+            })
         } else {
             0
         };
@@ -490,6 +503,7 @@ impl Room {
             identity,
             crew_tag,
             crew_slot,
+            party,
             session: Some(session),
             active: active.clone(),
             held_until: None,

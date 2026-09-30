@@ -62,6 +62,11 @@ func setup(s: NetSession, transport: NetTransport, net_tuning: NetTuning, time: 
 	var url := s.ws_url() if s != null else net_tuning.server_url
 	var tokens := s.access_token if s != null else func() -> String: return ""
 	session.configure(url, net_tuning.client_build, MapInfo.loop_hash(), tokens)
+	# N9.3: friends presence rides on this connection whenever it is up (N5.2 left
+	# NetSocialClient.attach_lobby unwired; the friends list polls only without it).
+	var social := NetSocialClient.of(s)
+	if social != null:
+		social.attach_lobby(session.client)
 
 
 func _enter_tree() -> void:
@@ -122,6 +127,47 @@ func join_id(room_id: int) -> void:
 func browse() -> void:
 	await _fresh_token()
 	session.browse()
+
+
+## N9.3: the party (docs/ROOMS_CLIENT.md → Parties). Each connects first when needed.
+func party_create() -> void:
+	await _fresh_token()
+	session.party_create()
+
+
+func party_join(code: String) -> void:
+	await _fresh_token()
+	session.party_join(code)
+
+
+func party_invite(account_id: String) -> void:
+	await _fresh_token()
+	session.party_invite(account_id)
+
+
+func party_leave() -> void:
+	session.party_leave()
+
+
+func party_kick(account_id: String) -> void:
+	session.party_kick(account_id)
+
+
+## The lobby connection alone (presence and party events while the hub shows).
+func connect_lobby() -> void:
+	if not available():
+		return
+	await _fresh_token()
+	session.connect_lobby()
+
+
+## The invite link for a room or party code (`https://<domain>/r/<code>`), "" without a
+## server.
+func invite_url(code: String) -> String:
+	var base := net_session.base_url if net_session != null else ""
+	if base.is_empty() or code.is_empty():
+		return ""
+	return NetRoomSession.invite_url(base, code, session.tuning.invite_path)
 
 
 ## A token good for the next hour before a new connection (renews when near expiry).

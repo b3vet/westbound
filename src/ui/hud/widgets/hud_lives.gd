@@ -5,7 +5,9 @@ extends HudWidget
 ##
 ## Faceted gem icons. A hit breaks the lost icon (two halves fall apart and fade,
 ## leaving its empty outline); life_restored pops it back. During the ghost period
-## the remaining icons blink and GHOST shows under them. Idle: no redraws.
+## the remaining icons blink and GHOST shows under them. Idle: no redraws. Reduced
+## motion (WP9.3): the lost gem fades where it was, a restored one fades in (no fall, no
+## pop) and the ghost's icons hold still (GHOST says it).
 
 const LABEL_GHOST := "GHOST"
 const GEM_POINTS := 6
@@ -100,7 +102,7 @@ func animate(dt: float) -> bool:
 		if _restore_t >= t.life_restore_s:
 			_restore_i = -1
 		active = true
-	if _ghost:
+	if _ghost and not style.reduced_motion:
 		_clock += dt
 		active = true
 	if active:
@@ -123,8 +125,12 @@ func _paint_plate(m: HudMesh) -> void:
 		var full := i < _lives
 		if i == _restore_i:
 			var k := clampf(_restore_t / t.life_restore_s, 0.0, 1.0)
-			_gem_at(c, icon * _overshoot(k))
-			_fill_gem(m, Color(s.hot, blink), Color(s.text, blink))
+			if s.reduced_motion:
+				_gem_at(c, icon)
+				_fill_gem(m, Color(s.hot, blink * k), Color(s.text, blink * k))
+			else:
+				_gem_at(c, icon * _overshoot(k))
+				_fill_gem(m, Color(s.hot, blink), Color(s.text, blink))
 		elif full:
 			_gem_at(c, icon)
 			_fill_gem(m, Color(s.hot, blink), Color(s.text, blink))
@@ -147,7 +153,27 @@ func _paint() -> void:
 			s.outline_px, s.outline)
 
 
+## The break's travel (px), the restore's overshoot (px) and the ghost blink's depth now
+## (tests, WP9.3).
+func motion_amount() -> float:
+	var m := super.motion_amount()
+	if style == null:
+		return m
+	var t := style.tuning
+	var icon := style.px(t.lives_icon_px)
+	if _break_i >= 0:
+		var k := clampf(_break_t / t.life_break_s, 0.0, 1.0)
+		m += (icon * k + icon * k * k * 2.0) * (0.0 if style.reduced_motion else 1.0)
+	if _restore_i >= 0 and not style.reduced_motion:
+		m += absf(_overshoot(clampf(_restore_t / t.life_restore_s, 0.0, 1.0)) - 1.0) * icon
+	if _ghost:
+		m += 1.0 - blink_edge()
+	return m
+
+
 func blink_edge() -> float:
+	if style.reduced_motion:
+		return 1.0
 	return lerpf(GHOST_MIN_ALPHA, 1.0, 0.5 + 0.5 * cos(TAU * style.tuning.ghost_pulse_hz * _clock))
 
 
@@ -162,9 +188,10 @@ func _overshoot(k: float) -> float:
 func _draw_break(m: HudMesh, c: Vector2, icon: float, k: float) -> void:
 	var s := style
 	var a := 1.0 - k
-	var spread := icon * k
-	var fall := icon * k * k * 2.0
-	var turn := k * BREAK_TURN_RAD
+	var still := 0.0 if s.reduced_motion else 1.0   # WP9.3: fades in place
+	var spread := icon * k * still
+	var fall := icon * k * k * 2.0 * still
+	var turn := k * BREAK_TURN_RAD * still
 	_gem_at(Vector2.ZERO, icon)
 	for side in 2:
 		var sx := 1.0 if side == 1 else -1.0

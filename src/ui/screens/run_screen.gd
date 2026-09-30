@@ -21,7 +21,8 @@ var full: Rect2 = Rect2(0.0, 0.0, 1280.0, 720.0)
 var safe: Rect2 = Rect2(0.0, 0.0, 1280.0, 720.0)
 ## Left-handed: the thumb-side blocks (menu, primary buttons) mirror.
 var mirrored: bool = false
-## Reduced motion: fades only, no punches or slides.
+## Reduced motion: fades only, no punches or slides. The live setting counts too
+## (motion_reduced()), so every screen honours it, the title's included (WP9.3).
 var reduced_motion: bool = false
 ## Modal screens (pause, results, crash) take every touch while open, so nothing reaches
 ## the game under them; they let go the moment they start closing.
@@ -183,6 +184,11 @@ func margin() -> float:
 	return tuning.layout_grid_px * MARGIN_GRIDS
 
 
+## True when this screen moves nothing but opacity: its own flag or the setting (WP9.3).
+func motion_reduced() -> bool:
+	return reduced_motion or bool(Settings.get_value(&"reduced_motion"))
+
+
 ## A punch-in (scale down from `from_scale` with a fade) on `c`, unless reduced motion.
 func punch(c: Control, from_scale: float, dur: float) -> Tween:
 	var tw := new_tween()
@@ -190,7 +196,7 @@ func punch(c: Control, from_scale: float, dur: float) -> Tween:
 	c.modulate.a = 0.0
 	tw.set_parallel(true)
 	tw.tween_property(c, ^"modulate:a", 1.0, dur * PUNCH_FADE_SHARE)
-	if reduced_motion:
+	if motion_reduced():
 		c.scale = Vector2.ONE
 	else:
 		c.scale = Vector2(from_scale, from_scale)
@@ -203,7 +209,7 @@ func slide_in(c: Control, dx: float, dur: float, delay: float) -> void:
 	var tw := new_tween()
 	var to := c.position
 	c.modulate.a = 0.0
-	if not reduced_motion:
+	if not motion_reduced():
 		c.position = to + Vector2(dx, 0.0)
 	tw.set_parallel(true)
 	tw.tween_property(c, ^"modulate:a", 1.0, dur).set_delay(delay)

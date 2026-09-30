@@ -56,8 +56,12 @@ func alive() -> int:
 	return _alive
 
 
-## A burst of `count` sparks (clamped to the free slots) from canvas point `at`.
+## A burst of `count` sparks (clamped to the free slots) from canvas point `at`. None
+## with reduced motion (WP9.3: flying particles are motion; the event's word and
+## sound carry it).
 func burst(at: Vector2, count: int) -> void:
+	if style.reduced_motion:
+		return
 	var t := style.tuning
 	var n := mini(count, _cap - _alive)
 	for k in n:
@@ -73,6 +77,17 @@ func burst(at: Vector2, count: int) -> void:
 	if _alive > 0:
 		visible = true
 		queue_redraw()
+
+
+func settle_motion() -> void:
+	_alive = 0
+	visible = false
+	queue_redraw()
+
+
+## Sparks in flight (tests, WP9.3).
+func motion_amount() -> float:
+	return float(_alive)
 
 
 func animate(dt: float) -> bool:

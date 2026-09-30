@@ -17,7 +17,8 @@ extends HudWidget
 ## A new objective pops in; progress redraws the text only when the count changes;
 ## completion turns the edge, text and icon gold with a tick; a broken "no X" objective
 ## shows FAILED in hot. Either way it holds objective_end_hold_s, then fades out and
-## hides until the next leg's objective. The pop and fade are scale and modulate only
+## hides until the next leg's objective (reduced motion, WP9.3: no pop, the fade stays).
+## The pop and fade are scale and modulate only
 ## (no redraws). One plate + one font (label) = two draw calls.
 
 enum State { PENDING, DONE, FAILED }
@@ -61,7 +62,8 @@ func set_objective(leg_index: int, id: StringName, text: String) -> void:
 		visible = id != &""
 		if visible and style != null:
 			_pop_t = 0.0
-			scale = Vector2.ONE * Units.pct_to_frac(style.tuning.objective_pop_from_pct)
+			scale = Vector2.ONE if style.reduced_motion \
+					else Vector2.ONE * Units.pct_to_frac(style.tuning.objective_pop_from_pct)
 	_value_changed()
 
 
@@ -151,7 +153,7 @@ func animate(dt: float) -> bool:
 		var k := clampf(_pop_t / maxf(t.objective_pop_s, EPS), 0.0, 1.0)
 		var e := 1.0 - (1.0 - k) * (1.0 - k)
 		var from := Units.pct_to_frac(t.objective_pop_from_pct)
-		scale = Vector2.ONE * lerpf(from, 1.0, e)
+		scale = Vector2.ONE if style.reduced_motion else Vector2.ONE * lerpf(from, 1.0, e)
 		if k >= 1.0:
 			_pop_t = -1.0
 	if _end_t >= 0.0:

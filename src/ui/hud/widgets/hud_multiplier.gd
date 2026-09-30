@@ -6,7 +6,8 @@ extends HudWidget
 ##
 ## The text redraws only when the shown value (tenths) changes. The hue cycle is the
 ## item's self_modulate and the wobble its rotation: per-frame property writes, no
-## redraw, and none at all at 1.0× (idle).
+## redraw, and none at all at 1.0× (idle). Reduced motion (WP9.3) keeps the hue cycle
+## (a slow color change, at most mult_hue_hz_max) and drops the wobble.
 
 var _key: int = -1
 var _m: float = 1.0
@@ -60,7 +61,7 @@ func animate(dt: float) -> bool:
 	_phase = fposmod(_phase + hz * dt, 1.0)
 	self_modulate = Color.from_hsv(fposmod(_phase + style.gold.h, 1.0),
 			Units.pct_to_frac(t.mult_hue_saturation_pct), 1.0)
-	var amp := wobble_rad(t, _m)
+	var amp := 0.0 if style.reduced_motion else wobble_rad(t, _m)
 	if amp > 0.0:
 		_clock += dt
 		rotation = amp * sin(TAU * t.mult_wobble_hz * _clock)

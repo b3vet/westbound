@@ -66,8 +66,13 @@ const USEC_PER_S := 1000000.0
 const TAG_DIGITS_MAX := 4
 
 ## N5's Join seam: `func(friend: NetSocialPlayer) -> void`. The friends screen shows JOIN
-## for a friend in a room with space, enabled only while this is set.
+## for a friend in a room with space, enabled only while this is set (N9.3: the online
+## hub sets it while it exists: the friend's room through the hub's joining status).
 static var join_handler: Callable
+## N9.3: `func(friend: NetSocialPlayer) -> void`, a party invite to an online friend. The
+## friends screen shows INVITE for online friends (not in a joinable room) only while this
+## is set (the online hub sets it while it exists).
+static var invite_handler: Callable
 static var _shared: NetSocialClient
 
 var api: NetApi

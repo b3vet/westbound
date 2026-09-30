@@ -81,6 +81,9 @@ extends Resource
 ## PlayerFx (visual only). Ghost flicker: the body toggles visible/hidden at this rate
 ## ("flickers translucent" during the ghost period).
 @export var ghost_flicker_hz: float = 12.0   # not in spec
+## Reduced motion (WP9.3): the ghost flicker slows to this rate, under the 3 flashes per
+## second of WCAG 2.3.1 (the HUD's GHOST says it too).
+@export var ghost_flicker_reduced_motion_hz: float = 2.0   # not in spec
 ## Hood smoke after the first hit: particles at medium quality (x Quality.particle_scale),
 ## lifetime, initial speed range, direction in car space (+Z is the car's rear: up and
 ## back), spread, rise, puff size and its scale at birth and at death.
@@ -99,6 +102,8 @@ extends Resource
 @export var smoke_hidden_camera_modes: Array[StringName] = [&"hood", &"cockpit"]   # not in spec
 ## The flickering headlight: flicker steps per second and the share of steps that are lit.
 @export var lamp_flicker_hz: float = 14.0   # not in spec
+## Reduced motion (WP9.3): the lamp's flicker steps per second (under 3 flashes a second).
+@export var lamp_flicker_reduced_motion_hz: float = 2.0   # not in spec
 @export var lamp_lit_share: float = 0.35   # not in spec
 ## Quad size when the lamp has no mesh (width, height; the height is also the minimum
 ## side), and its offset in front of the lamp face.
