@@ -12,18 +12,24 @@
 //! - `driver` (N6.1): [`driver::TrafficDriver`] (drives through the streamed traffic)
 //!   and [`driver::Scorer`] (the client's rules on the mirror, turned into honest or
 //!   cheating `score_claim`s).
-//! - `link` (N6.1): a minimal delay / jitter / loss line per direction (N4.4 owns the
-//!   full layer and its metrics).
+//! - `link` (N4.4): the in-process delay layer: per-direction delay, jitter and loss
+//!   (TCP: late and in order; datagram: gone and reordered), with statistics.
+//! - `predict` (N4.4): [`predict::TrafficPredictor`], the client's traffic model on a bot:
+//!   correction sizes and late intents as a client measures them.
+//! - `loadtest` (N10.1, `src/bin/loadtest.rs`): N rooms × M bots against a running server,
+//!   with the server's CPU, memory, tick times and the netcode numbers.
 
 pub mod bot;
 pub mod client;
 pub mod driver;
 pub mod http;
 pub mod link;
+pub mod predict;
 pub mod traffic;
 
 pub use bot::{BotConfig, RoomBot};
 pub use client::BotClient;
 pub use driver::{Cheat, ClaimMode, DriveMode};
-pub use link::LinkSim;
+pub use link::{LinkMode, LinkSim, LinkStats};
+pub use predict::{NetStats, TrafficPredictor};
 pub use traffic::{MirrorRules, TrafficMirror};

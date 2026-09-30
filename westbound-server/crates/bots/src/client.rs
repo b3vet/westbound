@@ -18,7 +18,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::bot::RoomBot;
-use crate::link::DelayLine;
+use crate::link::{DelayLine, LinkStats};
 
 pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -26,8 +26,12 @@ pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Client ping interval (`Welcome.ping_interval_ms` is the same).
 pub const PING_EVERY: Duration = Duration::from_secs(2);
-/// How often a simulated link is polled for due frames.
-const LINK_POLL: Duration = Duration::from_millis(5);
+/// Seeds of the two directions' delay lines (mixed with the bot's seed).
+const UP_SEED: u64 = 0x55;
+const DOWN_SEED: u64 = 0xAA;
+/// When no frame is on the simulated link, the next check (the drive loop's tick wakes
+/// it long before).
+const IDLE_WAKE: Duration = Duration::from_secs(1);
 
 pub struct BotClient {
     ws: Ws,
@@ -35,6 +39,9 @@ pub struct BotClient {
     pub welcome: Welcome,
     epoch: Instant,
     last_ping: Option<Instant>,
+    /// N4.4: the simulated link (`bot.cfg.link`): client → server and back.
+    up: Option<DelayLine<Vec<u8>>>,
+    down: Option<DelayLine<Vec<u8>>>,
 }
 
 impl BotClient {
@@ -49,12 +56,16 @@ impl BotClient {
         let (ws, _) = tokio_tungstenite::connect_async(url)
             .await
             .with_context(|| format!("connecting {url}"))?;
+        let link = bot.cfg.link;
+        let seed = bot.cfg.seed;
         let mut c = Self {
             ws,
             bot,
             welcome: Welcome::default(),
             epoch: Instant::now(),
             last_ping: None,
+            up: link.map(|l| DelayLine::new(l, true, seed ^ UP_SEED)),
+            down: link.map(|l| DelayLine::new(l, false, seed ^ DOWN_SEED)),
         };
         let hello = ClientMsg::Hello(Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -171,21 +182,50 @@ impl BotClient {
         Ok(())
     }
 
+    /// The simulated link's statistics (client → server, server → client), if any.
+    pub fn link_stats(&self) -> Option<(&LinkStats, &LinkStats)> {
+        Some((&self.up.as_ref()?.stats, &self.down.as_ref()?.stats))
+    }
+
+    /// When the next frame on the simulated link is due.
+    fn next_due(&self) -> Instant {
+        let due = [&self.up, &self.down]
+            .into_iter()
+            .filter_map(|l| l.as_ref()?.next_due())
+            .min();
+        match due {
+            Some(ms) => self.epoch + Duration::from_millis(ms),
+            None => Instant::now() + IDLE_WAKE,
+        }
+    }
+
+    /// Sends and delivers every frame due on the simulated link by `now_ms`.
+    async fn flush_link(&mut self, now_ms: u64) -> anyhow::Result<()> {
+        while let Some(f) = self.up.as_mut().and_then(|l| l.pop_due(now_ms)) {
+            self.ws
+                .send(Message::Binary(f.into()))
+                .await
+                .context("sending")?;
+        }
+        let now = self.now_ms();
+        while let Some(b) = self.down.as_mut().and_then(|l| l.pop_due(now_ms)) {
+            self.bot.on_frame(&b, now)?;
+        }
+        Ok(())
+    }
+
     /// Drives for `dur`: a state every room tick (with the claims its rules made, N6.1), a
     /// ping every 2 s, frames read as they come. With `cfg.link` every frame each way goes
-    /// through a [`DelayLine`].
+    /// through the connection's [`DelayLine`]s (N4.4), which wake the loop when a frame is
+    /// due.
     pub async fn drive_for(&mut self, dur: Duration) -> anyhow::Result<()> {
         let end = Instant::now() + dur;
         let tick = Duration::from_secs_f64(1.0 / self.bot.cfg.tick_rate_hz);
         let mut timer = tokio::time::interval(tick);
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let link = self.bot.cfg.link;
-        let seed = self.bot.cfg.seed;
-        let mut up: Option<DelayLine<Vec<u8>>> = link.map(|l| DelayLine::new(l, seed ^ 0x55));
-        let mut down: Option<DelayLine<Vec<u8>>> = link.map(|l| DelayLine::new(l, seed ^ 0xAA));
-        let mut poll = tokio::time::interval(LINK_POLL);
-        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let linked = self.up.is_some();
         while Instant::now() < end {
+            let due = self.next_due();
             tokio::select! {
                 _ = timer.tick() => {
                     let now = self.now_ms();
@@ -199,32 +239,28 @@ impl BotClient {
                         out.push(self.bot.ping(now));
                     }
                     if !out.is_empty() {
-                        match up.as_mut() {
+                        match self.up.as_mut() {
                             Some(line) => {
                                 let frame = encode_frame(&out).context("encoding")?;
-                                line.push(now, frame.to_vec());
+                                let n = frame.len();
+                                line.push_sized(now, frame.to_vec(), n);
                             }
                             None => self.send(&out).await?,
                         }
                     }
                 }
-                _ = poll.tick(), if link.is_some() => {
+                _ = tokio::time::sleep_until(due), if linked => {
                     let now = self.now_ms();
-                    while let Some(f) = up.as_mut().and_then(|l| l.pop_due(now)) {
-                        self.ws
-                            .send(Message::Binary(f.into()))
-                            .await
-                            .context("sending")?;
-                    }
-                    while let Some(b) = down.as_mut().and_then(|l| l.pop_due(now)) {
-                        self.bot.on_frame(&b, now)?;
-                    }
+                    self.flush_link(now).await?;
                 }
                 next = self.ws.next() => match next {
                     Some(Ok(Message::Binary(b))) => {
                         let now = self.now_ms();
-                        match down.as_mut() {
-                            Some(line) => line.push(now, b.to_vec()),
+                        match self.down.as_mut() {
+                            Some(line) => {
+                                let n = b.len();
+                                line.push_sized(now, b.to_vec(), n);
+                            }
                             None => self.bot.on_frame(&b, now)?,
                         }
                     }
@@ -236,17 +272,7 @@ impl BotClient {
             }
         }
         // Nothing sent is lost when the drive ends: the frames still on the link go now.
-        let now = self.now_ms();
-        while let Some(f) = up.as_mut().and_then(|l| l.pop_due(u64::MAX)) {
-            self.ws
-                .send(Message::Binary(f.into()))
-                .await
-                .context("sending")?;
-        }
-        while let Some(b) = down.as_mut().and_then(|l| l.pop_due(u64::MAX)) {
-            self.bot.on_frame(&b, now)?;
-        }
-        Ok(())
+        self.flush_link(u64::MAX).await
     }
 
     /// Closes the socket (a drop from the room's point of view: the seat is held).

@@ -10,7 +10,7 @@
 //! WESTBOUND_MULTIPLAYER_HANDOFF.md → Players, Testing → Netcode harness ("bots drive
 //! scripted paths"); docs/PROTOCOL.md §1 (clock sync), §4.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use protocol::budget::{on_wire_len, Direction};
@@ -23,6 +23,7 @@ use sim::map::LoopMap;
 
 use crate::driver::{Bodies, ClaimMode, DriveMode, Scorer, TrafficDriver};
 use crate::link::LinkSim;
+use crate::predict::{ModelParams, Participant, TrafficPredictor};
 use crate::traffic::TrafficMirror;
 
 const MS_PER_S: f64 = 1_000.0;
@@ -42,6 +43,8 @@ const INSET_M: f64 = 0.08;
 const HIT_LOOK_M: f64 = 12.0;
 /// How hard a crashed-out car stops (m/s²).
 const CRASH_DECEL_MPS2: f64 = 10.0;
+/// The bot's own states kept for the traffic model (ticks).
+const OWN_STATES: usize = 64;
 
 /// How a bot drives.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,6 +63,9 @@ pub struct BotConfig {
     pub link: Option<LinkSim>,
     /// Seeds the driver's choices, the cheats and the link.
     pub seed: u64,
+    /// N4.4: run the client's traffic model on the stream and measure its corrections
+    /// and late intents ([`TrafficPredictor`]).
+    pub measure: bool,
 }
 
 impl Default for BotConfig {
@@ -72,6 +78,7 @@ impl Default for BotConfig {
             claims: ClaimMode::Off,
             link: None,
             seed: 1,
+            measure: false,
         }
     }
 }
@@ -103,6 +110,11 @@ pub struct Seen {
     pub score_events: Vec<ScoreEvent>,
     /// N9.3: lobby events other than `room_left` (party state, invites, presence, lists).
     pub lobby_events: Vec<LobbyEvent>,
+    /// N4.4: frames that arrived when the bot's room clock was already this many ticks past
+    /// their traffic tick (the stream's age at arrival): sum and max, and how many.
+    pub frame_age_sum: f64,
+    pub frame_age_max: f64,
+    pub frame_ages: u64,
 }
 
 impl Seen {
@@ -148,6 +160,12 @@ pub struct RoomBot {
     pending: Vec<ClientMsg>,
     pub scorer: Scorer,
     bodies: Bodies,
+    /// N4.4: the client's traffic model (with `cfg.measure`), the bot's own recent states
+    /// (tick, s, d, v, lateral v) and the others' latest relayed ones.
+    pub predictor: Option<TrafficPredictor>,
+    own: VecDeque<(u32, f64, f64, f64, f64)>,
+    others: HashMap<u16, PlayerState>,
+    participants: Vec<Participant>,
 }
 
 impl RoomBot {
@@ -179,6 +197,12 @@ impl RoomBot {
             driver: TrafficDriver::new(cfg.seed),
             scorer: Scorer::new(cfg.claims, cfg.seed),
             bodies: Bodies::builtin(),
+            predictor: cfg
+                .measure
+                .then(|| TrafficPredictor::new(ModelParams::builtin())),
+            own: VecDeque::with_capacity(OWN_STATES),
+            others: HashMap::new(),
+            participants: Vec::with_capacity(9),
         }
     }
 
@@ -201,6 +225,8 @@ impl RoomBot {
         self.last_sent = None;
         self.last_ms = None;
         self.seen.room_left = None;
+        self.own.clear();
+        self.others.clear();
     }
 
     fn rate_per_ms(&self) -> f64 {
@@ -226,8 +252,12 @@ impl RoomBot {
         self.seen.wire_bytes += on_wire_len(bytes.len(), Direction::ServerToClient) as u64;
         self.seen.max_frame = self.seen.max_frame.max(bytes.len());
         let own_s_mm = ((self.s_m * MM_PER_M).round() as u32) % self.map.length_mm();
+        let msgs = decode_server_frame(bytes)?;
+        if self.predictor.is_some() {
+            self.predict_frame(&msgs, now_ms);
+        }
         self.seen.traffic.begin_frame();
-        for msg in decode_server_frame(bytes)? {
+        for msg in msgs {
             if let ServerMsg::RoomSnapshot(_) = &msg {
                 self.seen.traffic.reset();
             }
@@ -237,6 +267,98 @@ impl RoomBot {
         }
         self.seen.traffic.end_frame();
         Ok(())
+    }
+
+    /// N4.4: one frame through the client's traffic model: the model is brought to the
+    /// frame's tick (its correction batch's) with every player there, then the frame's
+    /// despawns, spawns, intents and corrections apply in order.
+    fn predict_frame(&mut self, msgs: &[ServerMsg], now_ms: u64) {
+        let now_tick = self.server_now(now_ms);
+        let Some(pred) = self.predictor.as_mut() else {
+            return;
+        };
+        if msgs.iter().any(|m| matches!(m, ServerMsg::RoomSnapshot(_))) {
+            pred.reset();
+        }
+        let Some(tick) = msgs.iter().find_map(|m| match m {
+            ServerMsg::TrafficCorrection(c) => Some(c.tick),
+            _ => None,
+        }) else {
+            return;
+        };
+        if let Some(now) = now_tick {
+            let age = now - f64::from(tick);
+            self.seen.frame_age_sum += age;
+            self.seen.frame_age_max = self.seen.frame_age_max.max(age);
+            self.seen.frame_ages += 1;
+        }
+        // The players at the frame's tick: the bot from its own states, the others from
+        // their last relayed state, carried on at their speeds.
+        let dt = 1.0 / self.cfg.tick_rate_hz;
+        self.participants.clear();
+        let own = self
+            .own
+            .iter()
+            .rev()
+            .find(|o| (tick.wrapping_sub(o.0) as i32) >= 0)
+            .or(self.own.front());
+        let me = match own {
+            Some(&(t, s, d, v, vl)) => {
+                let back = f64::from(tick.wrapping_sub(t) as i32) * dt;
+                Participant {
+                    s_m: self.map.wrap_m(s + v * back),
+                    d: d + vl * back,
+                    v,
+                    v_lat: vl,
+                }
+            }
+            None => Participant {
+                s_m: self.s_m,
+                d: self.d_m,
+                v: self.speed_mps,
+                v_lat: self.lat_vel,
+            },
+        };
+        self.participants.push(me);
+        for st in self.others.values() {
+            let back = f64::from(tick.wrapping_sub(st.tick) as i32) * dt;
+            let v = f64::from(st.speed_cms) / CM_PER_M;
+            let vl = f64::from(st.lat_vel_cms) / CM_PER_M;
+            self.participants.push(Participant {
+                s_m: self.map.wrap_m(f64::from(st.s_mm) / MM_PER_M + v * back),
+                d: f64::from(st.d_cm) / CM_PER_M + vl * back,
+                v,
+                v_lat: vl,
+            });
+        }
+        pred.advance_to(tick, &self.map, &self.participants);
+        let arrived = now_tick.unwrap_or(f64::from(tick));
+        for m in msgs {
+            match m {
+                ServerMsg::TrafficDespawn(d) => {
+                    for &id in &d.car_ids {
+                        pred.despawn(id);
+                    }
+                }
+                ServerMsg::TrafficSpawn(sp) => {
+                    for e in &sp.cars {
+                        pred.spawn(e, &self.map);
+                    }
+                }
+                ServerMsg::TrafficIntent(it) => {
+                    for e in &it.intents {
+                        pred.intent(e, arrived, &self.map);
+                    }
+                }
+                ServerMsg::TrafficCorrection(c) => {
+                    for e in &c.cars {
+                        pred.correct(c.tick, e, &self.map);
+                    }
+                }
+                _ => {}
+            }
+        }
+        pred.end_frame(&self.map);
     }
 
     fn on_msg(&mut self, msg: ServerMsg, now_ms: u64) {
@@ -260,6 +382,9 @@ impl RoomBot {
                         let entry = self.seen.others.entry(e.player_id).or_insert((0, 0));
                         entry.0 = e.state.tick;
                         entry.1 += 1;
+                        if self.predictor.is_some() {
+                            self.others.insert(e.player_id, e.state);
+                        }
                     }
                 }
             }
@@ -282,7 +407,18 @@ impl RoomBot {
                     self.offset = Some(at_receive - now_ms as f64 * self.rate_per_ms());
                 }
             }
-            ServerMsg::RoomEvent(e) => self.seen.room_events.push(e),
+            ServerMsg::RoomEvent(e) => {
+                match &e {
+                    RoomEvent::Leave(l) => {
+                        self.others.remove(&l.player_id);
+                    }
+                    RoomEvent::Kick(k) => {
+                        self.others.remove(&k.player_id);
+                    }
+                    _ => {}
+                }
+                self.seen.room_events.push(e);
+            }
             ServerMsg::Error(e) => self.seen.errors.push(e),
             ServerMsg::RunResult(r) => self.seen.run_results.push(r),
             ServerMsg::ScoreSync(s) => {
@@ -441,6 +577,13 @@ impl RoomBot {
         let d_at = self.d_m - self.lat_vel * back_s;
         let s_mm = ((s_at * MM_PER_M).round() as u32) % self.map.length_mm();
         let tick_dt = 1.0 / self.cfg.tick_rate_hz;
+        if self.predictor.is_some() {
+            if self.own.len() == OWN_STATES {
+                self.own.pop_front();
+            }
+            self.own
+                .push_back((tick, s_at, d_at, self.speed_mps, self.lat_vel));
+        }
         if self.cfg.drive == DriveMode::Traffic {
             self.detect_hit(tick, s_at, d_at);
         }
