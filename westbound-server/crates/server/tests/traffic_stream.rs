@@ -321,7 +321,9 @@ fn spawns_carry_lanes_and_lane_changes_from_the_right() {
 
 #[test]
 fn intents_reach_every_client_that_has_the_car() {
-    let mut h = Harness::new(Density::Rush, 21, eight_drivers());
+    // Seed 22: hesitant cancels are rare (5-12 per 1,600 rush ticks ring-wide) and must
+    // fall inside the drivers' areas; after WP6.11 seed 21 saw none there in 800 ticks.
+    let mut h = Harness::new(Density::Rush, 22, eight_drivers());
     let mut seen = 0;
     // Hesitant cancels sent ahead: (car, tick).
     let mut ahead: HashMap<(u16, u32), u16> = HashMap::new();
