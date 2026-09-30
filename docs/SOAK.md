@@ -456,3 +456,43 @@ Spot checks on the merged tree (reported, not gated):
 - Canyon, 2 × 28 km of lane drops: 0 windows, 0 contacts, the player never off the lanes.
 - `--all-pieces`, 3 runs, 84 km: 1 window at a toll gantry. The bot at 246 km/h braked 238 → 100 km/h in 0.3 s under the relaxation, drove a 50 km/h booth lane, and lost its path moving to the express lane.
 
+
+## WP6.10: Phase 6 cleanup and the M6 gate soak
+
+**What changed** (all before the gate soak unless marked):
+
+- **TrafficSim signal timer** (the WP6.1 soak's signal violation, run 113): a lane change a set piece requests between ticks on a far vehicle no longer counts the 30 Hz accumulation from before the blinker as blinker time (docs/TRAFFIC.md, *Telegraphing and execution*).
+- **The oracle** models lane ends, the sim's closures, speed and lane-drop zones, and bounded traffic acceleration (definition above). The classification is unchanged (contact at t0, the pre-registered cut-in rule); a player whose body is already in a closed lane or beyond the right edge at t0 is "in contact" with that static obstacle (`impossible_in_closure`, a subset of `impossible_player_induced`). New tests in `test_impossible_window_checker.gd` (lane end, lane opening ahead, sim closure and its half-lanes, a player inside a closure, speed zones, the accelerating platoon of the WP6.1 false positive, a queue never passing its leader); each fails on the old oracle. Cost: 13-31 ms per check in the gate soak (2, 3, 4 lanes, the container at load 6-10), about twice the constant-speed oracle; at 1 Hz it is a few percent of a run.
+- **`tools/soak.sh`** sums and prints the per-run counters (see *Commands*).
+- **The soak bot at toll gantries** (after the gate soak, below): `PassabilityBot` reads a toll's booth lanes as closed from 250 m before their traffic falls below the minimum speed (`PassabilityBot.BoothClosures`, like a player reading the TOLL legends), and leaves a lane that ends, closes or turns into a booth lane early: it first tries a check pinned one step into the half-lane move toward the open lane (a one-step lateral head start) and prefers that lane's pace. `test_passability_bot_booths.gd`.
+
+### The gate soak (`tools/soak.sh --km=2000 --shards=4 --all-pieces`, commit efc4644)
+
+Seed 20260928, the passability bot (`soak_main.gd` always runs `BOT_PASSABILITY`), 2,016 km in 72 runs, 14.8 simulated hours, wall 2,321 s (the container shared with other agents, load 6-10).
+
+| Counter | 2 lanes (504 km) | 3 lanes (1,008 km) | 4 lanes (504 km) | Gate |
+| --- | --- | --- | --- | --- |
+| collision pairs, signal, unsignaled, no-ambush, decel, brake flags, rear-end of a normal player, off-road, closed areas | all 0 | all 0 | all 0 | ✅ |
+| **impossible (traffic)** | 0 | **3** | 0 | ❌ |
+| impossible windows (player-induced / in a closed lane / cut-in rule) | 0 (0 / 0 / 0) | 8 (5 / 1 / 0) | 2 (1 / 0 / 1) | reported |
+| contacts with the player (rear-end) | 0 | 5 (4) | 2 (1) | reported |
+| `standstill_beside_fast` | 0 | 47 | 6 | reported |
+| `player_offroad_ticks` | 0 | 0 | 0 | reported |
+| bot checks / without a path / ms | 27,991 / 3 / 8.5 | 53,677 / 161 / 11.9 | 24,762 / 71 / 17.7 | reported |
+| director: checks, probes, failed, re-rolls, removals, unresolved, longest (ticks) | 1,733, 1,334, 6, 5, 0, **1**, 87 | 3,456, 2,682, 0, 0, 0, 0, 23 | 1,728, 925, 0, 0, 0, 0, 20 | reported |
+| set pieces spawned / passed; merges; peak active | 67 / 48; 2; 67 | 176 / 138; 1,930; 82 | 78 / 53; 12; 90 | |
+
+Min accel −6.00 m/s², 0 unfinished runs, 0 engine errors. Set pieces: 321 spawned (toll gantry 237, tunnel squeeze 60, truck wall 8, convoy 4, merge zone 4, slalom 4, road works 2, rolling roadblock 2), 303 started, 239 passed, 7 unmet, 0 hard decelerations, 0 collision pairs at a live piece.
+
+**The three traffic windows** (runs 36, 44, 64; 3 lanes; legs 2, 4, 6; all at a toll gantry): the bot, 0.9-3.9 s after entering lane 0, at 68-84 km/h behind booth traffic at 50-62 km/h, with the express lane beside it at 110-130 km/h. Replayed (run 44): the bot drove booth lane 0 at 135 km/h with the express lane open beside it for 10 s (130 m gaps), because passability's path is extracted greedily (speed first; a lane change costs as much lateral preference at its first step as it gains, so the path stays in its lane until the last feasible step) and the search may brake to the minimum speed at once. At the booths it braked 135 → 100 km/h in 0.5 s, started for the express lane, lost its path and fell back behind the booth traffic. Both oracles (with and without the WP6.10 zone model) fail from that state. So the windows are the soak bot's driving at a toll (a player reading the TOLL legends takes the express lane), not a wall Flow built and not an oracle artefact; the pre-registered rules classify them as traffic windows and they were **not reclassified**.
+
+**Fix (the bot, `tests/soak/passability_bot.gd`)** and re-run: all 36 three-lane runs of the gate soak with the fixed bot (`soak_main.gd --all-pieces --runs=...`, 1,008 km, 7.4 simulated hours): **every gate 0, impossible (traffic) 0**; 3 windows, all player-induced (contact at t0; runs 12, 44, 52); 4 rear-end contacts, none of a normally driving player; `standstill_beside_fast` 41; `player_offroad_ticks` 0; bot 53,349 checks, 39 without a path (was 161); director 3,456 checks, 0 failed. The 2- and 4-lane runs were not re-run (the 75-minute soak cap; the soak took 39 min, the diagnosis re-runs and the 3-lane re-run another ~40): their results above are from the gate commit, and the bot change can alter their traces (it acts wherever a lane ends, closes or has booths).
+
+Before the bot fix, two intermediate versions were measured on runs 33, 36, 44, 64 (not committed): the booth closure alone removed the windows but left the bot in the booth lanes' fallback for 13 % of its checks (the path could only leave a lane at the last step, so it rarely got out); the pinned early move fixed that.
+
+**Other nonzero counters:**
+
+- `standstill_beside_fast` (47 + 6): the canyon runs (13, 17, 37, 5: tunnel lane drops, the WP6.8 zipper at the end of a dropping lane) and run 63 (4 lanes, road works). The WP6.8 residual (71 per 1,008 km of canyon soak); TrafficSim's lane drops, not in WP6.10's paths.
+- The director's 1 unresolved range (run 62, 2 lanes, leg 7, s 23,944, player 130 km/h: 3 probes, 1 failed, 5 re-rolls, 87 ticks): the WP6.1 pattern, a failing probe starting before the range behind vehicles already within `min_ahead_m()`, which the director may not remove. No window followed.
+- The D12 2-lane slow wall did not occur in these 504 km of 2-lane runs (0 traffic windows on 2 lanes). It is still open (docs/PASSABILITY.md, *Open*).
+- The `impossible_in_closure` window (run 33, 3 lanes on the canyon road, leg 1, t = 19 s): the bot, mid lane change, with its body still in a lane the road drops (inside its closed taper). Player-induced under the new rule.
