@@ -6,11 +6,15 @@
 //
 //   node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000]
 //        [--settle 3000] [--screenshot build/web_smoke.png] [--headed]
-//        [--query "server=off"] [--expect REGEX]...
+//        [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...]
 //
 // --query: the page's query string (default server=off; e.g. the loop test mode:
 // "mode=loop&server=off&at=city&bot=keep"). --expect: a console line must match
-// REGEX (repeatable; e.g. the loop map hash the build prints).
+// REGEX (repeatable; e.g. the loop map hash the build prints). --reload: after the
+// first boot, reload the page in the same browser profile (same IndexedDB) and boot
+// again; --expect-reload: a console line of the second boot must match REGEX (the
+// save's persistence check: --query "server=off&save_probe=1" --reload
+// --expect-reload "Save probe: loaded 1 boot").
 //
 // Needs `npm ci` in tools/web_smoke once. Browser: Playwright's Chromium
 // (`npx playwright install chromium`), or CHROMIUM_PATH=/path/to/chrome.
@@ -31,6 +35,8 @@ function parseArgs(argv) {
     headed: false,
     query: 'server=off',
     expect: [],
+    reload: false,
+    expectReload: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s, 2);
@@ -43,6 +49,8 @@ function parseArgs(argv) {
       case '--headed': opts.headed = true; break;
       case '--query': opts.query = value(); break;
       case '--expect': opts.expect.push(new RegExp(value())); break;
+      case '--reload': opts.reload = true; break;
+      case '--expect-reload': opts.expectReload.push(new RegExp(value())); opts.reload = true; break;
       case '-h': case '--help':
         console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]...');
         process.exit(0);
@@ -240,30 +248,33 @@ async function main() {
     if (!gl) throw new Error('WebGL 2 is not available in this Chromium (tried SwiftShader flags)');
     console.log(`smoke: WebGL 2 renderer: ${gl}`);
 
-    // Booted = Godot printed its banner and the loading overlay is gone
-    // (the shell removes #status once engine.startGame() resolves).
-    const deadline = Date.now() + opts.timeout;
-    for (;;) {
-      if (failures.length) break;
-      const state = await page.evaluate(() => {
-        const notice = document.getElementById('status-notice');
-        return {
-          overlay: !!document.getElementById('status'),
-          notice: notice && notice.style.display === 'block' ? notice.innerText : '',
-        };
-      });
-      if (state.notice) {
-        failures.push(`Godot shell error notice: ${state.notice.trim()}`);
-        break;
+    // Booted = Godot printed its banner (since console line `from`) and the loading
+    // overlay is gone (the shell removes #status once engine.startGame() resolves).
+    const waitBoot = async (from) => {
+      const deadline = Date.now() + opts.timeout;
+      for (;;) {
+        if (failures.length) break;
+        const state = await page.evaluate(() => {
+          const notice = document.getElementById('status-notice');
+          return {
+            overlay: !!document.getElementById('status'),
+            notice: notice && notice.style.display === 'block' ? notice.innerText : '',
+          };
+        });
+        if (state.notice) {
+          failures.push(`Godot shell error notice: ${state.notice.trim()}`);
+          break;
+        }
+        const banner = consoleLines.slice(from).some((l) => /^Godot Engine v\d/.test(l));
+        if (banner && !state.overlay) break;
+        if (Date.now() > deadline) {
+          failures.push(`engine did not start within ${opts.timeout} ms (banner seen: ${banner}, loading overlay present: ${state.overlay})`);
+          break;
+        }
+        await page.waitForTimeout(250);
       }
-      const banner = consoleLines.some((l) => /^Godot Engine v\d/.test(l));
-      if (banner && !state.overlay) break;
-      if (Date.now() > deadline) {
-        failures.push(`engine did not start within ${opts.timeout} ms (banner seen: ${banner}, loading overlay present: ${state.overlay})`);
-        break;
-      }
-      await page.waitForTimeout(250);
-    }
+    };
+    await waitBoot(0);
 
     if (!failures.length) {
       console.log(`smoke: engine started after ${elapsed()}; letting it run ${opts.settle} ms`);
@@ -290,6 +301,22 @@ async function main() {
       for (const re of opts.expect) {
         if (!consoleLines.some((l) => re.test(l))) failures.push(`no console line matches ${re}`);
         else console.log(`smoke: console matches ${re}`);
+      }
+      if (opts.reload && !failures.length) {
+        // Same page, same profile: user:// (IndexedDB) must still hold what the first
+        // boot wrote.
+        const from = consoleLines.length;
+        console.log(`smoke: reloading after ${elapsed()}`);
+        await page.reload({ waitUntil: 'load', timeout: opts.timeout });
+        await waitBoot(from);
+        if (!failures.length) {
+          await page.waitForTimeout(opts.settle);
+          console.log(`smoke: second boot after ${elapsed()}`);
+          for (const re of opts.expectReload) {
+            if (!consoleLines.slice(from).some((l) => re.test(l))) failures.push(`after the reload, no console line matches ${re}`);
+            else console.log(`smoke: after the reload, console matches ${re}`);
+          }
+        }
       }
     } else {
       try {

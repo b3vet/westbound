@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="MetaTuning" format=3]
+
+[ext_resource type="Script" path="res://src/core/tuning/meta_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+warmup_s = 20.0
+warmup_fade_s = 12.0
+warmup_fade_steps = 4
+warmup_end_note_s = 2.5
+settings_dead_zones = PackedFloat64Array(0.5, 1, 2)
+settings_curves = PackedFloat64Array(0.625, 1, 1.375)

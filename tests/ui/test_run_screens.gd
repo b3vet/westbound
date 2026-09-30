@@ -395,6 +395,7 @@ func test_settings_write_settings() -> void:
 		check(sp.row(k) != null, "row %s" % k)
 		check(Settings.DEFAULTS.has(k))
 	eq(sp.selected_index(&"throttle_mode"), 0, "AUTO selected")
+	sp.show_page(SettingsPanel.PAGE_CONTROLS)   # WP8.1: the controls rows have their own page
 	_tap(sp.option(&"throttle_mode", 1))
 	eq(Settings.get_value(&"throttle_mode"), &"manual", "MANUAL written")
 	eq(sp.selected_index(&"throttle_mode"), 1)
@@ -402,6 +403,7 @@ func test_settings_write_settings() -> void:
 	eq(Settings.get_value(&"left_handed"), true)
 	_tap(sp.option(&"drag_visual", 1))
 	eq(Settings.get_value(&"drag_visual"), &"wheel")
+	sp.show_page(SettingsPanel.PAGE_GAME)
 	_tap(sp.option(&"units", 1))
 	eq(Settings.get_value(&"units"), &"mph")
 	_tap(sp.option(&"reduced_motion", 1))

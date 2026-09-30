@@ -10,11 +10,13 @@ extends Node
 ##   tools/snap.sh src/ui/screens/dev/screens_preview.tscn --screen=countdown --step=3 --gyro
 ##   tools/snap.sh src/ui/screens/dev/screens_preview.tscn --size=2496x1320 --screen=pause   # iPhone
 ##
-## snap_setup options: --screen=countdown|pause|settings|results|results_best|crash|hold
+## snap_setup options: --screen=countdown|pause|settings|results|results_best|crash|hold|
+## warmup (WP8.1: the first run's warm-up hint, --warmup_s= seconds into it)
 ## (default countdown), --step=3|2|1|0 (countdown; 0 = GO), --gyro (calibration card,
 ## RECALIBRATE), --hand=right|left, --text_scale=1|1.25, --units=kmh|mph, --sky_t=<0..1>,
-## --reduced_motion, --dev (keep the dev rows and dev HUD). Prints the screens' visible
-## canvas items ("snap: ...").
+## --reduced_motion, --dev (keep the dev rows and dev HUD), --page=game|controls|audio|
+## chooser (settings: the page shown; WP8.1). Prints the screens' visible canvas items
+## ("snap: ...").
 
 const RUN_SCENE := preload("res://src/run/run.tscn")
 const SNAP_SEED := 20260929
@@ -49,6 +51,8 @@ func snap_setup(args: Dictionary) -> void:
 			run_state = "paused"
 		"results", "results_best", "crash":
 			run_state = "results" if screen != "crash" else "running"
+		"warmup":
+			run_state = "running"
 	run.snap_setup({"state": run_state, "sky_t": float(args.get("sky_t", SKY_T)),
 			"s": float(args.get("s", 900.0)), "speed_kmh": 180.0})
 	var screens := run.screens
@@ -70,10 +74,29 @@ func snap_setup(args: Dictionary) -> void:
 			screens.pause_screen.set_gyro(gyro)
 			if screen == "settings":
 				screens.pause_screen.open_settings()
+				var sp := screens.pause_screen.settings
+				match String(args.get("page", "game")):
+					"controls":
+						sp.show_page(SettingsPanel.PAGE_CONTROLS)
+					"audio":
+						sp.show_page(SettingsPanel.PAGE_AUDIO)
+					"chooser":
+						sp.toggle_chooser()
 		"results":
 			screens.show_results(_payload(FAKE_SCORE, FAKE_BEST, false))
 		"results_best":
 			screens.show_results(_payload(FAKE_NEW_SCORE, FAKE_BEST, true))
+		"warmup":
+			# A fresh save's first Journey from the title (in memory: nothing is written).
+			Save.first_run_enabled = true
+			Save.reset_fresh()
+			Settings.set_value(&"text_scale", float(args.get("text_scale", 1.0)))
+			Settings.set_value(&"left_handed", String(args.get("hand", "right")) == "left")
+			run.start_mode(RunContext.MODE_JOURNEY)
+			run.go()
+			run.sky.sky_t = float(args.get("sky_t", SKY_T))
+			for i in roundi(float(args.get("warmup_s", 3.0)) * float(run.tuning.vehicle.physics_tick_hz)):
+				await get_tree().physics_frame
 		"crash":
 			run.lives.lives = 1
 			run.force_hit(HitDetection.HIT_TRAFFIC, -1, 1)
