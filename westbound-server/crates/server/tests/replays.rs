@@ -88,6 +88,15 @@ impl TestApp {
         .unwrap()
     }
 
+    async fn job_result(&self, run_id: i64) -> String {
+        sqlx::query_scalar::<_, Option<String>>("SELECT result FROM replays WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(self.db())
+            .await
+            .unwrap()
+            .unwrap_or_default()
+    }
+
     async fn verification(&self, run_id: i64) -> String {
         sqlx::query_scalar("SELECT verification FROM runs WHERE id = ?")
             .bind(run_id)
@@ -560,6 +569,125 @@ async fn jobs_left_running_are_requeued_on_start() {
         2,
         "the lost attempt counts"
     );
+}
+
+/// N8.3: a verifier command that names a per-build file (`/verifier/{build}/westbound`)
+/// whose build is not in this worker: the job is set aside at once, without running
+/// anything and without a retry loop; the run stays verifying. A worker that starts with
+/// that build (a new verifier image) takes it up again.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_build_without_a_verifier_is_set_aside_until_a_worker_has_it() {
+    let script = Script::new(&format!(r#"touch "$DIR/ran"; {ACCEPT}"#));
+    let builds = script.file("builds");
+    let per_build = format!("{}/{{build}}/westbound", builds.display());
+    let app = app_with_verifier(&script, |c| {
+        c.replays.verifier_command.push(per_build);
+        c.replays.max_attempts = 3;
+    })
+    .await;
+    let (run_id, tok, _) = app.pending_run("nob-00001", 42_000).await;
+    app.upload(Some(&tok), &run_id.to_string(), replay(&header(run_id), 10))
+        .await;
+    let worker = app.state.replay_worker();
+    let (_, outcome) = worker.run_next().await.unwrap().unwrap();
+    let JobOutcome::Unverifiable { error } = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert!(
+        error.contains("no verifier for build 1") && error.contains("/1/westbound"),
+        "{error}"
+    );
+    assert!(!script.file("ran").exists(), "nothing was run");
+    let (status, _, verdict, deleted) = app.job(run_id).await.unwrap();
+    assert_eq!((status.as_str(), verdict, deleted), ("failed", None, None));
+    let result: Value = serde_json::from_str(&app.job_result(run_id).await).unwrap();
+    assert_eq!(result["unverifiable"], true, "{result}");
+    assert_eq!(result["build"], 1, "{result}");
+    assert_eq!(app.verification(run_id).await, "pending", "still verifying");
+    assert!(replay_file(&app, run_id).exists(), "the file is kept");
+    app.clock.advance(3_600);
+    assert!(
+        worker.run_next().await.unwrap().is_none(),
+        "no retry loop: set aside until a worker starts"
+    );
+
+    // Still no build 1: a restarted worker puts it back, and it is set aside again.
+    assert_eq!(worker.requeue_unverifiable().await.unwrap(), 1);
+    let (_, again) = worker.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(again, JobOutcome::Unverifiable { .. }),
+        "{again:?}"
+    );
+
+    // A worker (a new image) with build 1: verified.
+    std::fs::create_dir_all(builds.join("1")).unwrap();
+    std::fs::write(builds.join("1/westbound"), b"").unwrap();
+    assert_eq!(worker.requeue_unverifiable().await.unwrap(), 1);
+    let (_, outcome) = worker.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(outcome, JobOutcome::Verdict { accepted: true, .. }),
+        "{outcome:?}"
+    );
+    assert!(script.file("ran").exists());
+    assert_eq!(app.verification(run_id).await, "verified");
+}
+
+/// N8.3: the verifier's "cannot verify" (exit 3 with a result `error`: another tuning
+/// under the same build number, a replay without inputs, an unknown car) is not retried
+/// against the same verifier: the job is set aside at once with the verifier's reason.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_replay_this_verifier_cannot_verify_is_set_aside_at_once() {
+    let script = Script::new(&format!(
+        r#"if [ ! -f "$DIR/once" ]; then touch "$DIR/once"; echo '{{"error":"tuning_mismatch: another tuning"}}' > "$1"; exit 3; fi; {ACCEPT}"#
+    ));
+    let app = app_with_verifier(&script, |c| {
+        c.replays.max_attempts = 3;
+        c.replays.retry_delay_secs = 0;
+    })
+    .await;
+    let (run_id, tok, _) = app.pending_run("cnv-00001", 42_000).await;
+    app.upload(Some(&tok), &run_id.to_string(), replay(&header(run_id), 10))
+        .await;
+    let worker = app.state.replay_worker();
+    let (_, outcome) = worker.run_next().await.unwrap().unwrap();
+    let JobOutcome::Unverifiable { error } = outcome else {
+        panic!("{outcome:?}")
+    };
+    assert!(error.contains("tuning_mismatch"), "{error}");
+    assert_eq!(app.job(run_id).await.unwrap().0, "failed");
+    let result: Value = serde_json::from_str(&app.job_result(run_id).await).unwrap();
+    assert_eq!(result["unverifiable"], true, "{result}");
+    assert!(
+        worker.run_next().await.unwrap().is_none(),
+        "not retried against the same verifier"
+    );
+    assert_eq!(app.verification(run_id).await, "pending");
+
+    // A job that failed for good otherwise stays failed (the operator requeues it).
+    let plain = Script::new("exit 7");
+    let other = app_with_verifier(&plain, |c| c.replays.max_attempts = 1).await;
+    let (other_run, other_tok, _) = other.pending_run("cnv-00002", 42_000).await;
+    other
+        .upload(
+            Some(&other_tok),
+            &other_run.to_string(),
+            replay(&header(other_run), 10),
+        )
+        .await;
+    let other_worker = other.state.replay_worker();
+    other_worker.run_next().await.unwrap().unwrap();
+    assert_eq!(other.job(other_run).await.unwrap().0, "failed");
+    assert_eq!(other_worker.requeue_unverifiable().await.unwrap(), 0);
+
+    assert_eq!(worker.requeue_unverifiable().await.unwrap(), 1);
+    let (_, outcome) = worker.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(outcome, JobOutcome::Verdict { accepted: true, .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(app.verification(run_id).await, "verified");
 }
 
 /// The real server's worker task: three uploads, one verifier process at a time, in

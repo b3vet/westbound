@@ -12,20 +12,25 @@
 # it with the exported binary exactly as the server's worker will (exit 0 = accepted).
 # build/verifier/ is the Docker build context of westbound-server/verifier/Dockerfile.
 #
-#   tools/verifier/export_verifier.sh [--no-smoke] [--seconds=20]
+#   tools/verifier/export_verifier.sh [--no-smoke] [--seconds=20] [--keep-sample=DIR]
 #   docker build -f westbound-server/verifier/Dockerfile -t westbound-verifier build/verifier
 #
-# Needs the Linux export templates (tools/export_templates.sh --all).
+# --keep-sample=DIR keeps the smoke test's replay and claims (DIR/sample.wbr,
+# DIR/claims.json) for the image's own smoke test (tools/verifier/smoke_image.py).
+# Needs the Linux debug export template (installed by tools/verifier/install_linux_template.sh
+# when missing). N8.3: .github/workflows/verifier.yml runs this in CI.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 smoke=1
 seconds=20
+keep_sample=""
 for a in "$@"; do
   case "$a" in
     --no-smoke) smoke=0 ;;
     --seconds=*) seconds="${a#--seconds=}" ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --keep-sample=*) keep_sample="${a#--keep-sample=}" ;;
+    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "export_verifier.sh: unknown argument $a" >&2; exit 2 ;;
   esac
 done
@@ -35,7 +40,7 @@ out_dir="build/verifier"
 build="$(sed -n 's/^client_build = \([0-9][0-9]*\)$/\1/p' data/tuning/net.tres)"
 [[ -n "$build" ]] || { echo "export_verifier.sh: no client_build in data/tuning/net.tres" >&2; exit 2; }
 templates="${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates/4.7.stable"
-[[ -f "$templates/linux_debug.x86_64" ]] || tools/export_templates.sh --all
+[[ -f "$templates/linux_debug.x86_64" ]] || tools/verifier/install_linux_template.sh
 
 mkdir -p build
 [[ -f build/.gdignore ]] || : >build/.gdignore
@@ -56,6 +61,7 @@ if ! nice tools/godot.sh --headless --path . --export-debug "$preset" "$bin" >"$
 fi
 [[ -f "$bin" && -f "$bin.pck" ]] || { cat "$log"; echo "export_verifier.sh: no binary / pack in $out_dir/$build" >&2; exit 1; }
 chmod +x "$bin"
+cp build_info.cfg "$out_dir/$build/build_info.cfg"   # which commit this build's pack is
 echo "export_verifier.sh: $bin + $bin.pck ($(du -h "$bin.pck" | cut -f1))" >&2
 
 if [[ $smoke -eq 1 ]]; then
@@ -70,7 +76,8 @@ if [[ $smoke -eq 1 ]]; then
   # Exactly the server's command (docs/SERVER.md → Running the verifier), in a fresh HOME.
   set +e
   HOME="$work/home" nice -n 10 "$bin" --headless -- --verifier=1 --server=off --replay="$work/sample.wbr" \
-    --out="$work/result.json" --seed="$seed" --claimed-score="$score" --claimed-hits="$hits" >"$log" 2>&1
+    --out="$work/result.json" --seed="$seed" --claimed-score="$score" --claimed-hits="$hits" \
+    --require-inputs=1 >"$log" 2>&1
   status=$?
   set -e
   grep -h "^verify_replay:" "$log" >&2 || cat "$log" >&2
@@ -79,4 +86,9 @@ if [[ $smoke -eq 1 ]]; then
     exit 1
   fi
   echo "export_verifier.sh: SMOKE PASS (the exported verifier accepted a ${seconds} s replay)" >&2
+  if [[ -n "$keep_sample" ]]; then
+    mkdir -p "$keep_sample"
+    cp "$work/sample.wbr" "$work/claims.json" "$keep_sample/"
+    echo "export_verifier.sh: sample replay and claims kept in $keep_sample" >&2
+  fi
 fi

@@ -290,11 +290,13 @@ dir = "/data/replays"
 max_bytes = 4194304
 # The verifier, one argv entry per item; placeholders {replay} {out} {run_id} {seed}
 # {mode} {build} {claimed_score} {claimed_hits}. Empty: no verifier, jobs wait as
-# pending and runs stay "verifying". Example (same container, docs/SERVER.md):
-# verifier_command = ["nice", "-n", "10", "/verifier/westbound-verifier", "--headless",
-#   "--main-pack", "/verifier/westbound.pck", "--script", "res://tools/verifier/verify_replay.gd",
-#   "--", "--server=off", "--replay={replay}", "--out={out}", "--seed={seed}",
-#   "--claimed-score={claimed_score}", "--claimed-hits={claimed_hits}"]
+# pending and runs stay "verifying". The verifier image (westbound-server/verifier/Dockerfile)
+# sets it to one exported verifier per client build; a job whose /verifier/<build>/ is
+# missing, or that the verifier cannot verify (exit 3), is set aside until a worker starts
+# (docs/SERVER.md → Replays and verification):
+# verifier_command = ["nice", "-n", "10", "/verifier/{build}/westbound", "--headless", "--",
+#   "--verifier=1", "--server=off", "--replay={replay}", "--out={out}", "--seed={seed}",
+#   "--claimed-score={claimed_score}", "--claimed-hits={claimed_hits}", "--require-inputs=1"]
 verifier_command = []
 # Run the queue worker inside `serve` (false when a sidecar runs `verify-worker`).
 worker_enabled = true

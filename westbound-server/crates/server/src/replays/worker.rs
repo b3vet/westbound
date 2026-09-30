@@ -14,6 +14,16 @@
 //! `retry_delay_secs`, or becomes `failed` after `max_attempts`. Jobs are strictly
 //! sequential: the next one starts only after the previous one finished. On start, jobs
 //! left `running` by a stopped worker go back to `pending`.
+//!
+//! N8.3, build parity: a job this worker cannot verify is **set aside** at once instead of
+//! being retried against the same verifier: `failed` with `{"error": ..., "unverifiable":
+//! true, "build": N}` as its result, the run still "verifying". That is a command naming a
+//! per-build file (an absolute argv entry built from `{build}`, like
+//! `/verifier/{build}/westbound`) that does not exist here (nothing is run), or the
+//! verifier's "cannot verify" (exit 3 with a result `error`: another tuning under the same
+//! build number, a replay without inputs, an unknown car). Each worker start puts those
+//! jobs back to `pending` (a new verifier image may know their build); jobs that failed
+//! for another reason wait for `admin replay-requeue`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,6 +42,9 @@ use crate::leaderboards::{Leaderboards, ReplayOutcome};
 /// Verifier exit statuses (tools/verifier/verify_replay.gd).
 pub const EXIT_ACCEPTED: i32 = 0;
 pub const EXIT_REJECTED: i32 = 1;
+/// "Cannot verify this replay here": not a verdict, and retrying the same verifier would
+/// not change it (N8.3: set aside until a worker starts).
+pub const EXIT_CANNOT: i32 = 3;
 /// Output kept from the verifier for the logs (its tail).
 const OUTPUT_TAIL_BYTES: usize = 2_000;
 
@@ -55,6 +68,17 @@ pub enum JobOutcome {
     Verdict { accepted: bool, result: Value },
     /// The attempt failed; the job is pending again (retry) or `failed` (`final_`).
     Failed { error: String, final_: bool },
+    /// This worker cannot verify the job (its build has no verifier here, or the verifier
+    /// answered "cannot verify"): set aside as `failed` until a worker starts (N8.3).
+    Unverifiable { error: String },
+}
+
+/// Why a job got no verdict.
+enum NoVerdict {
+    /// Worth another attempt (a crash, a timeout, a missing result).
+    Failed(String),
+    /// Not with this verifier (N8.3).
+    Unverifiable(String),
 }
 
 /// The queue worker.
@@ -79,7 +103,18 @@ impl Worker {
         match self.recover().await {
             Ok(0) => {}
             Ok(n) => tracing::info!(jobs = n, "replay jobs left running were requeued"),
-            Err(e) => tracing::warn!(error = %e, "requeueing running replay jobs failed"),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "requeueing running replay jobs failed (is the server's database on this volume?)"
+            ),
+        }
+        match self.requeue_unverifiable().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                jobs = n,
+                "replay jobs set aside as unverifiable were requeued (this verifier may know their build)"
+            ),
+            Err(e) => tracing::warn!(error = %e, "requeueing unverifiable replay jobs failed"),
         }
         tracing::info!(
             command = %self.cfg.verifier_command.join(" "),
@@ -118,6 +153,22 @@ impl Worker {
             now,
             running
         )
+        .execute(&self.db)
+        .await?;
+        Ok(done.rows_affected())
+    }
+
+    /// Jobs set aside as unverifiable by a worker (N8.3) go back to `pending`, their
+    /// attempts reset: called when a worker starts, whose verifier may know their build.
+    pub async fn requeue_unverifiable(&self) -> sqlx::Result<u64> {
+        let now = self.clock.now();
+        let done = sqlx::query(
+            "UPDATE replays SET status = ?, attempts = 0, not_before = ?
+             WHERE status = ? AND json_valid(result) AND json_extract(result, '$.unverifiable') = 1",
+        )
+        .bind(status::PENDING)
+        .bind(now)
+        .bind(status::FAILED)
         .execute(&self.db)
         .await?;
         Ok(done.rows_affected())
@@ -241,7 +292,8 @@ impl Worker {
                 }
                 JobOutcome::Verdict { accepted, result }
             }
-            Err(error) => self.fail(job, error).await?,
+            Err(NoVerdict::Failed(error)) => self.fail(job, error).await?,
+            Err(NoVerdict::Unverifiable(error)) => self.set_aside(job, error).await?,
         };
         Ok(outcome)
     }
@@ -279,15 +331,64 @@ impl Worker {
         Ok(JobOutcome::Failed { error, final_ })
     }
 
+    /// Sets a job aside as unverifiable here (N8.3): `failed` with the reason, until a
+    /// worker starts. The run stays pending ("verifying") and the file is kept.
+    async fn set_aside(&self, job: &Job, error: String) -> anyhow::Result<JobOutcome> {
+        let now = self.clock.now();
+        let result = serde_json::json!({
+            "error": error,
+            "unverifiable": true,
+            "build": job.build,
+        })
+        .to_string();
+        sqlx::query("UPDATE replays SET status = ?, result = ?, finished_at = ? WHERE run_id = ?")
+            .bind(status::FAILED)
+            .bind(result)
+            .bind(now)
+            .bind(job.run_id)
+            .execute(&self.db)
+            .await?;
+        tracing::warn!(
+            run_id = job.run_id,
+            build = job.build,
+            %error,
+            "replay cannot be verified by this verifier; set aside until a verifier with its build starts"
+        );
+        Ok(JobOutcome::Unverifiable { error })
+    }
+
+    /// The first per-build file the command names that is not here: an argv entry built
+    /// from a `{build}` template (and no other placeholder) that is an absolute path
+    /// (`/verifier/{build}/westbound`).
+    pub fn missing_build_file(&self, job: &Job) -> Option<String> {
+        let build = job.build.to_string();
+        self.cfg
+            .verifier_command
+            .iter()
+            .filter(|a| a.contains("{build}"))
+            .map(|a| a.replace("{build}", &build))
+            .filter(|p| !p.contains('{'))
+            .find(|p| Path::new(p).is_absolute() && !Path::new(p).exists())
+    }
+
     /// Runs the verifier command: `(accepted, result JSON)`, or why there is no verdict.
-    async fn verify(&self, job: &Job) -> Result<(bool, Value), String> {
+    async fn verify(&self, job: &Job) -> Result<(bool, Value), NoVerdict> {
         if !Path::new(&job.file_path).exists() {
-            return Err(format!("the replay file {} is missing", job.file_path));
+            return Err(NoVerdict::Failed(format!(
+                "the replay file {} is missing",
+                job.file_path
+            )));
+        }
+        if let Some(missing) = self.missing_build_file(job) {
+            return Err(NoVerdict::Unverifiable(format!(
+                "no verifier for build {} here ({missing} is missing)",
+                job.build
+            )));
         }
         let work = super::work_dir(&self.cfg);
         tokio::fs::create_dir_all(&work)
             .await
-            .map_err(|e| format!("creating {}: {e}", work.display()))?;
+            .map_err(|e| NoVerdict::Failed(format!("creating {}: {e}", work.display())))?;
         let out = work.join(format!("{}.json", job.run_id));
         super::remove_file(&out).await;
         let args = self.command_for(job, &out);
@@ -299,17 +400,17 @@ impl Worker {
             .kill_on_drop(true);
         let child = cmd
             .spawn()
-            .map_err(|e| format!("starting the verifier `{}`: {e}", args[0]))?;
+            .map_err(|e| NoVerdict::Failed(format!("starting the verifier `{}`: {e}", args[0])))?;
         let limit = Duration::from_secs(self.cfg.job_timeout_secs);
         let output = match tokio::time::timeout(limit, child.wait_with_output()).await {
             Ok(Ok(o)) => o,
-            Ok(Err(e)) => return Err(format!("waiting for the verifier: {e}")),
+            Ok(Err(e)) => return Err(NoVerdict::Failed(format!("waiting for the verifier: {e}"))),
             Err(_) => {
                 super::remove_file(&out).await;
-                return Err(format!(
+                return Err(NoVerdict::Failed(format!(
                     "the verifier ran over {} s and was killed",
                     self.cfg.job_timeout_secs
-                ));
+                )));
             }
         };
         let code = output.status.code();
@@ -325,11 +426,16 @@ impl Worker {
         match (code, accepted, parsed) {
             (Some(EXIT_ACCEPTED), Some(true), Some(v)) => Ok((true, v)),
             (Some(EXIT_REJECTED), Some(false), Some(v)) => Ok((false, v)),
-            (code, _, parsed) => Err(format!(
+            (Some(EXIT_CANNOT), None, Some(v)) if v.get("error").is_some_and(Value::is_string) => {
+                Err(NoVerdict::Unverifiable(truncate(
+                    v.get("error").and_then(Value::as_str).unwrap_or_default(),
+                )))
+            }
+            (code, _, parsed) => Err(NoVerdict::Failed(format!(
                 "no verdict (exit {code:?}, result {}): {}",
                 parsed.map_or("missing".to_string(), |v| truncate(&v.to_string())),
                 tail(&output.stdout, &output.stderr)
-            )),
+            ))),
         }
     }
 

@@ -6,6 +6,7 @@ extends Node
 ##   tools/godot.sh --headless --path . --script res://tools/verifier/verify_replay.gd -- \
 ##       --replay=/data/replays/917.wbr --out=/tmp/917.json \
 ##       [--claimed-score=183200] [--claimed-hits=1] [--seed=2538700399935769545] [--server=off]
+##       [--require-inputs=1]
 ##   /verifier/1/westbound --headless -- --verifier=1 --replay=... --out=... [...]
 ##       (the exported verifier, tools/verifier/export_verifier.sh: Run._ready hands its main
 ##       scene over to this node on `--verifier=1`)
@@ -27,6 +28,8 @@ const EXIT_USAGE := 2
 const EXIT_CANNOT := 3
 ## Run._ready's hand-over flag for the exported verifier.
 const BOOT_PARAM := "verifier"
+## N8.3: refuse (exit 3) replays without the input stream instead of playing them back.
+const REQUIRE_INPUTS := "require-inputs"
 
 
 func _ready() -> void:
@@ -52,6 +55,10 @@ func _main() -> void:
 	var replay := NetReplayFile.decode(bytes, errs)
 	if replay == null:
 		_finish({"error": "unreadable replay: %s" % ", ".join(errs)}, out_path, EXIT_USAGE)
+		return
+	var why := inputs_error(replay, args)
+	if not why.is_empty():
+		_finish({"error": why}, out_path, EXIT_CANNOT)
 		return
 	var v := ReplayVerifier.new(replay)
 	v.claimed_score = int_arg(args, "claimed-score")
@@ -103,6 +110,15 @@ static func parse_args(raw: PackedStringArray) -> Dictionary:
 				out[body] = ""
 		i += 1
 	return out
+
+
+## N8.3: with `--require-inputs=1` (the production sidecar), a replay without the input
+## stream (an N8.1 client's) is "cannot verify" instead of the kinematic playback, which
+## rejects long honest runs (docs/DETERMINISM.md → Replays). Empty when it may be verified.
+static func inputs_error(replay: NetReplayFile, args: Dictionary) -> String:
+	if not args.has(REQUIRE_INPUTS) or String(args[REQUIRE_INPUTS]) in ["0", "false"] or replay.has_inputs():
+		return ""
+	return "no_inputs: the replay has no input stream (an N8.1 client); only re-simulation is trusted here"
 
 
 static func int_arg(args: Dictionary, key: String) -> int:
