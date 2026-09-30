@@ -28,8 +28,18 @@ extends EditorScenePostImport
 ##
 ## The same conform() runs at runtime (CarModel.load_model), so a model imported
 ## without this script still works; tests/unit/test_check_car_assets.gd validates.
+##
+## Modular models (G1, docs/ART_PRODUCTION.md §3.6, §3.11): when the sidecar says
+## "modular": true, or the file has a `Body` node, the whole convention tree is kept and
+## converted by material name instead (tools/art/car_modular_import.gd,
+## CarModularImport): per-slot surfaces, shared wheel meshes, Markers as Marker3D,
+## signal lights, Interior and Damage hidden. Steps 1-3 above are the placeholder path
+## only (modular files are exact size, in the Godot frame).
+## Garage rims (G5): a file with a `<name>.rim.json` sidecar becomes a root with one
+## `Rim` mesh in the trim slot (CarModularImport.convert_rim; RimStyle.mesh_path).
 
 const HINT_SUFFIX := ".car.json"
+const RIM_HINT_SUFFIX := ".rim.json"
 ## Classification (placeholder bake). HSV on the sRGB face color.
 const PAINT_MIN_SAT := 0.3
 const PAINT_MIN_VAL := 0.2
@@ -44,7 +54,17 @@ const PAINT_SHADE_MIN := 0.55
 
 
 func _post_import(scene: Node) -> Object:
-	var hints := _load_hints(get_source_file())
+	var source := get_source_file()
+	var rim_hints := _load_json(source.get_basename() + RIM_HINT_SUFFIX)
+	if not rim_hints.is_empty():
+		return _finish_other(scene, CarModularImport.convert_rim(scene,
+			String(rim_hints.get("root_name", "Rim_" + source.get_file().get_basename().to_pascal_case()))))
+	var hints := _load_hints(source)
+	if CarModularImport.is_modular(scene, hints):
+		# <id>_lod1.glb (G8): the LOD1 Body only, nothing stubbed around it.
+		var lod1 := source.get_file().get_basename().ends_with(CarModel.LOD1_SUFFIX)
+		return _finish_other(scene, CarModularImport.convert(scene, hints,
+			String(hints.get("root_name", _root_name(source))), null, not lod1))
 	var meshes: Array[MeshInstance3D] = []
 	_collect_meshes(scene, meshes)
 	var root := Node3D.new()
@@ -59,8 +79,20 @@ func _post_import(scene: Node) -> Object:
 	return root
 
 
+## Owns and returns a converted root, reports its problems, frees the imported scene.
+static func _finish_other(scene: Node, root: Node3D) -> Object:
+	_own(root, root)
+	for p: String in root.get_meta(&"car_import_problems", PackedStringArray()):
+		push_warning("car_import %s: %s" % [root.name, p])
+	scene.free()
+	return root
+
+
 static func _load_hints(source: String) -> Dictionary:
-	var path := source.get_basename() + HINT_SUFFIX
+	return _load_json(source.get_basename() + HINT_SUFFIX)
+
+
+static func _load_json(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {}
 	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))

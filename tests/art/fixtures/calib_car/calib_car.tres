@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="CarDef" format=3]
+
+[ext_resource type="Script" path="res://src/vehicle/car_def.gd" id="1_xfk4f"]
+
+[resource]
+script = ExtResource("1_xfk4f")
+id = &"calib_car"
+display_name = "CALIBRATION"
+model_scene_path = "res://tests/art/fixtures/calib_car/calib_car.glb"
+default_paint = Color(0.1, 0.58, 0.6, 1)
+paint_options = PackedColorArray()

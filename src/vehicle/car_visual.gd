@@ -15,6 +15,10 @@ extends Node3D
 ##   - wheels spin at v / wheel radius; the front pivots show the steer angle.
 ##   - brake lights while brake input >= brake_light_min_input_pct.
 ##   - the Interior's SteeringWheel turns with the steer angle.
+##   - switched signals (WP-ART-G, G1): the reverse lamp while rolling backwards
+##     (state.v < 0), and the blinkers set by set_blinkers() (both = hazards), flashing
+##     at the traffic's rate (TrafficViewTuning.blinker_hz, blinker_duty_pct). All start
+##     off (hidden), as the import leaves them.
 ## bind() first merges the model's draws (CarModel.merge_draw_surfaces, WP4.6): the
 ## wheels are then drawn by MultiMesh instances written here each tick (the Wheel,
 ## Rim and Tire nodes still get the same transforms), and the brake lights are the
@@ -36,6 +40,10 @@ var brake_lights_on: bool = false
 ## True while braking hard at speed (tire smoke and squeal, for the feel layer).
 var tire_smoke: bool = false
 var damage_level: int = 0
+## Blinkers requested by set_blinkers (the lamps flash while on) and the reverse lamp.
+var blinker_left: bool = false
+var blinker_right: bool = false
+var reverse_on: bool = false
 
 var model: CarModel
 
@@ -49,6 +57,11 @@ var _brake_min: float = 0.0
 var _wheel_ratio: float = 0.0
 var _smoke_decel: float = 0.0
 var _smoke_speed: float = 0.0
+var _blink_hz: float = 0.0
+var _blink_duty: float = 0.0
+## Time since the blinkers last changed (s); the first flash starts lit.
+var _blink_t: float = 0.0
+var _blink_lit: bool = false
 var _pivot := Vector3.ZERO
 var _radius: float = 1.0
 ## Unclamped spring positions (the displayed roll/pitch are clamped copies).
@@ -95,6 +108,9 @@ func bind(car_model: CarModel, tuning: VehicleTuning) -> void:
 	_wheel_ratio = tuning.steering_wheel_ratio_factor
 	_smoke_decel = tuning.tire_smoke_min_decel_mps2
 	_smoke_speed = Units.kmh_to_mps(tuning.tire_smoke_min_speed_kmh)
+	var tv := TrafficViewTuning.load_default()
+	_blink_hz = tv.blinker_hz
+	_blink_duty = tv.blinker_duty_frac()
 	_dt_cached = -1.0
 	_radius = car_model.wheel_radius_m if car_model.wheel_radius_m > 0.0 else 1.0
 	_pivot = Vector3(0.0, car_model.wheel_radius_m, 0.0)
@@ -146,6 +162,8 @@ func reset() -> void:
 	_pitch_x = 0.0
 	tire_smoke = false
 	_set_brake_lights(false)
+	set_blinkers(false, false)
+	_set_reverse(false)
 	_apply(0.0)
 	for wd in _wheel_draws:
 		wd.mm.reset_instances_physics_interpolation()
@@ -174,7 +192,42 @@ func tick(dt: float, state: VehicleState, input: VehicleInput) -> void:
 	if braking != brake_lights_on:
 		_set_brake_lights(braking)
 	tire_smoke = braking and state.accel_long <= -_smoke_decel and state.v >= _smoke_speed
+	var reversing := state.v < 0.0
+	if reversing != reverse_on:
+		_set_reverse(reversing)
+	if blinker_left or blinker_right:
+		_blink_t += dt
+		_update_blinkers()
 	_apply(state.steer_angle)
+
+
+## Turns the blinkers on or off (both = hazards). A change restarts the flash cycle lit.
+## Allocation-free.
+func set_blinkers(left: bool, right: bool) -> void:
+	if left == blinker_left and right == blinker_right and (left or right):
+		return
+	blinker_left = left
+	blinker_right = right
+	_blink_t = 0.0
+	_blink_lit = not (left or right)   # forces the lamps to update below
+	_update_blinkers()
+
+
+func _update_blinkers() -> void:
+	var lit := (blinker_left or blinker_right) and fposmod(_blink_t * _blink_hz, 1.0) < _blink_duty
+	if lit == _blink_lit or model == null:
+		return
+	_blink_lit = lit
+	for n in CarModel.BLINKERS_LEFT:
+		model.set_signal(n, lit and blinker_left)
+	for n in CarModel.BLINKERS_RIGHT:
+		model.set_signal(n, lit and blinker_right)
+
+
+func _set_reverse(on: bool) -> void:
+	reverse_on = on
+	if model != null:
+		model.set_signal(CarModel.REVERSE, on)
 
 
 ## Wheel spin rate (rad/s) for a forward speed: v / wheel radius.

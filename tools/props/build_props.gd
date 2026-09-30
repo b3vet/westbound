@@ -64,6 +64,11 @@ func _initialize() -> void:
 
 
 func _save(path: String, meta: Dictionary = {}) -> void:
+	# A mesh converted from a modelled .glb (tools/art/convert.gd) retires this recipe.
+	if ArtConvert.is_converted(path):
+		_written.append("%s (kept: converted from a .glb)" % path)
+		_b.clear()
+		return
 	var mesh := _b.commit(meta)
 	var err := ResourceSaver.save(mesh, path)
 	if err != OK:

@@ -97,6 +97,42 @@ static func _v1_to_v2(doc: Dictionary) -> Dictionary:
 	return doc
 
 
+## G7 (docs/ART_PRODUCTION.md §3.11): moves car ids recorded under a former garage slot
+## id to the slot's current id, in place: the unlock "car/<old>" (keeping the earlier
+## run count when both exist), the selected car and the look. Data-driven, not a version
+## step: the renames come from the garage catalog (GarageCatalog.car_id_renames, from
+## GarageSlot.former_ids), which grows whenever a COMING SOON slot gets its car, so it
+## runs on every profile load and is a no-op once done. Returns whether anything moved.
+static func rename_car_ids(unlocks: Dictionary, garage: Dictionary, renames: Dictionary) -> bool:
+	var changed := false
+	for old_id: Variant in renames:
+		var from := str(old_id)
+		var to := str(renames[old_id])
+		if from.is_empty() or to.is_empty() or from == to:
+			continue
+		var old_key := GarageCatalog.CAR + from
+		if unlocks.has(old_key):
+			var new_key := GarageCatalog.CAR + to
+			var run: Variant = unlocks[old_key]
+			if unlocks.has(new_key) and (unlocks[new_key] is int or unlocks[new_key] is float) \
+					and (run is int or run is float):
+				run = mini(int(unlocks[new_key]), int(run))
+			unlocks[new_key] = run
+			unlocks.erase(old_key)
+			changed = true
+		if str(garage.get(MetaProfile.CAR, "")) == from:
+			garage[MetaProfile.CAR] = to
+			changed = true
+		var looks: Variant = garage.get(MetaProfile.LOOKS)
+		if looks is Dictionary and (looks as Dictionary).has(from):
+			var d := looks as Dictionary
+			if not d.has(to):
+				d[to] = d[from]
+			d.erase(from)
+			changed = true
+	return changed
+
+
 ## Every section the current build reads, with the right type (a wrong one is replaced
 ## by an empty one). The first-run flags default to "not done".
 static func normalize(doc: Dictionary) -> Dictionary:

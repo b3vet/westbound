@@ -6,6 +6,9 @@ extends WBTest
 ## (3.8-5.2 m long and matching its CarDef body). Only the vehicle shader is used.
 
 const CARS_DIR := "res://data/cars"
+## WP-ART-G: the modular calibration car (tools/art/make_calibration.gd), checked like a
+## roster car but never in data/cars (tests only).
+const CALIB_CAR := "res://tests/art/fixtures/calib_car/calib_car.tres"
 ## Plausible car length (spec: "wrong scale").
 const LENGTH_MIN_M := 3.8
 const LENGTH_MAX_M := 5.2
@@ -95,12 +98,16 @@ func _problems(m: CarModel, car: CarDef) -> PackedStringArray:
 		out.append("headlights not at the front left/right")
 	if m.marker(&"cam_hood").position.z >= 0.0 or m.marker(&"exhaust_L").position.z <= 0.0:
 		out.append("markers not front/rear")
-	# Materials: the project vehicle shader only (no PBR), with a paint slot.
+	# Materials: the project vehicle shader only (no PBR), with a paint slot; the Interior
+	# uses the cockpit's interior and gauges shaders (G4, docs/ART_PRODUCTION.md §3.3.2).
 	var has_paint := false
 	for mi in m.root.find_children("*", "MeshInstance3D", true, false):
 		var inst := mi as MeshInstance3D
+		var in_interior := m.interior != null and m.interior.is_ancestor_of(inst)
 		for i in inst.mesh.get_surface_count():
 			var mat := inst.get_active_material(i) as ShaderMaterial
+			if in_interior and mat != null and (mat.shader == Cockpit.INTERIOR_SHADER or mat.shader == Cockpit.GAUGE_SHADER):
+				continue
 			if mat == null or mat.shader != CarModel.VEHICLE_SHADER:
 				out.append("%s surface %d not on the vehicle shader" % [inst.name, i])
 			elif inst == m.body and int(mat.get_shader_parameter(&"slot")) == CarModel.Slot.PAINT:
@@ -130,6 +137,38 @@ func test_every_car_model_passes() -> void:
 		print("      %s: body %d tris, rim %d, wheel r %.3f m, bounds %s" % [car.id,
 			m.body_triangles(), CarModel.triangle_count((m.rims[0] as MeshInstance3D).mesh),
 			m.wheel_radius_m, m.body_aabb.size])
+
+
+func test_calibration_car_passes() -> void:
+	var car := load(CALIB_CAR) as CarDef
+	var m := CarModel.load_model(car.model_scene_path, car)
+	_roots.append(m.root)
+	var problems := _problems(m, car)
+	check(problems.is_empty(), "calib_car: %s" % ", ".join(problems))
+	eq(m.stubbed.size(), 0, "nothing stubbed at runtime")
+	eq(m.root.get_meta(&"car_import_stubbed", PackedStringArray(["?"])), PackedStringArray(),
+		"the modular import stubbed nothing")
+	eq(m.root.get_meta(&"car_import_problems", PackedStringArray(["?"])), PackedStringArray(),
+		"the modular import found no problems")
+
+
+## G8: a car's LOD1 (`<id>_lod1.glb`, when it has one) fits player_body_tris_lod1 and
+## keeps the Body's slots.
+func test_lod1_models_fit_their_budget() -> void:
+	var cars := _car_defs()
+	cars.append(load(CALIB_CAR) as CarDef)
+	var found := 0
+	for car in cars:
+		var lod := CarModel.load_lod1_mesh(car)
+		if lod == null:
+			continue
+		found += 1
+		le(CarModel.triangle_count(lod), _tuning.progression.player_body_tris_lod1, "%s LOD1 budget" % car.id)
+		for i in lod.get_surface_count():
+			var mat := lod.surface_get_material(i) as ShaderMaterial
+			check(mat != null and mat.shader == CarModel.VEHICLE_SHADER, "%s LOD1 on the vehicle shader" % car.id)
+	ge(found, 1, "the calibration car has a LOD1")
+	eq(CarModel.lod1_path("res://a/b.glb"), "res://a/b_lod1.glb", "LOD1 next to the model")
 
 
 func test_bare_mesh_is_stubbed_to_the_convention() -> void:

@@ -13,10 +13,19 @@ extends Node3D
 ## front3q|side|front|rear|top|orbit|hood, --angle_deg=<orbit angle, 0 = behind>,
 ## --speed_kmh=<0 parks the car>, --steer=<-1..1>, --brake=<0..1>, --sky_t=<0..1>,
 ## --lane=<index>, --paint=<#rrggbb>, --hide_car=true (world-only baseline).
+## WP-ART-G: --car_def=<res path to a CarDef> (a car outside data/cars, e.g. the
+## calibration car tests/art/fixtures/calib_car/calib_car.tres), --cam=cockpit (the eye
+## at the model's authored Markers/cam_cockpit, else CameraTuning's default, with the
+## model's own Interior shown as the cockpit view shows it, G4), --blinkers=left|right|
+## hazard (G1 signal lights).
 ## Keys: C camera, 1/2/3 car, Up/Down speed, Left/Right steer, Space brake, T spin.
 
 const CARS: Array[StringName] = [&"falcon_gt", &"night_viper", &"brute_v8"]
-const CAMS: Array[StringName] = [&"chase", &"chase3q", &"front3q", &"side", &"front", &"rear", &"top", &"orbit", &"hood"]
+const CAMS: Array[StringName] = [&"chase", &"chase3q", &"front3q", &"side", &"front", &"rear", &"top", &"orbit", &"hood",
+	&"cockpit"]
+## Cockpit view: look this far ahead and this high (the rig's cockpit mode_look_* are the
+## tuned numbers; a preview approximation).
+const COCKPIT_LOOK := Vector3(0.0, 0.3, -40.0)
 ## Camera rigs in the car's frame (x right, y up, z back): [eye, look-at]. Dev values.
 const RIGS := {
 	&"chase": [Vector3(0.0, 2.3, 7.5), Vector3(0.0, 0.9, -8.0)],
@@ -94,11 +103,15 @@ func _ready() -> void:
 
 
 func _load_car(id: StringName) -> void:
-	var def := load("res://data/cars/%s.tres" % id) as CarDef
+	_load_def("res://data/cars/%s.tres" % id)
+
+
+func _load_def(path: String) -> void:
+	var def := load(path) as CarDef if ResourceLoader.exists(path) else null
 	if def == null:
-		push_warning("car_preview: no car %s" % id)
+		push_warning("car_preview: no car %s" % path)
 		return
-	_car_id = id
+	_car_id = def.id
 	car.setup(_ctx, _road, _origin, def)
 
 
@@ -136,6 +149,16 @@ func _place_camera(delta: float) -> void:
 		var a := deg_to_rad(orbit_deg)
 		eye = Vector3(sin(a) * ORBIT_RADIUS_M, ORBIT_HEIGHT_M, cos(a) * ORBIT_RADIUS_M)
 		at = Vector3(0.0, 0.6, 0.0)
+	elif cam_mode == &"cockpit":
+		# The model's authored eye, as CameraRig's cockpit mode takes it (else the
+		# CarDef-proportional default); the model's Interior shows (G4).
+		var mk := car.model.marker(&"cam_cockpit")
+		var stubs: PackedStringArray = car.model.root.get_meta(&"car_import_stubbed", PackedStringArray())
+		if mk != null and not stubs.has("Markers/cam_cockpit") and not car.model.stubbed.has("Markers/cam_cockpit"):
+			eye = mk.position
+		else:
+			eye = _ctx.tuning.camera.cockpit_eye_default(car.car.length_m, car.car.width_m, car.car.height_m)
+		at = COCKPIT_LOOK
 	elif cam_mode == &"hood":
 		# As the camera rig mounts it: rigidly on Markers/cam_hood, looking along -Z.
 		var mk := car.model.marker(&"cam_hood")
@@ -154,7 +177,9 @@ func _place_camera(delta: float) -> void:
 ## Snap hook (tools/snap.sh).
 func snap_setup(args: Dictionary) -> void:
 	_snapping = true
-	if args.has("car") and StringName(str(args["car"])) != _car_id:
+	if args.has("car_def"):
+		_load_def(str(args["car_def"]))
+	elif args.has("car") and StringName(str(args["car"])) != _car_id:
 		_load_car(StringName(str(args["car"])))
 	if args.has("paint"):
 		car.model.apply_paint(Color(str(args["paint"])))
@@ -167,6 +192,9 @@ func snap_setup(args: Dictionary) -> void:
 	_respawn(START_S, int(args.get("lane", start_lane)))
 	# --hide_car=true: the same frame without the car (parity baseline of the world).
 	car.visible = not bool(args.get("hide_car", false))
+	car.model.set_interior_visible(cam_mode == &"cockpit")
+	var blink := str(args.get("blinkers", ""))
+	car.visual.set_blinkers(blink == "left" or blink == "hazard", blink == "right" or blink == "hazard")
 	_sky.push_now()
 	for i in 2:
 		await get_tree().process_frame

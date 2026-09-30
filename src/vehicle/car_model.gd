@@ -28,7 +28,17 @@ extends RefCounted
 ##   add_child(model.root)
 ##   model.apply_paint(car.default_paint)
 ##
-## Everything here runs at load time (it may allocate); nothing runs per tick.
+## Everything here runs at load time (it may allocate); nothing runs per tick, except
+## set_signal() and set_gauges() (allocation-free).
+##
+## Art pipeline (WP-ART-G, docs/ART_PRODUCTION.md §3.11):
+##   - modular models come from assets/cars/car_import.gd's modular path (G1);
+##   - the Interior (Cabin, SteeringWheel, Gauges) is hidden on load and shown only by the
+##     cockpit view (G4: CameraRig through set_interior_visible; has_authored_interior);
+##     the Gauges quad's material is made unique per car on first use (set_gauges);
+##   - blinkers and reverse are switched with set_signal() (CarVisual drives them);
+##   - a RimStyle with a mesh_path swaps in an authored rim (G5, apply_rim);
+##   - lod1_path() / load_lod1_mesh(): the car's `<id>_lod1.glb` Body (G8).
 ##
 ## Draw calls (WP4.6; spec Performance budget → draw calls): merge_draw_surfaces()
 ## (CarVisual.bind calls it) folds the per-part meshes into as few draws as the
@@ -136,6 +146,13 @@ const MERGED_DRAW_SURFACES_MAX := 5
 const MERGED_LAMPS := &"MergedLamps"
 const MERGED_BRAKES := &"MergedBrakes"
 const MERGED_WHEELS_PREFIX := "MergedWheels"
+## The Interior's gauges quad (cockpit_gauges.gdshader) and the LOD1 file suffix.
+const GAUGES := &"Gauges"
+const LOD1_SUFFIX := "_lod1"
+## Lights switched by set_signal (hidden until used).
+const BLINKERS_LEFT: Array[StringName] = [&"blinker_FL", &"blinker_RL"]
+const BLINKERS_RIGHT: Array[StringName] = [&"blinker_FR", &"blinker_RR"]
+const REVERSE := &"reverse"
 ## Lights folded into MergedLamps / MergedBrakes.
 const LAMP_NAMES: Array[StringName] = [&"headlight_L", &"headlight_R", &"taillight_L", &"taillight_R"]
 const BRAKE_NAMES: Array[StringName] = [&"brake_L", &"brake_R"]
@@ -182,6 +199,9 @@ var rims: Array[Node3D] = []
 var tires: Array[Node3D] = []
 var interior: Node3D
 var steering_wheel: Node3D
+## The Interior's Gauges quad (null without one) and its per-car material (set_gauges).
+var gauges: MeshInstance3D
+var gauge_material: ShaderMaterial
 var markers: Node3D
 var damage: Node3D
 var collision_shape: CollisionShape3D
@@ -223,6 +243,10 @@ static func from_root(node: Node3D, car: CarDef = null) -> CarModel:
 	var m := CarModel.new()
 	m.stubbed = conform(node, car)
 	m._resolve(node)
+	# The Interior is for the cockpit view only (spec budget: "Interior 5k, cockpit
+	# camera only"): hidden until CameraRig shows it (G4).
+	if m.interior != null:
+		m.interior.visible = false
 	return m
 
 
@@ -321,6 +345,9 @@ func apply_paint(color: Color) -> void:
 ## mesh shared by the four wheels; the left wheels keep their outward turn). A null or
 ## model_default style keeps the model's own rims. Call before merge_draw_surfaces()
 ## (CarVisual.bind): the merged wheel draws bake the rim in. Returns whether it swapped.
+## G5: a style with a mesh_path uses that authored rim (radius 1.0, face toward +X on
+## x = 0), scaled to wheel_radius x radius_frac and set just outside the tire's outer
+## sidewall; the procedural rim when the file is missing.
 func apply_rim(style: RimStyle) -> bool:
 	if style == null or style.model_default:
 		return false
@@ -337,7 +364,11 @@ func apply_rim(style: RimStyle) -> bool:
 			var t := tires[i] as MeshInstance3D if i < tires.size() else null
 			if t != null and t.mesh != null:
 				tw = t.mesh.get_aabb().size.x
-			mesh = build_styled_rim_mesh(wheel_radius_m * style.radius_frac, tw, style)
+			var authored := load_rim_mesh(style.mesh_path)
+			if authored != null:
+				mesh = place_authored_rim(authored, wheel_radius_m * style.radius_frac, tw)
+			else:
+				mesh = build_styled_rim_mesh(wheel_radius_m * style.radius_frac, tw, style)
 		r.mesh = mesh
 		for s in r.get_surface_override_material_count():
 			r.set_surface_override_material(s, null)
@@ -379,6 +410,117 @@ static func build_styled_rim_mesh(radius: float, tire_width: float, style: RimSt
 	var mesh := ArrayMesh.new()
 	_commit_slot(st, mesh, Slot.TRIM)
 	return mesh
+
+
+## G5: the rim mesh of an authored rim file: a Mesh resource, or a scene (an imported
+## assets/cars/rims/<id>.glb) whose `Rim` (else first) MeshInstance3D holds it. null for
+## an empty or missing path.
+static func load_rim_mesh(path: String) -> Mesh:
+	if path.is_empty() or not ResourceLoader.exists(path):
+		return null
+	var res := load(path)
+	if res is Mesh:
+		return res as Mesh
+	var scene := res as PackedScene
+	if scene == null:
+		return null
+	var inst := scene.instantiate()
+	var mi := inst.get_node_or_null(NodePath(RIM)) as MeshInstance3D
+	if mi == null:
+		var found := inst.find_children("*", "MeshInstance3D", true, false)
+		mi = found[0] as MeshInstance3D if not found.is_empty() else null
+	var mesh: Mesh = mi.mesh if mi != null else null
+	inst.free()
+	return mesh
+
+
+## An authored unit rim scaled to `radius` and moved to just outside the tire's outer
+## (+X) sidewall, where build_styled_rim_mesh puts its face. Load time; allocates.
+static func place_authored_rim(unit_rim: Mesh, radius: float, tire_width: float) -> ArrayMesh:
+	var holder := MeshInstance3D.new()
+	holder.mesh = unit_rim
+	var parts: Array[MeshInstance3D] = [holder]
+	var xforms: Array[Transform3D] = [Transform3D(Basis.from_scale(Vector3.ONE * radius),
+		Vector3(tire_width * 0.5 + STUB_LIGHT_STANDOFF_M * 0.5, 0.0, 0.0))]
+	var out := merge_meshes(parts, xforms)
+	holder.free()
+	return out
+
+
+## G8: the LOD1 file next to a model (`<model>_lod1.<ext>`), or "" for an empty path.
+static func lod1_path(model_path: String) -> String:
+	if model_path.is_empty():
+		return ""
+	return "%s%s.%s" % [model_path.get_basename(), LOD1_SUFFIX, model_path.get_extension()]
+
+
+## G8: the Body mesh of the car's LOD1 model (one Body, the same slots), or null when the
+## car has none (the placeholders). For far views: remote cars, the ghost.
+static func load_lod1_mesh(car: CarDef) -> Mesh:
+	var path := lod1_path(car.model_scene_path if car != null else "")
+	if path.is_empty() or not ResourceLoader.exists(path):
+		return null
+	var scene := load(path) as PackedScene
+	if scene == null:
+		return null
+	var inst := scene.instantiate()
+	var body_node := inst.find_child(String(BODY), true, false) as MeshInstance3D
+	var mesh: Mesh = body_node.mesh if body_node != null else null
+	inst.free()
+	return mesh
+
+
+## True when the model brings its own interior (an Interior with at least one mesh):
+## the cockpit view shows it instead of the procedural cockpit (G4).
+func has_authored_interior() -> bool:
+	if interior == null:
+		return false
+	for mi in interior.find_children("*", "MeshInstance3D", true, false):
+		if (mi as MeshInstance3D).mesh != null:
+			return true
+	return false
+
+
+## Shows or hides the Interior (the cockpit view only; G4).
+func set_interior_visible(on: bool) -> void:
+	if interior != null:
+		interior.visible = on
+
+
+## The gauges' red band start (fraction of the tachometer's full scale). Load time.
+func configure_gauges(redline_frac: float) -> void:
+	if _own_gauge_material():
+		gauge_material.set_shader_parameter(&"redline_frac", clampf(redline_frac, 0.0, 1.0))
+
+
+## Needles (0..1 of full scale) on the model's Gauges quad. Allocation-free after the
+## first call.
+func set_gauges(speed_frac: float, rpm_frac: float) -> void:
+	if _own_gauge_material():
+		gauge_material.set_shader_parameter(&"speed_frac", speed_frac)
+		gauge_material.set_shader_parameter(&"rpm_frac", rpm_frac)
+
+
+## Makes the gauges' material this car's own (first call; load time). False without gauges.
+func _own_gauge_material() -> bool:
+	if gauge_material != null:
+		return true
+	if gauges == null or gauges.mesh == null:
+		return false
+	for i in gauges.mesh.get_surface_count():
+		var mat := gauges.get_active_material(i) as ShaderMaterial
+		if mat != null:
+			gauge_material = mat.duplicate() as ShaderMaterial
+			gauges.set_surface_override_material(i, gauge_material)
+			return true
+	return false
+
+
+## Shows or hides a switched light (blinker_*, reverse). Allocation-free.
+func set_signal(light_name: StringName, on: bool) -> void:
+	var l: Node3D = light.get(light_name)
+	if l != null and l.visible != on:
+		l.visible = on
 
 
 func marker(marker_name: StringName) -> Marker3D:
@@ -708,6 +850,7 @@ func _resolve(node: Node3D) -> void:
 		tires.append(w.get_node_or_null(NodePath(TIRE)) as Node3D if w != null else null)
 	interior = node.get_node_or_null(NodePath(INTERIOR)) as Node3D
 	steering_wheel = interior.find_child(STEERING_WHEEL, true, false) as Node3D if interior != null else null
+	gauges = interior.find_child(GAUGES, true, false) as MeshInstance3D if interior != null else null
 	markers = node.get_node_or_null(NodePath(MARKERS)) as Node3D
 	damage = node.get_node_or_null(NodePath(DAMAGE)) as Node3D
 	collision_shape = node.get_node_or_null(NodePath(COLLISION_BOX)) as CollisionShape3D

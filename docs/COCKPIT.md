@@ -48,6 +48,15 @@ tools/snap.sh src/dev/car_drive.tscn --renderer=both --cam=cockpit --sweep=sky_t
 tools/snap.sh src/camera/dev/camera_preview.tscn --mode=cockpit --steer=1 --frames=20   # wheel turned, head into the lane
 ```
 
-## Later (ART5)
+## Model interiors (WP-ART-G, G4)
 
-When a model brings its own `Interior` and an authored `Markers/cam_cockpit`, the rig already uses the marker. Hiding the procedural cockpit and showing the model's interior instead (body hidden, interior shown) is a small switch in `CameraRig._apply_cockpit_view()`.
+A car whose model brings its own `Interior` (`CarModel.has_authored_interior()`: an `Interior` with at least one mesh, from the modular import, docs/ART_PRODUCTION.md §3.6.5) gets it instead of the procedural cockpit:
+
+- **Cockpit mode** (`CameraRig._apply_cockpit_view`): the procedural cockpit is not built or drawn; the body stays **visible** (its hood shows through the windscreen, and the glass faces outward, so the view out is clear); the model's `Interior` is shown (`CarModel.set_interior_visible`); the eye is the authored `Markers/cam_cockpit`, as before.
+- **Gauges:** the model's `Gauges` quad (`cockpit_gauges.gdshader`, `aspect` from the quad at import) gets its own material copy and the needles every tick (`CarModel.set_gauges(speed_frac, rpm_frac)`, same full scales as the procedural binnacle: `cockpit_speedo_max_kmh`, `cockpit_tach_max_rpm`, red band from `engine_redline_rpm`). The `SteeringWheel` turns in `CarVisual` (local +Z), as before.
+- **Outside cockpit mode** the Interior is hidden: `CarModel.from_root` hides every Interior on load, and the rig hides it again when leaving the mode, changing targets or leaving the tree. The car stays within its 5-draw budget; the cockpit view costs the interior's 3 draws (Cabin, SteeringWheel, Gauges) on top of the car's 5.
+- Placeholders (no Interior) keep the procedural cockpit with the body hidden.
+
+Tests: `tests/art/test_art_cameras.gd` (the calibration car, `tests/art/fixtures/calib_car`). Snap: `tools/snap.sh src/vehicle/dev/car_preview.tscn --renderer=both --car_def=res://tests/art/fixtures/calib_car/calib_car.tres --cam=cockpit --speed_kmh=60 --steer=0.3 --sky_t=0.38`.
+
+The **hood** mode likewise mounts on the model's authored `Markers/cam_hood` (G6, `CameraRig._authored_marker`); a stubbed marker (the placeholders) keeps the `camera.tres` offsets.

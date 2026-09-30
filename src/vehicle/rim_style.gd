@@ -16,6 +16,12 @@ extends Resource
 ## The driver level that unlocks it.
 @export var unlock_level: int = 1
 
+## G5 (docs/ART_PRODUCTION.md §4.1.4): an authored rim (an imported
+## assets/cars/rims/<id>.glb, or a Mesh .res) modelled at radius 1.0 with its face toward
+## +X; CarModel.apply_rim scales it to the wheel radius x radius_frac. Empty = the
+## procedural rim built from the shape fields below.
+@export_file("*.glb", "*.tscn", "*.res", "*.tres") var mesh_path: String = ""
+
 @export_group("Shape")
 @export var spokes: int = 5
 ## Rim radius as a fraction of the wheel radius.

@@ -1,0 +1,5 @@
+{
+	"rim": "calib",
+	"root_name": "Rim_Calib",
+	"source": "in-house, generated: tools/art/make_calibration.gd (ArtCalib.build_rim)"
+}
