@@ -175,6 +175,10 @@ const PATH := "res://data/tuning/net.tres"
 ## the server streams it; until then (and always when off: a dev escape) the local
 ## traffic director runs as in loop practice.
 @export var room_network_traffic: bool = true   # not in spec
+## The run's TrafficState in a room holds at least this many cars: the server's area of
+## interest (300 m behind, 900 m ahead) at rush density in the city can hold 90+ (N4.2).
+## Single-player keeps TrafficTuning.max_active_vehicles.
+@export var room_traffic_capacity: int = 128   # not in spec
 ## Room HUD sizes, canvas px at 100% text size: the loop strip, the room line and
 ## buttons, the room panel.
 @export var room_strip_width_px: float = 520.0   # not in spec

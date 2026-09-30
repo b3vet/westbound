@@ -75,6 +75,7 @@ The run drives **loop mode** (`Run.MODE_LOOP`: the loop road, sectors, the room 
 - **REJOIN CREW** (HUD button, pause RETRY): `run_event.rejoin`; the server places the car 40 m behind the crew leader.
 - **Room clock.** Every frame `loop.clock.set_time(epoch + room.cycle_ms_at(server_now()) / 1000)`: `cycle` advances with the room clock (public rooms and private `cycle` rooms are UTC-derived, MP-D7), `fixed` and `night` hold the server's value. The loop's RoomClock then gives the sky, night ×2 and the HUD clock that replaces the sun bar (HudLoopFeed). The server's cycle shape (32 / 22 min) equals `loop.tuning` (tested).
 - **Traffic (N4.3, [NET_TRAFFIC.md](NET_TRAFFIC.md) → Integration).** Per room: the local traffic director runs as in loop practice until the server streams traffic (the room's first traffic message: `NetRoomSession.traffic_frame`, `traffic_streamed`). Then `RunRoom` builds N4.3's `NetworkTrafficSource` over the run's own `TrafficState` (its `clear()` drops the local cars; the headway scale of the loop's director leg, the car's body, the room clock's headlights) and feeds it every traffic frame (`apply_frame` with the car's unwrapped s, `server_tick()` and the one-way estimate; `note_frame_bytes`). The run then calls `RunRoom.step_traffic` in place of `sim.step` + `director.step` (the source at `server_tick()`, the player a participant; `director.opposite.step` keeps the opposite carriageway local), `net_traffic.notify_hit` in place of `sim.notify_hit`, skips the local close-pass and surrounding-brake reactions (the server's), and hit reports carry the wire `car_id` of the hit slot. The source and the TrafficState are **kept across respawns and teleports** (`_start_run` keeps the sim, director and view in that case; `room_teleport` moves the car without `director.reset`): the server sends a car once while it stays in the area. A reconnect clears the source (the new snapshot's frame brings the whole area). The join frame's signals go out after its placement and before its traffic, so a run started on `joined` gets the first traffic frame. `NetTrafficStats.report_dev_stats()` / `report_link()` feed the dev HUD every 10 frames. `NetTuning.room_network_traffic = false` keeps the local director (dev).
+- **Capacity.** In a room the loop's tuning copy raises `max_active_vehicles` to `room_traffic_capacity` (128), so the TrafficState, TrafficView's pools, scoring's slots and HitDetection (re-made when the capacity changes) hold the server's whole area at rush density; single-player keeps its 90.
 - **Before the first Pong** of a room `server_tick()` runs from the snapshot's tick and the time since it arrived (behind by the one-way delay; the clock then steps forward), so states, remotes and traffic work from the join frame on.
 
 ## Remote players
@@ -116,6 +117,7 @@ A CanvasLayer (layer 6: over the gameplay HUD, under the in-run screens), hidden
 | `room_browse_refresh_s` | 5 | not in spec |
 | `room_fixed_morning_min` / `room_fixed_golden_min` | 3 / 18 | PRIVATE ROOM's fixed times (not in spec) |
 | `room_network_traffic` | true | not in spec: switch to the server's traffic when it streams it (false: always local, dev) |
+| `room_traffic_capacity` | 128 | not in spec: the run's TrafficState in a room holds at least this many (N4.2: 45–95 cars in the area at rush); single-player keeps 90 |
 | `room_strip_width_px` / `_height_px` / `_dot_px`, `room_font_px`, `room_button_width_px`, `room_panel_width_px` | 520 / 6 / 6, 16, 200, 680 | not in spec |
 
 ## Tests
@@ -170,19 +172,38 @@ The server logged `room seat taken`, `run ended ... reason=Crashed verified=true
 tools/godot.sh --headless --path . res://tests/net/live_room_run_check.tscn -- http://127.0.0.1:18652 --metrics=http://127.0.0.1:19652
 ```
 
+Against the server with N4.2's traffic streaming (`rooms.traffic = "sim"`, the default since N4.2; this branch after merging it), 2026-09-30:
+
 ```
 accounts               ok
-A creates, the run starts ok    code 7H6FX5, s 25153, protected true
+A creates, the run starts ok    code XBX9MX, s 25153, protected true
 B joins by code        ok    2/8
-B sees A drive         ok    36.9 m/s, 3.6 m behind A's car (100 ms at speed = 3.7 m); A sent 204 states
+B sees A drive         ok    37.9 m/s, 3.8 m behind A's car (100 ms at speed = 3.8 m); A sent 203 states
+traffic streamed       ok    35 cars (28 ahead, nearest 102 m; 7 behind), capacity 128; corrections 616, mean 0.032 m, max 2.30 m; spawns 39, despawns 4, intents 12, dropped_full 0
 crash-out, respawn     ok    respawns 1, lives 2
+traffic after respawn  ok    35 cars (27 ahead, nearest 0 m; 8 behind), capacity 128; corrections 1024, mean 0.036 m, max 2.71 m; spawns 41, despawns 6, intents 26, dropped_full 0
 no offences            ok    wb_room_offences_total = 0 (server plausibility)
 LIVE_ROOM_RUN ok (0 failed)
 ```
 
-(204 states in about 11 s: the headless run on the loaded box drew under 20 frames a second at times, and the upload sends at most one state per frame, the latest tick.)
+(About 200 states in 11 s: the headless run on the loaded box drew under 20 frames a second at times, and the upload sends at most one state per frame, the latest tick. "nearest 0 m" after the respawn is a car beside the placement, in another lane: the server's gap search keeps the spawn lane clear.)
 
-**Play it** against the local server: `tools/godot.sh --path . -- --server=http://127.0.0.1:18652` (native: the title → ONLINE → a room button; start a second copy to see each other), or the web build with `?server=http://127.0.0.1:18652`.
+**Play it** against the local server (streamed traffic included):
+
+```sh
+# 1. the server (from this branch; its own target dir), dev env, a scratch directory
+(cd westbound-server && CARGO_TARGET_DIR=$PWD/target nice cargo build -p server)
+mkdir -p /tmp/wb && cp westbound-server/config/dev.toml /tmp/wb/ && cd /tmp/wb
+WB_SERVER__ENV=dev WB_SERVER__BIND=127.0.0.1:18652 WB_METRICS__BIND=127.0.0.1:19652 WB_BACKUP__ENABLED=false \
+    <repo>/westbound-server/target/debug/westbound-server --config dev.toml
+# 2. player one, native (repo root): title -> ONLINE -> PRIVATE ROOM -> CREATE ROOM (the code is on the room line)
+tools/godot.sh --path . -- --server=http://127.0.0.1:18652
+# 3. player two, the web build in a browser (its own device account in localStorage):
+tools/export_web.sh && (cd build/web && python3 -m http.server 8000)
+#    open http://127.0.0.1:8000/index.html?server=http://127.0.0.1:18652 -> ONLINE -> JOIN BY CODE
+```
+
+Two native copies on one machine share the device account stored per server (`user://`), so the newer login wins and the first gets "This account signed in on another device": use a native copy and the web build (or two browser profiles / a private window) for two players on one machine. `?server=off` keeps the hub's rooms off.
 
 ## Snaps
 

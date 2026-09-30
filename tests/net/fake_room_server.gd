@@ -18,6 +18,8 @@ var place_s_mm: int = 1_000_000
 var place_d_cm: int = 350
 var place_speed_cms: int = 3000
 var time_mode: String = "cycle"
+## Messages appended to every join's frame (the N4.2 server's whole area of interest).
+var join_extra: Array = []
 var cycle_ms: int = 1_000_000
 
 var joins: Array[Dictionary] = []
@@ -64,7 +66,7 @@ func _lobby(m: Dictionary) -> void:
 			in_seat = true
 			var tick := floori(server_ticks())
 			placement_tick = tick
-			send([snapshot(tick), placement(tick)])
+			send([snapshot(tick), placement(tick)] + join_extra)
 		"room_leave":
 			leaves += 1
 			if in_seat:

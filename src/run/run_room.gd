@@ -31,10 +31,10 @@ extends RefCounted
 ##   go) and the run calls step_traffic() in place of sim.step + director.step (the
 ##   opposite carriageway's director keeps running) and the source's notify_hit in place
 ##   of sim.notify_hit; hit reports carry the network car id. The source (and the
-##   TrafficState) is kept across respawns and teleports: the server sends each car once
-##   for the area around the player. A reconnect clears it (the server sends the whole
-##   area with the new snapshot). NetTuning.room_network_traffic = false keeps the local
-##   director (dev).
+##   TrafficState, at least NetTuning.room_traffic_capacity cars in a room) is kept across
+##   respawns and teleports: the server sends each car once for the area around the
+##   player. Every room_snapshot clears it (the server sends the whole area in the same
+##   frame). NetTuning.room_network_traffic = false keeps the local director (dev).
 
 const MS_PER_S := 1000.0   # lint: allow-number unit conversion
 ## Brake input above this reads as braking for the brake-light flag.
@@ -89,6 +89,7 @@ func _init(owner_run: Run, room_session: NetRoomSession, net_tuning: NetTuning =
 	session.notice.connect(_on_notice)
 	session.traffic_frame.connect(_on_traffic_frame)
 	session.rejoined.connect(_on_rejoined)
+	session.joined.connect(_on_rejoined)
 	if _read_placement():
 		start_valid = true
 
@@ -112,7 +113,7 @@ func install() -> void:
 ## Removes the nodes and lets go of the session's signals (the run is leaving the room).
 func uninstall() -> void:
 	for s: Signal in [session.run_result, session.chat, session.reconnecting, session.left, session.notice,
-			session.traffic_frame, session.rejoined]:
+			session.traffic_frame, session.rejoined, session.joined]:
 		for c: Dictionary in s.get_connections():
 			if (c["callable"] as Callable).get_object() == self:
 				s.disconnect(c["callable"])
@@ -182,7 +183,8 @@ func _on_traffic_frame(f: NetServerFrame) -> void:
 	net_traffic.apply_frame(f, run.car.state.s, session.server_tick(), session.one_way_ticks())
 
 
-## A reconnect: the server sends the whole area again with the snapshot.
+## Every room_snapshot (a join, a reconnect): the server sends the whole area of interest
+## in the same frame (after this signal), so the network traffic starts over.
 func _on_rejoined(_room: NetRoomState) -> void:
 	if net_traffic != null:
 		net_traffic.clear()

@@ -123,6 +123,8 @@ func _main() -> void:
 		"%.1f m/s, %.1f m behind A's car (100 ms at speed = %.1f m); A sent %d states" % [seen_v, gap,
 		_run.car.state.v * t.room_interp_delay_ms / MS_PER_S, _a.states_sent])
 
+	_traffic_rows("traffic streamed")
+
 	# Crash-out: two hits after the protection; the server respawns A 3 s later.
 	_run.force_hit(HitDetection.HIT_BARRIER)
 	await _sleep(Tuning.load_default().lives.ghost_period_s + 0.2)
@@ -132,6 +134,7 @@ func _main() -> void:
 	_row("crash-out, respawn", crashed and respawned, "respawns %d, lives %d" % [_run.room.respawns, _run.lives.lives])
 	_run.drive_controller = bot
 	await _sleep(3.0)
+	_traffic_rows("traffic after respawn")
 
 	if not _metrics.is_empty():
 		var m := _fetch(_metrics + "/metrics")
@@ -143,6 +146,37 @@ func _main() -> void:
 	_a.close()
 	_b.close()
 	_finish()
+
+
+## The network traffic around A's car: the source took over, the cars in the area of
+## interest (−300 m … +900 m), the nearest ahead, and the corrections' sizes.
+func _traffic_rows(step: String) -> void:
+	var src := _run.room.net_traffic
+	var st := _run.sim.state
+	var me := _run.car.state
+	var ahead := 0
+	var behind := 0
+	var outside := 0
+	var nearest := INF
+	for i in st.capacity:
+		if st.active[i] == 0:
+			continue
+		var ds := st.s[i] - me.s
+		if ds >= 0.0:
+			ahead += 1
+			nearest = minf(nearest, ds)
+		else:
+			behind += 1
+		if ds < -320.0 or ds > 920.0:
+			outside += 1
+	if src == null:
+		_row(step, false, "no network traffic (is the server built with N4.2, rooms.traffic = \"sim\"?)")
+		return
+	var s := src.stats
+	_row(step, st.count > 0 and outside == 0,
+		"%d cars (%d ahead, nearest %.0f m; %d behind), capacity %d; corrections %d, mean %.3f m, max %.2f m; spawns %d, despawns %d, intents %d, dropped_full %d" % [
+		st.count, ahead, nearest, behind, st.capacity, s.corrections, s.err_sum / maxf(float(s.corrections), 1.0),
+		s.err_max, s.spawns, s.despawns, s.intents, s.dropped_full])
 
 
 func _finish() -> void:

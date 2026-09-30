@@ -333,6 +333,7 @@ func test_network_traffic_takes_over_when_the_server_streams_it() -> void:
 	if not check(src != null, "the network source took over"):
 		return
 	check(run.sim.state == state_before, "it publishes into the run's TrafficState")
+	ge(run.sim.state.capacity, net.room_traffic_capacity, "room capacity (N4.2: 90+ cars at rush)")
 	eq(run.sim.state.count, 2, "only the server's cars")
 	var slot := src.slot_of(41)
 	check(slot >= 0 and run.sim.state.active[slot] == 1)
@@ -404,8 +405,22 @@ func test_network_traffic_survives_a_respawn_and_clears_on_a_reconnect() -> void
 	_seconds_alive(0.1)
 	eq(run.room.teleports, 1)
 	eq(run.sim.state.count, 3, "a teleport keeps the network cars")
-	# A reconnect: the server sends the whole area again, so the source starts over.
+	# A reconnect: every snapshot clears the traffic; the whole area follows in its frame.
+	var me := run.car.state
+	var area := []
+	for k in 2:
+		var at := me.s + 50.0 + 70.0 * float(k)
+		area.append({"car_id": 100 + k, "vehicle": 0, "color": 1, "profile": 0, "lane": 0,
+			"s_mm": roundi(run.loop.road.wrap_s(at) * 1000.0),
+			"d_cm": roundi(run.loop.road.lane_center_d(run.loop.road.lane_count(at) - 1, at) * 100.0),
+			"speed_cms": roundi(me.v * 100.0), "lc_phase": "none", "lc_target_lane": 0,
+			"lc_move_start_tick": 0, "lc_duration_ms": 0, "flags": {"hazard": false, "braking": false}})
+	server.set("join_extra", [{"type": "traffic_spawn", "cars": area}])
 	server.call("drop")
 	_seconds(1.5)
 	eq(rs.state, NetRoomSession.State.IN_ROOM)
-	eq(run.sim.state.count, 0, "cleared for the new snapshot's area")
+	eq(run.sim.state.count, 2, "cleared on the snapshot, then the area from the same frame")
+	check(src.slot_of(7) < 0 and src.slot_of(100) >= 0, "the old cars gone, the new ones in")
+	# Out of the room, single-player keeps its own capacity.
+	run.room.leave()
+	eq(run.sim.state.capacity, Tuning.load_default().traffic.max_active_vehicles, "single-player's cap")

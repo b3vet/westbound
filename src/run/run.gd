@@ -225,6 +225,8 @@ var _menu_count: int = 0
 var _full_countdown: bool = false
 var _dev_hud_stepped_aside: bool = false
 var _dev_hud_was_visible: bool = false
+## N5.2: HitDetection's slot count (a room's TrafficState can be larger).
+var _hits_cap: int = 0
 
 
 ## Full brake, wheel straight: the fallback crash (the car skids to a stop).
@@ -316,6 +318,7 @@ func _ready() -> void:
 	legs = LegTracker.new(tuning.legs)
 	objectives = LegObjectives.new(tuning.legs)
 	hits = HitDetection.new(tuning.lives, tuning.traffic.max_active_vehicles)
+	_hits_cap = tuning.traffic.max_active_vehicles
 	lives = Lives.new(tuning.lives)
 	fx = PlayerFx.new()
 	fx.name = "PlayerFx"
@@ -1121,6 +1124,10 @@ func _start_run() -> void:
 	var keep_traffic := room != null and room.net_traffic != null and sim != null
 	if not keep_traffic:
 		sim = TrafficSim.new(ctx, road, registry)
+		if sim.state.capacity != _hits_cap:
+			# N5.2: a room's TrafficState is larger (NetTuning.room_traffic_capacity).
+			_hits_cap = sim.state.capacity
+			hits = HitDetection.new(tuning.lives, _hits_cap)
 		director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types,
 			car_def.length_m, car_def.width_m)
 		director.set_fog_end(builder.view_distance_m())
@@ -1256,6 +1263,10 @@ func _setup_loop() -> void:
 		# The build's map hash (the web export smoke checks it against the committed one).
 		print("loop: %s map_hash=%s" % [MapInfo.LOOP_V1_ID, MapInfo.hash_hex()])
 	var t := loop.run_tuning(tuning)
+	if room != null:
+		# N5.2: the server's area of interest can hold more cars than single-player's cap
+		# (the loop's tuning copy: single-player keeps its own).
+		t.traffic.max_active_vehicles = maxi(t.traffic.max_active_vehicles, room.net.room_traffic_capacity)
 	ctx = RunContext.new(current_seed, mode, t)
 	if is_nan(loop.clock_start_unix_s):
 		# The room clock is UTC-derived: read once here (the Node layer), then advanced
