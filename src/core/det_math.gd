@@ -234,7 +234,8 @@ static func _rem_pio2(x: float) -> int:
 	var t := r
 	var w := fn * PIO2_2
 	r = t - w
-	w = fn * PIO2_2T - ((t - r) - w)
+	# (fdlibm's second-round tail, fn × PIO2_2T, is never read once the third round runs:
+	# PIO2_3 + PIO2_3T replace it.)
 	t = r
 	w = fn * PIO2_3
 	r = t - w

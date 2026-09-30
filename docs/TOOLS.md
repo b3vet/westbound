@@ -110,6 +110,7 @@ Output is `path:line: RULE message`; warnings print as `RULE (warning)`. A summa
 | WB102 | error | sim | nondeterminism: global `randf/randi/randf_range/randi_range/randomize/randfn/seed/rand_from_seed(`, `RandomNumberGenerator`, `hash()`/`.hash()`, `Time.`, `OS.get_ticks*/unix_time*/system_time*`, `Engine.get_*frames*`, `get_(physics_)process_delta_time()` | none: sims take an `Rng` stream and `dt` |
 | WB103 | error | sim | impurity: `extends` a Node-family class (`Node`, `Control`, `*2D`, `*3D`, `SceneTree`, `Timer`, …), `get_tree/get_node/get_node_or_null/get_parent/add_child/remove_child/find_child/get_viewport/get_window(`, `$Node`, `Input`, `Engine.get_main_loop/get_singleton`, autoload access (names read from `project.godot`) | none: use a Node adapter file |
 | WB104 | warning | sim tick functions | allocation: `[…]` array literal, `{…}`, `.new(`, `Array/Dictionary/String/StringName/NodePath/Packed*Array(`, `str(`, `"…" %`, `.duplicate/slice/keys/values/split/join/format/map/filter(`, lambdas, `.bind(` | `# lint: allow-alloc <reason>` on the line |
+| WB105 | error | sim, plus `LIBM_GLOBS` | the platform math library: `sin/cos/tan/asin/acos/atan/atan2/exp/log/pow/sinh/cosh/tanh/asinh/acosh/atanh/ease/lerp_angle/angle_difference/rotate_toward(` and `.angle/angle_to/angle_to_point/rotated/slerp/from_angle/from_euler/get_euler(`: they round differently per platform (N8.2, docs/DETERMINISM.md). `DetMath.sin(...)` etc. are fine | `# lint: allow-libm <reason>` on the line (rendering-only values that never feed back) |
 | WB201 | warning | `src/**.gd` | named `func` without `-> Type` | none |
 
 **Scopes.**
@@ -119,6 +120,7 @@ Output is `path:line: RULE message`; warnings print as `RULE (warning)`. A summa
   - A file in those paths that is really a Node adapter (e.g. `src/traffic/traffic_view.gd`) opts out with `# lint: not-sim <reason>`. The reviewer checks the reason.
   - Comments and string contents are ignored.
 - *sim tick functions*: named `step*`, `tick*`, `_physics_process`, `_process` or `*_into` in sim files. The function body is found by indentation, and default arguments count.
+- *WB105* (N8.2) covers the sim scope except `src/net/` (network client code follows the server's authority and is never replayed bit for bit), plus these simulation-side files outside it: `src/vehicle/vehicle_params.gd`, `src/vehicle/vehicle_state.gd`, `src/run/run.gd`, `src/run/run_finale.gd`, `src/run/run_forks.gd`, `src/meta/daily/daily_script_driver.gd`, `src/traffic/dev/sandbox_bot.gd` and `tools/verifier/*.gd` (`LIBM_GLOBS` in `tools/lint_rules/__init__.py`), whatever their `not-sim` marker.
 
 **Magic-number allow-list (WB101).**
 

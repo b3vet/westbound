@@ -197,6 +197,12 @@ func _make_run(host: Node) -> Run:
 	var run_seed := expected_seed if expected_seed >= 0 else replay.seed_value
 	r.run_seed = run_seed if run_seed != 0 else 1
 	r.mode = replay.mode_name()
+	if r.mode == RunContext.MODE_DAILY:
+		# N8.2: a Daily run takes its seed from its date, never run_seed (an empty date
+		# would be the verifier's today). The replay's date must give the run's seed.
+		r.daily_date = replay.date
+		if not DailyGhostStore.valid_date(replay.date) or Run.daily_seed_for(replay.date) != run_seed:
+			_violate(V_SEED, 0, "the Daily replay's date %s does not give the run's seed %d" % [replay.date, run_seed])
 	r.manual_ticks = true
 	r.crash_cinematic = false
 	r.record_best = false

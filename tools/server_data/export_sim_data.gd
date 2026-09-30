@@ -598,12 +598,12 @@ func _velocity_vectors() -> String:
 		var yaw := 0.0 if r.chance(SPECIAL_PCT / PCT) else r.float_range(-YAW_MAX, YAW_MAX)
 		var kappa := 0.0 if r.chance(SPECIAL_PCT / PCT) else r.float_range(-KAPPA_MAX, KAPPA_MAX)
 		var d := r.float_range(0.0, AMBUSH_D_MAX)
-		var cy := cos(yaw)
-		var sy := sin(yaw)
+		var sy := DetMath.sin_cos(yaw)
+		var cy := DetMath.cos_out
 		cases.append([_hx(v), _hx(vl), _hx(yaw), _hx(kappa), _hx(d),
 			_hx((v * cy - vl * sy) / (1.0 - kappa * d)), _hx(v * sy + vl * cy)])
 	var head := _header("TrafficSim._read_player: s_dot = (v cos yaw - v_lat sin yaw) / (1 - kappa d), "
-		+ "d_dot = v sin yaw + v_lat cos yaw (libm: compare within 1e-12)")
+		+ "d_dot = v sin yaw + v_lat cos yaw (DetMath, N8.2: bit-exact)")
 	head["columns"] = ["v", "v_lat", "yaw", "kappa", "d", "s_dot", "d_dot"]
 	return _doc_text(head, "cases", cases)
 
@@ -1094,7 +1094,7 @@ func _hull_vectors() -> String:
 		var hw2 := r.float_range(HULL_HALF_WID_MIN, HULL_HALF_WID_MAX)
 		cases.append([_hx(s1), _hx(d1), _hx(yaw1), _hx(hl1), _hx(hw1), _hx(s2), _hx(d2), _hx(yaw2), _hx(hl2),
 			_hx(hw2), _hx(RoadHull.clearance(s1, d1, yaw1, hl1, hw1, s2, d2, yaw2, hl2, hw2))])
-	var head := _header("RoadHull.clearance (src/scoring/road_hull.gd): two boxes, then the clearance (libm)")
+	var head := _header("RoadHull.clearance (src/scoring/road_hull.gd): two boxes, then the clearance (DetMath, N8.2)")
 	head["columns"] = ["s1", "d1", "yaw1", "hl1", "hw1", "s2", "d2", "yaw2", "hl2", "hw2", "clearance"]
 	return _doc_text(head, "cases", cases)
 

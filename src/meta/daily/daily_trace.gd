@@ -16,6 +16,7 @@ extends RefCounted
 ##   DT sec=N all=h car=h input=h traffic=h opp=h scoring=h lives=h legs=h obj=h sun=h
 ##          forks=h stats=h  s=... v=... cars=n   (after every simulated second)
 ##   DTT k=... (per tick of --detail=<second>: the same hashes and the car's float bits)
+##   DT replay seed=... score=... b64=...         (with record_replay: the run's .wbr, N8.2)
 ##   DT done seconds=N
 ##
 ## The run: the real Run scene (manual ticks, Daily mode on the given date, the car of
@@ -24,8 +25,9 @@ extends RefCounted
 ## with driver "bot", the weaving SandboxBot (closed-loop, like a player: it reacts to the
 ## state, so any difference grows, and adds its own asin). Run.frame() every
 ## check_ticks_per_frame ticks (events drained, views updated) as the game does. The view
-## distance (it sets where the director spawns: fog end) is pinned to the default tier's
-## so a device's quality setting does not change the run (see docs/DAILY.md → Findings).
+## distance is pinned to the default tier's (WP8.4: it set the director's spawn distance;
+## since N8.2 the simulation reads RoadTuning.sim_horizon_m instead, so the pin only keeps
+## the two sides' rendering alike: tests/run/test_sim_horizon.gd).
 
 const BOOT_PARAM := "determinism"
 const SCENE := "res://src/meta/daily/daily_trace.tscn"
@@ -54,6 +56,12 @@ var date: String = ""
 var seconds: int = 0
 ## Print per-tick lines within this second (0: none).
 var detail_second: int = 0
+## N8.2: also record the run's replay (NetReplayRecorder) and print it at the end as
+## "DT replay ... b64=<the .wbr bytes>", so the other platform's verifier can check it
+## (compare.sh --replay). With it the run keeps its real lives (a verifier replays those),
+## so it can end at its crash.
+var record_replay: bool = false
+var recorder: NetReplayRecorder
 var ticks_done: int = 0
 var tick_hz: int = 120
 var view_m: float = 0.0
@@ -83,7 +91,7 @@ func start(parent: Node, run_date: String, run_seconds: int, pin_view_m: float =
 	r.car_index = 0
 	parent.add_child(r)
 	run = r
-	run.infinite_lives = true
+	run.infinite_lives = not record_replay
 	tick_hz = run.tuning.vehicle.physics_tick_hz
 	view_m_before = run.builder.view_distance_m()
 	var pin := pin_view_m
@@ -109,6 +117,12 @@ func start(parent: Node, run_date: String, run_seconds: int, pin_view_m: float =
 		driver = DailyScriptDriver.new(tuning, tick_hz)
 	run.drive_controller = driver
 	run.go()
+	if record_replay:
+		recorder = NetReplayRecorder.new(NetTuning.load_default(), NetTuning.load_default().client_build)
+		recorder.auto_attach = false
+		recorder.set_physics_process(false)   # captured after each of our ticks instead
+		parent.add_child(recorder)
+		recorder.begin(run)
 	ticks_done = 0
 	lines.append(info_line())
 	lines.append(libm_line())
@@ -124,6 +138,8 @@ func step_ticks(n: int) -> bool:
 		if ticks_done >= total:
 			break
 		run.tick()
+		if recorder != null:
+			recorder.capture()
 		ticks_done += 1
 		if ticks_done % every == 0:
 			run.frame(FRAME_S)
@@ -132,6 +148,8 @@ func step_ticks(n: int) -> bool:
 			lines.append(tick_line())
 		if ticks_done % tick_hz == 0:
 			lines.append(second_line(ticks_done / tick_hz))
+	if ticks_done >= total and recorder != null and recorder.recording:
+		lines.append(replay_line())
 	if ticks_done >= total and (lines.is_empty() or not lines[lines.size() - 1].begins_with(PREFIX + " done")):
 		lines.append("%s done seconds=%d" % [PREFIX, ticks_done / tick_hz])
 		return true
@@ -145,7 +163,20 @@ func take_lines() -> PackedStringArray:
 	return out
 
 
+## "DT replay seed=... score=... hits=... bytes=N b64=...": the recorded replay with the
+## run's claims (the banked score: a run cut here loses its held chain, as at its end).
+func replay_line() -> String:
+	var results := {RunStats.SCORE: run.scoring.banked(), RunStats.HITS: run.stats.hits,
+		RunStats.DISTANCE_M: run.stats.distance_m}
+	var bytes := recorder.finish(results, date)
+	return "%s replay seed=%d score=%d hits=%d crashed=%s bytes=%d b64=%s" % [PREFIX, run.current_seed,
+		run.scoring.banked(), run.stats.hits, run.state == Game.CRASH, bytes.size(), Marshalls.raw_to_base64(bytes)]
+
+
 func finish() -> void:
+	if recorder != null and is_instance_valid(recorder):
+		recorder.queue_free()
+	recorder = null
 	if run != null and is_instance_valid(run):
 		run.queue_free()
 	run = null

@@ -30,6 +30,7 @@ const SOAK_SEEDS: Array[int] = [20260929, 424242, 9001, 31337, 123456789]
 const LONG_S := 660.0
 const LONG_SEEDS: Array[int] = [20260929, 424242, 9001]
 const STEER_EDIT := 20
+const DAILY_S := 8.0
 
 const EXACT_RUNS := 2
 
@@ -152,6 +153,20 @@ func test_edited_inputs_are_rejected() -> void:
 	bad.in_throttle[0] = q * 2
 	var res2 := await verify(bad)
 	eq(res2.get("reason"), ReplayVerifier.REASON_MALFORMED, "an input out of range: %s" % describe(res2))
+
+
+## N8.2: a Daily replay is verified on its own date's seed (not the verifier's today),
+## and a date that does not give the run's seed is a seed mismatch.
+func test_daily_replay_is_verified_on_its_date() -> void:
+	var rec := await record_bot_run(0, 2, DAILY_S, RunContext.MODE_DAILY)
+	eq(rec.replay.mode, NetReplayFile.MODE_DAILY)
+	eq(rec.replay.seed_value, Run.daily_seed_for(REPLAY_DATE), "the date's seed")
+	var res := await verify(rec.replay, rec.score, rec.hits, rec.replay.seed_value)
+	check(bool(res.get("accepted", false)), describe(res))
+	var r := _copy(rec)
+	r.date = "2026-10-01"
+	var res2 := await verify(r, rec.score, rec.hits, rec.replay.seed_value)
+	eq(res2.get("reason"), ReplayVerifier.REASON_SEED, "another date: %s" % describe(res2))
 
 
 ## N8.2: a replay without inputs (an N8.1 client) is played back kinematically.

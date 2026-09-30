@@ -4,7 +4,8 @@
 //! `tools/server_data/export_sim_data.gd --only=scoring` (re-run it after any change to
 //! src/scoring/ or the scoring tuning).
 //!
-//! - `scoring_hull.json`: `RoadHull.clearance` on 2,000 box pairs (libm trig on both sides).
+//! - `scoring_hull.json`: `RoadHull.clearance` on 2,000 box pairs (DetMath trig on both
+//!   sides, N8.2: bit for bit).
 //! - `scoring_<scenario>.json`: the whole rule set replayed tick by tick: the same cars on
 //!   scripted lines, the same scripted player (speed changes and dips below the minimum,
 //!   lane changes with yaw, shoulder visits, boost), the same run hooks (hits and the
@@ -49,6 +50,11 @@ fn hull_clearance_matches_road_hull() {
         "overlaps and gaps both covered"
     );
     println!("hull: {exact} / {} bit-exact", cases.len());
+    assert_eq!(
+        exact,
+        cases.len(),
+        "N8.2: DetMath on both sides, every case bit-exact"
+    );
 }
 
 /// A structure of arrays like `TrafficState`, as the trace's rig fills it.

@@ -48,8 +48,16 @@ fn every_vector_bit_exact() {
             ));
         }
     }
-    assert!(bad.is_empty(), "{} of {} differ:\n{}", bad.len(), cases.len(), bad[..bad.len().min(20)].join("\n"));
-    for f in ["sin", "cos", "tan", "atan", "atan2", "asin", "exp", "log", "pow"] {
+    assert!(
+        bad.is_empty(),
+        "{} of {} differ:\n{}",
+        bad.len(),
+        cases.len(),
+        bad[..bad.len().min(20)].join("\n")
+    );
+    for f in [
+        "sin", "cos", "tan", "atan", "atan2", "asin", "exp", "log", "pow",
+    ] {
         assert!(per_fn.get(f).copied().unwrap_or(0) >= 300, "{f} covered");
     }
 }

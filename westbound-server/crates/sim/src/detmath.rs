@@ -188,7 +188,8 @@ fn rem_pio2(x: f64) -> (i64, f64, f64) {
     let mut t = r;
     let mut w = fn_ * PIO2_2;
     r = t - w;
-    w = fn_ * PIO2_2T - ((t - r) - w);
+    // (fdlibm's second-round tail, fn × PIO2_2T, is never read once the third round runs:
+    // PIO2_3 + PIO2_3T replace it.)
     t = r;
     w = fn_ * PIO2_3;
     r = t - w;

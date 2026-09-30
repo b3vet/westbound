@@ -23,8 +23,8 @@
 
 use super::events::{Kind, ScoreEventBuffer, Tag};
 use super::hull;
-use crate::detmath;
 use super::params::{pct_to_frac, ScoringParams, ScoringTuning};
+use crate::detmath;
 use crate::trace_hash::{mix_bool, mix_float, mix_int, SEED};
 use crate::traffic::gd::{maxf, minf};
 use crate::traffic::TrafficState;
@@ -381,7 +381,11 @@ impl Scoring {
                 let tv = traffic.v(i);
                 let tvl = traffic.v_lat(i);
                 let th = (tv * tv + tvl * tvl).sqrt();
-                let (tc, tn) = if th > 0.0 { (tv / th, tvl / th) } else { (1.0, 0.0) };
+                let (tc, tn) = if th > 0.0 {
+                    (tv / th, tvl / th)
+                } else {
+                    (1.0, 0.0)
+                };
                 let clr = hull::clearance_cs(
                     ps,
                     pd,
