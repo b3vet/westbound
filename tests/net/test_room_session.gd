@@ -17,7 +17,7 @@ var link: NetLoopbackLink
 var server: RefCounted
 var rs: NetRoomSession
 var token: String = "token"
-var log: Array[String] = []
+var seen_log: Array[String] = []
 var results: Array[Dictionary] = []
 var chats: Array[String] = []
 
@@ -35,14 +35,14 @@ func before_each() -> void:
 	rs = NetRoomSession.new(link.client, tuning, L, time)
 	rs.configure("loop://rooms", 3, NetCodec.hex_to_bytes(MAP_HASH), func() -> String: return token)
 	token = "token"
-	log.clear()
+	seen_log.clear()
 	results.clear()
 	chats.clear()
-	rs.joined.connect(func(r: NetRoomState) -> void: log.append("joined %s" % r.code))
-	rs.rejoined.connect(func(r: NetRoomState) -> void: log.append("rejoined %s" % r.code))
-	rs.join_failed.connect(func(c: String, _m: String) -> void: log.append("join_failed %s" % c))
-	rs.left.connect(func(r: String, _m: String) -> void: log.append("left %s" % r))
-	rs.reconnecting.connect(func(on: bool) -> void: log.append("reconnecting %s" % on))
+	rs.joined.connect(func(r: NetRoomState) -> void: seen_log.append("joined %s" % r.code))
+	rs.rejoined.connect(func(r: NetRoomState) -> void: seen_log.append("rejoined %s" % r.code))
+	rs.join_failed.connect(func(c: String, _m: String) -> void: seen_log.append("join_failed %s" % c))
+	rs.left.connect(func(r: String, _m: String) -> void: seen_log.append("left %s" % r))
+	rs.reconnecting.connect(func(on: bool) -> void: seen_log.append("reconnecting %s" % on))
 	rs.run_result.connect(func(r: Dictionary) -> void: results.append(r))
 	rs.chat.connect(func(_p: int, text: String) -> void: chats.append(text))
 
@@ -81,7 +81,7 @@ func test_quick_join_enters_the_room() -> void:
 	eq(rs.state, NetRoomSession.State.IN_ROOM)
 	eq(seen, [NetRoomSession.State.CONNECTING, NetRoomSession.State.LOBBY, NetRoomSession.State.JOINING,
 		NetRoomSession.State.IN_ROOM] as Array[NetRoomSession.State])
-	eq(log, ["joined ABC234"] as Array[String])
+	eq(seen_log, ["joined ABC234"] as Array[String])
 	var joins: Array[Dictionary] = server.get("joins")
 	eq(joins.size(), 1, "one quick_join")
 	eq(joins[0]["kind"], "quick_join")
@@ -127,12 +127,12 @@ func test_refusals_and_timeouts_come_back_to_the_lobby() -> void:
 	rs.join_code("ZZZ999")
 	_run(0.5)
 	eq(rs.state, NetRoomSession.State.LOBBY)
-	eq(log, ["join_failed room_not_found"] as Array[String])
+	eq(seen_log, ["join_failed room_not_found"] as Array[String])
 	eq(rs.last_message, "No room with that code.")
 	server.set("answer_joins", false)
 	rs.quick_join()
 	_run(tuning.room_join_timeout_s + 0.5)
-	eq(log.back(), "join_failed join_timeout")
+	eq(seen_log.back(), "join_failed join_timeout")
 	eq(rs.state, NetRoomSession.State.LOBBY)
 
 
@@ -271,7 +271,7 @@ func test_kick_sends_back_to_the_hub() -> void:
 	_send([{"type": "lobby_event", "kind": "room_left", "reason": "kicked"}])
 	_run(0.2)
 	eq(rs.state, NetRoomSession.State.LOBBY)
-	eq(log.back(), "left kicked")
+	eq(seen_log.back(), "left kicked")
 	eq(rs.last_message, "The host removed you from the room.")
 
 
@@ -283,12 +283,12 @@ func test_reconnect_within_the_hold_keeps_the_seat() -> void:
 	server.call("drop")
 	_run(0.2)
 	eq(rs.state, NetRoomSession.State.RECONNECTING)
-	eq(log.back(), "reconnecting true")
+	eq(seen_log.back(), "reconnecting true")
 	check(rs.has_room(), "the run keeps driving")
 	check(rs.reconnect_left_s() > tuning.room_reconnect_window_s - 1.0)
 	_run(1.5)
 	eq(rs.state, NetRoomSession.State.IN_ROOM, "back in")
-	eq(log.slice(-2), ["reconnecting false", "rejoined ABC234"])
+	eq(seen_log.slice(-2), ["reconnecting false", "rejoined ABC234"])
 	var joins: Array[Dictionary] = server.get("joins")
 	eq(joins.back()["kind"], "room_join_code", "rejoin by code")
 	eq(joins.back()["code"], "ABC234")
@@ -304,7 +304,7 @@ func test_reconnect_gives_up_after_the_hold() -> void:
 	check(rs.reconnect_left_s() <= 1.1, "the hold counts down")
 	_run(1.5)
 	eq(rs.state, NetRoomSession.State.IDLE)
-	eq(log.back(), "left seat_lost")
+	eq(seen_log.back(), "left seat_lost")
 	eq(rs.last_message, "Lost the connection to the room.")
 	check(not rs.has_room())
 
@@ -315,7 +315,7 @@ func test_a_ban_is_not_retried() -> void:
 	server.call("drop")
 	_run(2.0)
 	eq(rs.state, NetRoomSession.State.FAILED)
-	eq(log.back(), "left banned")
+	eq(seen_log.back(), "left banned")
 
 
 # ---------------------------------------------------------------- The room clock

@@ -1,25 +1,31 @@
 class_name OnlineHubScreen
 extends RunScreen
-## The online hub, a stub until rooms exist (WP8.5). Spec: multiplayer handoff → Client
-## changes ("Online hub: Quick Join, room browser, create a private room, join by code";
-## "Party panel and friends list"; "Crew page"; "Leaderboards"); plan: rooms are N5, not
-## built yet. docs/SCREENS.md → Online hub.
+## The online hub (WP8.5; rooms N5.2). Spec: multiplayer handoff → Client changes ("Online
+## hub: Quick Join, room browser, create a private room, join by code"; "Party panel and
+## friends list"; "Crew page"; "Leaderboards"), Rooms, parties and matchmaking.
+## docs/SCREENS.md → Online hub.
 ##
 ## Over the title's attract drive, on the same slanted band:
 ##   - ONLINE (speed-tilted) top-left, the player and the online status under it; BACK
 ##     top-right (Esc too);
-##   - a ROOMS panel: COMING SOON, and QUICK JOIN, ROOM BROWSER, PRIVATE ROOM and JOIN BY
-##     CODE, disabled with SOON;
+##   - a ROOMS panel: QUICK JOIN, ROOM BROWSER, PRIVATE ROOM and JOIN BY CODE (N5.2: the
+##     RoomLobbyPanel over the hub; when the room's snapshot arrives the hub emits
+##     room_ready(session) and the run drives in the room). Without the online server
+##     (`?server=off`, native dev runs) or while offline the buttons are disabled and the
+##     panel says why (NetRooms.unavailable_text); a message from the last room (kicked,
+##     closed, connection lost) shows there too;
 ##   - LOOP PRACTICE (primary, bottom-left thumb): the run in loop mode (`?mode=loop`), solo
 ##     on the multiplayer loop, which works offline;
 ##   - FRIENDS, CREW and LEADERBOARDS up from the right thumb. FRIENDS and CREW open the
 ##     account view on that tab (they need a session: disabled, ONLINE OFF, without one);
 ##     LEADERBOARDS opens on the Loop season board.
-## Emits intents only (loop_practice, social, back).
+## Emits intents only (loop_practice, social, back, room_ready).
 
 signal loop_practice()
 signal social(view: int)
 signal back()
+## N5.2: a room was joined; the run drives in it (Run.start_room).
+signal room_ready(session: NetRoomSession)
 
 const TILT_SHADER := preload("res://src/ui/theme/speed_tilt.gdshader")
 const TEXT_TITLE := "ONLINE"
@@ -27,8 +33,9 @@ const TEXT_BACK := "BACK"
 const TEXT_LOOP := "LOOP PRACTICE"
 const TEXT_LOOP_NOTE := "SOLO ON THE LOOP · WORKS OFFLINE"
 const TEXT_ROOMS := "ROOMS"
-const TEXT_ROOMS_SOON := "COMING SOON"
+const TEXT_ROOMS_SOON := "UP TO 8 PLAYERS"
 const TEXT_ROOMS_NOTE := "Drive the loop with friends and crews."
+const TEXT_UNAVAILABLE := "OFFLINE"
 const TEXT_QUICK_JOIN := "QUICK JOIN"
 const TEXT_BROWSER := "ROOM BROWSER"
 const TEXT_PRIVATE := "PRIVATE ROOM"
@@ -64,6 +71,13 @@ var leaderboards: LeaderboardsScreen
 var runs: NetRunsClient
 ## The session shown (null: NetSession.current).
 var session: NetSession
+## N5.2: the rooms service (null: NetRooms.ensure()).
+var rooms: NetRooms
+var lobby: RoomLobbyPanel
+## The run's input hub (the code field mutes it while typing).
+var input_hub: PlayerInput
+## The last room's parting message (kicked, closed, connection lost), "" = none.
+var room_message: String = ""
 
 
 func _init() -> void:
@@ -92,11 +106,17 @@ func _init() -> void:
 	rooms_panel.add_child(rooms_soon)
 	rooms_note = ScreenText.make(TEXT_ROOMS_NOTE, ScreenText.Face.BODY, NOTE_PX, ScreenText.Ink.MUTED)
 	rooms_panel.add_child(rooms_note)
-	for label: String in [TEXT_QUICK_JOIN, TEXT_BROWSER, TEXT_PRIVATE, TEXT_CODE]:
-		var b := _button(label, ScreenButton.Kind.NORMAL, func() -> void: pass, rooms_panel)
-		b.note = TEXT_SOON
-		b.disabled = true
+	var actions: Array[Callable] = [open_quick_join, open_browser, open_private, open_code]
+	var labels: Array[String] = [TEXT_QUICK_JOIN, TEXT_BROWSER, TEXT_PRIVATE, TEXT_CODE]
+	for i in labels.size():
+		var b := _button(labels[i], ScreenButton.Kind.NORMAL, actions[i], rooms_panel)
 		room_buttons.append(b)
+	lobby = RoomLobbyPanel.new()
+	lobby.joined.connect(_on_room_joined)
+	lobby.closed.connect(func() -> void:
+		dim.visible = false
+		refresh())
+	add_child(lobby)
 	loop_caption = ScreenText.make(TEXT_LOOP_NOTE, ScreenText.Face.LABEL, STATUS_PX, ScreenText.Ink.ACCENT)
 	loop_caption.name = "LoopCaption"
 	add_child(loop_caption)
@@ -124,6 +144,8 @@ func _restyled() -> void:
 		b.size_px = tuning.font_screen_button_px
 	if leaderboards != null:
 		leaderboards.setup(style, tuning)
+	lobby.hub = input_hub
+	lobby.setup(style, tuning, NetTuning.load_default())
 	dim.color = Color(style.ink, Units.pct_to_frac(tuning.screen_dim_pct))
 	_layout()
 
@@ -137,6 +159,8 @@ func _buttons() -> Array[ScreenButton]:
 func open() -> void:
 	if leaderboards != null:
 		leaderboards.close(false)
+	if lobby.is_open():
+		lobby.close()
 	dim.visible = false
 	refresh()
 	super.open()
@@ -160,7 +184,82 @@ func refresh() -> void:
 	for b: ScreenButton in [friends_button, crew_button]:
 		b.disabled = s == null
 		b.note = TEXT_OFF if s == null else ""
+	# N5.2: rooms need the server and a signed-in session.
+	var why := _rooms_unavailable()
+	for b in room_buttons:
+		b.disabled = not why.is_empty()
+		b.note = "" if why.is_empty() else (TEXT_OFF if _rooms() == null else TEXT_UNAVAILABLE)
+	if not room_message.is_empty():
+		rooms_note.text = room_message
+		rooms_note.set_ink(ScreenText.Ink.HOT)
+	elif not why.is_empty():
+		rooms_note.text = why
+		rooms_note.set_ink(ScreenText.Ink.MUTED)
+	else:
+		rooms_note.text = TEXT_ROOMS_NOTE
+		rooms_note.set_ink(ScreenText.Ink.MUTED)
 	_layout()
+
+
+# ---------------------------------------------------------------- Rooms (N5.2)
+
+func _rooms() -> NetRooms:
+	if rooms != null and is_instance_valid(rooms):
+		return rooms
+	return NetRooms.ensure()
+
+
+## Why rooms can't be used now ("" = they can).
+func _rooms_unavailable() -> String:
+	var r := _rooms()
+	return NetRooms.TEXT_OFF if r == null else r.why_unavailable()
+
+
+## The last room's parting message on the ROOMS panel (the run calls this on the way back).
+func show_room_message(text: String) -> void:
+	room_message = text
+	refresh()
+
+
+func open_quick_join() -> void:
+	if _open_lobby():
+		lobby.quick_join()
+
+
+func open_browser() -> void:
+	if _open_lobby():
+		lobby.open_browser()
+
+
+func open_private() -> void:
+	if _open_lobby():
+		lobby.open_create()
+
+
+func open_code() -> void:
+	if _open_lobby():
+		lobby.open_code()
+
+
+func _open_lobby() -> bool:
+	var r := _rooms()
+	if r == null or not r.available():
+		refresh()
+		return false
+	room_message = ""
+	lobby.rooms = r
+	lobby.place(safe)
+	dim.visible = true
+	return true
+
+
+func lobby_open() -> bool:
+	return lobby != null and lobby.is_open()
+
+
+func _on_room_joined(s: NetRoomSession) -> void:
+	dim.visible = false
+	room_ready.emit(s)
 
 
 func _session() -> NetSession:
@@ -188,7 +287,7 @@ func leaderboards_open() -> bool:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not visible or leaderboards_open():
+	if not visible or leaderboards_open() or lobby_open():
 		return
 	if event.is_action_pressed(&"ui_cancel"):
 		get_viewport().set_input_as_handled()
@@ -231,6 +330,7 @@ func _layout() -> void:
 	var rw := bw * ROOM_WIDTH
 	for b in room_buttons:
 		rw = maxf(rw, SocialUi.button_width(b, tuning))
+	lobby.place(safe)
 	var cs := rooms_caption.get_combined_minimum_size()
 	var sn := rooms_soon.get_combined_minimum_size()
 	var ns := rooms_note.get_combined_minimum_size()
