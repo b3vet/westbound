@@ -127,6 +127,11 @@ func _respawn(s: float, lane: int) -> void:
 
 func _physics_process(delta: float) -> void:
 	car.tick(delta)
+	if cam_mode == &"cockpit":
+		# The needles, as CameraRig drives them in the cockpit mode (G4).
+		var ct := _ctx.tuning.camera
+		car.model.set_gauges(clampf(car.state.v / Units.kmh_to_mps(ct.cockpit_speedo_max_kmh), 0.0, 1.0),
+			clampf(car.state.rpm / ct.cockpit_tach_max_rpm, 0.0, 1.0))
 	var smp := car.road_sample()
 	_road.ensure_generated_to(car.state.s + _builder.view_distance_m() + _ctx.tuning.road.chunk_length_m * 2.0)
 	_origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)

@@ -104,6 +104,8 @@ func _traffic(conv: ArtConvert, pt: ProgressionTuning) -> void:
 			_failed += 1
 			continue
 		var out_dir := _dir(_out).path_join("traffic")
+		if not _check:
+			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out_dir))
 		if lod != null:
 			var lod_path := out_dir.path_join(model + ArtConvert.LOD1_SUFFIX + ".res")
 			r.mesh.set_meta(&"lod1_path", lod_path)
