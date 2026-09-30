@@ -157,6 +157,10 @@ const PATH := "res://data/tuning/net.tres"
 	Color(0.2, 0.85, 1.0), Color(1.0, 0.45, 0.3), Color(0.55, 1.0, 0.35), Color(1.0, 0.8, 0.2),
 	Color(0.85, 0.45, 1.0), Color(1.0, 0.35, 0.65), Color(0.35, 1.0, 0.8), Color(0.95, 0.95, 0.95),
 ])   # not in spec
+## The loop strip's dot shape per crew color (facets; same index, wrapping): the second
+## channel for crews, so colors a color-blind player confuses never share a shape (WP9.3,
+## tests/a11y/test_color_independence.gd). A player's own dot is the larger hexagon.
+@export var room_crew_dot_facets: PackedInt32Array = PackedInt32Array([6, 6, 3, 4, 4, 3, 4, 3])   # not in spec
 ## The car model remote players are drawn with (index into Run.CAR_PATHS; the protocol
 ## carries no car).
 @export var room_remote_car: int = 0   # not in spec

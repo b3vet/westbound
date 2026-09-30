@@ -156,6 +156,9 @@ extends Resource
 ## shot takes the side with a clear line when there is one.
 @export var attract_min_shot_s: float = 1.5   # not in spec
 @export var attract_clear_margin_m: float = 0.4   # not in spec
+## Reduced motion (WP9.3): no orbit, no drive-past and no cuts; the camera holds this
+## mode's follow pose behind the car (the gameplay view, roll off) for the whole title.
+@export var attract_reduced_motion_mode: StringName = &"chase"   # not in spec
 
 
 ## Index of `mode` in `modes`, or -1.

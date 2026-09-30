@@ -7,6 +7,9 @@ extends RefCounted
 var tuning: HudTuning
 var ts: float = 1.0
 var accent: Color = Color.WHITE
+## Reduced motion (Settings `reduced_motion`, WP9.3): widgets fade only. No pops,
+## slides, flights, bursts, wobbles or pulses (docs/ACCESSIBILITY.md → Reduced motion).
+var reduced_motion: bool = false
 
 var ink: Color
 var panel: Color

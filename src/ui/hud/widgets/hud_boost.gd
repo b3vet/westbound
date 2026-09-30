@@ -6,7 +6,8 @@ extends HudWidget
 ## seconds of extra thrust"); UI → HUD elements.
 ##
 ## Slanted segments fill with the meter; READY in the accent when full; while boost
-## burns the segments turn gold and pulse, and the label reads BOOSTING. Redraws only
+## burns the segments turn gold and pulse (steady with reduced motion, WP9.3), and the
+## label reads BOOSTING. Redraws only
 ## when the lit segment count, the percentage or the state changes, or while boosting.
 
 const LABEL_BOOST := "BOOST"
@@ -64,7 +65,7 @@ func set_fill(fill: float, boosting: bool) -> void:
 
 
 func animate(dt: float) -> bool:
-	if not _boosting:
+	if not _boosting or style.reduced_motion:
 		return false
 	_clock += dt
 	_plate_redraw()
@@ -88,8 +89,13 @@ func _paint_plate(m: HudMesh) -> void:
 			lit, lit, n, Color(s.muted, OFF_ALPHA))
 
 
+## Pulse depth now (tests, WP9.3).
+func motion_amount() -> float:
+	return super.motion_amount() + (1.0 - _pulse())
+
+
 func _pulse() -> float:
-	if not _boosting:
+	if not _boosting or style.reduced_motion:
 		return 1.0
 	return lerpf(PULSE_MIN, 1.0, 0.5 + 0.5 * cos(TAU * style.tuning.boost_pulse_hz * _clock))
 

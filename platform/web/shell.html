@@ -133,6 +133,25 @@ body {
 	from { transform: translateX(-100%); }
 	to { transform: translateX(340%); }
 }
+/* Reduced motion (WP9.3): the game's own setting is not readable before the engine
+   runs, so the shell follows the system's. No sweep: the whole bar breathes in opacity
+   (compositor-only, stepped, under one change a second). docs/ACCESSIBILITY.md. */
+@media (prefers-reduced-motion: reduce) {
+	#status.starting #wb-sweep {
+		left: 0;
+		width: 100%;
+		transform: none;
+		opacity: 0.2;
+		animation: wb-breathe 2.4s steps(2, jump-none) infinite;
+	}
+	#wb-fill {
+		transition: none;
+	}
+}
+@keyframes wb-breathe {
+	from { opacity: 0.12; }
+	to { opacity: 0.4; }
+}
 #status-notice {
 	display: none;
 	position: absolute;

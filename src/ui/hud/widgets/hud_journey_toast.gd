@@ -11,7 +11,8 @@ extends HudWidget
 ##
 ## Shown on Events.journey_complete, centred over the top of the play area (never in
 ## the middle third or the thumb zones), for hud.journey_toast_s: a fade and grow in, a
-## hold, a fade out (modulate and scale only: it draws once). Takes no touches. One plate
+## hold, a fade out (modulate and scale only: it draws once; no grow with reduced motion,
+## WP9.3). Takes no touches. One plate
 ## + two fonts = three draw calls.
 
 const TITLE := "JOURNEY COMPLETE"
@@ -64,6 +65,8 @@ func animate(dt: float) -> bool:
 		a = (total - _t) / maxf(t.journey_toast_out_s, EPS)
 	modulate.a = clampf(a, 0.0, 1.0)
 	var k := lerpf(t.journey_toast_grow_from, 1.0, smoothstep(0.0, 1.0, clampf(_t / maxf(t.journey_toast_in_s, EPS), 0.0, 1.0)))
+	if style.reduced_motion:
+		k = 1.0   # WP9.3: fades only
 	pivot_offset = size * 0.5
 	scale = Vector2(k, k)
 	return false

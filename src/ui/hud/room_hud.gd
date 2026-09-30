@@ -15,7 +15,7 @@ extends CanvasLayer
 ## strip in the top margin over the sun bar; the room line, ROOM and REJOIN CREW and the
 ## feed under the score panel (where loop mode has no leg objective), clear of the thumb
 ## zones; the toast and the banner in the event stack's column. Labels change only when
-## their text changes.
+## their text changes. The text size applies live (Settings `text_scale`, WP9.3: restyle()).
 ##
 ## N6.2 (multiplayer scoring): the crew line under the room line (CREW ×1.50 · 2 NEAR:
 ## crewmates within 30 m, the factor on every scored event) with the TRAIN ×n badge beside
@@ -23,7 +23,8 @@ extends CanvasLayer
 ## (PLAYERS; spec: "shown in the room menu"), and the crash-out toast with the official
 ## score. Train links and official sector bonuses go on the gameplay HUD's event stack
 ## (RunRoom). Chat feed lines are kept clear of the event stack's column (a long name is
-## shortened on the feed; the nametag shows it whole).
+## shortened on the feed; the nametag shows it whole), re-fitted on every layout, so a
+## text-size change keeps them clear too (WP9.3).
 
 signal rejoin_pressed()
 signal leave_pressed()
@@ -82,6 +83,10 @@ var _reconnecting: bool = false
 var _line_key: int = -1
 var _banner_key: int = -1
 var _feed_left := PackedFloat32Array()
+## The feed lines' sender and message in full (a shown line has the name shortened to
+## end before the event stack's column: _fit_feed()).
+var _feed_who := PackedStringArray()
+var _feed_msg := PackedStringArray()
 var _crew_key: int = -1
 var _train_left_s: float = 0.0
 
@@ -145,8 +150,6 @@ func setup(net_tuning: NetTuning, room_session: NetRoomSession) -> void:
 	net = net_tuning
 	session = room_session
 	hud = Tuning.load_default().hud
-	var ts := hud.clamp_text_scale(float(Settings.get_value(&"text_scale")))
-	style.setup(UiTheme.load_theme(), hud, ts)
 	for i in net.room_chat_feed_lines:
 		var t := ScreenText.make("", ScreenText.Face.LABEL, net.room_font_px, ScreenText.Ink.TEXT)
 		t.name = "Feed%d" % i
@@ -156,9 +159,33 @@ func setup(net_tuning: NetTuning, room_session: NetRoomSession) -> void:
 		feed.append(t)
 	_feed_left.resize(feed.size())
 	_feed_left.fill(0.0)
+	_feed_who.resize(feed.size())
+	_feed_msg.resize(feed.size())
+	_restyle_all()
+	set_crew(0, 1.0)
 	strip.setup(style, net, net.room_max_remotes)
 	nametags.setup(style, net, net.room_max_remotes)
 	nametags.clock = func() -> float: return float(session.time.now_usec()) / NetRoomSession.USEC_PER_S
+	if not session.room_changed.is_connected(refresh_room):
+		session.room_changed.connect(refresh_room)
+	_relayout()
+	refresh_room()
+
+
+## The text size changed (WP9.3; Accessibility → text size): every piece takes the new
+## style and the layout is rebuilt.
+func restyle() -> void:
+	if hud == null:
+		return
+	_restyle_all()
+	strip.queue_redraw()
+	nametags.queue_redraw()
+	_relayout()
+	refresh_room()
+
+
+func _restyle_all() -> void:
+	style.setup(UiTheme.load_theme(), hud, hud.clamp_text_scale(float(Settings.get_value(&"text_scale"))))
 	for c in get_children():
 		if c is ScreenButton:
 			(c as ScreenButton).setup(style)
@@ -170,12 +197,22 @@ func setup(net_tuning: NetTuning, room_session: NetRoomSession) -> void:
 		(c as ScreenText).setup(style)
 	line.size_px = net.room_font_px
 	crew_line.size_px = net.room_font_px
-	set_crew(0, 1.0)
 	menu.setup(style, hud, net, session)
-	if not session.room_changed.is_connected(refresh_room):
-		session.room_changed.connect(refresh_room)
-	_relayout()
-	refresh_room()
+
+
+func _enter_tree() -> void:
+	if not Events.settings_changed.is_connected(_on_setting_changed):
+		Events.settings_changed.connect(_on_setting_changed)
+
+
+func _exit_tree() -> void:
+	if Events.settings_changed.is_connected(_on_setting_changed):
+		Events.settings_changed.disconnect(_on_setting_changed)
+
+
+func _on_setting_changed(key: StringName) -> void:
+	if key == &"text_scale":
+		restyle()
 
 
 func _ready() -> void:
@@ -292,11 +329,13 @@ func add_feed(who: String, text: String, color: Color) -> void:
 	if feed.is_empty():
 		return
 	for i in range(feed.size() - 1, 0, -1):
-		feed[i].text = feed[i - 1].text
+		_feed_who[i] = _feed_who[i - 1]
+		_feed_msg[i] = _feed_msg[i - 1]
 		feed[i].modulate = feed[i - 1].modulate
 		feed[i].visible = feed[i - 1].visible
 		_feed_left[i] = _feed_left[i - 1]
-	feed[0].text = _fit_feed(who, text)
+	_feed_who[0] = who
+	_feed_msg[0] = text
 	feed[0].modulate = color
 	feed[0].visible = true
 	_feed_left[0] = net.room_chat_show_s
@@ -304,7 +343,7 @@ func add_feed(who: String, text: String, color: Color) -> void:
 
 
 func feed_text(i: int) -> String:
-	return feed[i].text if i < feed.size() and feed[i].visible else ""
+	return TEXT_FEED % [_feed_who[i], _feed_msg[i]] if i < feed.size() and feed[i].visible else ""
 
 
 func set_reconnecting(on: bool) -> void:
@@ -380,12 +419,19 @@ func _relayout() -> void:
 var _feed_top: float = 0.0
 var _crew_top: float = 0.0
 var _feed_max_w: float = INF
+## The feed's reserved area ends here (all its lines, shown or not).
+var _feed_bottom: float = 0.0
 
 
-## "name#1234  TEXT", the name shortened with an ellipsis until the line fits _feed_max_w.
-func _fit_feed(who: String, text: String) -> String:
+## Feed line i as shown: "name#1234  TEXT", the name shortened with an ellipsis until the
+## line fits _feed_max_w at the current text size.
+func _fit_feed(i: int) -> String:
+	var who := _feed_who[i]
+	var text := _feed_msg[i]
+	if who.is_empty() and text.is_empty():
+		return ""
 	var line_text := TEXT_FEED % [who, text]
-	var t := feed[0]
+	var t := feed[i]
 	if style == null or t.style == null:
 		return line_text
 	var f := t.font()
@@ -413,13 +459,19 @@ func _place_crew() -> void:
 
 func _place_feed() -> void:
 	var y := _feed_top
-	for t in feed:
-		t.position = Vector2(_safe.position.x + hud.edge_margin_px, y)
+	var x := _safe.position.x + hud.edge_margin_px
+	for i in feed.size():
+		var t := feed[i]
+		t.text = _fit_feed(i)
+		t.position = Vector2(x, y)
 		t.size = t.get_combined_minimum_size()
 		y += t.size.y + hud.spacing_grid_px * 0.5
+	_feed_bottom = y
 
 
-## The toast in the event stack's column, a third down the screen.
+## The toast in the event stack's column, a third down the screen. A toast wider than the
+## column (125 % text, a long official score) that would reach over the chat feed's column
+## drops below the feed's area instead (WP9.3 text sweep).
 func _place_toast() -> void:
 	if hud == null:
 		return
@@ -429,7 +481,11 @@ func _place_toast() -> void:
 	var b := toast_sub.get_combined_minimum_size()
 	var w := maxf(a.x, b.x) + pad * 2.0
 	toast.size = Vector2(w, a.y + b.y + pad * 2.0)
-	toast.position = Vector2(_safe.get_center().x - w * 0.5, _safe.position.y + _safe.size.y * TOAST_TOP)
+	var left := _safe.get_center().x - w * 0.5
+	var top := _safe.position.y + _safe.size.y * TOAST_TOP
+	if left < _safe.position.x + hud.edge_margin_px + _feed_max_w + hud.spacing_grid_px:
+		top = maxf(top, _feed_bottom + hud.spacing_grid_px)
+	toast.position = Vector2(left, top)
 	toast_title.position = Vector2((w - a.x) * 0.5, pad)
 	toast_title.size = a
 	toast_sub.position = Vector2((w - b.x) * 0.5, pad + a.y)
