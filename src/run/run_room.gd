@@ -71,7 +71,6 @@ func _init(owner_run: Run, room_session: NetRoomSession, net_tuning: NetTuning =
 	session.chat.connect(_on_chat)
 	session.reconnecting.connect(_on_reconnecting)
 	session.left.connect(_on_left)
-	session.room_changed.connect(_on_room_changed)
 	session.notice.connect(_on_notice)
 	if _read_placement():
 		start_valid = true
@@ -95,8 +94,7 @@ func install() -> void:
 
 ## Removes the nodes and lets go of the session's signals (the run is leaving the room).
 func uninstall() -> void:
-	for s: Signal in [session.run_result, session.chat, session.reconnecting, session.left,
-			session.room_changed, session.notice]:
+	for s: Signal in [session.run_result, session.chat, session.reconnecting, session.left, session.notice]:
 		for c: Dictionary in s.get_connections():
 			if (c["callable"] as Callable).get_object() == self:
 				s.disconnect(c["callable"])
@@ -369,11 +367,6 @@ func _on_reconnecting(on: bool) -> void:
 
 func _on_left(_reason: String, message: String) -> void:
 	run.leave_room(message)
-
-
-func _on_room_changed() -> void:
-	if hud != null:
-		hud.refresh_room()
 
 
 func _on_notice(text: String) -> void:

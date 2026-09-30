@@ -144,6 +144,8 @@ func setup(net_tuning: NetTuning, room_session: NetRoomSession) -> void:
 		(c as ScreenText).setup(style)
 	line.size_px = net.room_font_px
 	menu.setup(style, hud, net, session)
+	if not session.room_changed.is_connected(refresh_room):
+		session.room_changed.connect(refresh_room)
 	_relayout()
 	refresh_room()
 

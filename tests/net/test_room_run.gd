@@ -264,3 +264,33 @@ func test_leaving_and_a_kick_go_back_to_the_hub() -> void:
 	check(run.room == null)
 	eq(run.title.online_hub.room_message, "The host removed you from the room.")
 	eq(run.title.online_hub.rooms_note.text, "The host removed you from the room.")
+
+
+func test_a_dropped_socket_keeps_driving_and_rejoins_the_seat() -> void:
+	_join()
+	_seconds(net.room_protection_s + 0.2)
+	run.force_hit(HitDetection.HIT_BARRIER)
+	_frames(2)
+	var seed_before := run.current_seed
+	server.call("drop")
+	_seconds(0.2)
+	eq(rs.state, NetRoomSession.State.RECONNECTING)
+	eq(run.state, Game.RUNNING, "your car never waits for the network")
+	check(run.room.hud.banner.visible, "the reconnecting banner")
+	check(run.room.hud.banner.text.begins_with("RECONNECTING"), run.room.hud.banner.text)
+	_seconds(1.5)
+	eq(rs.state, NetRoomSession.State.IN_ROOM, "back in the seat")
+	check(not run.room.hud.banner.visible)
+	eq(run.room.teleports, 1, "placed where the car was: a teleport, not a new run")
+	eq(run.current_seed, seed_before, "the same run")
+	eq(run.lives.lives, run.lives.max_lives - 1, "lives kept")
+
+
+func test_a_lost_seat_goes_back_to_the_hub() -> void:
+	_join()
+	link.refuse = true
+	server.call("drop")
+	_seconds(net.room_reconnect_window_s + 0.5)
+	eq(run.state, Game.MENU)
+	check(run.room == null)
+	eq(run.title.online_hub.room_message, "Lost the connection to the room.")
