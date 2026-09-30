@@ -164,6 +164,24 @@ LIVE_ROOM ok (0 failed)
 
 The server logged `room seat taken`, `run ended ... reason=Crashed verified=true`, `room seat held` / `taken back ... was_held=true`, and `/metrics` showed `wb_room_offences_total` 0 for every kind (no implausible state) with 10 placements and 2 reconnects.
 
+`tests/net/live_room_run_check.tscn` puts **the game's Run** in the room (RunRoom's placements, the upload from the real car, protection, the crash-out and respawn) with a lane-keeping bot, while a bare session watches it; the server's own plausibility checks judge every state (`/metrics`):
+
+```sh
+tools/godot.sh --headless --path . res://tests/net/live_room_run_check.tscn -- http://127.0.0.1:18652 --metrics=http://127.0.0.1:19652
+```
+
+```
+accounts               ok
+A creates, the run starts ok    code 7H6FX5, s 25153, protected true
+B joins by code        ok    2/8
+B sees A drive         ok    36.9 m/s, 3.6 m behind A's car (100 ms at speed = 3.7 m); A sent 204 states
+crash-out, respawn     ok    respawns 1, lives 2
+no offences            ok    wb_room_offences_total = 0 (server plausibility)
+LIVE_ROOM_RUN ok (0 failed)
+```
+
+(204 states in about 11 s: the headless run on the loaded box drew under 20 frames a second at times, and the upload sends at most one state per frame, the latest tick.)
+
 **Play it** against the local server: `tools/godot.sh --path . -- --server=http://127.0.0.1:18652` (native: the title → ONLINE → a room button; start a second copy to see each other), or the web build with `?server=http://127.0.0.1:18652`.
 
 ## Snaps
