@@ -78,6 +78,10 @@ var events: ScoreEventBuffer
 var rng: Rng
 ## Scripted speeds never go below this (minimum speed + set_piece_min_speed_margin_kmh).
 var min_speed_mps: float
+## WP9.6 (ACCEPTANCE F2): the player's pace a rolling piece's road fit assumes (the
+## director sets it: the faster of the waves' smoothed pace and the player's cruising
+## pace; 0 = the waves' pace). See meet_x().
+var meet_pace: float = 0.0
 ## True when the sim has the scripting hooks.
 var can_script: bool = false
 ## True when the sim has the WP6.3 zone hooks (lane closures, speed / headway zones,
@@ -644,17 +648,33 @@ func fits_road(def: SetPieceDef, v: float, s: float, span: float, lanes: int, on
 	if waves.is_blind(v, s) or waves.is_blind(v, s + span * 0.5) or waves.is_blind(v, s + span):
 		unfit_blind += 1
 		return false
-	var x_end := waves.meet_x(v, s + span) + def.end_margin_m
-	if not waves.clear_of_checkpoints(waves.meet_x(v, s), x_end):
+	# WP9.6: the road it drives until the player passes it, at the cruising pace (a dip
+	# behind slow traffic stretched it to the 4 km lookahead; a piece that does roll into
+	# a lane-count change, tunnel or fork ends there: ended_zone). The checkpoints, a
+	# fairness range, are checked over both estimates.
+	var x_end := meet_x(v, s + span) + def.end_margin_m
+	var x_end_now := waves.meet_x(v, s + span) + def.end_margin_m
+	if not waves.clear_of_checkpoints(minf(meet_x(v, s), waves.meet_x(v, s)), maxf(x_end, x_end_now)):
 		unfit_checkpoint += 1
 		return false
-	if not waves.clear_of_zones(s, x_end) or on_road.lane_count(x_end) != lanes:
+	if not waves.clear_of_zones(s, x_end, true) or on_road.lane_count(x_end) < lanes:
 		unfit_road += 1
 		return false
 	if not clear_of_live(s, x_end):
 		unfit_live += 1
 		return false
 	return true
+
+
+## WP9.6: where the player meets a vehicle at speed v planned now at s, at meet_pace
+## when that is faster than the waves' pace (IntensityWaves.meet_x otherwise).
+func meet_x(v: float, s: float) -> float:
+	if meet_pace <= waves.pace:
+		return waves.meet_x(v, s)
+	var x := waves.player_s
+	var look := tuning.wave_meet_lookahead_m
+	var dv := maxf(meet_pace - v, Units.kmh_to_mps(tuning.wave_min_closing_kmh))
+	return clampf(x + (s - x) * meet_pace / dv, x - look, x + look)
 
 
 ## A piece vehicle fits the live traffic: s* (closing speed included) to its live
@@ -931,7 +951,7 @@ func step(dt: float, player: VehicleState) -> void:
 			ended_duration += 1
 		elif not inst.did_start and inst.age > inst.def.approach_max_s:
 			ended_unmet += 1
-		elif not waves.clear_of_zones(inst.s_rear, inst.s_front + inst.def.clear_ahead_m) \
+		elif not waves.clear_of_zones(inst.s_rear, inst.s_front + inst.def.clear_ahead_m, true) \
 				or not clear_of_live(inst.s_rear, inst.s_front + inst.def.clear_ahead_m):
 			ended_zone += 1   # rolling into a lane drop, tunnel or fork, or a road-anchored piece
 		else:

@@ -169,6 +169,15 @@ var _phi := NAN
 # Road cross-section at the player (lane geometry is constant over the active window)
 var _edge: float
 var _lw: float
+# WP9.6 (F1): long vehicles merging from a crawl (TrafficTuning.long_merge_*).
+var _lm_on := false
+var _lm_len := 0.0
+var _lm_crawl := 0.0
+var _lm_fast := 0.0
+var _lm_t := 0.0
+var _lm_hl_max := 0.0   # the longest body's half length (scan bounds)
+## Lane changes a long crawling vehicle did not start for a fast vehicle beyond its target.
+var stat_long_merge_holds := 0
 
 # Mirrors, capacity + 1 entries (the last one is the player)
 var _ks := PackedFloat64Array()    # s
@@ -317,6 +326,7 @@ func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
 	for x in _tlen:
 		max_len = maxf(max_len, x)
 	_react_range = _blind_m + max_len + _plen
+	_lm_hl_max = maxf(max_len, _plen) * 0.5
 
 	# Packed arrays are values: resize each member directly (never through a loop copy).
 	_ks.resize(_cap + 1)
@@ -948,7 +958,7 @@ func _consider_merge(i: int) -> void:
 		t = cur - 1
 	elif gr > 0.0:
 		t = cur + 1
-	if t < 0:
+	if t < 0 or _long_crawl_held(i, t):
 		return
 	_start_signal(i, t, _lane_d(t), 0)
 	_will_cancel[i] = 0
@@ -1677,9 +1687,51 @@ func _consider_lane_change(i: int) -> void:
 		if gl > 0.0 or gr > 0.0:
 			_weave_note_change(i)
 	if gl > 0.0 and gl >= gr:
-		_start_signal(i, cur - 1, _lane_d(cur - 1), 0)
+		if not _long_crawl_held(i, cur - 1):
+			_start_signal(i, cur - 1, _lane_d(cur - 1), 0)
 	elif gr > 0.0:
-		_start_signal(i, cur + 1, _lane_d(cur + 1), 0)
+		if not _long_crawl_held(i, cur + 1):
+			_start_signal(i, cur + 1, _lane_d(cur + 1), 0)
+
+
+## WP9.6 (ACCEPTANCE F1): true when vehicle i is long (> long_merge_min_length_m) and
+## crawling (< long_merge_crawl_kmh) and a vehicle faster than long_merge_fast_kmh in the
+## lane beyond target lane t (the player included) would reach its body within
+## long_merge_guard_s, or is beside it: the lane change waits (counted in
+## stat_long_merge_holds). Allocation-free.
+func _long_crawl_held(i: int, t: int) -> bool:
+	if not _lm_on or state.length[i] <= _lm_len or _kv[i] >= _lm_crawl:
+		return false
+	var far := t + (t - state.lane[i])
+	if far < 0 or far >= road.lane_count(_ks[i]):
+		return false
+	var c := _lane_d(far)
+	var lo := c - _lw * 0.5
+	var hi := c + _lw * 0.5
+	var si := _ks[i]
+	var rear := si - _khl[i]
+	var front := si + _khl[i]
+	var reach := maxf(_vmax, _kv[_P]) * _lm_t
+	var k := _rank[i]
+	var kk := k - 1
+	while kk >= 0:
+		var j := _ord[kk]
+		if rear - (_ks[j] + _lm_hl_max) > reach:
+			break
+		if _kv[j] > _lm_fast and _klo[j] < hi and _khi[j] > lo and _ks[j] + _khl[j] + _kv[j] * _lm_t >= rear:
+			stat_long_merge_holds += 1
+			return true
+		kk -= 1
+	kk = k + 1
+	while kk < _n:
+		var j := _ord[kk]
+		if _ks[j] - _lm_hl_max > front:
+			break
+		if _kv[j] > _lm_fast and _klo[j] < hi and _khi[j] > lo:
+			stat_long_merge_holds += 1
+			return true
+		kk += 1
+	return false
 
 
 ## Motorbikes: in slow traffic that MOBIL cannot escape, move onto a lane boundary
@@ -2173,6 +2225,11 @@ func _emit_pending(out: ScoreEventBuffer) -> void:
 
 func _cache_tuning() -> void:
 	var t := tuning
+	_lm_on = t.long_merge_guard
+	_lm_len = t.long_merge_min_length_m
+	_lm_crawl = Units.kmh_to_mps(t.long_merge_crawl_kmh)
+	_lm_fast = Units.kmh_to_mps(t.long_merge_fast_kmh)
+	_lm_t = t.long_merge_guard_s
 	_max_decel = t.max_decel_mps2
 	_scripted_decel = maxf(t.scripted_max_decel_mps2, t.max_decel_mps2)
 	_brake_decel = t.brake_light_decel_mps2

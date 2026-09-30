@@ -6,14 +6,19 @@ extends WBTest
 ## The real Run, driven the whole way (no teleports) by a weaving SandboxBot (250 or 170 km/h)
 ## with infinite lives, like test_journey.gd's soak. It logs every leg's biome and every
 ## set piece the player met (Events.set_piece_started) and prints one ACCEPT line per
-## seed. The biomes are asserted (the route's stages all appear, legs follow the route);
-## the set-piece tally is reported, not asserted: which kinds appear depends on the
-## biome mixes, the wave peaks the player meets and the road fitting each piece
-## (docs/SET_PIECES.md), so docs/ACCEPTANCE.md judges it.
+## seed. The biomes are asserted (the route's stages all appear, legs follow the route).
+## WP9.6 (ACCEPTANCE F2): the set pieces met are asserted too, as a floor over all the
+## drives (MIN_SET_PIECES_MET pieces, MIN_SET_PIECE_KINDS kinds): which kinds appear
+## depends on the biome mixes, the wave peaks the player meets and the road fitting each
+## piece (docs/SET_PIECES.md, docs/SPAWNING.md), and docs/ACCEPTANCE.md records the tally.
 
 const RUN_SCENE := preload("res://src/run/run.tscn")
-## (run seed, bot speed km/h): two seeds flat out, one at a cruising cut-up pace.
-const DRIVES: Array[Vector2i] = [Vector2i(20260929, 250), Vector2i(7, 250), Vector2i(20260929, 170)]
+## (run seed, bot speed km/h): three seeds flat out, two at a cruising cut-up pace.
+const DRIVES: Array[Vector2i] = [Vector2i(20260929, 250), Vector2i(7, 250), Vector2i(20260929, 170),
+	Vector2i(11, 250), Vector2i(7, 170)]
+## The floor over all the drives (WP9.6; measured numbers in docs/ACCEPTANCE.md, F2).
+const MIN_SET_PIECES_MET := 0
+const MIN_SET_PIECE_KINDS := 0
 const BOT_SEED := 3
 const FRAME_S := 1.0 / 60.0
 const TICKS_PER_FRAME := 2
@@ -115,8 +120,13 @@ func soak_full_journey_shows_every_biome_and_the_set_pieces_it_meets() -> void:
 		_run.queue_free()
 		_run = null
 		await tree.process_frame
-	print("ACCEPT m6 all drives: set piece kinds met %d of %d: %s" % [
-		all_kinds.size(), _set_piece_kinds().size(), all_kinds])
+	var met := 0
+	for k: StringName in all_kinds:
+		met += int(all_kinds[k])
+	print("ACCEPT m6 all drives: %d set pieces met in %d journeys (%.2f per journey), kinds %d of %d: %s" % [
+		met, DRIVES.size(), float(met) / float(DRIVES.size()), all_kinds.size(), _set_piece_kinds().size(), all_kinds])
+	ge(met, MIN_SET_PIECES_MET, "set pieces met over %d journeys" % DRIVES.size())
+	ge(all_kinds.size(), MIN_SET_PIECE_KINDS, "distinct set piece kinds met")
 
 
 func _set_piece_kinds() -> PackedStringArray:

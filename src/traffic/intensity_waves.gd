@@ -63,6 +63,9 @@ var checkpoints := PackedFloat64Array()
 ## forks), grown by set_piece_feature_clear_m.
 var zone_s0 := PackedFloat64Array()
 var zone_s1 := PackedFloat64Array()
+## WP9.6: 1 where the zone is a widening (lanes added on the right: a rolling piece's lanes
+## stay as they are, clear_of_zones(..., true) skips it).
+var zone_widen := PackedByteArray()
 
 ## Where the curve starts, how far it is built and how far the road was scanned.
 var origin_s: float = 0.0
@@ -116,6 +119,7 @@ func reset(s: float, speed: float) -> void:
 	checkpoints.clear()
 	zone_s0.clear()
 	zone_s1.clear()
+	zone_widen.clear()
 	_scanned_any = false
 	origin_s = s
 	planned_to = s
@@ -236,10 +240,11 @@ func clear_of_checkpoints(x0: float, x1: float) -> bool:
 	return true
 
 
-## True when the road stretch [s0, s1] has no lane-count change, tunnel or fork zone.
-func clear_of_zones(s0: float, s1: float) -> bool:
+## True when the road stretch [s0, s1] has no lane-count change, tunnel or fork zone
+## (`rolling`, WP9.6: widenings do not count; the added lanes come on the right).
+func clear_of_zones(s0: float, s1: float, rolling: bool = false) -> bool:
 	for j in zone_s0.size():
-		if s1 >= zone_s0[j] and s0 <= zone_s1[j]:
+		if s1 >= zone_s0[j] and s0 <= zone_s1[j] and not (rolling and zone_widen[j] == 1):
 			return false
 	return true
 
@@ -288,6 +293,7 @@ func forget_before(s: float) -> void:
 	if z > 0:
 		zone_s0 = zone_s0.slice(z)
 		zone_s1 = zone_s1.slice(z)
+		zone_widen = zone_widen.slice(z)
 	var c := 0
 	while c < checkpoints.size() and checkpoints[c] + tuning.set_piece_checkpoint_clear_after_m < s:
 		c += 1
@@ -314,10 +320,22 @@ func _scan(road: RoadPath, s_to: float) -> void:
 			RoadFeature.Kind.CHECKPOINT:
 				if checkpoints.is_empty() or f.s_start > checkpoints[checkpoints.size() - 1]:
 					checkpoints.append(f.s_start)
-			RoadFeature.Kind.LANE_COUNT_CHANGE, RoadFeature.Kind.TUNNEL, RoadFeature.Kind.FORK:
-				_insert_sorted(zone_s0, zone_s1, f.s_start - grow, f.s_end + grow)
+			RoadFeature.Kind.LANE_COUNT_CHANGE:
+				_insert_zone(f.s_start - grow, f.s_end + grow, int(f.value) > road.lane_count(f.s_start - 1.0))
+			RoadFeature.Kind.TUNNEL:
+				_insert_zone(f.s_start - grow, f.s_end + grow, false)
+			RoadFeature.Kind.FORK:
+				# WP9.6: up to set_piece_fork_clear_after_m past the split (f.value).
+				_insert_zone(f.s_start - grow, minf(f.s_end, f.value + tuning.set_piece_fork_clear_after_m) + grow, false)
 	scanned_to = hi
 	_scanned_any = true
+
+
+func _insert_zone(s0: float, s1: float, widen: bool) -> void:
+	var at := zone_s0.bsearch(s0, false)
+	zone_s0.insert(at, s0)
+	zone_s1.insert(at, s1)
+	zone_widen.insert(at, 1 if widen else 0)
 
 
 static func _insert_sorted(a0: PackedFloat64Array, a1: PackedFloat64Array, s0: float, s1: float) -> void:

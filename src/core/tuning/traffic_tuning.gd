@@ -8,7 +8,13 @@ extends Resource
 
 @export_group("Simulation budget")
 ## Plan D7/D11: the spec's 60 raised to 90 (leg-8 density on 4 lanes; see docs/SPAWNING.md).
-@export var max_active_vehicles: int = 90   # TrafficState capacity, player's carriageway
+## WP9.6 (PL-2, proposed deviation): the TrafficState capacity (player's carriageway) and
+## the director's cap on roads of wide_road_min_lanes lanes or more; narrower roads keep
+## max_active_vehicles_narrow (active_cap). At leg 8 on 4 lanes the 90 cap bound 6 % of
+## the time and cost 7 % of the density around the player (14 % at the peaks).
+@export var max_active_vehicles: int = 120   # TrafficState capacity, player's carriageway
+@export var max_active_vehicles_narrow: int = 90   # not in spec
+@export var wide_road_min_lanes: int = 4   # not in spec
 @export var near_radius_m: float = 200.0
 @export var near_tick_hz: int = 120
 @export var far_tick_hz: int = 30
@@ -144,6 +150,18 @@ extends Resource
 ## needs more than the profile's comfortable b, the follower brakes for it now, never
 ## beyond the clamp (a racer closing on a car braking at the clamp into a queue).
 @export var anticipate_leader_braking: bool = true   # not in spec
+
+@export_group("Long vehicles merging from a crawl (WP9.6; not in spec)")
+## ACCEPTANCE F1: a vehicle longer than long_merge_min_length_m (a semi, a coach) slower
+## than long_merge_crawl_kmh starts no lane change while a vehicle faster than
+## long_merge_fast_kmh in the lane beyond its target would reach its body within
+## long_merge_guard_s (it waits for that lane to be clear too): a 16 m truck pulling out
+## of a standstill queue swings its cab toward the next lane as it moves over.
+@export var long_merge_guard: bool = false   # not in spec
+@export var long_merge_min_length_m: float = 12.0   # not in spec
+@export var long_merge_crawl_kmh: float = 20.0   # not in spec
+@export var long_merge_fast_kmh: float = 60.0   # not in spec
+@export var long_merge_guard_s: float = 5.0   # not in spec
 
 @export_group("Readable braking")
 @export var brake_light_decel_mps2: float = 1.0
@@ -309,3 +327,10 @@ func blind_spot_horn_frac() -> float:
 ## Near ticks per far tick (120 / 30 = 4). At least 1.
 func far_tick_ratio() -> int:
 	return maxi(1, roundi(float(near_tick_hz) / float(far_tick_hz)))
+
+
+## WP9.6: the director's cap on live vehicles on a road of `lanes` lanes.
+func active_cap(lanes: int) -> int:
+	if lanes >= wide_road_min_lanes:
+		return max_active_vehicles
+	return mini(max_active_vehicles_narrow, max_active_vehicles)
