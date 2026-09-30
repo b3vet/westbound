@@ -60,6 +60,7 @@ var _ping_usec: int
 var _join_usec: int
 var _client_ticks: int = 0
 var _near_m: float
+var _gen_ahead: float
 
 
 func _init(base: Tuning, road_path: RoadPath, player_state: VehicleState, player_length_m: float,
@@ -69,6 +70,10 @@ func _init(base: Tuning, road_path: RoadPath, player_state: VehicleState, player
 	road = road_path
 	player = player_state
 	_near_m = net.traffic_correction_near_m
+	# The client's lane-drop zones look this far ahead (an open road generates as it goes).
+	var t := base.traffic
+	_gen_ahead = net.traffic_aoi_ahead_m + t.lane_drop_view_m + t.lane_drop_merge_zone_m * 2.0 \
+		+ t.lane_drop_narrow_max_m
 	_start_usec = 1_000_000_000
 	time = NetVirtualTime.new(_start_usec)
 	var root := Rng.new(seed_value)
@@ -106,6 +111,7 @@ func true_server_ticks() -> float:
 ## One client tick of `dt_s`: every server and link event up to then in time order, the
 ## client's uplink, then the client's step (the caller moved `player` before).
 func advance(dt_s: float) -> void:
+	road.ensure_generated_to(player.s + _gen_ahead)
 	var target := time.usec + roundi(dt_s * NetClock.USEC_PER_S)
 	while true:
 		var t_up := up.next_due()
@@ -183,9 +189,8 @@ func _client_receive(bytes: PackedByteArray) -> void:
 func _send_player_state() -> void:
 	if not clock.has_sync():
 		return
-	# The wire's lateral quantities are left-positive like d (docs/NET_TRAFFIC.md).
-	var err := _ps.set_physical(floori(clock.server_now()), NetTrafficWire.s_wrap(road, player.s), -player.d,
-		-player.yaw, player.v, -player.v_lat, -player.yaw_rate, 0.0, 0, RUN_STATE_DRIVING)
+	var err := _ps.set_physical(floori(clock.server_now()), NetTrafficWire.s_wrap(road, player.s), player.d,
+		player.yaw, player.v, player.v_lat, player.yaw_rate, 0.0, 0, RUN_STATE_DRIVING)
 	if err != "":
 		return
 	_up_codec.clear_frame()

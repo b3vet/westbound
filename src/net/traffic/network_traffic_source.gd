@@ -769,8 +769,6 @@ func _correct_from(f: NetServerFrame, k: int, player_s: float, now: float) -> bo
 	var e_v := v_srv - pv
 	var e_d := d_srv - pd
 	var err := sqrt(e_s * e_s + e_d * e_d)
-	if err > 0.5:
-		print("DBG err %.2f cid %d prof %d ds %.0f e_s %.2f e_v %.2f e_d %.2f dt %d plan %d bias %.2f v0e %.1f v %.1f lane %d n %d match %.1f zone %s s %.0f" % [err, _cid[i], state.profile_id[i], s_srv - player_s, e_s, e_v, e_d, n - _last_ct[i], _lc[i], _bias[i], _v0e[i], v_srv, state.lane[i], n, _match[i], str(_dz_n), fmod(s_srv, 25000.0)])
 	stats.add_correction(err, e_d, absf(s_srv - player_s) <= _near_m)
 	_estimate(i, n, v_srv, e_v)
 	_last_cs[i] = s_srv
@@ -1292,4 +1290,4 @@ func _init_profiles() -> void:
 			or d.lane_change_cooldown_s >= 0.0 or d.lane_change_cap_count > 0
 		_pweave[p] = 1 if on else 0
 		_v0lo[p] = reg.v0_min[p] * (1.0 - _v0_margin)
-		_v0hi[p] = reg.v0_max[p] * (1.0 + _v0_margin)
+		_v0hi[p] = maxf(reg.v0_max[p] * (1.0 + _v0_margin), _v_merge)

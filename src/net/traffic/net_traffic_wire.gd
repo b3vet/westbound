@@ -10,8 +10,8 @@ extends RefCounted
 ##   wire counts from the right (0 = rightmost). `wire = n - 1 - lane` with n the lane
 ##   count at the car's s. Wire lane 7 (RAMP_LANE) is the ramp pseudo-lane, the sim's
 ##   lane n (one right of the rightmost lane).
-## - **d:** the sim is right-positive (CONTRACTS §2); the wire's `d_cm` is left-positive
-##   (PROTOCOL.md §3), so the sign flips here.
+## - **d:** right-positive on both sides (CONTRACTS §2; PROTOCOL.md §3 and §12's
+##   clarification): cm on the wire, unchanged sign.
 ## - **s:** the wire carries s wrapped into [0, L) on the loop (u32 mm); the client keeps s
 ##   unwrapped and places each wire s at the lap nearest the player
 ##   (LoopRoadPath.unwrap_near's rule, generalised to any RoadPath.period_m()). An open road
@@ -38,14 +38,14 @@ static func lane_to_wire(lane: int, lanes: int) -> int:
 	return clampi(lanes - 1 - lane, 0, RAMP_LANE - 1)
 
 
-## Wire d (cm, left-positive) → sim d (m, right-positive).
+## Wire d (cm) → sim d (m); both right-positive.
 static func d_from_wire(d_cm: int) -> float:
-	return -NetCodec.d_from_wire(d_cm)
+	return NetCodec.d_from_wire(d_cm)
 
 
-## Sim d (m, right-positive) → wire d (cm, left-positive, clamped to the protocol range).
+## Sim d (m) → wire d (cm, clamped to the protocol range).
 static func d_to_wire(d_m: float) -> int:
-	return NetCodec.d_to_wire(-d_m)
+	return NetCodec.d_to_wire(d_m)
 
 
 ## s into the wire's range: [0, period) on a periodic road, unchanged on an open one.

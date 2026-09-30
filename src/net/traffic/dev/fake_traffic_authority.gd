@@ -27,7 +27,7 @@ extends RefCounted
 ## `traffic_intent` (lane changes when the blinker comes on, cancels, hazards and hard
 ## brakes of a hit), `traffic_correction` (this tick's due cars: within
 ## traffic_correction_near_m at the near rate, else at the far rate, staggered by car id).
-## Wire conventions: NetTrafficWire (s wrapped, d left-positive, lanes from the right, 7 =
+## Wire conventions: NetTrafficWire (s wrapped, d right-positive, lanes from the right, 7 =
 ## ramp). Car ids: MP-D6 (a free list; an id is reused only traffic_car_id_reuse_s after its
 ## despawn; 0 is never used).
 
@@ -169,10 +169,10 @@ func receive_player_state(st: NetPlayerState) -> void:
 	_rep_tick = st.tick
 	_rep_s = NetTrafficWire.s_unwrap(road, st.s_m(), player.s)
 	_rep_d = NetTrafficWire.d_from_wire(st.d_cm)
-	# The wire's lateral quantities are left-positive like d (docs/NET_TRAFFIC.md).
-	var h := -NetCodec.heading_from_wire(st.heading_e4)
+	# Right-positive like everything lateral (CONTRACTS §2, PROTOCOL.md §12).
+	var h := NetCodec.heading_from_wire(st.heading_e4)
 	var v := st.speed_mps()
-	var vl := -NetCodec.lat_vel_from_wire(st.lat_vel_cms)
+	var vl := NetCodec.lat_vel_from_wire(st.lat_vel_cms)
 	_rep_sdot = v * cos(h) - vl * sin(h)
 	_rep_ddot = v * sin(h) + vl * cos(h)
 
@@ -212,6 +212,7 @@ func step() -> PackedByteArray:
 	var horizon := net.traffic_aoi_ahead_m + t.lane_drop_view_m + t.lane_drop_merge_zone_m
 	if player.s + horizon > _synced_to:
 		_synced_to = player.s + horizon + t.lane_drop_merge_zone_m
+		road.ensure_generated_to(_synced_to + t.merge_spawn_clear_m + t.lane_drop_narrow_max_m)
 		sim.sync_road_closures(player.s - t.despawn_behind_m, _synced_to)
 	if loop != null:
 		loop.tick(dt, player.s, events)

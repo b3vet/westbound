@@ -254,14 +254,15 @@ const PATH := "res://data/tuning/net.tres"
 @export var traffic_v0_gain: float = 0.5   # not in spec
 @export var traffic_v0_free_accel_mps2: float = 0.15   # not in spec
 ## Estimates stay within the profile's desired-speed range widened by this fraction on both
-## sides (the server's lane-drop speed matching lifts slow profiles above their range).
-@export var traffic_v0_margin_frac: float = 0.5   # not in spec
+## sides (the per-car jitter is ±5 %), and may reach the lane-drop merge-lane speed (the
+## server's speed matching lifts slow profiles to it).
+@export var traffic_v0_margin_frac: float = 0.1   # not in spec
 ## Otherwise the unexplained acceleration (zipper, lane-drop harmonisation, remote players,
 ## server-only rules) becomes a per-car bias: gain per correction, limit, and the time it
 ## fades with when corrections stop explaining it.
-@export var traffic_bias_gain: float = 0.5   # not in spec
+@export var traffic_bias_gain: float = 1.0   # not in spec: swept in the harness (docs/NET_TRAFFIC.md)
 @export var traffic_bias_max_mps2: float = 2.0   # not in spec
-@export var traffic_bias_fade_s: float = 3.0   # not in spec
+@export var traffic_bias_fade_s: float = 6.0   # not in spec: swept in the harness
 ## The model catches up at most this many server ticks per client tick (after a stall).
 @export var traffic_max_catchup_ticks: int = 40   # not in spec
 ## Metric: a car in view whose published position moves this much faster than its own

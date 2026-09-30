@@ -47,10 +47,14 @@ const COLOR_HOT := Color("#ff5a4d")
 ## Quality-row button text (flat buttons: the color marks them as tappable).
 const COLOR_ACCENT := Color("#7fd4ff")
 
-enum Row { FPS, FRAME, DRAWS, TRIS, SCALE, MSAA, VEHICLES, SIM, THERMAL, QUALITY }
+enum Row { FPS, FRAME, DRAWS, TRIS, SCALE, MSAA, VEHICLES, SIM, THERMAL, QUALITY, NET_CORR, NET_LINK }
 const ROW_NAMES: PackedStringArray = [
 	"fps", "frame", "draws", "tris", "3d scale", "msaa", "vehicles", "sim tick", "thermal", "quality",
+	"net corr", "net link",
 ]
+## Network traffic rows (N4.3, NetTrafficStats keys): m → cm, bytes → kB.
+const NET_CM_PER_M := 100.0
+const NET_BYTES_PER_KB := 1000.0
 ## Suffix on the tier button while a dev override is active.
 const OVERRIDE_MARK := "*"
 
@@ -228,6 +232,33 @@ func refresh() -> void:
 		tier, OVERRIDE_MARK if dev else "", rung])
 	_set_hot(Row.QUALITY, rung > 0)
 	_refresh_quality_buttons(scale_3d, tier, dev)
+	_refresh_net_rows()
+
+
+## Network traffic (N4.3; spec: multiplayer handoff → Client network traffic, "Dev HUD adds
+## network metrics: average and maximum correction size, late intents per minute, RTT and
+## clock offset"): corrections per second, mean / max / p99 correction; late intents per
+## minute, downstream traffic bytes per second, RTT and the clock's remaining slew. Red on a
+## visible teleport. "-" outside network mode.
+func _refresh_net_rows() -> void:
+	var cps: Variant = DevStats.get_value(NetTrafficStats.DEV_CORR_PER_S)
+	if cps == null:
+		_set_row(Row.NET_CORR, PLACEHOLDER)
+		_set_row(Row.NET_LINK, PLACEHOLDER)
+		return
+	var mean: float = DevStats.get_value(NetTrafficStats.DEV_ERR_MEAN_M, 0.0)
+	var mx: float = DevStats.get_value(NetTrafficStats.DEV_ERR_MAX_M, 0.0)
+	var p99: float = DevStats.get_value(NetTrafficStats.DEV_ERR_P99_M, 0.0)
+	var teleports: int = DevStats.get_value(NetTrafficStats.DEV_TELEPORTS, 0)
+	_set_row(Row.NET_CORR, "%.0f/s  %.1f/%.0f cm  p99 %.1f" % [float(cps), mean * NET_CM_PER_M,
+		mx * NET_CM_PER_M, p99 * NET_CM_PER_M])
+	_set_hot(Row.NET_CORR, teleports > 0)
+	var late: float = DevStats.get_value(NetTrafficStats.DEV_LATE_PER_MIN, 0.0)
+	var bps: float = DevStats.get_value(NetTrafficStats.DEV_BYTES_PER_S, 0.0)
+	var rtt: float = DevStats.get_value(NetTrafficStats.DEV_RTT_MS, 0.0)
+	var slew: float = DevStats.get_value(NetTrafficStats.DEV_CLOCK_SLEW_MS, 0.0)
+	_set_row(Row.NET_LINK, "late %.1f/min  %.1f kB/s  rtt %.0f  clk %+.1f ms" % [late,
+		bps / NET_BYTES_PER_KB, rtt, slew])
 
 
 ## The rows as [[name, value], ...], refreshed now (dev report, tests).

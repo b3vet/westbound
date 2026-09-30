@@ -96,12 +96,12 @@ func test_wire_lanes_d_and_s() -> void:
 	eq(NetTrafficWire.lane_to_wire(2, 3), 0, "rightmost of 3 is wire 0")
 	eq(NetTrafficWire.lane_to_wire(3, 3), NetTrafficWire.RAMP_LANE, "the ramp")
 	eq(NetTrafficWire.lane_to_wire(3, 4), 0, "rightmost of 4")
-	for n in [2, 3, 4]:
-		for lane in n + 1:
+	for n: int in [2, 3, 4]:
+		for lane: int in n + 1:
 			eq(NetTrafficWire.lane_from_wire(NetTrafficWire.lane_to_wire(lane, n), n), lane, "round trip %d/%d" % [lane, n])
-	# d: the sim is right-positive, the wire left-positive.
-	eq(NetTrafficWire.d_to_wire(5.3), -530)
-	near(NetTrafficWire.d_from_wire(-530), 5.3, 1e-12)
+	# d: right-positive on both sides (PROTOCOL.md §12), cm on the wire.
+	eq(NetTrafficWire.d_to_wire(5.3), 530)
+	near(NetTrafficWire.d_from_wire(530), 5.3, 1e-12)
 	# s: wrapped on the loop, placed at the lap nearest the player.
 	var road := RunLoop.loop_road(tuning)
 	var L := road.length()
@@ -133,7 +133,7 @@ func test_traffic_messages_round_trip_through_the_codec() -> void:
 	var frames := 0
 	for k in 400:
 		player.s += player.v * auth.dt
-		ps.set_physical(auth.tick, NetTrafficWire.s_wrap(road, player.s), -player.d, 0.0, player.v, 0.0, 0.0, 0.0, 0, 2)
+		ps.set_physical(auth.tick, NetTrafficWire.s_wrap(road, player.s), player.d, 0.0, player.v, 0.0, 0.0, 0.0, 0, 2)
 		auth.receive_player_state(ps)
 		var bytes := auth.step()
 		if bytes.is_empty():
@@ -150,11 +150,11 @@ func test_traffic_messages_round_trip_through_the_codec() -> void:
 			if m["type"] == "traffic_spawn":
 				for c: Dictionary in m["cars"]:
 					lt(float(c["s_mm"]), L * 1000.0, "s is wrapped")
-					lt(float(c["d_cm"]), 0.0, "lanes are right of the reference line: left-positive d < 0")
+					gt(float(c["d_cm"]), 0.0, "lanes are right of the reference line: d > 0")
 					le(int(c["lane"]), 3)
 					ne(int(c["car_id"]), 0, "car id 0 is never used")
 	gt(frames, 300, "a frame nearly every tick")
-	for t in ["traffic_spawn", "traffic_correction", "traffic_intent"]:
+	for t: String in ["traffic_spawn", "traffic_correction", "traffic_intent"]:
 		check(kinds.has(t), "the stream has %s" % t)
 	eq(auth.move_tick_mismatches, 0, "every move started at its announced tick")
 
@@ -576,7 +576,8 @@ func _replay(trace: Array) -> PackedInt64Array:
 
 ## Per tick the source and its corrector allocate nothing: decode + apply_frame and step
 ## over a recorded stream, measured tightly around each call after warm-up (the heap
-## around them is not ours to measure).
+## around them is not ours to measure); the lane-drop zone sync every ~1 km of travel
+## (director rate) is excluded.
 func test_no_allocation_per_tick() -> void:
 	var r := NetTrafficRig.on_loop(27, 3000.0, 150.0, true)
 	r.harness.record = true
@@ -598,6 +599,7 @@ func test_no_allocation_per_tick() -> void:
 		if k == half:
 			obj0 = Performance.get_monitor(Performance.OBJECT_COUNT)
 		var e: Array = trace[k]
+		var syncs := src.zone_syncs
 		var m0 := OS.get_static_memory_usage()
 		if e[0] == "frame":
 			codec.decode_server_frame_into(e[1], frame)
@@ -609,7 +611,8 @@ func test_no_allocation_per_tick() -> void:
 			p.d = e[3]
 			src.step(e[1], p, ev)
 			ev.clear()
-			if k > half:
+			# The lane-drop zone sync (every ~1 km, road features) allocates by design.
+			if k > half and src.zone_syncs == syncs:
 				grow_steps += OS.get_static_memory_usage() - m0
 		if k > half:
 			calls += 1

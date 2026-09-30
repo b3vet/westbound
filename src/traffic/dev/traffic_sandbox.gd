@@ -37,6 +37,9 @@ extends Node3D
 ##   FAST xK / RACER (top right, below the set pieces; FastTrafficControls, WP6.6): scale
 ##           the fast shares (aggressive + racer); spawn a racer behind the player; below
 ##           them ARR ON/OFF and ARRIVE: the director's racer arrivals from behind (WP6.7)
+##   NET ON/OFF / LINK (below them; NetTrafficControls, N4.3): network mode, the traffic
+##           from a fake server over a simulated link through NetworkTrafficSource, with
+##           the network overlays (NetTrafficOverlay); the local sim and director stop
 ## Tap a vehicle to select it (all MOBIL terms in a side panel).
 ## Keys: Space pause, . step, N +1 s, [ ] time scale, V camera mode, B driver,
 ## X clear, 1-5 layers (IDM, MOBIL, BLINK, OCC, PASS), backtick dev HUD, C rig camera.
@@ -132,6 +135,8 @@ var events: ScoreEventBuffer
 var set_piece_controls: SetPieceControls
 ## The fast-traffic controls (plan D15, WP6.6).
 var fast_controls: FastTrafficControls
+## Network mode (N4.3).
+var net_controls: NetTrafficControls
 ## The set pieces' props (WP6.3).
 var set_piece_view: SetPieceView
 
@@ -248,6 +253,10 @@ func _ready() -> void:
 	fast_controls.name = "FastTrafficControls"
 	fast_controls.sandbox = self
 	add_child(fast_controls)
+	net_controls = NetTrafficControls.new()
+	net_controls.name = "NetTrafficControls"
+	net_controls.sandbox = self
+	add_child(net_controls)
 	if Game.can_change_to(Game.COUNTDOWN):
 		Game.change_state(Game.COUNTDOWN)
 	if Game.can_change_to(Game.RUNNING):
@@ -307,11 +316,17 @@ func _tick() -> void:
 	road.ensure_generated_to(st.s + _view_ahead(0.0))
 	car.tick(DT)
 	var t0 := Time.get_ticks_usec()
-	sim.step(DT, st, car.params, events)
+	var net := is_network()
+	if net:
+		net_controls.tick(DT)   # N4.3: the fake server, the link and NetworkTrafficSource
+	else:
+		sim.step(DT, st, car.params, events)
 	var us := Time.get_ticks_usec() - t0
 	DevStats.report_sim_tick_usec(us)
 	_last_tick_usec = us
-	if auto_spawn:
+	if net:
+		director.opposite.step(DT, st.s)   # local-only in multiplayer too
+	elif auto_spawn:
 		director.step(DT, st)
 	else:
 		director.step_despawn(st.s)
@@ -320,7 +335,8 @@ func _tick() -> void:
 	_check_contacts()
 	_forward_events()
 	events.clear()
-	overlay.observe_tick()
+	if not net:
+		overlay.observe_tick()
 	sim_time += DT
 	ticks += 1
 	view.set(&"blink_time", sim_time)
@@ -335,8 +351,10 @@ func _tick() -> void:
 func _upkeep() -> void:
 	var st := car.state
 	if st.s >= _next_forget_s:
-		road.forget_before(st.s - maxf(_roadside.reach_behind_m(), tuning.traffic.despawn_behind_m)
-			- tuning.road.chunk_length_m)
+		var behind := maxf(_roadside.reach_behind_m(), tuning.traffic.despawn_behind_m)
+		if is_network():
+			behind = maxf(behind, NetTrafficControls.REACH_BEHIND_M)
+		road.forget_before(st.s - behind - tuning.road.chunk_length_m)
 		_next_forget_s = st.s + FORGET_EVERY_M
 	var smp := car.road_sample()
 	origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
@@ -345,6 +363,13 @@ func _upkeep() -> void:
 		_night = night
 		sim.set_headlights(night)
 		director.set_night(night)
+		if net_controls != null:
+			net_controls.set_headlights(night)
+
+
+## True while network mode (N4.3) drives the traffic.
+func is_network() -> bool:
+	return net_controls != null and net_controls.active
 
 
 ## Player vs traffic boxes in road space (inset like a run's collisions): the car gets
@@ -358,7 +383,10 @@ func _check_contacts() -> void:
 		if st.active[i] == 0 or st.has_flag(i, TrafficState.FLAG_HIT):
 			continue
 		if absf(st.s[i] - p.s) < st.length[i] * 0.5 - _inset + hl and absf(st.d[i] - p.d) < st.width[i] * 0.5 - _inset + hw:
-			sim.notify_hit(i)
+			if is_network():
+				net_controls.notify_hit(i)
+			else:
+				sim.notify_hit(i)
 			overlay.note_event(i, TrafficOverlay.Mark.HIT)
 			hits += 1
 
@@ -460,6 +488,8 @@ func reseed(seed_value: int) -> void:
 		bot.traffic = sim.state
 	if fast_controls != null:
 		fast_controls.apply_to(director)   # racer arrivals on / off (WP6.7)
+	if net_controls != null:
+		net_controls.restart()   # N4.3: network mode on the new sim's TrafficState
 	_lc_ring_n = 0
 	_lc_sample()
 	_lc_next_t = sim_time + 1.0
@@ -476,6 +506,8 @@ func set_leg(value: int) -> void:
 ## Removes every vehicle on the player's carriageway (the director keeps planning
 ## ahead, beyond the fog, unless AUTO is off).
 func clear_traffic() -> void:
+	if is_network():
+		return   # the server owns the cars
 	for i in sim.state.capacity:
 		if sim.state.active[i] == 1:
 			sim.despawn(i)
@@ -484,13 +516,16 @@ func clear_traffic() -> void:
 
 ## Refills the road from the player to the ahead distance (director.reset).
 func fill_traffic() -> void:
-	director.reset(car.state)
+	if not is_network():
+		director.reset(car.state)
 
 
 ## Spawns one vehicle of `profile_id` (type: the profile's allowed type number
 ## `type_pick`, wrapped) in `lane`, ahead of or behind the player, at the first spot
 ## with SPAWN_CLEAR_M free to every vehicle in that lane. Returns the slot, or -1.
 func spawn_vehicle(profile_id: int, type_pick: int, lane: int, ahead: bool) -> int:
+	if is_network():
+		return -1   # the server owns the cars
 	var st := car.state
 	var lanes := road.lane_count(st.s)
 	lane = clampi(lane, 0, lanes - 1)
@@ -542,6 +577,8 @@ func _spot_free(s: float, d: float, ln: float, wd: float) -> bool:
 ## now to signal into an adjacent lane (TrafficSim.request_lane_change: the normal
 ## safety checks and telegraphing). For snaps and quick checks. Returns the slot or -1.
 func request_nearby_lane_change(max_ahead_m: float) -> int:
+	if is_network():
+		return -1   # lane changes come from the server
 	var st := sim.state
 	var after := 0.0
 	for attempt in st.capacity:
@@ -567,6 +604,8 @@ func request_nearby_lane_change(max_ahead_m: float) -> int:
 ## Asks the selected car (tap one first) to change lanes left (-1) or right (+1):
 ## TrafficSim.request_lane_change, the normal safety checks and telegraphing.
 func request_selected_lane_change(dir: int) -> bool:
+	if is_network():
+		return false   # lane changes come from the server
 	var i := overlay.selected_slot
 	if i < 0 or sim.state.active[i] == 0:
 		return false
@@ -749,6 +788,9 @@ func refresh_stats() -> void:
 		DevStats.get_sim_tick_max_usec(), 1000.0 / maxf(Engine.get_frames_per_second(), 1.0)])
 	lines.append("player %.0f km/h  lane %d  %s" % [Units.mps_to_kmh(p.v), road.lane_index_at(p.d, p.s),
 		DRIVER_NAMES[driver]])
+	if is_network():
+		lines.append(net_controls.stats_line())
+		net_controls.report_dev_stats()
 	var text := "\n".join(lines)
 	if _stats_label != null and _stats_label.text != text:
 		_stats_label.text = text
@@ -1037,7 +1079,8 @@ func _place_slider() -> void:
 ## select=true (select the nearest labeled car), labels, layers=idm,mobil,blink,occ,pass
 ## (the ones to show; default all but pass), text (overlay text scale), run=true (keep running; default: paused
 ## after the warm-up so the frame is exact); set_piece=<id> (+ piece_dist_m, piece_wait_s)
-## and waves=true: SetPieceControls.snap_run.
+## and waves=true: SetPieceControls.snap_run; net=true (+ link=tcp|clean|udp, truth=false):
+## network mode (NetTrafficControls.snap_run, N4.3).
 func snap_setup(args: Dictionary) -> void:
 	if args.has("sky_t"):
 		sky.sky_t = float(args["sky_t"])
@@ -1051,6 +1094,7 @@ func snap_setup(args: Dictionary) -> void:
 	if bot != null and args.has("speed_kmh"):
 		bot.v_target = Units.kmh_to_mps(float(args["speed_kmh"]))
 	reseed(traffic_seed)
+	net_controls.snap_run(args)   # net=true, link=tcp|clean|udp (N4.3)
 	var warm := float(args.get("warm_s", 20.0))
 	for k in ceili(warm * float(TICKS_PER_SECOND)):
 		_tick()
