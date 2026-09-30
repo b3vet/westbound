@@ -35,6 +35,12 @@
 //!    subscription ends with it.
 //! 8. **Kicks** from outside (duplicate login, the ban sweep, a slow-client report from a
 //!    room) arrive on the session's `watch` and end in a fatal `Error` + close.
+//! 9. **Planned restart** (N10.2, `shutdown.rs`): a session that signs in while the server
+//!    drains gets the `server_notice{restart}` with the seconds left after its `Welcome`; a
+//!    `room_join_code` for a code this instance does not know recreates the room when the
+//!    previous instance handed it over (`handover.rs`); at the end the socket closes with
+//!    1012 behind the room's last frame. `room_create` is limited per account
+//!    (`rooms.create_per_hour`, `account_limits.rs`).
 
 use std::sync::Arc;
 
@@ -73,6 +79,8 @@ pub const DETAIL_PARTIES_UNAVAILABLE: &str = "Parties are unavailable. Try again
 pub const DETAIL_ROOMS_UNAVAILABLE: &str = "Rooms are unavailable. Try again.";
 pub const DETAIL_PRESENCE_UNAVAILABLE: &str = "Friends presence is unavailable. Try again.";
 pub const DETAIL_NOT_IN_ROOM: &str = "You are not in a room.";
+/// N10.2: `room_create` past the per-account limit.
+pub const DETAIL_CREATE_LIMITED: &str = "Too many rooms created. Try again later.";
 
 /// What the gateway accepts and announces, built once from the config.
 #[derive(Debug, Clone)]
@@ -412,12 +420,44 @@ impl Conn<'_> {
         if let Err(r) = self.reply(welcome) {
             return Step::Close(r);
         }
+        // N10.2: signed in during a planned restart's notice: the notice, with what is left.
+        if let Some(left) = self.state.drain.seconds_left() {
+            if let Err(r) = self.reply(&crate::shutdown::restart_notice(left)) {
+                return Step::Close(r);
+            }
+        }
         // N9.3: the party's follow orders; a reconnect gets its party state after Welcome.
         let (rx, party) = self.state.parties.attach(session_id, account);
         self.follow_rx = Some(rx);
         match party.map(|m| self.reply(&m)) {
             Some(Err(r)) => Step::Close(r),
             _ => Step::Continue,
+        }
+    }
+
+    /// N10.2: a code this instance does not know may be a room the previous instance
+    /// handed over at a restart: recreate it (same code and settings) so the join finds it.
+    async fn restore_handed_over(&self, target: &JoinTarget) {
+        let JoinTarget::Code(code) = target else {
+            return;
+        };
+        let rooms = &self.state.rooms;
+        if rooms.is_draining() || rooms.find_code(code).is_some() {
+            return;
+        }
+        let path = crate::handover::path_for(&self.state.config.db.path);
+        let Some(settings) = crate::handover::lookup(&path, code, self.state.clock.now()).await
+        else {
+            return;
+        };
+        match rooms.restore(code.clone(), settings) {
+            Ok(room) => {
+                Metrics::inc(&self.metrics().rooms_restored);
+                tracing::info!(room, code = %code.0, "handed-over room restored");
+            }
+            Err(r) => {
+                tracing::info!(code = %code.0, detail = r.detail, "handed-over room not restored")
+            }
         }
     }
 
@@ -507,6 +547,12 @@ impl Conn<'_> {
             );
             return self.reply_step(&e);
         }
+        if matches!(target, JoinTarget::Create(_)) && !self.state.room_creates.try_take(me) {
+            Metrics::inc(&self.metrics().room_create_limited);
+            let e = error_msg(ErrorCode::RateLimited, false, DETAIL_CREATE_LIMITED);
+            return self.reply_step(&e);
+        }
+        self.restore_handed_over(&target).await;
         let rooms = self.state.rooms.clone();
         let party = self.state.parties.view(me);
         let mut opts = JoinOpts {
@@ -878,7 +924,11 @@ pub async fn run(socket: WebSocket, state: &AppState, client: &str) -> CloseReas
     let reason = loop {
         let established = conn.session.is_some();
         tokio::select! {
-            _ = state.shutdown.cancelled() => break CloseReason::Shutdown,
+            _ = state.shutdown.cancelled() => break if state.drain.is_restart() {
+                CloseReason::Restart
+            } else {
+                CloseReason::Shutdown
+            },
             _ = conn.keepalive.check.tick() => {
                 if let Err(r) = conn.keepalive.on_check(&conn.out) {
                     break r;

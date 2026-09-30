@@ -156,6 +156,32 @@ func test_crash_out_toast_lasts_3s() -> void:
 	check(not hud.is_toast_shown(), "gone after 3 s")
 
 
+func test_room_closed_result_toast() -> void:
+	# N10.2: a run the server ended at a restart or an operator's close keeps its score.
+	hud.show_result({"player_id": 1, "score": 4200, "distance_m": 1000, "duration_ms": 61000,
+		"end_reason": "room_closed", "flags": {"verified": true, "leaderboard_eligible": true}})
+	eq(hud.toast_title.text, RoomHud.TEXT_RUN_ENDED)
+	eq(hud.toast_sub.text, "SCORE 4,200  ·  1.0 KM  ·  1:01")
+	hud.show_result({"player_id": 1, "score": 1, "distance_m": 0, "duration_ms": 0, "end_reason": "crashed"})
+	eq(hud.toast_title.text, RoomHud.TEXT_CRASHED_OUT)
+
+
+func test_restart_notice_counts_down_then_the_reconnect_banner() -> void:
+	server.call("send", [{"type": "server_notice", "kind": "restart", "seconds": 42, "text": "Server restart soon."}])
+	_net(0.1)
+	hud.advance(0.0)
+	check(hud.banner.visible)
+	eq(hud.banner.text, RoomHud.TEXT_RESTART % 42)
+	_net(1.0)
+	hud.advance(1.0)
+	eq(hud.banner.text, RoomHud.TEXT_RESTART % 41, "counts down")
+	server.call("drop")
+	_net(0.2)
+	hud.set_reconnecting(true)
+	eq(hud.banner.text, RoomHud.TEXT_RECONNECTING % ceili(rs.reconnect_left_s()), "the reconnect takes over")
+	check(rs.reconnect_left_s() > net.room_reconnect_window_s, "with the restart's window")
+
+
 func test_chat_feed_and_banner() -> void:
 	hud.add_feed("Dusty#1234", "GG", Color.RED)
 	hud.add_feed("Kai#0055", "HONK!", Color.BLUE)

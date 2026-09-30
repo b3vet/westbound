@@ -1,0 +1,84 @@
+# Example Prometheus alerting rules for westbound-server (N10.2). docs/OPERATIONS.md →
+# "Metrics and alerts". Optional: import into Grafana Cloud / Prometheus when a scraper
+# (e.g. a Grafana Alloy sidecar sharing the container's network) sends /metrics there.
+# Thresholds follow the spec's budget (WESTBOUND_MULTIPLAYER_HANDOFF.md → Resource budget).
+groups:
+  - name: westbound-server
+    rules:
+      - alert: WestboundDown
+        expr: up{job="westbound"} == 0
+        for: 3m
+        labels: { severity: page }
+        annotations:
+          summary: "westbound-server is not answering /metrics"
+
+      - alert: WestboundErrors
+        expr: rate(wb_log_events_total{level="error"}[10m]) > 0.05
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "westbound-server logs errors (see docker logs, level ERROR)"
+
+      - alert: Westbound5xx
+        expr: rate(wb_http_requests_total{class="5xx"}[5m]) > 0.1
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "HTTP 5xx responses"
+
+      - alert: WestboundRoomTickSlow
+        # Spec: room tick p99 under 5 ms.
+        expr: histogram_quantile(0.99, rate(wb_room_tick_seconds_bucket[5m])) > 0.005
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "Room tick p99 above 5 ms"
+
+      - alert: WestboundDatabaseSlow
+        expr: wb_db_probe_seconds > 0.05
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "Database probe above 50 ms"
+
+      - alert: WestboundBackupFailed
+        expr: increase(wb_backups_failed_total[1d]) > 0
+        labels: { severity: page }
+        annotations:
+          summary: "The nightly backup failed (see the log line 'nightly backup failed')"
+
+      - alert: WestboundOffsiteCopyFailed
+        expr: increase(wb_backup_uploads_failed_total[1d]) > 0
+        labels: { severity: warn }
+        annotations:
+          summary: "The off-site backup hook failed"
+
+      - alert: WestboundMemory
+        # Spec: under 300 MB excluding the verifier.
+        expr: process_resident_memory_bytes > 300e6
+        for: 15m
+        labels: { severity: warn }
+        annotations:
+          summary: "Server memory above the 300 MB budget"
+
+      - alert: WestboundNearConnectionCap
+        # limits.max_connections = 400.
+        expr: wb_ws_connections > 350
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "Close to the 400-connection cap"
+
+      - alert: WestboundReplayBacklog
+        expr: wb_replay_jobs{status="pending"} > 100
+        for: 30m
+        labels: { severity: info }
+        annotations:
+          summary: "Replay verification queue is growing"
+
+      - alert: WestboundModerationQueue
+        expr: wb_reports_unhandled > 20
+        for: 1h
+        labels: { severity: info }
+        annotations:
+          summary: "Player reports waiting (westbound-server admin reports --unhandled)"

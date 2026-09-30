@@ -66,6 +66,8 @@ pub struct Config {
     pub replays: ReplaysConfig,
     pub rooms: RoomsConfig,
     pub scoring: ScoringConfig,
+    /// N10.2: the admin API (live rooms, notices, stats) the `admin` CLI talks to.
+    pub admin: AdminConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -84,8 +86,30 @@ pub struct ServerConfig {
     /// On SIGTERM: how long open sockets get to receive their close frame and the
     /// in-flight HTTP requests get to finish before the process exits.
     pub shutdown_grace_ms: u64,
-    /// N10 hook: seconds of `ServerNotice` before a planned restart. 0 = off (N0).
+    /// N10.2: on SIGTERM, seconds of `server_notice{restart}` before the rooms are handed
+    /// over and the sockets close (spec: 60). The notice ends early once nobody is
+    /// connected. 0 = no notice (the handover still runs).
     pub restart_notice_secs: u64,
+    /// Reminders during the notice, as seconds left (those not below the notice are skipped).
+    pub restart_notice_reminders_secs: Vec<u64>,
+    /// How long the next instance recreates a handed-over room when a player rejoins it by
+    /// code (docs/OPERATIONS.md → Restarts).
+    pub handover_ttl_secs: u64,
+}
+
+/// `[admin]` (N10.2): the admin API on its own loopback listener.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AdminConfig {
+    /// Serve the admin API (it also needs a token).
+    pub enabled: bool,
+    /// Loopback only, like the metrics listener.
+    pub bind: String,
+    /// Bearer token for the admin API (`WB_ADMIN__TOKEN`, at least 32 bytes). Empty: the
+    /// API is off and the live admin commands (rooms, notices, kicks) are unavailable.
+    pub token: Secret,
+    /// How long an `admin` CLI command waits for the running server.
+    pub request_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,6 +156,9 @@ pub struct MetricsConfig {
     pub enabled: bool,
     /// Prometheus text on its own listener; must be a loopback address.
     pub bind: String,
+    /// N10.2: how often the server times a database probe and reads its sizes and queue
+    /// depths for `/metrics`.
+    pub db_probe_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -144,6 +171,13 @@ pub struct BackupConfig {
     pub time_utc: String,
     /// Dated files older than this many days are deleted after each run.
     pub retention_days: u32,
+    /// N10.2: after each backup, open it read-only and run `PRAGMA integrity_check`.
+    pub verify: bool,
+    /// N10.2: optional off-site hook, run after each good backup: argv, `{file}` is the
+    /// backup's path (no shell). Empty = off. docs/OPERATIONS.md → Off-site copies.
+    pub upload_command: Vec<String>,
+    /// The hook is killed after this long.
+    pub upload_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -187,6 +221,14 @@ pub struct RateLimitsConfig {
     /// top of the account limit: this many per hour, `social_burst` at once (N9.1).
     pub social_per_hour: u32,
     pub social_burst: u32,
+    /// N10.2: every HTTP route (API, upgrades, deep-link files, invite pages, health) per
+    /// client IP, on top of the route's own limit. Generous: players behind one carrier
+    /// NAT share it.
+    pub ip_per_minute: u32,
+    pub ip_burst: u32,
+    /// N10.2: WebSocket upgrades (`/ws`, `/ws/echo`) per client IP.
+    pub ws_connect_per_minute: u32,
+    pub ws_connect_burst: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -536,6 +578,11 @@ pub struct RoomsConfig {
     pub placement_grace_ms: u64,
     /// A state within this distance of a placement (plus its speed's reach) acknowledges it.
     pub placement_radius_m: f64,
+    /// N10.2: `room_create` per account (survives reconnects): this many per hour, refilled
+    /// evenly, `create_burst` at once. Empty rooms live 60 s, so without it one account
+    /// could fill the room cap (not in spec).
+    pub create_per_hour: u32,
+    pub create_burst: u32,
 }
 
 /// Multiplayer scoring (N6.1; docs/SERVER.md → "Scoring (N6.1)"). Spec: "Scoring in
@@ -653,6 +700,8 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MIN_MESSAGE_BYTES: usize = 1024;
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const MAX_WORKER_THREADS: usize = 64;
+/// `server_notice.seconds` is a u16.
+const MAX_RESTART_NOTICE_SECS: u64 = u16::MAX as u64;
 const LOG_FORMATS: &[&str] = &["text", "json"];
 /// Crew invite codes: long enough not to be guessed under the rate limits, short enough to
 /// type.
@@ -673,7 +722,20 @@ impl Default for ServerConfig {
             public_origin: DEFAULT_PUBLIC_ORIGIN.into(),
             worker_threads: 2,
             shutdown_grace_ms: 5_000,
-            restart_notice_secs: 0,
+            restart_notice_secs: 60,
+            restart_notice_reminders_secs: vec![30, 10],
+            handover_ttl_secs: 600,
+        }
+    }
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: "127.0.0.1:9091".into(),
+            token: Secret::default(),
+            request_timeout_ms: 10_000,
         }
     }
 }
@@ -716,6 +778,7 @@ impl Default for MetricsConfig {
         Self {
             enabled: true,
             bind: "127.0.0.1:9090".into(),
+            db_probe_interval_secs: 15,
         }
     }
 }
@@ -727,6 +790,9 @@ impl Default for BackupConfig {
             dir: "/data/backups".into(),
             time_utc: "03:17".into(),
             retention_days: 7,
+            verify: true,
+            upload_command: Vec::new(),
+            upload_timeout_secs: 600,
         }
     }
 }
@@ -778,6 +844,10 @@ impl Default for RateLimitsConfig {
             runs_burst: 10,
             social_per_hour: 60,
             social_burst: 20,
+            ip_per_minute: 600,
+            ip_burst: 200,
+            ws_connect_per_minute: 60,
+            ws_connect_burst: 30,
         }
     }
 }
@@ -897,6 +967,8 @@ impl Default for RoomsConfig {
             stale_state_ms: 2_000,
             placement_grace_ms: 2_000,
             placement_radius_m: 30.0,
+            create_per_hour: 30,
+            create_burst: 5,
         }
     }
 }
@@ -1091,6 +1163,81 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigErrors> {
         let mut errs = Vec::new();
+        self.validate_main(&mut errs);
+        self.validate_ops(&mut errs);
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigErrors(errs))
+        }
+    }
+
+    /// N10.2: `[admin]`, the restart notice, backups' hook, the new rate limits.
+    fn validate_ops(&self, errs: &mut Vec<String>) {
+        let s = &self.server;
+        // Reminders at or above the notice are skipped (lowering the notice alone, e.g. to
+        // fit a platform's stop timeout, must not break startup).
+        if s.restart_notice_reminders_secs.contains(&0) {
+            errs.push("server.restart_notice_reminders_secs entries must be at least 1".into());
+        }
+        if s.restart_notice_secs > MAX_RESTART_NOTICE_SECS {
+            errs.push(format!(
+                "server.restart_notice_secs must be at most {MAX_RESTART_NOTICE_SECS} (server_notice.seconds is a u16)"
+            ));
+        }
+        if s.handover_ttl_secs == 0 {
+            errs.push("server.handover_ttl_secs must be at least 1".into());
+        }
+        let a = &self.admin;
+        if a.enabled {
+            match a.bind.parse::<SocketAddr>() {
+                Ok(addr) if addr.ip().is_loopback() => {}
+                Ok(_) => errs.push(format!(
+                    "admin.bind `{}` must be a loopback address (127.0.0.1 or ::1)",
+                    a.bind
+                )),
+                Err(_) => errs.push(format!(
+                    "admin.bind `{}` is not an ip:port socket address",
+                    a.bind
+                )),
+            }
+        }
+        if !a.token.is_empty() && a.token.expose().len() < MIN_JWT_SECRET_BYTES {
+            errs.push(format!(
+                "admin.token must be at least {MIN_JWT_SECRET_BYTES} bytes (or empty: API off)"
+            ));
+        }
+        if a.request_timeout_ms == 0 {
+            errs.push("admin.request_timeout_ms must be at least 1".into());
+        }
+        let b = &self.backup;
+        if b.upload_command.iter().any(|x| x.is_empty()) {
+            errs.push("backup.upload_command entries must not be empty".into());
+        }
+        if !b.upload_command.is_empty() && b.upload_timeout_secs == 0 {
+            errs.push("backup.upload_timeout_secs must be at least 1".into());
+        }
+        let r = &self.rate_limits;
+        if r.enabled
+            && [
+                r.ip_per_minute,
+                r.ip_burst,
+                r.ws_connect_per_minute,
+                r.ws_connect_burst,
+            ]
+            .contains(&0)
+        {
+            errs.push("rate_limits.ip_* and ws_connect_* must be at least 1".into());
+        }
+        if self.rooms.create_per_hour == 0 || self.rooms.create_burst == 0 {
+            errs.push("rooms.create_per_hour and rooms.create_burst must be at least 1".into());
+        }
+        if self.metrics.db_probe_interval_secs == 0 {
+            errs.push("metrics.db_probe_interval_secs must be at least 1".into());
+        }
+    }
+
+    fn validate_main(&self, errs: &mut Vec<String>) {
         let s = &self.server;
         if !SERVER_ENVS.contains(&s.env.as_str()) {
             errs.push(format!("server.env must be one of {SERVER_ENVS:?}"));
@@ -1276,17 +1423,12 @@ impl Config {
                 ));
             }
         }
-        self.validate_leaderboards(&mut errs);
-        self.validate_social(&mut errs);
-        self.validate_deeplinks(&mut errs);
-        self.validate_replays(&mut errs);
-        self.validate_rooms(&mut errs);
-        self.validate_scoring(&mut errs);
-        if errs.is_empty() {
-            Ok(())
-        } else {
-            Err(ConfigErrors(errs))
-        }
+        self.validate_leaderboards(errs);
+        self.validate_social(errs);
+        self.validate_deeplinks(errs);
+        self.validate_replays(errs);
+        self.validate_rooms(errs);
+        self.validate_scoring(errs);
     }
 
     fn validate_leaderboards(&self, errs: &mut Vec<String>) {
@@ -1569,6 +1711,12 @@ impl Config {
             .then(|| self.metrics.bind.parse().expect("validated"))
     }
 
+    /// The admin API's address: enabled **and** a token set (N10.2).
+    pub fn admin_addr(&self) -> Option<SocketAddr> {
+        (self.admin.enabled && !self.admin.token.is_empty())
+            .then(|| self.admin.bind.parse().expect("validated"))
+    }
+
     pub fn ping_interval(&self) -> Duration {
         Duration::from_millis(self.limits.ping_interval_ms)
     }
@@ -1588,7 +1736,11 @@ impl Config {
     /// Effective config as TOML with secrets redacted (for `check-config`).
     pub fn to_redacted_toml(&self) -> String {
         let mut c = self.clone();
-        for secret in [&mut c.auth.jwt_secret, &mut c.auth.device_secret_pepper] {
+        for secret in [
+            &mut c.auth.jwt_secret,
+            &mut c.auth.device_secret_pepper,
+            &mut c.admin.token,
+        ] {
             if !secret.is_empty() {
                 *secret = Secret::new("<redacted>");
             }
@@ -1707,13 +1859,22 @@ fn apply_env_override(
             "0" | "false" | "no" | "off" => false,
             _ => bail!("env override {key}: expected true/false"),
         }),
-        toml::Value::Array(_) => toml::Value::Array(
-            raw.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(|s| toml::Value::String(s.to_string()))
-                .collect(),
-        ),
+        // Items take the type of the default's items (integers for
+        // `server.restart_notice_reminders_secs`), strings otherwise.
+        toml::Value::Array(items) => {
+            let ints = matches!(items.first(), Some(toml::Value::Integer(_)));
+            let mut out = Vec::new();
+            for s in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                out.push(if ints {
+                    toml::Value::Integer(s.parse().with_context(|| {
+                        format!("env override {key}: expected comma-separated integers")
+                    })?)
+                } else {
+                    toml::Value::String(s.to_string())
+                });
+            }
+            toml::Value::Array(out)
+        }
         _ => bail!("env override {key}: this key cannot be set from the environment"),
     };
     let table = merged

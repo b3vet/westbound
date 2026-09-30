@@ -3,8 +3,9 @@ extends WBTest
 ## the run there with protection, states go up once per room tick, remote players are drawn
 ## ghosted with nametags and strip dots, hits and the crash-out are reported, the respawn
 ## placement starts a fresh run, REJOIN CREW teleports and keeps the run, the room clock
-## follows the server, leaving and a kick go back to the hub. Spec: multiplayer handoff →
-## Players, Time of day in multiplayer, Rooms. docs/ROOMS_CLIENT.md. WP N5.2.
+## follows the server, leaving and a kick go back to the hub; N10.2: a server restart rejoins
+## the room by code into a fresh run. Spec: multiplayer handoff → Players, Time of day in
+## multiplayer, Rooms, Resource budget and deployment (restarts). docs/ROOMS_CLIENT.md. WP N5.2.
 
 const RUN_SCENE := preload("res://src/run/run.tscn")
 const FakeRoomServer := preload("res://tests/net/fake_room_server.gd")
@@ -284,6 +285,36 @@ func test_a_dropped_socket_keeps_driving_and_rejoins_the_seat() -> void:
 	eq(run.room.teleports, 1, "placed where the car was: a teleport, not a new run")
 	eq(run.current_seed, seed_before, "the same run")
 	eq(run.lives.lives, run.lives.max_lives - 1, "lives kept")
+
+
+func test_a_server_restart_rejoins_by_code_into_a_fresh_run() -> void:
+	# N10.2: the notice, the room closed (run_result room_closed), a restart longer than the
+	# 15 s hold, then the rejoin by code: a fresh run at the new room's placement.
+	_join()
+	_seconds(net.room_protection_s + 0.2)
+	run.force_hit(HitDetection.HIT_BARRIER)
+	_frames(2)
+	server.call("send", [{"type": "server_notice", "kind": "restart", "seconds": 2, "text": "Server restart soon."}])
+	_seconds(0.5)
+	check(run.room.hud.banner.text.begins_with("SERVER RESTART"), run.room.hud.banner.text)
+	server.call("send", [{"type": "run_result", "player_id": 1, "run_seq": 1, "end_reason": "room_closed",
+		"flags": {"verified": true, "leaderboard_eligible": true}, "score": 900, "duration_ms": 5000,
+		"distance_m": 150, "passes": 0, "close_passes": 0, "cuts": 0, "threads": 0, "trains": 0,
+		"max_multiplier_milli": 1000}])
+	_seconds(1.6)
+	eq(run.room.hud.toast_title.text, RoomHud.TEXT_RUN_ENDED, "the banked run's toast")
+	link.refuse = true
+	server.call("drop")
+	_seconds(net.room_reconnect_window_s + 2.0)
+	eq(rs.state, NetRoomSession.State.RECONNECTING, "still rejoining past the 15 s hold")
+	eq(run.state, Game.RUNNING, "still driving meanwhile")
+	link.refuse = false
+	_seconds(2.0)
+	eq(rs.state, NetRoomSession.State.IN_ROOM, "back in the room by code")
+	eq(run.room.respawns, 1, "a fresh run, not a teleport")
+	eq(run.room.teleports, 0)
+	eq(run.lives.lives, run.lives.max_lives, "the new run's lives")
+	check(run.room.is_protected(), "protected at the placement")
 
 
 func test_a_lost_seat_goes_back_to_the_hub() -> void:

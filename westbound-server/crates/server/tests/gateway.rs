@@ -331,7 +331,7 @@ async fn bad_expired_and_revoked_tokens_fail_auth() {
 async fn banned_account_is_refused_at_hello() {
     let s = start().await;
     let (id, token) = create_account(&s).await;
-    admin::ban(&s.state.db, id, "7d", clock::unix_now_secs())
+    admin::ban(&s.state.db, id, "7d", None, clock::unix_now_secs())
         .await
         .unwrap();
     let mut ws = s.connect().await;
@@ -535,7 +535,7 @@ async fn live_admin_ban_drops_the_socket() {
     let (mut ws, _, id, _) = login(&s).await;
     let (mut other, _, _, _) = login(&s).await;
     // The admin CLI's own function, as `westbound-server admin ban <id> 7d` runs it.
-    admin::ban(&s.state.db, id, "7d", clock::unix_now_secs())
+    admin::ban(&s.state.db, id, "7d", None, clock::unix_now_secs())
         .await
         .unwrap();
     assert_eq!(

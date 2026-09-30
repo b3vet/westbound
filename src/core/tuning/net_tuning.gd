@@ -140,6 +140,11 @@ const PATH := "res://data/tuning/net.tres"
 ## long (spec: 15 s), then the run is over and the player goes back to the hub.
 @export var room_reconnect_window_s: float = 15.0
 @export var room_reconnect_retry_s: float = 1.0   # not in spec
+## N10.2: after the server announced a planned restart (server_notice restart), a dropped
+## connection keeps retrying this long (the notice's end plus the new instance's start),
+## then rejoins the room by code into a fresh run (spec: "clients reconnect automatically
+## and rejoin the same private room by code").
+@export var room_restart_rejoin_window_s: float = 90.0   # not in spec
 ## A join (create, code, id, Quick Join) not answered within this long fails.
 @export var room_join_timeout_s: float = 10.0   # not in spec
 ## The crash-out results toast (spec: 3 s).

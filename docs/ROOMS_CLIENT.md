@@ -51,6 +51,7 @@ IN_ROOM --leave() / lobby_event.room_left--> LOBBY (`left`) ; a fatal error --> 
 - **Upload:** `send_state(tick, s, d, heading, speed, lat_vel, yaw_rate, steer, flags, run_state)`: `s` is wrapped into [0, L) here; `d` passes unchanged (CONTRACTS: + right of travel); one state per tick (a tick not after the last sent is skipped). Hot path: `NetPlayerState` + `NetCodec.push_player_state`, no Dictionaries.
 - `send_hit(tick, target, car_id, lives_left)`, `send_run_event(start|end|rejoin, tick)`, `send_chat(item)` (one per `room_chat_interval_s` on the device; `chat_ready()`), `send_host({kind, ...})`, `set_muted(player_id, on)` (client-side: a muted player's chat is never shown).
 - **Reconnect** (spec: seat held 15 s): a dropped socket in a room turns RECONNECTING; the session reconnects every `room_reconnect_retry_s` with the current access token and joins the same room by code. The snapshot brings the same seat back (`rejoined`), and the placement "where the car was" arrives. After `room_reconnect_window_s` it gives up (`left` seat_lost, "Lost the connection to the room."). `update_required`, `server_outdated`, `map_mismatch`, `banned` and a fatal `not_allowed` (signed in elsewhere) are never retried.
+- **Planned restart (N10.2; SERVER.md → "Operations (N10.2) → The planned restart").** A `server_notice{restart, seconds}` sets `restart_left_s()` (the room HUD counts it down: SERVER RESTART · n S); other notices (`info`, `maintenance`) go out as `notice(text)`. The server then ends the run (`run_result{room_closed}`, the banked score kept: a RUN ENDED toast) and closes the socket (1012). A drop after the notice reconnects for `room_restart_rejoin_window_s` (90 s) instead of 15 s and rejoins **by code** the room the next instance recreates; that snapshot counts as a restart rejoin (`take_restart_rejoin()`), so `RunRoom` starts a **fresh run** at its placement instead of a teleport. A lobby connection dropped after a restart notice reconnects quietly (no `lobby_error`). If the room did not come back (`room_not_found`), the seat is lost and the player goes to the hub as for any lost seat.
 
 ## The run in a room (RunRoom)
 
@@ -218,6 +219,7 @@ A CanvasLayer (layer 6: over the gameplay HUD, under the in-run screens), hidden
 | `room_max_remotes` | 7 | up to 8 players |
 | `room_protection_s` | 3 | Spawn / rejoin protection |
 | `room_reconnect_window_s` / `room_reconnect_retry_s` | 15 / 1 | Reconnect seat hold / not in spec |
+| `room_restart_rejoin_window_s` | 90 | N10.2: the reconnect window after a restart notice (the notice's end plus the next instance's start); not in spec |
 | `room_join_timeout_s` | 10 | not in spec |
 | `room_result_toast_s` | 3 | the 3-second results toast |
 | `room_ghost_near_m` / `room_ghost_near_opacity` / `room_ghost_overlap_opacity` | 15 / 0.55 / 0.2 | translucent within 15 m / not in spec |
