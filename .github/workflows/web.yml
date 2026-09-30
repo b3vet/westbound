@@ -58,7 +58,13 @@ jobs:
           npx playwright install --with-deps --only-shell chromium
 
       - name: Smoke test (headless Chromium)
-        run: node tools/web_smoke/smoke.mjs --timeout 90000
+        run: node tools/web_smoke/smoke.mjs --timeout 90000 --gzip --json build/web_metrics.json
+
+      - name: Audio unlock (default autoplay policy, first tap)
+        run: node tools/web_smoke/smoke.mjs --timeout 90000 --settle 8000 --audio-unlock tap --screenshot build/web_smoke_unlock.png
+
+      - name: Stale page reloads once
+        run: node tools/web_smoke/smoke.mjs --timeout 90000 --stale --screenshot build/web_smoke_stale.png
 
       - name: Daily Drive determinism (native vs wasm, 15 s)
         run: tools/determinism/compare.sh --seconds=15 --no-export
@@ -68,7 +74,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: web-smoke-screenshot
-          path: build/web_smoke.png
+          path: |
+            build/web_smoke*.png
+            build/web_metrics.json
           if-no-files-found: ignore
 
   deploy:
