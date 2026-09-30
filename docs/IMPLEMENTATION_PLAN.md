@@ -306,7 +306,7 @@ Updated by the orchestrator at every merge.
 | 4 | M4 Scoring & lives | ✅ WP4.1–4.7 merged: run loop, crash cinematic, HUD & theme, screens, integration suite (858 tests), draw calls 85 → 70 with dev overlays, cockpit camera (D11). WP4.8 density merged (D11) | continue |
 | 5 | M5 Sun loop & legs | ✅ sun drives the run and sky, night ×2, dawn, legs + objectives + toast, landmarks + warning signs, night lighting + manual high beams (D8); M5 gate test green; WP5.5/5.6 follow-ups and HUD polish merged | continue |
 | 6 | M6 Director, biomes, journey | ⬜ | continue |
-| 7 | M7 Audio & feel | ⬜ | continue |
+| 7 | M7 Audio & feel | 🟨 WP7A audio (engine, wind, pass/traffic, music, stingers, buses) + WP7B haptics/juice merged; WP7.5 one-frame check green (every scoring event sounds, pulses and shows in its frame; slipstream has none per spec). WP7.6 running: one-shot SFX from OGG to WAV (each OGG voice costs ~0.6 ms decoder setup). Owner feel check on native pending | continue |
 | 8 | M8 Meta | ⬜ | continue |
 | 9 | M9 Hardening & release | ⬜ | final |
 
