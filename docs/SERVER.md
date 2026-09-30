@@ -58,6 +58,14 @@ N9.1 adds the account-level social layer:
 
 See "Social API".
 
+N4.1 adds the server's traffic simulation in the pure `sim` crate (not wired into rooms yet; N4.2 does that):
+
+- a port of the client's traffic model (IDM, MOBIL, no-ambush, `TrafficSim` with lane drops and weaving racers), bit-exact against the GDScript model on exported vectors and tick-identical on whole-sim traces;
+- the server's rules: every player as a participant, extrapolated to the current tick, the loop's wrap-around, a 1.0 s minimum signal for every profile with intents known when the blinker comes on, ramps and density upkeep (light / normal / rush), road works, hits;
+- `TrafficWorld`, one room's traffic behind one call per 20 Hz tick.
+
+See "Traffic simulation (N4.1)".
+
 | Path | What |
 | --- | --- |
 | `westbound-server/crates/server/` | The binary (`westbound-server`) and its library, with integration tests in `tests/` |
@@ -70,6 +78,11 @@ See "Social API".
 | `tools/net_echo_check.gd`, `tools/web_smoke/ws_echo.mjs` | Echo checks from Godot and from Chromium (point them at `/ws/echo`) |
 | `tests/net/live_ws_check.gd` | Godot's `NetClient` against a running server: account, `Hello` → `Welcome`, clock sync, keepalive (see "Realtime gateway → Live cross-side check") |
 | `tools/server_data/export_daily_seed_vectors.gd` | Exports `Rng.daily_seed` vectors to `crates/server/tests/data/daily_seed_vectors.json` for the Rust port's parity test |
+| `westbound-server/crates/sim/src/traffic/`, `src/rng.rs`, `src/trace_hash.rs` | The traffic simulation (N4.1): see "Traffic simulation (N4.1)" |
+| `westbound-server/crates/sim/data/traffic_params.json` | Traffic parameters **exported from the Godot tuning** (never edit by hand), compiled in |
+| `westbound-server/crates/sim/data/mp_traffic.json` | The server-only traffic rules (densities, signal floor, capacity, ramps), compiled in |
+| `westbound-server/crates/sim/vectors/` | Parity vectors from the GDScript models (exported) |
+| `tools/server_data/export_sim_data.gd` | Writes `traffic_params.json` and the parity vectors (`--check` compares) |
 
 ## Routes
 
@@ -975,6 +988,146 @@ Migration `0004_social.sql`:
 | `report_context_max_bytes` | `1024` | Largest report `context` (compact JSON; 2–4096) |
 
 `[rate_limits]`: `social_per_hour` / `social_burst` (`60` / `20`), the social writes per account.
+
+## Traffic simulation (N4.1)
+
+Spec: [multiplayer handoff](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Traffic: server-authoritative with intents → Server simulation, Testing (traffic parity, traffic soak), Tuning reference. The client model it ports: [TRAFFIC.md](TRAFFIC.md). Code: `westbound-server/crates/sim/src/traffic/`. Pure: no I/O, clock or global state, allocation-free per tick.
+
+### What the room uses
+
+```rust
+let mut world = sim::traffic::TrafficWorld::builtin(&map, Density::Normal, room_seed)?;  // filled ring
+world.set_player(p, PlayerInput { s, d, s_dot, d_dot, length, width, tick });          // latest report
+world.tick();                                   // one 20 Hz step: players extrapolated, sim, ramps
+for e in world.sim.events.as_slice() { /* Signal, Cancel, Hazards, Horn, BrakeTap, Spawned, Despawned */ }
+// world.sim.state: the SoA TrafficState (s, d, v, lane, lc_state, flags ...) for corrections and spawns
+world.set_density(Density::Rush); world.set_road_works(zone, true); world.notify_hit(slot, player);
+```
+
+- **Players** are `PlayerInput`s in road space: `s` (m, wrapped or not), `d`, `s_dot`, `d_dot`, body size and the tick the state describes. `PlayerInput::from_vehicle` converts speed, lateral velocity and heading relative to the road as the client's `TrafficSim._read_player` does (the server has no curvature: pass 0; the error is under 0.5 %). The sim extrapolates each report linearly to the current tick, at most `player_max_extrapolation_s`.
+- **Events** (`SimEvent`, fixed-capacity buffer, cleared by `tick`): `Signal` is the intent: `tick` (blinker on), `move_start_tick` (the tick the lateral move starts: the curve's u = 0 there, so d(t) = d0 + (target - d0) · smoothstep((t - move_start) / duration)), `target_lane`, `target_d` and `duration_s` (the move time, drawn when the blinker comes on). `Cancel` ends a signal. `Hazards` (value 1 on / 0 off, tag `Hit`), `Horn` (blind spot, close pass) and `BrakeTap` (cut-in) are the client model's reactions; the handoff keeps horns client-side. `Spawned` / `Despawned` carry the slot and `vehicle_id`; tags `Ramp` (an on-ramp entry) and `Exit` (an off-ramp exit).
+- **For N4.2** (encoding decisions, not made here):
+  - lanes in the sim count from the median (0 = leftmost, as the client and the map's spawn points); the protocol's `lane` counts from the right (`n - 1 - lane`);
+  - `vehicle_id` is an `i32` that grows by one per spawn; `car_id` is `u16` (wraps after 65,536 spawns, about 18 h of churn in one room);
+  - ramp cars sit in a **pseudo-lane** one right of the rightmost lane (`TrafficSim::ramp_lane(s)`, `lane == lane_count(s)`): an on-ramp car spawns there, an exit's `Signal` targets it. The protocol's `target_lane` (0 = rightmost, 0–7) has no value for it: an exit could be sent as a lane change to the rightmost lane plus a new intent kind, or `target_lane = 7` reserved (**needs a protocol decision**). `TrafficSpawn.d_cm` carries an entry's position as is;
+  - hit reactions: `Hazards` on at the next tick (4 s recovery, `hit_recover_s`) with a hard brake for `hit_brake_s`: the `Hazard` and `HardBrake` intents.
+
+### Structure: a port that keeps the GDScript's shape
+
+| Rust | GDScript (ported at) | Notes |
+| --- | --- | --- |
+| `idm.rs`, `mobil.rs`, `no_ambush.rs` | `idm.gd`, `mobil.gd`, `no_ambush.gd` | Function for function; `gd.rs` has Godot's exact `maxf` / `minf` / `clampf` |
+| `state.rs` | `traffic_state.gd` | Same fields, slot order and `hash_into` |
+| `sim.rs` (`TrafficSim`) | `traffic_sim.gd` at the integration branch's `4b33c6c` (WP6.8 lane drops `aac617e`, WP6.9 weaving racers) | Same fields without the `_`, same functions in the same order: `spawn`, `despawn`, `notify_hit`, `honk`, `notify_close_pass`, `set_headlights`, `request_lane_change`, the set-piece hooks, closures (`add_lane_closure`, `merge_zone_frac`, `closure_ahead`, `_closure_wall_accel`, `_consider_merge`), lane-drop zones (`add_lane_drop_zone`, `lane_drop_limit_at`, `_drop_brake`, `_drop_tick`, `_update_drop_reach`, `_yield_accel`, `_zone_held`, `_collect_yield_candidates`, `_merge_gap_accel`), set-piece zones, `step`, `_step_accel`, `_step_lateral`, `_tick_signaling`, `_tick_moving`, `_tick_hit`, `_tick_reactions`, `_consider_lane_change`, `_consider_split`, `_consider_split_exit`, `_start_signal`, `_cancel`, `_eval_target`, `_eval_move`, `_follower_accel`, the weaving block (`_init_weave`, `_cooldown_of`, `_weave_bonus`, `_weave_pace`, `_weave_cap_ok`, `_weave_note_change`), `_read_player`, `_sort`, `_refresh_interval`, `_emit_pending`. Not ported: WP6.1's passability (single-player only) |
+| `population.rs` | `SpawnSources.Flow.draw_into` / `_eligible` / `_pick` | The server's own fill, ramps and density upkeep |
+| `checker.rs` | `tests/fixtures/traffic/traffic_rule_checker.gd` (the rules) | Plus the intents |
+| `rng.rs`, `trace_hash.rs` | `src/core/rng.gd` (Godot's PCG32 `RandomNumberGenerator`), `src/core/trace_hash.gd` | Bit-exact |
+| `road.rs` | the `RoadPath` subset | Open road (parity) and the loop (wrap) |
+
+**When `traffic_sim.gd` changes** (WP6.10 and later): diff it from `4b33c6c`, apply the same change to the same function in `sim.rs` (mind the MP generalisations below: `self.is_player(j)` for `== _P`, `road.signed_delta(a, b)` for `b - a` between positions, the `next_k` / `prev_k` walks for `kk += 1` / `kk -= 1`), export new parameters in `tools/server_data/export_sim_data.gd` (and `TuningParams` / `ProfileParams`), re-run the exporter, then `cargo test -p sim --test parity`. The traces fail at the first tick where the two models differ.
+
+### The server's rules
+
+| Rule | How | Where |
+| --- | --- | --- |
+| Players are participants (up to `max_players`, 8) | Entries `capacity + p` in the sorted order: leaders by lateral overlap, MOBIL's safety with the player b_safe (2 m/s²), the hidden-follower check, cut-in brake taps, blind-spot horns, split blocking, hit swerves away from the hitting player | `set_player`, `is_player` |
+| Players at the current tick | Linear extrapolation of the report to `tick`, capped at `player_max_extrapolation_s` (0.5 s, not in spec) | `read_players` |
+| No-ambush against predicted players | `no_ambush::violates` against every player's extrapolated position and road velocity | `eval_move` |
+| 1.0 s minimum signal time | The profile's signal time floored at `signal_time_floor_s` = 1.0 (the client floors at 0.5; aggressive and racers signal 0.6 s there) | `SimConfig::multiplayer` |
+| Intents at decision time | The move time is drawn when the blinker comes on; `move_start_tick` repeats `_tick_signaling`'s float accumulation (every car is due every tick), so the move starts exactly there (checked by the soak) | `start_signal` |
+| Fixed 20 Hz, no distance-based detail | `near_radius_m = INF` (every car's model every tick) | `SimConfig::multiplayer` |
+| The loop | s wraps into [0, L); every distance between positions is `road.signed_delta`; the leader, follower and scan loops walk round the order; lane closures and drop zones wrap | `road.rs`, `sim.rs` |
+| Lane drops | The map's lane changes become the client's closures and WP6.8 drop zones (the zone starts `lane_drop_slow_zone_m` before the taper: loop_v1's lane-ends signs stand there; checked against the client's `sync_road_closures` in `loop_closures.json`) | `add_road_closures` |
+| Density upkeep through the ramps | Target = density × section share (`LoopTuning.section_density_pct`) over every lane-km: light 514, normal 857, rush 1200. Off-ramps: a rightmost-lane car passing the diverge exits with probability `exit_share_base_frac` (15 %) + `exit_share_gain` × surplus (none below target); the exit is a telegraphed move into the ramp lane, and the car despawns when it completes. On-ramps: while below target, a car every `spawn_interval_s` (1.5 s) at the ramp's start when clear; the ramp lane is closed at the ramp's end (`merge_wall_m`), so the car merges like at a lane drop (WP6.8 zone, zipper, own-advantage merge) | `population.rs` |
+| The mix | The client's Flow draw per lane: weights, aggressive / racer shares and headway scale of the loop's director leg (5), keep-right and fast-lane rules, v0 in the lane's band with jitter, a type from the profile's list, a colour from the section's palette | `Population::draw` |
+| Fill | Lane by lane at the density's spacing (±50 %), each car at least IDM's s* (both orders, with the closing speed) + 5 m behind the previous one, nothing within `merge_spawn_clear_m` of a closure or `spawn_player_clear_m` of a player; then gap-filling passes to the exact target | `Population::fill` |
+| Road works | `set_road_works(zone, on)`: the zone's lanes from the right closed like a set-piece closure | `Population::set_road_works` |
+
+**Not on the server:** motorbike lane splitting (`lane_split: false`): a split's move targets a lane boundary, which `TrafficIntent.target_lane` cannot express. Motorbikes still spawn and drive. Turn it on once the protocol can name a boundary target.
+
+### Server-only safety extensions (deviation: needs an orchestrator row, MP-D5)
+
+At rush-hour density the loop's lane drops (desert and city 4 → 3, canyon 3 → 2) queue up, and the client model then collides: over one simulated hour at rush, **11,622 ticks with traffic-to-traffic contacts** (33,162 pair-ticks, all real body overlaps; `soak_hour_rush_without_mp_extensions`). Light and normal hours were clean without them. Three mechanisms, each traced to a contact:
+
+1. **Cut-out.** A car's new leader in the target lane is itself signalling out of it; once it leaves, a stopped queue is revealed that needs more than the 6 m/s² clamp.
+2. **Stale lane-change decision.** MOBIL judges the new leader as if it holds its speed; by the time the car is in the lane (1.0 s signal on the server, 0.6 s for racers in single-player, plus the move) the leader, braking into the queue, has slowed too much.
+3. **Late IDM reaction.** A racer at 180 km/h follows a car braking at the clamp into the queue; stock IDM ignores the leader's deceleration and reacts too late for 6 m/s².
+
+The fixes (`mp_traffic.json`, each on / off; off in the parity config, so the client model's parity is untouched):
+
+| Flag | What |
+| --- | --- |
+| `look_through_leaving_leaders` | A leader signalling or moving to a target off the path does not hide what is ahead of it: following (IDM) and MOBIL's own safety also judge the next vehicle on the path (`look_through_accel`) |
+| `predict_leader_braking` | MOBIL's own safety also judges each new leader extrapolated with its current deceleration to when the car is in the lane (signal time + half the minimum move time), against the car holding its speed (`predicted_leaders_safe`) |
+| `anticipate_leader_braking` | When stopping s0 behind the leader's own stopping point (at its current deceleration) needs more than the profile's comfortable b, the follower brakes for it now (`anticipation_accel`); never beyond the clamp |
+
+With them: **0 contacts at every density** and 0 clamp violations. Recommended follow-up: port the three into `traffic_sim.gd` (the single-player game has the same exposure at high density, and N4.3's client-side IDM should follow the same model as the server), then turn them on in the parity config and re-export.
+
+**Collision criterion.** The soak counts a contact when two cars' boxes overlap as clients render them: `TrafficView`'s heading atan2(v_lat, max(v, 20 km/h)) within ±20° (`view_yaw_*`, exported), and the sim's own un-yawed bodies. The single-player checker's heading (atan2(v_lat, max(v, 0)) within ±0.28 rad) is reported, not gated: it turns a 16 m semi or 12 m coach crawling through a lane change in a lane-drop queue far enough to touch a car two lanes over (365 pair-ticks in the rush hour, all with the long vehicle below 1 m/s; no body overlap). Clients never draw that.
+
+### Data
+
+- **`data/traffic_params.json`** is exported from the Godot tuning by `tools/server_data/export_sim_data.gd`: `TrafficTuning` (SI), the `TrafficRegistry` profile and type arrays (with the WP6.9 weaving fields), the spawn mix, `LoopTuning` with `DirectorTuning` at the loop's leg, the view's yaw rule, `NetTuning.tick_rate_hz`, `LivesTuning.collision_inset_m`. Floats are written readable and again as exact IEEE-754 bits under `exact` (Godot's JSON writer does not round-trip every double); the loader applies the bits and checks the two agree.
+- **`data/mp_traffic.json`** holds the rules the Godot tuning does not: from the spec, `signal_time_floor_s` 1.0, densities 6 / 10 / 14 per km per lane; not in spec, `capacity` 1600, `max_players` 8, `player_max_extrapolation_s` 0.5, `lane_split` false, the three safety extensions, and the ramp and fill values in the table above.
+
+```sh
+tools/godot.sh --headless --path . --import      # once
+tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_data.gd            # write
+tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_data.gd -- --check # exit 1 if stale
+# -- --dump=<trace>:<tick> prints every car of a trace at a tick (to diff a divergence)
+```
+
+### Parity (≤ 1e-9; bit-exact in practice)
+
+`crates/sim/tests/parity.rs`, vectors in `crates/sim/vectors/`:
+
+| Vectors | Result |
+| --- | --- |
+| `rng.json`: 7 seeds × 24 draws of each kind, `derive_seed`, the traffic stream chain | bit-exact (Godot's PCG32 with its `randf` / `randi_range`) |
+| `idm.json`: 1,200 cases × `accel`, `free_accel`, `interaction_accel`, `desired_gap`, `equilibrium_gap`, `pow_int` | 7,200 / 7,200 bit-exact |
+| `mobil.json`: 600 cases, `incentive`, `threshold`, `accepts`, `is_safe`, `b_safe_for` | bit-exact |
+| `no_ambush.json`: 1,500 cases (287 violations) | identical |
+| `player_velocity.json`: 300 cases of `_read_player`'s road velocity | within 1e-9 (libm) |
+| `loop_closures.json`: the client's closures and drop zones on loop_v1, per lane every 50 m | within 1e-8 m |
+| `trace_*.json`: the whole sim, per-tick state hash and every event | **tick-identical**: `sp_weave_120hz` 4,800 / 4,800 ticks (single-player rules, near / far ticks, hits, close passes), `sp_closure_120hz` 3,600 / 3,600 (set-piece closure), `mp_weave_20hz` 2,400 / 2,400 (20 Hz, all near, 1.0 s floor, 4 lanes, headway scale), `mp_lane_drop_20hz` 1,800 / 1,800 (a WP6.8 road drop with its zone) |
+
+The traces run the GDScript `TrafficSim` on the `StraightRoadPath` fixture with a scripted player and a tool-local spawner; the Rust replay applies the same ops. They exercise every profile including WP6.9's weaving racers, lane changes and cancels (player, hesitant, unsafe), mandatory merges, the zipper and harmonisation, hits and horns. The server config differs from them only in the MP flags (move time at the signal, the safety extensions, no lane splitting).
+
+### Tests and numbers
+
+| Test | What |
+| --- | --- |
+| `tests/parity.rs` | The table above |
+| `tests/mp_rules.rs` | Every profile signals ≥ 1.0 s and moves at its intent's tick with the announced time; a player (any index) as leader, never touched; a player as new follower tightens b_safe, and entering the gap cancels the signal; extrapolation (and its cap); leaders across the seam; ramp exits (signalled first) and entries (merge onto the road); density change through the ramps; a hit swerves away from the hitting player with hazards; road works; determinism by seed |
+| `tests/soak.rs` | Short soaks (3 min normal, 2 min rush) in the normal suite; `soak_hour_{light,normal,rush}` (`#[ignore]`): one simulated hour each with 6 bot players (IDM, weaving, reporting 150 ms late), the rule checker every tick |
+| `tests/alloc.rs` | A counting allocator: 600 ticks of a rush room with 8 players moving, joining, leaving, a hit and exits: **0 allocations** |
+| `tests/bench.rs` | µs per room tick (`cargo test --release -p sim --test bench -- --nocapture`) |
+
+**One-hour soaks** (release, `cargo test --release -p sim --test soak -- --ignored --nocapture`; the integration branch with WP6.8 and WP6.9):
+
+| Density | Vehicles (target, min–max after 60 s) | Lane changes signalled / moved / cancelled | Shortest blinker → motion, shortest intent lead | Merges, exits = entries | Contacts, rule violations | Wall time |
+| --- | --- | --- | --- | --- | --- | --- |
+| Light | 514, 513–514 | 46,966 / 44,590 / 2,364 | 1.05 s, 1.00 s | 3,460, 232 | 0, 0 | 15 s (235×) |
+| Normal | 857, 857–857 | 61,878 / 56,738 / 5,124 | 1.05 s, 1.00 s | 3,793, 276 | 0, 0 | 28 s (130×) |
+| Rush | 1200, 1200–1200 | 82,872 / 72,473 / 10,371 | 1.05 s, 1.00 s | 4,707, 319 | 0, 0 | 42 s (87×) |
+
+No bot driving normally was rear-ended (the bots' own cut-ins caused 13–35 contacts per hour, as a weaving player would). Rule violations cover signal time, unsignaled moves, intents (lead and move tick), the clamp, brake-light flags and off-road.
+
+**Tick cost** (`bench.rs`, release, Intel Xeon @ 2.10 GHz shared with other jobs, one thread; 8 players; a tick = sim step + ramps and density upkeep):
+
+| Density | Vehicles | Mean | Median | p99 | 20 rooms × 20 Hz |
+| --- | --- | --- | --- | --- | --- |
+| Light | 514 | 122 µs | 104 µs | 261 µs | 4.9 % of one core |
+| Normal | 857 | 199 µs | 182 µs | 386 µs | 8.0 % |
+| Rush | 1200 | 362 µs | 330 µs | 569 µs | 14.5 % |
+
+The N10 target (20 rooms × 8 players ≤ 50 % of 1 vCPU, room tick p99 < 5 ms) leaves room for streaming and scoring; the bench asserts p99 < 5 ms and < 50 % in release builds.
+
+### Open questions
+
+- **Protocol:** how to send ramp exits and entries (the pseudo-lane), and lane-splitting boundary targets (see "For N4.2").
+- **The three safety extensions** (MP-D5): approve, and schedule their port to `traffic_sim.gd` so the client's network IDM (N4.3) matches the server.
+- **Ramps:** no ramp geometry on the client yet (docs/LOOP_MAP.md): an exiting car moves one lane right onto the shoulder and is gone; an entering car appears on the shoulder at the on-ramp. N4.3 should fade them.
 
 ## Configuration reference
 
