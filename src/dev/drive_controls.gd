@@ -4,6 +4,9 @@ extends CanvasLayer
 ## zones were hard to find, three-finger taps don't reach the web build).
 ## Dev-only: scenes add the buttons they need per corner with `add_button()`;
 ## rows stack inward from each corner inside the display safe area.
+## Safe area (WP9.10): ScreenInsets.canvas_safe_rect, the same source as the HUD and
+## the menus (WP9.7: the web shell's insets, the phone's minimum left inset for the
+## camera cutout), so dev buttons never sit under the Dynamic Island.
 ## Faceted panels per the design system (chamfered StyleBoxFlat, thin edge),
 ## no animation when idle.
 
@@ -118,15 +121,19 @@ func _style(pressed: bool) -> StyleBoxFlat:
 	return s
 
 
+## The display safe area in canvas pixels (ScreenInsets: notch, camera cutout, rounded
+## corners; the whole canvas headless).
+func safe_rect() -> Rect2:
+	return ScreenInsets.canvas_safe_rect(get_viewport().get_visible_rect())
+
+
 ## Place each row in its corner inside the display safe area, stacking inward.
 func _layout() -> void:
-	var vp := get_viewport().get_visible_rect().size
-	var safe := Rect2(Vector2.ZERO, vp)
-	var screen_safe := DisplayServer.get_display_safe_area()
-	var win := DisplayServer.window_get_size()
-	if screen_safe.size.x > 0 and win.x > 0:
-		var k := vp / Vector2(win)
-		safe = Rect2(Vector2(screen_safe.position) * k, Vector2(screen_safe.size) * k)
+	layout_in(safe_rect())
+
+
+## Place each row in its corner inside `safe` (canvas px), stacking inward.
+func layout_in(safe: Rect2) -> void:
 	var stacked_by_corner := {}
 	var keys := _rows.keys()
 	keys.sort()

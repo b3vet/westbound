@@ -20,7 +20,8 @@ signal changed(key: StringName)
 const KEY_STEERING := &"steering_mode"
 const KEY_THROTTLE := &"throttle_mode"
 const KEY_HAND := &"left_handed"
-## The drag look (plan D10): not a chooser row, but part of the default layout SKIP gives.
+## The drag look (plan D10): not a chooser row, but part of the default layout SKIP gives,
+## and the look the sketch draws for drag steering (WP9.10).
 const KEY_DRAG_VISUAL := &"drag_visual"
 const TEXT_NA := "N/A"
 const TEXT_MIRRORED := "MIRRORED"
@@ -109,7 +110,7 @@ func _exit_tree() -> void:
 
 
 func _on_setting_changed(key: StringName) -> void:
-	if key == KEY_STEERING or key == KEY_THROTTLE or key == KEY_HAND:
+	if key == KEY_STEERING or key == KEY_THROTTLE or key == KEY_HAND or key == KEY_DRAG_VISUAL:
 		refresh()
 
 
@@ -139,7 +140,7 @@ func refresh() -> void:
 	tilt.note = String(NOTES[0][1]) if gyro_ok else TEXT_NA
 	var shown := &"gyro" if steering == &"gyro" and gyro_ok else &"drag"
 	var mode := &"manual" if throttle == &"manual" else &"auto"
-	sketch.set_layout(shown, mode, left)
+	sketch.set_layout(shown, mode, left, StringName(Settings.get_value(KEY_DRAG_VISUAL)))
 	var pair: Array = LINES[shown][mode]
 	line1.text = side_words(String(pair[0]), left)
 	line2.text = side_words(String(pair[1]), left)
