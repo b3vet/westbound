@@ -58,6 +58,8 @@ var yaw_lag_table_s := PackedFloat64Array()   ## already scaled by handling
 var heading_align_ratio: float
 var align_fade_mps: float
 var lateral_grip_rate: float   ## 1/s
+var _grip_decay_dt: float = -1.0
+var _grip_decay: float = 1.0
 var slip_max_tan: float
 
 # ---------------------------------------------------------------- Longitudinal
@@ -213,7 +215,7 @@ func _configure(tuning: Tuning, car: CarDef, vtype: VehicleType) -> void:
 	heading_align_ratio = 1.0 / (vt.heading_damping_ratio * vt.heading_damping_ratio)
 	align_fade_mps = Units.kmh_to_mps(vt.heading_align_fade_kmh)
 	lateral_grip_rate = 1.0 / (Units.ms_to_s(vt.lateral_grip_lag_ms) * h)
-	slip_max_tan = tan(vt.slip_angle_max_rad())
+	slip_max_tan = DetMath.tan(vt.slip_angle_max_rad())
 
 	traction_mps2 = vt.engine_traction_max_mps2
 	rolling_mps2 = vt.rolling_resistance_mps2
@@ -229,9 +231,9 @@ func _configure(tuning: Tuning, car: CarDef, vtype: VehicleType) -> void:
 	var top_gear_mps := top_speed_mps * vt.top_gear_speed_factor
 	var ratio_step := 1.0
 	if gear_count > 1:
-		ratio_step = pow(Units.pct_to_frac(vt.first_gear_speed_pct), 1.0 / float(gear_count - 1))
+		ratio_step = DetMath.pow(Units.pct_to_frac(vt.first_gear_speed_pct), 1.0 / float(gear_count - 1))
 	for g in gear_count:
-		gear_top_speed_mps[g] = top_gear_mps * pow(ratio_step, float(gear_count - 1 - g))
+		gear_top_speed_mps[g] = top_gear_mps * DetMath.pow(ratio_step, float(gear_count - 1 - g))
 	idle_rpm = vt.engine_idle_rpm
 	redline_rpm = vt.engine_redline_rpm
 	shift_up_rpm = redline_rpm * Units.pct_to_frac(vt.shift_up_pct)
@@ -252,6 +254,14 @@ func _configure(tuning: Tuning, car: CarDef, vtype: VehicleType) -> void:
 
 
 # ---------------------------------------------------------------- Per-tick queries (allocation-free)
+
+## exp(-dt × lateral_grip_rate): the lateral velocity's decay per tick (DetMath, cached per dt).
+func lateral_grip_decay(dt: float) -> float:
+	if dt != _grip_decay_dt:
+		_grip_decay_dt = dt
+		_grip_decay = DetMath.exp(-dt * lateral_grip_rate)
+	return _grip_decay
+
 
 ## Speed-sensitive maximum steer angle (rad): 30 deg at rest easing linearly to 3.5 deg at
 ## 250 km/h, held above.
@@ -321,7 +331,7 @@ func target_lane_change_time(v: float) -> float:
 func predicted_brake_time(v_from: float, v_to: float) -> float:
 	var k0 := braking_mps2 + engine_brake_mps2 + rolling_mps2
 	var w := sqrt(drag_per_m / k0)
-	return (atan(v_from * w) - atan(v_to * w)) / (k0 * w)
+	return (DetMath.atan(v_from * w) - DetMath.atan(v_to * w)) / (k0 * w)
 
 
 # ---------------------------------------------------------------- The lane-change procedure
@@ -401,7 +411,8 @@ func _simulate_move(st: VehicleState, inp: VehicleInput, v: float, hold_ticks: i
 		VehiclePhysics.step(st, inp, dt, self, null)
 		if out != null:
 			_record(st, i, out)
-		var d_dot := v * sin(st.yaw) + st.v_lat * cos(st.yaw)
+		var sy := DetMath.sin_cos(st.yaw)
+		var d_dot := v * sy + st.v_lat * DetMath.cos_out
 		if i >= hold_ticks and st.steer_angle == 0.0 and absf(d_dot) < QUIESCENT_MPS \
 				and absf(st.yaw) < settle_yaw_rad:
 			ticks = i + 1

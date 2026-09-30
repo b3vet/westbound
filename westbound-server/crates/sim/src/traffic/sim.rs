@@ -263,8 +263,7 @@ impl PlayerInput {
         width: f64,
         tick: u32,
     ) -> Self {
-        let cy = yaw.cos();
-        let sy = yaw.sin();
+        let (sy, cy) = crate::detmath::sin_cos(yaw);
         PlayerInput {
             s,
             d,

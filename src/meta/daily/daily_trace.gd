@@ -12,6 +12,7 @@ extends RefCounted
 ## the same lines, so tools/determinism/compare.mjs can diff them:
 ##   DT info date=... seed=... driver=... view_m=... tier=... platform=... hz=...
 ##   DT libm sin=... cos=... ...                  (the math library's bits on fixed inputs)
+##   DT detmath sin=... cos=... ...               (the same on DetMath: identical everywhere)
 ##   DT sec=N all=h car=h input=h traffic=h opp=h scoring=h lives=h legs=h obj=h sun=h
 ##          forks=h stats=h  s=... v=... cars=n   (after every simulated second)
 ##   DTT k=... (per tick of --detail=<second>: the same hashes and the car's float bits)
@@ -111,6 +112,7 @@ func start(parent: Node, run_date: String, run_seconds: int, pin_view_m: float =
 	ticks_done = 0
 	lines.append(info_line())
 	lines.append(libm_line())
+	lines.append(libm_line(true))
 	lines.append(params_line())
 
 
@@ -216,18 +218,18 @@ func second_line(sec: int) -> String:
 		run.stats.hits]
 
 
-## Also the math library's results the next VehiclePhysics.step takes from this state
-## (lcos, lsin: the heading; lexp: the yaw lag blend; ltan: the steer angle) and the
-## first-hit wobble's next yaw step (lwob, Lives: a sine): on the tick before the first
-## divergence, the one that differs is its cause.
+## Also the DetMath results the next VehiclePhysics.step takes from this state (lcos,
+## lsin: the heading; lexp: the yaw lag blend; ltan: the steer angle) and the first-hit
+## wobble's next yaw step (lwob, Lives: a sine): on the tick before the first divergence,
+## the one that differs is its cause (N8.2: DetMath's, so they should never differ).
 func tick_line() -> String:
 	var st := run.car.state
 	var p := run.car.params
 	var dt := run.tuning.vehicle.physics_dt()
 	return "DTT k=%d all=%s %s s=%s d=%s yaw=%s v=%s vlat=%s steer=%s lcos=%s lsin=%s lexp=%s ltan=%s lwob=%s" % [
 		ticks_done, _h(run.trace_hash()), _components(), _f(st.s), _f(st.d), _f(st.yaw), _f(st.v),
-		_f(st.v_lat), _f(run.car.input.steer), _f(cos(st.yaw)), _f(sin(st.yaw)),
-		_f(exp(-dt / p.yaw_lag_s(maxf(st.v, 0.0)))), _f(tan(st.steer_angle)), _f(_wobble_next(dt))]
+		_f(st.v_lat), _f(run.car.input.steer), _f(DetMath.cos(st.yaw)), _f(DetMath.sin(st.yaw)),
+		_f(DetMath.exp(-dt / p.yaw_lag_s(maxf(st.v, 0.0)))), _f(DetMath.tan(st.steer_angle)), _f(_wobble_next(dt))]
 
 
 func _components() -> String:
@@ -244,7 +246,9 @@ func _components() -> String:
 ## `masked=` hashes the same results with the low LIBM_MASK_BITS mantissa bits cleared (equal
 ## there = the differences are last-bit rounding); `chunks=` has an 8-bit hash per block of
 ## LIBM_CHUNK inputs (compare.mjs counts the blocks that differ: the share of inputs hit).
-static func libm_line() -> String:
+## With `det` (N8.2): the same probe on DetMath ("DT detmath"), which must be identical
+## on every platform.
+static func libm_line(det: bool = false) -> String:
 	var names: Array[String] = ["sin", "cos", "tan", "atan2", "exp", "log", "pow", "sqrt", "asin", "atan"]
 	var hs: Array[int] = []
 	var masked: Array[int] = []
@@ -264,6 +268,11 @@ static func libm_line() -> String:
 		var vals: Array[float] = [sin(x), cos(x), tan(x), atan2(x, LIBM_ATAN_X), exp(x * LIBM_EXP_SCALE),
 			log(ax + LIBM_LOG_BIAS), pow(ax + LIBM_LOG_BIAS, LIBM_POW), sqrt(ax),
 			asin(clampf(x / absf(LIBM_FROM), -1.0, 1.0)), atan(x)]
+		if det:
+			vals = [DetMath.sin(x), DetMath.cos(x), DetMath.tan(x), DetMath.atan2(x, LIBM_ATAN_X),
+				DetMath.exp(x * LIBM_EXP_SCALE), DetMath.log(ax + LIBM_LOG_BIAS),
+				DetMath.pow(ax + LIBM_LOG_BIAS, LIBM_POW), sqrt(ax),
+				DetMath.asin(clampf(x / absf(LIBM_FROM), -1.0, 1.0)), DetMath.atan(x)]
 		for j in vals.size():
 			hs[j] = TraceHash.mix_float(hs[j], vals[j])
 			bits.encode_double(0, vals[j])
@@ -279,7 +288,7 @@ static func libm_line() -> String:
 		parts.append("%s_masked=%s" % [names[j], HEX32 % masked[j]])
 	for j in names.size():
 		parts.append("%s_chunks=%s" % [names[j], chunks[j]])
-	return "%s libm n=%d chunk=%d %s" % [PREFIX, LIBM_COUNT, LIBM_CHUNK, " ".join(parts)]
+	return "%s %s n=%d chunk=%d %s" % [PREFIX, "detmath" if det else "libm", LIBM_COUNT, LIBM_CHUNK, " ".join(parts)]
 
 
 func _h(h: int) -> String:

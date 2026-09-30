@@ -5,6 +5,7 @@ Rules (ids are stable; docs/TOOLS.md has the table with escapes):
   WB100        malformed `# lint:` directive
   WB101-WB103  magic numbers, determinism, purity (sim files)
   WB104        allocation in a tick function (sim files, warning)
+  WB105        platform libm transcendental in sim code (use DetMath)
   WB201        missing return type (src/, warning)
 """
 
@@ -32,6 +33,7 @@ RULES: dict[str, tuple[str, str]] = {
     "WB102": (ERROR, "nondeterminism in sim code"),
     "WB103": (ERROR, "impure sim code (Node, scene tree, autoload, Input)"),
     "WB104": (WARNING, "allocation in a sim tick function"),
+    "WB105": (ERROR, "platform math library (sin, cos, exp, ...) in sim code; use DetMath"),
     "WB201": (WARNING, "func without a return type"),
 }
 
@@ -53,8 +55,8 @@ DEFAULT_AUTOLOADS = ("Events", "Game", "Settings", "Save")
 ALLOWED_NUMBERS = {0.0, 1.0, 2.0, 0.5}
 
 DIRECTIVE = re.compile(r"^#+\s*lint:\s*([\w-]+)[ \t]*(.*)$")
-KNOWN_DIRECTIVES = {"sim", "not-sim", "allow-number", "allow-alloc"}
-NEEDS_REASON = {"not-sim", "allow-number", "allow-alloc"}
+KNOWN_DIRECTIVES = {"sim", "not-sim", "allow-number", "allow-alloc", "allow-libm"}
+NEEDS_REASON = {"not-sim", "allow-number", "allow-alloc", "allow-libm"}
 
 
 @dataclass(frozen=True, order=True)
@@ -118,6 +120,45 @@ NONDETERMINISM = [
     (re.compile(r"(?<![\w.])Engine\.(get_\w*frames\w*)"), "Engine.{0} (frame timing) in sim"),
     (re.compile(r"\b(get_(?:physics_)?process_delta_time)\s*\("), "{0}() (frame timing) in sim; dt is a parameter"),
 ]
+
+# WB105 (N8.2): the platform math libraries round these differently in the last bit
+# (glibc vs Emscripten's musl vs iOS / Android), so a sim that calls them is not the same
+# run on two devices. DetMath.<name>(...) is fine (the lookbehind skips `.name(`).
+LIBM_CALL = re.compile(
+    r"(?<![\w.])(sin|cos|tan|asin|acos|atan|atan2|exp|log|pow|sinh|cosh|tanh|asinh|acosh|atanh|ease"
+    r"|lerp_angle|angle_difference|rotate_toward)\s*\("
+)
+# Network client code (src/net/) follows the server's authority (corrections, intents,
+# interpolation) and is never replayed bit for bit, so WB105 skips it.
+LIBM_EXEMPT_PREFIXES = ("src/net/",)
+# WB105 also covers these simulation-side files outside the sim scope (load-time physics
+# constants, controllers the run drives the car with, the replay verifier).
+LIBM_GLOBS = (
+    "src/vehicle/vehicle_params.gd",
+    "src/vehicle/vehicle_state.gd",
+    "src/run/run.gd",
+    "src/run/run_finale.gd",
+    "src/run/run_forks.gd",
+    "src/meta/daily/daily_script_driver.gd",
+    "src/traffic/dev/sandbox_bot.gd",
+    "tools/verifier/*.gd",
+)
+LIBM_METHOD = re.compile(r"\.(angle|angle_to|angle_to_point|rotated|slerp|from_angle|from_euler|get_euler)\s*\(")
+
+
+def _libm(rel: str, lines: list[Line], directives: dict[int, dict[str, str]]) -> list[Finding]:
+    out: list[Finding] = []
+    if rel.startswith(LIBM_EXEMPT_PREFIXES):
+        return out
+    for ln in lines:
+        if "allow-libm" in directives.get(ln.lineno, {}):
+            continue
+        for m in LIBM_CALL.finditer(ln.code):
+            out.append(Finding(rel, ln.lineno, "WB105", f"{m.group(1)}() rounds differently per platform; use DetMath.{m.group(1)}() or '# lint: allow-libm <reason>' (rendering only)"))
+        for m in LIBM_METHOD.finditer(ln.code):
+            out.append(Finding(rel, ln.lineno, "WB105", f".{m.group(1)}() uses the platform math library; use DetMath or '# lint: allow-libm <reason>'"))
+    return out
+
 
 NODE_BASES = re.compile(
     r"^(Node|Control|CanvasItem|CanvasLayer|Viewport|SubViewport|Window|SceneTree|MainLoop|Timer"
@@ -354,6 +395,9 @@ def lint_file(root: Path, path: Path, autoloads: tuple[str, ...]) -> list[Findin
         findings += _magic_numbers(rel, lines, per_line)
         findings += _determinism_and_purity(rel, lines, autoloads)
         findings += _allocations(rel, lines, per_line)
+        findings += _libm(rel, lines, per_line)
+    elif any(fnmatch.fnmatchcase(rel, g) for g in LIBM_GLOBS):
+        findings += _libm(rel, lines, per_line)
     if rel.startswith("src/"):
         findings += _return_types(rel, lines)
     return findings

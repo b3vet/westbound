@@ -121,8 +121,8 @@ func set_player_body(length_m: float, width_m: float) -> void:
 
 ## The player's state for this readout (the state the sim last stepped with).
 func set_player(player: VehicleState) -> void:
-	var cy := cos(player.yaw)
-	var sy := sin(player.yaw)
+	var sy := DetMath.sin_cos(player.yaw)
+	var cy := DetMath.cos_out
 	var kappa := road.curvature_at(player.s)
 	_ps = player.s
 	_pd = player.d

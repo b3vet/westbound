@@ -121,21 +121,25 @@ func record_run(run_seed: int, car_index: int, max_s: float, make_controller: Ca
 
 
 ## Plays `replay` back (optionally with the server's claims) and returns the result.
-func verify(replay: NetReplayFile, score: int = -1, hits: int = -1, run_seed: int = -1) -> Dictionary:
+## `resim` false: the N8.1 kinematic playback even when the replay has inputs.
+func verify(replay: NetReplayFile, score: int = -1, hits: int = -1, run_seed: int = -1,
+		resim: bool = true) -> Dictionary:
 	var v := ReplayVerifier.new(replay, net)
 	v.claimed_score = score
 	v.claimed_hits = hits
 	v.expected_seed = run_seed
+	v.resim = resim
 	var res := v.verify(tree.root)
 	await tree.process_frame
 	return res
 
 
-## Plays `rec` back with the original's exact car state fed in at every tick (instead of
-## the quantized, interpolated samples) and returns the first tick whose simulation hash
+## Plays `rec` back kinematically with the original's exact car state fed in at every tick
+## (instead of the quantized, interpolated samples) and returns the first tick whose simulation hash
 ## differs from the original's (-1: identical throughout) and the result.
 func verify_exact(rec: Recorded) -> Array:
 	var v := ReplayVerifier.new(rec.replay, net)
+	v.resim = false   # the kinematic playback, fed the exact states
 	v.claimed_score = rec.score
 	v.claimed_hits = rec.hits
 	var first := [-1]

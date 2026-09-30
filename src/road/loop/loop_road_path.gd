@@ -168,7 +168,7 @@ func sample_into(s: float, out: RoadSample) -> void:
 	out.s = s
 	out.curvature = k0 + u * (k1 - k0)
 	out.set_frame(heading + lap * _turn, g0 + u * (g1 - g0))
-	out.set_position(_x[j] + ds * sin(mid_h), elevation, _z[j] - ds * cos(mid_h))
+	out.set_position(_x[j] + ds * sin(mid_h), elevation, _z[j] - ds * cos(mid_h))   # lint: allow-libm world position (rendering)
 
 
 func curvature_at(s: float) -> float:

@@ -168,13 +168,14 @@ func test_hooks_allocate_nothing() -> void:
 func test_the_determinism_check_runs_and_repeats() -> void:
 	var first := _trace(1)
 	var second := _trace(1)
-	if not check(first.size() >= 5, "info, libm, params, a second, done: %s" % str(first)):
+	if not check(first.size() >= 6, "info, libm, detmath, params, a second, done: %s" % str(first)):
 		return
 	check(first[0].begins_with("DT info date=%s" % DATE), first[0])
 	check(first[0].contains("driver=script"), "the open-loop driver by default")
 	check(first[1].begins_with("DT libm "), "the libm probe")
-	check(first[2].begins_with("DT params ") and first[2].contains(" cap_time_s="), "the car's constants")
-	check(first[3].begins_with("DT sec=1 all=") and first[3].contains(" score="), first[3])
+	check(first[2].begins_with("DT detmath "), "the DetMath probe (N8.2)")
+	check(first[3].begins_with("DT params ") and first[3].contains(" cap_time_s="), "the car's constants")
+	check(first[4].begins_with("DT sec=1 all=") and first[4].contains(" score="), first[4])
 	eq(first[first.size() - 1], "DT done seconds=1")
 	eq(second, first, "the same run twice: the same trace")
 

@@ -165,7 +165,10 @@ func test_battery_saver_skips_the_fps_rung() -> void:
 	eq(_rungs, [1, 2, 3] as Array[int])
 
 
+## The switch (off by default since N8.2, when the simulation stopped reading the view
+## distance) still holds the view-distance rung through a run when turned on.
 func test_view_distance_rung_waits_for_the_run_to_end() -> void:
+	_tuning.governor_view_distance_between_runs = true
 	var q := _make()
 	Events.game_state_changed.emit(Game.MENU, Game.COUNTDOWN)
 	Events.game_state_changed.emit(Game.COUNTDOWN, Game.RUNNING)
@@ -197,12 +200,13 @@ func test_view_distance_rung_waits_for_the_run_to_end() -> void:
 		"the next run starts with it (docs/QUALITY.md: N8.2)")
 
 
-func test_view_distance_live_when_the_switch_is_off() -> void:
-	_tuning.governor_view_distance_between_runs = false
+func test_view_distance_live_by_default() -> void:
+	check(not Tuning.load_default().quality.governor_view_distance_between_runs,
+		"N8.2: the simulation reads RoadTuning.sim_horizon_m, so the rung applies live")
 	var q := _make()
 	Events.game_state_changed.emit(Game.MENU, Game.RUNNING)
 	q.set_governor_rung(3)
-	near(q.view_distance_m, 550.0, 1e-9, "after N8.2 the rung can apply live")
+	near(q.view_distance_m, 550.0, 1e-9, "the rung applies mid-run")
 
 
 func test_outside_gameplay_frames_do_not_count() -> void:

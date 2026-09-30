@@ -219,8 +219,7 @@ func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profil
 	source = set_pieces
 	_closing_floor = Units.kmh_to_mps(director_tuning.wave_min_closing_kmh)
 	_apply_headway()
-	var q := run.tuning.quality
-	fog_end_m = q.view_distance_m[maxi(q.tier_index(q.default_tier), 0)]
+	fog_end_m = run.tuning.road.sim_horizon_m   # N8.2: tier-independent (the run sets the same)
 	set_player_box(player_length_m, player_width_m)
 	_behind_debt.resize(traffic_tuning.lane_flow_speeds_from_right_kmh.size())
 	_behind_wait.resize(_behind_debt.size())
@@ -246,8 +245,9 @@ func set_ghost_zone(behind_m: float, ahead_m: float, half_width_m: float) -> voi
 	ghost_half_width_m = half_width_m
 
 
-## The run passes the fog end at the current view distance (quality tier x the color
-## script's fog_end_frac, or just the view distance to be conservative).
+## The run passes its simulation horizon (RoadTuning.sim_horizon_m, N8.2): the same on
+## every device, and past every quality tier's fog, so the spawn distance never depends on
+## the tier (fairness rule 5 holds on every tier).
 func set_fog_end(meters: float) -> void:
 	fog_end_m = meters
 	opposite.ahead_m = ahead_distance()

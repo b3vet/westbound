@@ -17,10 +17,17 @@ extends RefCounted
 ## Minimum distance between the two boxes; 0 when they overlap or touch.
 static func clearance(s1: float, d1: float, yaw1: float, hl1: float, hw1: float,
 		s2: float, d2: float, yaw2: float, hl2: float, hw2: float) -> float:
-	var c1 := cos(yaw1)
-	var n1 := sin(yaw1)
-	var c2 := cos(yaw2)
-	var n2 := sin(yaw2)
+	var n1 := DetMath.sin_cos(yaw1)
+	var c1 := DetMath.cos_out
+	var n2 := DetMath.sin_cos(yaw2)
+	var c2 := DetMath.cos_out
+	return clearance_cs(s1, d1, c1, n1, hl1, hw1, s2, d2, c2, n2, hl2, hw2)
+
+
+## clearance() with each heading given as its (cos, sin) (N8.2: the scoring passes the
+## player's once per tick and a traffic car's from its velocity direction).
+static func clearance_cs(s1: float, d1: float, c1: float, n1: float, hl1: float, hw1: float,
+		s2: float, d2: float, c2: float, n2: float, hl2: float, hw2: float) -> float:
 	var ds := s2 - s1
 	var dd := d2 - d1
 	# Separating-axis test on the four box axes: forward (c, n) and right (-n, c).

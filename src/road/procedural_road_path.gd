@@ -256,7 +256,7 @@ func sample_into(s: float, out: RoadSample) -> void:
 	out.s = s
 	out.curvature = k0 + u * (k1 - k0)
 	out.set_frame(heading, g0 + u * (g1 - g0))
-	out.set_position(_x[j] + ds * sin(mid_h), elevation, _z[j] - ds * cos(mid_h))
+	out.set_position(_x[j] + ds * sin(mid_h), elevation, _z[j] - ds * cos(mid_h))   # lint: allow-libm world position (rendering); the s/d road table never reads it
 
 
 func curvature_at(s: float) -> float:
@@ -852,8 +852,8 @@ func _build_block() -> void:
 		else:
 			# Same rule as sample_into at u = 1: Hermite heading at the midpoint.
 			var mid_h := (_h[j - 1] + _h[j]) * 0.5 + _dx * (_k[j - 1] - _k[j]) * 0.5 * 0.5 * 0.5
-			_x[j] = _x[j - 1] + _dx * sin(mid_h)
-			_z[j] = _z[j - 1] - _dx * cos(mid_h)
+			_x[j] = _x[j - 1] + _dx * sin(mid_h)   # lint: allow-libm world position (rendering)
+			_z[j] = _z[j - 1] - _dx * cos(mid_h)   # lint: allow-libm world position (rendering)
 	_n = size
 	for f in forks:
 		if not f.pose_known and f.split_s <= last_s:
@@ -862,8 +862,8 @@ func _build_block() -> void:
 				f.pose_known = true
 				f.split_x = _x[js]
 				f.split_z = _z[js]
-				f.right_x = cos(_h[js])
-				f.right_z = sin(_h[js])
+				f.right_x = cos(_h[js])   # lint: allow-libm the fork's world frame (rendering)
+				f.right_z = sin(_h[js])   # lint: allow-libm the fork's world frame (rendering)
 
 
 # ---------------------------------------------------------------- Biome legs (WP6.4a)

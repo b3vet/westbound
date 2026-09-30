@@ -30,6 +30,10 @@ extends Node
 ##   fingerprint (NetReplayFile.traffic_fingerprint), so the verifier can tell where its
 ##   traffic stopped being this one. **The event log** (from `Events`, stamped with the last tick seen):
 ##   scored, hit, chain banked / lost, bonus, checkpoint crossed.
+## - **Inputs (N8.2):** the car's exact inputs every tick (PlayerCar quantizes them to
+##   1 / VehicleInput.QUANTUM before physics), one row per tick where any changed, so the
+##   verifier re-simulates the car bit for bit. A gap in the ticks (a missed capture) drops
+##   the stream and the verifier falls back to the 30 Hz path.
 ## - **finish(results, date):** the header's claims (score, hits, distance, ticks) from the
 ##   run_over payload, then the encoded bytes. NetRunsClient stores them until uploaded.
 ## Per tick it allocates nothing (the columns are reserved for replay_reserve_s and grow
@@ -69,6 +73,11 @@ var _p_steer: float = 0.0
 var _p_throttle: float = 0.0
 var _p_boost: bool = false
 var _hash_cache: Dictionary[int, int] = {}
+var _inputs_ok: bool = true
+var _in_steer: int = 0
+var _in_throttle: int = 0
+var _in_brake: int = 0
+var _in_boost: bool = false
 
 
 func _init(net_tuning: NetTuning = null, build: int = 0) -> void:
@@ -125,6 +134,8 @@ func begin(r: Run) -> bool:
 	replay.car = String(r.car.car.id)
 	var reserve := ceili(t.replay_reserve_s * _hz / float(_every))
 	replay.reserve(reserve, reserve >> 2)   # events: about one per four samples
+	replay.reserve_inputs(reserve)   # inputs: rows only where they change
+	_inputs_ok = true
 	_last_k = 0
 	_last_sample_k = 0
 	_crash_done = false
@@ -162,6 +173,8 @@ func finish(results: Dictionary, date: String) -> PackedByteArray:
 		return PackedByteArray()
 	replay.date = date
 	replay.ticks = _last_k
+	if not _inputs_ok:
+		replay.input_count = 0   # a missed tick: the verifier plays the 30 Hz path instead
 	replay.score = int(results.get(RunStats.SCORE, 0))
 	replay.hits = int(results.get(RunStats.HITS, 0))
 	replay.distance_mm = roundi(float(results.get(RunStats.DISTANCE_M, 0.0)) * NetReplayFile.Q_CLEARANCE)
@@ -176,6 +189,7 @@ func cancel() -> void:
 func _tick(k: int, final: bool) -> void:
 	var cs := run.car.state
 	var inp := run.car.input
+	_record_input(k, inp)
 	var fl := 0
 	var swapped := run.forks.right_count != _last_right
 	var reset := run._resets != _last_resets
@@ -224,6 +238,26 @@ func _tick(k: int, final: bool) -> void:
 	_p_throttle = inp.throttle
 	_p_boost = cs.boost_active
 	_last_k = k
+
+
+## The inputs physics took on tick k (already multiples of 1 / Q_INPUT): a row when any
+## changed. Ticks must follow one another (k = the previous + 1) or the stream is dropped.
+func _record_input(k: int, inp: VehicleInput) -> void:
+	if not _inputs_ok:
+		return
+	if k != _last_k + 1:
+		_inputs_ok = false
+		return
+	var sq := roundi(inp.steer * NetReplayFile.Q_INPUT)
+	var tq := roundi(inp.throttle * NetReplayFile.Q_INPUT)
+	var bq := roundi(inp.brake * NetReplayFile.Q_INPUT)
+	if replay.input_count == 0 or sq != _in_steer or tq != _in_throttle or bq != _in_brake \
+			or inp.boost != _in_boost:
+		replay.add_input(k, sq, tq, bq, inp.boost)
+		_in_steer = sq
+		_in_throttle = tq
+		_in_brake = bq
+		_in_boost = inp.boost
 
 
 ## The lateral shift of the fork just resolved to the right (RunForks keeps it per fork).

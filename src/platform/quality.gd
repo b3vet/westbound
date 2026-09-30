@@ -19,14 +19,14 @@ extends Node
 ## user's `quality_tier` setting, and no rung raises any value above what the user's tier
 ## gives. docs/QUALITY.md.
 ##
-## Simulation safety (WP9.1): the rungs change rendering only (render scale, particles,
-## the frame cap), except that the view distance still feeds the simulation (the
-## director's spawn distance at run start, how far ahead the road and the leg planner
-## generate: docs/QUALITY.md → Simulation safety; N8.2). So the view-distance rung is
-## held from a run's start (Game COUNTDOWN) to its end (RESULTS / MENU) and applied between
-## runs (`QualityTuning.governor_view_distance_between_runs`): a governor step mid-run never
-## changes the run. `run_view_distance_m` is the user tier's view distance, never the
-## governor's, for simulation uses once N8.2 moves them off `view_distance_m`.
+## Simulation safety (WP9.1, N8.2): the rungs change rendering only (render scale,
+## particles, the frame cap, the view distance). Since N8.2 the simulation reads
+## RoadTuning.sim_horizon_m (the director's spawn distance, the road and leg planner
+## horizon, fork candidates), never the view distance, so every rung applies live.
+## `QualityTuning.governor_view_distance_between_runs` (false) can still hold the
+## view-distance rung from a run's start (Game COUNTDOWN) to its end (RESULTS / MENU) and
+## apply it between runs. `run_view_distance_m` is the user tier's view distance, never the
+## governor's. docs/QUALITY.md → Simulation safety.
 ##
 ## All numbers come from a `QualityTuning` resource (read duck-typed, so tests
 ## can pass a double).

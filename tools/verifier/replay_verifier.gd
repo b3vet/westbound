@@ -24,9 +24,16 @@ extends RefCounted
 ## buffer is read and cleared (the adapter never drains: nothing renders). No frame() is
 ## played: views, HUD and sky only listen (Architecture rule 8).
 ##
-## This is an approximation until the determinism audit (N8.2): playback on another
-## machine can differ in the last float bits (pow/sin/cos/exp in the sims), and the path
-## is quantized (0.1 mm) and interpolated between samples.
+## **Re-simulation (N8.2).** A replay with an input stream (every replay the N8.2 client
+## records) is not interpolated: the car is driven from GO by its recorded inputs through
+## the real Run.tick (controller → VehiclePhysics → the whole simulation), with the
+## run's real lives, and the result must land on every 30 Hz sample exactly (the quantized
+## state equal to the recorded one): `path_mismatch` otherwise. The simulation is
+## bit-identical on every platform (DetMath, fixed tick, tier-independent horizon), so an
+## honest replay reproduces the client's run tick for tick: every event, hit and the score
+## (docs/DETERMINISM.md). The physics limits are still checked on the samples.
+## A replay without inputs (an N8.1 client) is played back kinematically as before: an
+## approximation (the path is quantized and interpolated between samples).
 
 const RUN_SCENE_PATH := "res://src/run/run.tscn"
 const MAX_LISTED_VIOLATIONS := 20
@@ -39,6 +46,9 @@ const REASON_PHYSICS := "physics"
 const REASON_SEED := "seed_mismatch"
 const REASON_LOG := "log_mismatch"
 const REASON_MALFORMED := "malformed"
+## N8.2: the re-simulated car left the recorded path (edited inputs or samples, or a
+## determinism bug: the result says where).
+const REASON_PATH := "path_mismatch"
 
 ## Violation kinds.
 const V_SPEED := "speed"
@@ -53,6 +63,8 @@ const V_RESET := "reset"
 const V_FORK := "fork_swap"
 const V_SAMPLES := "samples"
 const V_SEED := "seed"
+const V_RESIM := "resim"
+const V_INPUTS := "inputs"
 
 var replay: NetReplayFile
 var tuning: NetTuning
@@ -90,6 +102,13 @@ var _fp_checked: int = 0
 var _fp_matched: int = 0
 ## The first tick whose traffic fingerprint differs from the client's (-1: none).
 var diverged_at: int = -1
+## N8.2: re-simulate from the input stream when the replay has one (off: always the
+## kinematic playback; tests compare the two).
+var resim: bool = true
+## The first sample tick the re-simulated state missed (-1: none) and how many missed.
+var resim_mismatch_at: int = -1
+var resim_mismatches: int = 0
+var _resim_edges := PackedInt64Array()
 var _hit_grace_ticks: int = 0
 var _meter: float = 0.0
 var _k: int = 0
@@ -132,7 +151,10 @@ func verify(host: Node) -> Dictionary:
 		return result
 	_limits = VerifierLimits.new(_run.car.params, tuning, _dt)
 	_index_events()
-	_play()
+	if _resimulating():
+		_play_resim()
+	else:
+		_play()
 	_run.scoring.notify_run_end(_run.events)
 	_scan_events(0)
 	_run.events.clear()
@@ -180,13 +202,19 @@ func _make_run(host: Node) -> Run:
 	r.record_best = false
 	r.car_index = car_index
 	host.add_child(r)
-	r.infinite_lives = true
+	# Kinematic playback: infinite lives (the path goes on past the recorded crash, every
+	# hit counts). Re-simulation: the run's own lives, so it ends where the client's did.
+	r.infinite_lives = not _resimulating()
 	_hz = float(r.tuning.vehicle.physics_tick_hz)
 	_dt = r.tuning.vehicle.physics_dt()
 	_hit_grace_ticks = roundi(tuning.verify_hit_grace_s * _hz)
 	_ghost_s = r.tuning.lives.ghost_period_s
 	r.go()
 	return r
+
+
+func _resimulating() -> bool:
+	return resim and replay.has_inputs()
 
 
 func _free_run() -> void:
@@ -293,6 +321,108 @@ func _play() -> void:
 			break
 
 
+## N8.2: drives the run from GO with the recorded inputs (the real Run.tick), then checks
+## each sample against the re-simulated state (exact, in wire units), the boost edges, the
+## fork swaps and resets, and the physics limits on the samples.
+func _play_resim() -> void:
+	var r := replay
+	if r.tick[0] != 1:
+		_violate(V_SAMPLES, 0, "the first sample is tick %d, not 1" % r.tick[0])
+	for i in range(1, r.sample_count):
+		if r.tick[i] <= r.tick[i - 1]:
+			_violate(V_SAMPLES, int(r.tick[i]), "sample ticks go backwards")
+			return
+	if expected_seed >= 0 and expected_seed != r.seed_value:
+		_violate(V_SEED, 0, "the replay's seed %d is not the run's %d" % [r.seed_value, expected_seed])
+	if not _inputs_valid():
+		return
+	var ctrl := ReplayInputs.new(r)
+	_run.drive_controller = ctrl
+	var st := _run.car.state
+	var last := int(r.tick[r.sample_count - 1])
+	var b := 0
+	var boost_was := st.boost_active
+	var right_before := _run.forks.right_count
+	var resets_before := _run._resets
+	_resim_edges.clear()
+	for k in range(1, last + 1):
+		_k = k
+		ctrl.k = k
+		_run.tick()
+		_scan_events(0)
+		_run.events.clear()
+		if st.boost_active != boost_was:
+			boost_was = st.boost_active
+			_resim_edges.append(k * 2 + (1 if boost_was else 0))
+		var swapped := _run.forks.right_count != right_before
+		right_before = _run.forks.right_count
+		var reset := _run._resets != resets_before
+		resets_before = _run._resets
+		if _fingerprints.has(k):
+			_fp_checked += 1
+			if NetReplayFile.traffic_fingerprint(_run.sim.state) == _fingerprints[k]:
+				_fp_matched += 1
+			elif diverged_at < 0:
+				diverged_at = k
+		if b < r.sample_count and int(r.tick[b]) == k:
+			var fl := int(r.flags[b])
+			if swapped != ((fl & NetReplayFile.FLAG_FORK_SWAP) != 0):
+				_violate(V_FORK, k, "the recorded path and the re-simulation disagree on a fork swap")
+			if reset != ((fl & NetReplayFile.FLAG_RESET) != 0):
+				_violate(V_RESET, k, "the recorded path and the re-simulation disagree on a reset")
+			_compare_sample(b, k)
+			if b > 0 and (fl & (NetReplayFile.FLAG_RESET | NetReplayFile.FLAG_FORK_SWAP)) == 0:
+				_check_segment(b - 1, b)
+			b += 1
+		elif swapped or reset:
+			_violate(V_RESIM, k, "the re-simulation swapped a fork or reset the car where the replay has no sample")
+		if on_tick.is_valid():
+			on_tick.call(k, _run)
+		if _run.state != Game.RUNNING:
+			break
+	if b < r.sample_count:
+		_violate(V_RESIM, _k, "the re-simulated run ended at tick %d, the replay goes on to %d" % [_k, last])
+	if _resim_edges != _boost_edges:
+		_violate(V_RESIM, 0, "the re-simulated boost edges differ from the recorded ones")
+
+
+## The input stream's shape: rows from tick 1, strictly increasing ticks, values in range.
+func _inputs_valid() -> bool:
+	var r := replay
+	var q := int(NetReplayFile.Q_INPUT)
+	if r.in_tick[0] != 1:
+		_violate(V_INPUTS, 0, "the inputs start at tick %d, not 1" % r.in_tick[0])
+		return false
+	for i in r.input_count:
+		if i > 0 and r.in_tick[i] <= r.in_tick[i - 1]:
+			_violate(V_INPUTS, int(r.in_tick[i]), "input ticks go backwards")
+			return false
+		if absi(r.in_steer[i]) > q or r.in_throttle[i] < 0 or r.in_throttle[i] > q or r.in_brake[i] < 0 \
+				or r.in_brake[i] > q or r.in_boost[i] < 0 or r.in_boost[i] > 1:
+			_violate(V_INPUTS, int(r.in_tick[i]), "an input out of range")
+			return false
+	return true
+
+
+## The re-simulated state after tick k against sample b, in wire units (exact).
+func _compare_sample(b: int, k: int) -> void:
+	var r := replay
+	var st := _run.car.state
+	var ds := roundi(st.s * NetReplayFile.Q_POS) - r.s_q[b]
+	var dd := roundi(st.d * NetReplayFile.Q_POS) - r.d_q[b]
+	var dy := roundi(st.yaw * NetReplayFile.Q_YAW) - r.yaw_q[b]
+	var dv := roundi(st.v * NetReplayFile.Q_SPEED) - r.v_q[b]
+	var dl := roundi(st.v_lat * NetReplayFile.Q_SPEED) - r.vlat_q[b]
+	var boost_ok := st.boost_active == ((int(r.flags[b]) & NetReplayFile.FLAG_BOOST_ACTIVE) != 0)
+	if ds == 0 and dd == 0 and dy == 0 and dv == 0 and dl == 0 and boost_ok:
+		return
+	resim_mismatches += 1
+	if resim_mismatch_at < 0:
+		resim_mismatch_at = k
+		_violate(V_RESIM, k, "the re-simulated car is off the recorded sample: s %+d, d %+d (10 um), yaw %+d (1e-6 rad), v %+d, v_lat %+d (0.1 mm/s)%s" % [
+			ds, dd, dy, dv, dl, "" if boost_ok else ", boost"])
+
+
 ## The car's state for tick k: sample b exactly, or between samples a and b.
 func _set_state(st: VehicleState, inp: VehicleInput, a: int, b: int, k: int, flags: int) -> void:
 	var r := replay
@@ -345,8 +475,8 @@ func _build_segment(a: int, b: int) -> void:
 		var v_prev := lerpf(va, vb, float(j - 1) / float(n))
 		var yaw := lerpf(r.yaw_at(a), r.yaw_at(b), f)
 		var vlat := lerpf(r.vlat_at(a), r.vlat_at(b), f)
-		var cy := cos(yaw)
-		var sy := sin(yaw)
+		var sy := DetMath.sin_cos(yaw)
+		var cy := DetMath.cos_out
 		var kappa := _run.road.curvature_at(s)
 		s += (v_prev * cy - vlat * sy) / (1.0 - kappa * d) * _dt
 		d += (v_prev * sy + vlat * cy) * _dt
@@ -393,10 +523,14 @@ func _check_segment(a: int, b: int) -> void:
 	var kappa_b := _run.road.curvature_at(r.s_at(b))
 	var ya := r.yaw_at(a)
 	var yb := r.yaw_at(b)
-	var sdot_a := (va * cos(ya) - r.vlat_at(a) * sin(ya)) / (1.0 - kappa_a * r.d_at(a))
-	var sdot_b := (vb * cos(yb) - r.vlat_at(b) * sin(yb)) / (1.0 - kappa_b * r.d_at(b))
-	var ddot_a := va * sin(ya) + r.vlat_at(a) * cos(ya)
-	var ddot_b := vb * sin(yb) + r.vlat_at(b) * cos(yb)
+	var sa := DetMath.sin_cos(ya)
+	var ca := DetMath.cos_out
+	var sb := DetMath.sin_cos(yb)
+	var cb := DetMath.cos_out
+	var sdot_a := (va * ca - r.vlat_at(a) * sa) / (1.0 - kappa_a * r.d_at(a))
+	var sdot_b := (vb * cb - r.vlat_at(b) * sb) / (1.0 - kappa_b * r.d_at(b))
+	var ddot_a := va * sa + r.vlat_at(a) * ca
+	var ddot_b := vb * sb + r.vlat_at(b) * cb
 	var ds := r.s_at(b) - r.s_at(a)
 	var dd := r.d_at(b) - r.d_at(a)
 	var tol := tuning.verify_path_tolerance_m
@@ -486,11 +620,18 @@ func _verdict(recomputed: int) -> void:
 	result["log_match_pct"] = snappedf(log_match, 0.01)
 	var missing := _missing_hits()
 	result["missing_hits"] = missing
+	result["playback"] = "resim" if _resimulating() else "kinematic"
+	result["resim_mismatch_at_s"] = null
+	if resim_mismatch_at >= 0:
+		result["resim_mismatch_at_s"] = snappedf(float(resim_mismatch_at) / _hz, 0.01)
+	result["resim_mismatches"] = resim_mismatches
 	var reason := REASON_ACCEPTED
 	if _has(V_SEED):
 		reason = REASON_SEED
-	elif _has(V_SAMPLES):
+	elif _has(V_SAMPLES) or _has(V_INPUTS):
 		reason = REASON_MALFORMED
+	elif _has(V_RESIM):
+		reason = REASON_PATH
 	elif _violation_count > 0:
 		reason = REASON_PHYSICS
 	elif unreported > 0:
@@ -599,3 +740,24 @@ func _event_counts() -> Dictionary:
 			String(ScoreEvents.THREAD)]:
 		out[k] = {"logged": logged.get(k, 0), "recomputed": _recomputed_kinds.get(k, 0)}
 	return out
+
+
+## N8.2: the recorded inputs as a controller (piecewise constant: a row holds from its tick
+## until the next row's). The verifier sets `k` before each tick.
+class ReplayInputs:
+	extends VehicleController
+
+	var r: NetReplayFile
+	var k: int = 0
+	var _row: int = 0
+
+	func _init(replay_file: NetReplayFile) -> void:
+		r = replay_file
+
+	func update(_dt: float, _state: VehicleState, out_input: VehicleInput) -> void:
+		while _row + 1 < r.input_count and r.in_tick[_row + 1] <= k:
+			_row += 1
+		out_input.steer = float(r.in_steer[_row]) / NetReplayFile.Q_INPUT
+		out_input.throttle = float(r.in_throttle[_row]) / NetReplayFile.Q_INPUT
+		out_input.brake = float(r.in_brake[_row]) / NetReplayFile.Q_INPUT
+		out_input.boost = r.in_boost[_row] == 1

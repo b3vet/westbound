@@ -23,6 +23,7 @@
 
 use super::events::{Kind, ScoreEventBuffer, Tag};
 use super::hull;
+use crate::detmath;
 use super::params::{pct_to_frac, ScoringParams, ScoringTuning};
 use crate::trace_hash::{mix_bool, mix_float, mix_int, SEED};
 use crate::traffic::gd::{maxf, minf};
@@ -342,6 +343,9 @@ impl Scoring {
         let lane = road.lane_index_at(pd, ps);
         let mut slip = false;
         let slip_ok = !self.ghost && lane >= 0 && v >= self.slip_v;
+        // Headings as (cos, sin) for the hulls (N8.2: detmath for the player's, a traffic
+        // car's from its velocity direction, no transcendentals).
+        let (pn, pc) = detmath::sin_cos(player.yaw);
         for i in 0..traffic.capacity() {
             if !traffic.active(i) {
                 self.vid[i] = 0;
@@ -374,15 +378,21 @@ impl Scoring {
                 self.taint[i] = 0;
             }
             if ph == PHASE_OVERLAP {
-                let clr = hull::clearance(
+                let tv = traffic.v(i);
+                let tvl = traffic.v_lat(i);
+                let th = (tv * tv + tvl * tvl).sqrt();
+                let (tc, tn) = if th > 0.0 { (tv / th, tvl / th) } else { (1.0, 0.0) };
+                let clr = hull::clearance_cs(
                     ps,
                     pd,
-                    player.yaw,
+                    pc,
+                    pn,
                     self.p_hl,
                     self.p_hw,
                     traffic.s(i),
                     traffic.d(i),
-                    traffic.v_lat(i).atan2(traffic.v(i)),
+                    tc,
+                    tn,
                     traffic.length(i) * 0.5 - self.inset,
                     traffic.width(i) * 0.5 - self.inset,
                 );

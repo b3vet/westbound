@@ -14,6 +14,12 @@ extends RefCounted
 ##   brake 1e-4 · event clearance 1 mm.
 ## (Finer than the protocol's: playback interpolates between samples and traffic reacts
 ## to the result, so every micrometre of error is a chance for a traffic decision to flip.)
+## N8.2: the body ends with the **input stream** when the recorder has one: the exact
+## quantized inputs (steer, throttle, brake, boost request) the car's physics took, one row
+## per tick where any of them changed (they are piecewise constant). With it the verifier
+## re-simulates the car from GO bit for bit (DetMath) instead of interpolating the 30 Hz
+## path. A file without it is the N8.1 body byte for byte (the header version stays 1, so
+## the server's header reader takes both).
 ## The body is column-major (every sample's tick, then every s, ...), each column delta or
 ## delta-of-delta coded as zigzag varints, then gzip (PackedByteArray.compress,
 ## COMPRESSION_GZIP; Godot's gzip is in every export, the web included, and the format
@@ -113,6 +119,16 @@ var ev_clearance := PackedInt64Array()
 var ev_value := PackedInt64Array()
 var tags := PackedStringArray()
 
+# ---- input stream (N8.2; wire integers, Q_INPUT) ----
+## Rows: the tick from which these inputs hold (until the next row's tick).
+var input_count: int = 0
+var in_tick := PackedInt64Array()
+var in_steer := PackedInt64Array()
+var in_throttle := PackedInt64Array()
+var in_brake := PackedInt64Array()
+## 1 when a boost was requested on exactly this tick (an edge: the next tick has a row).
+var in_boost := PackedInt64Array()
+
 var _tag_index: Dictionary[String, int] = {}
 
 
@@ -141,6 +157,30 @@ func add_sample(t: int, s: float, d: float, yaw: float, v: float, v_lat: float, 
 	brake_q[i] = roundi(clampf(brake, 0.0, 1.0) * Q_INPUT)
 	flags[i] = sample_flags
 	sample_count += 1
+
+
+## Appends an input row (wire integers: the car's inputs are already multiples of
+## 1 / Q_INPUT, VehicleInput.quantize). The recorder appends only when one changed.
+func add_input(t: int, steer_q: int, throttle_q: int, brake_q: int, boost: bool) -> void:
+	if input_count >= in_tick.size():
+		_resize_inputs(maxi(in_tick.size() * 2, 1))
+	var i := input_count
+	in_tick[i] = t
+	in_steer[i] = steer_q
+	in_throttle[i] = throttle_q
+	in_brake[i] = brake_q
+	in_boost[i] = 1 if boost else 0
+	input_count += 1
+
+
+## Reserves room for `rows` input rows.
+func reserve_inputs(rows: int) -> void:
+	if rows > in_tick.size():
+		_resize_inputs(rows)
+
+
+func has_inputs() -> bool:
+	return input_count > 0
 
 
 ## Appends one event. `clearance_m` < 0 = none.
@@ -325,12 +365,17 @@ static func decode(bytes: PackedByteArray, out_error: Array[String] = []) -> Net
 
 
 func _encode_body() -> PackedByteArray:
-	var w := _Writer.new(sample_count * 16 + event_count * 12 + 64)
+	var w := _Writer.new(sample_count * 16 + event_count * 12 + input_count * 8 + 64)
 	w.varint(sample_count)
 	for col: PackedInt64Array in [tick, s_q, d_q, yaw_q, v_q, vlat_q]:
 		w.delta2(col, sample_count)
+	# With an input stream the samples' inputs are derivable from it (decode rebuilds them):
+	# written as zeros, which cost nothing compressed.
+	var zeros := PackedInt64Array()
+	if input_count > 0:
+		zeros.resize(sample_count)
 	for col: PackedInt64Array in [steer_q, throttle_q, brake_q]:
-		w.delta(col, sample_count)
+		w.delta(zeros if input_count > 0 else col, sample_count)
 	w.raw(flags, sample_count)
 	w.varint(tags.size())
 	for t in tags:
@@ -344,6 +389,11 @@ func _encode_body() -> PackedByteArray:
 	w.zigzag_raw(ev_points, event_count)
 	w.zigzag_raw(ev_clearance, event_count)
 	w.zigzag_raw(ev_value, event_count)
+	if input_count > 0:
+		w.varint(input_count)
+		for col: PackedInt64Array in [in_tick, in_steer, in_throttle, in_brake]:
+			w.delta2(col, input_count)
+		w.raw(in_boost, input_count)
 	return w.finish()
 
 
@@ -380,7 +430,44 @@ func _decode_body(body: PackedByteArray) -> bool:
 	rd.zigzag_raw(ev_points, ne)
 	rd.zigzag_raw(ev_clearance, ne)
 	rd.zigzag_raw(ev_value, ne)
+	input_count = 0
+	if not rd.bad and rd.pos < body.size():
+		var ni := rd.varint()
+		if rd.bad or ni <= 0 or ni > body.size():
+			return false
+		input_count = ni
+		_resize_inputs(ni)
+		for col: PackedInt64Array in [in_tick, in_steer, in_throttle, in_brake]:
+			rd.delta2(col, ni)
+		rd.raw(in_boost, ni)
+		if not rd.bad:
+			_sample_inputs_from_stream()
 	return not rd.bad and rd.pos == body.size()
+
+
+## The samples' inputs from the input stream, as the recorder samples them: steer and
+## throttle at the sample's tick, the largest brake of the ticks since the previous sample.
+func _sample_inputs_from_stream() -> void:
+	var row := 0
+	var prev := 0
+	for i in sample_count:
+		var t := int(tick[i])
+		var brake_max := 0
+		# Rows holding over (prev, t]: the one holding at prev + 1, then those starting after.
+		while row + 1 < input_count and in_tick[row + 1] <= prev + 1:
+			row += 1
+		var j := row
+		while true:
+			brake_max = maxi(brake_max, int(in_brake[j]))
+			if j + 1 < input_count and in_tick[j + 1] <= t:
+				j += 1
+			else:
+				break
+		row = j
+		steer_q[i] = in_steer[j]
+		throttle_q[i] = in_throttle[j]
+		brake_q[i] = brake_max
+		prev = t
 
 
 func _grow_samples(n: int) -> void:
@@ -399,6 +486,14 @@ func _resize_samples(n: int) -> void:
 	throttle_q.resize(n)
 	brake_q.resize(n)
 	flags.resize(n)
+
+
+func _resize_inputs(n: int) -> void:
+	in_tick.resize(n)
+	in_steer.resize(n)
+	in_throttle.resize(n)
+	in_brake.resize(n)
+	in_boost.resize(n)
 
 
 func _grow_events(n: int) -> void:
