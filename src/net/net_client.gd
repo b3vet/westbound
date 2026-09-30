@@ -217,6 +217,13 @@ func send_player_state(st: NetPlayerState) -> String:
 	return "" if _transport.send(codec.finish_frame()) == OK else REASON_CLOSED
 
 
+## Sends a Ping now, outside the keepalive cadence (N5.2: right after joining a room the
+## clock is reset and needs a fresh sample of the room tick).
+func ping_now() -> void:
+	if _state == State.READY:
+		_send_ping(_time.now_usec())
+
+
 ## Closes the connection on purpose (no `failed` signal).
 func close() -> void:
 	if _state == State.CLOSED or _state == State.IDLE:
