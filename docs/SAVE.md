@@ -43,10 +43,10 @@ The local save, every player setting, the first-run chooser and the empty-road w
 | `bests` | WP4.1 (`Save.submit_best_score`) | best banked score per mode id |
 | `journeys` | WP6.5 (`Save.record_journey`) | per mode: `count`, `best_time_s`, `best_distance_m` |
 | `stats`, `unlocks`, `garage` | WP8.2 (driver XP and level, lifetime stats incl. the Daily streak, unlocks, the car/paint/rims selection); additive, no version bump | [GARAGE.md](GARAGE.md) |
-| `daily` | WP8.4 (Daily Drive results, streak) | empty until then |
+| `daily` | WP8.4 (`DailyGhostStore`) | `ghosts`: the index of the Daily Drive ghosts on the device, `{date: {score, ticks, car, bytes}}` (the best run per UTC date; today and yesterday kept). The Daily streak stays in `stats` (WP8.2). [DAILY.md](DAILY.md) |
 | any new one | its WP, via `section()` | achievements (WP8.3) can take their own |
 
-**Ghosts** (WP8.4, 20 Hz samples) should not go inside `save.json`: that file is rewritten on every settings change. Store each ghost as its own file (for example `user://ghosts/<date>.bin`, written with the same temp + rename pattern as `SaveStore`) and keep only the index in `daily`.
+**Ghosts** (WP8.4, 20 Hz samples) are not inside `save.json` (that file is rewritten on every settings change): each is its own file, `user://daily/<date>.ghost` (`DailyGhost`, written temp + read back + rename like `SaveStore`), and only the index is in `daily`. See [DAILY.md → Ghost file and storage](DAILY.md#ghost-file-and-storage).
 
 ## Migrations
 
@@ -151,6 +151,7 @@ Every setting the spec names, where it lives, and how it applies (live, from `Ev
 | --- | --- | --- |
 | Device account (tokens, profile) | native: `user://net/session.dat` (AES-encrypted, key from `user://net/install.salt`); web: `localStorage["westbound.net.v1"]` | `NetSession` (N1.2), `NetFileStore` / `NetWebStore` |
 | Offline run queue, legacy-upload flags | native: `user://net/runs.dat`; web: `localStorage["westbound.net.v1.runs"]` (per server: a name suffix) | `NetRunsClient` (N7) |
+| Daily Drive ghosts (the index is in `daily`) | `user://daily/<date>.ghost` (web: IndexedDB via `/userfs`) | `DailyGhostStore` (WP8.4) |
 | Stored replays awaiting upload | native: `user://net/replay_<key>.dat`; web: `localStorage["westbound.net.v1.replay_<key>"]` | `NetRunsClient` (N8.1) |
 
 These keep their own files and formats (atomic temp + rename natively); nothing in WP8.1 reads or writes them.
