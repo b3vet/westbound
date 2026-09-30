@@ -41,6 +41,13 @@ const BURST_EVENTS := 20
 const BURST_REPEATS := 20
 ## A 60 fps frame is 16.7 ms. The listeners (audio aside) for 20 events stay far below it.
 const DRAIN_BUDGET_MS := 4.0
+## The same drain with audio (32 one-shot voices), mean over the repeats. One-shots are
+## QOA WAVs (WP7.6): about 2 ms mean alone, 3 ms in the loaded full suite (OGG Vorbis
+## one-shots took ~20 ms). The mean, not the worst: single repeats spike to ~6 ms under
+## a loaded suite. 2x the loaded mean, still far below the OGG cost.
+const AUDIO_DRAIN_MEAN_BUDGET_MS := 6.0
+## Audio's share per started voice (OGG Vorbis: 0.55-0.65 ms; QOA WAV: ~0.06 ms).
+const AUDIO_PER_VOICE_BUDGET_MS := 0.25
 
 # Visual channels.
 const V_STACK := &"stack"
@@ -277,10 +284,11 @@ func test_night() -> void:
 
 ## 20 scoring events drained in one frame: the one-frame guarantee must not hitch.
 ## Times the drain with every listener, then without GameAudio (taken out of the tree:
-## its listeners disconnect), and the whole frame(). Prints the numbers. The budget is
-## asserted on the listeners without audio: every audio one-shot is an OGG Vorbis stream,
-## and Godot builds a decoder per play() (about 0.6 ms each here), which the handoff
-## flags (docs/FEEL.md → One-frame check → Cost).
+## its listeners disconnect), and the whole frame(). Prints the numbers. Budgets: the
+## listeners without audio (worst), the drain with audio (mean) and audio's cost per
+## voice. One-shots are WAV (QOA) since WP7.6: an OGG Vorbis one-shot built a decoder
+## per play() (about 0.6 ms each here), a 20-event burst took ~20 ms (docs/FEEL.md →
+## One-frame check → Cost, docs/AUDIO.md → Assets).
 func test_drain_of_twenty_events_timing() -> void:
 	var r := _make()
 	_go_quiet(r, FAST_MPS)
@@ -305,6 +313,8 @@ func test_drain_of_twenty_events_timing() -> void:
 		BURST_EVENTS, with_audio.x * ms, with_audio.y * ms / BURST_REPEATS, voices,
 		no_audio.x * ms, no_audio.y * ms / BURST_REPEATS, per_voice * ms, worst_frame * ms])
 	lt(no_audio.x * ms, DRAIN_BUDGET_MS, "HUD, haptics, camera, slow motion: 20 events far inside a frame")
+	lt(with_audio.y * ms / BURST_REPEATS, AUDIO_DRAIN_MEAN_BUDGET_MS, "with audio: 20 events inside a frame (mean)")
+	lt(per_voice * ms, AUDIO_PER_VOICE_BUDGET_MS, "a one-shot voice starts without a decoder hitch")
 
 
 ## Drains BURST_REPEATS bursts: (worst us, total us, voices started in total).
