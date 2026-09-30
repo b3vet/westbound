@@ -114,7 +114,7 @@ A CanvasLayer (layer 6: over the gameplay HUD, under the in-run screens), hidden
 | `room_browse_refresh_s` | 5 | not in spec |
 | `room_fixed_morning_min` / `room_fixed_golden_min` | 3 / 18 | PRIVATE ROOM's fixed times (not in spec) |
 | `room_local_traffic` | true | the N4.3 seam |
-| `room_strip_width_px` / `_height_px` / `_dot_px`, `room_font_px`, `room_button_width_px`, `room_panel_width_px` | 520 / 6 / 6, 16, 200, 620 | not in spec |
+| `room_strip_width_px` / `_height_px` / `_dot_px`, `room_font_px`, `room_button_width_px`, `room_panel_width_px` | 520 / 6 / 6, 16, 200, 680 | not in spec |
 
 ## Tests
 

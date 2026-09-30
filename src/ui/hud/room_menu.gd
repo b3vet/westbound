@@ -266,4 +266,4 @@ func _layout() -> void:
 
 
 ## The header's tab and close buttons: a share of the panel's inner width each.
-const TAB_SHARE := 0.2   # lint: allow-number layout proportion
+const TAB_SHARE := 0.18   # lint: allow-number layout proportion

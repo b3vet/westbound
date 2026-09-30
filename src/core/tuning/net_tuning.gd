@@ -179,7 +179,7 @@ const PATH := "res://data/tuning/net.tres"
 @export var room_strip_dot_px: float = 6.0   # not in spec
 @export var room_font_px: int = 16   # not in spec
 @export var room_button_width_px: float = 200.0   # not in spec
-@export var room_panel_width_px: float = 620.0   # not in spec
+@export var room_panel_width_px: float = 680.0   # not in spec
 @export var room_nametag_font_px: int = 15   # not in spec
 
 @export_group("Keepalive")
