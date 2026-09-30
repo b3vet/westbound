@@ -39,6 +39,10 @@ extends RefCounted
 ##   - WP6.8: `standstill_beside_fast` (reported) samples, once per window-check
 ##     interval, vehicles nearly stopped with a fast vehicle in the next lane beside them
 ##     (the lane drops' "no standstill queues next to fast lanes").
+##   - WP6.10: the oracle reads the sim's lane closures, speed and lane-drop zones
+##     (`windows.zones = sim`); a window that starts with the player's body already in a
+##     closed lane or beyond the right edge is player-induced (`impossible_in_closure`,
+##     counted in impossible_player_induced, like a contact at t0).
 ##
 ##   var r := TrafficSoakRun.new(index, base_seed)
 ##   r.run_to_end()                 # or r.advance(seconds)
@@ -116,6 +120,11 @@ var impossible_checks := 0
 var impossible_windows := 0
 var impossible_player_induced := 0
 var impossible_player_cut_in := 0
+## WP6.10: player-induced windows that start with the player's body already in a closed
+## lane or beyond the lanes' right edge (a subset of impossible_player_induced).
+var impossible_in_closure := 0
+## Wall time in the oracle (reported: its cost per check).
+var window_usec := 0
 ## Ticks with the player's body outside the driving lanes (a lane that ended: WP6.2 lane
 ## drops), the rule checker's tolerance. Reported, not gated (the player's own driving).
 var player_offroad_ticks := 0
@@ -221,6 +230,7 @@ func _init(run_index: int, base_seed: int, run_legs: int = -1, leg_m: float = -1
 	checker = TrafficRuleChecker.new(tuning, registry, road, car.length_m, car.width_m)
 	checker.set_piece_of = director.set_pieces.instance_of
 	windows = ImpossibleWindowChecker.new(tuning, registry, car)
+	windows.zones = sim   # WP6.10: lane closures, speed and lane-drop zones
 	metrics = TrafficMetrics.new(tuning)
 	events = ScoreEventBuffer.new(tuning.scoring.event_buffer_capacity)
 	road.ensure_generated_to(director.ahead_distance() * 2.0)
@@ -390,7 +400,10 @@ func _count_set_pieces() -> void:
 
 func _check_window() -> void:
 	window_checks += 1
-	if windows.is_passable(sim.state, bot.state, road):
+	var u0 := Time.get_ticks_usec()
+	var ok := windows.is_passable(sim.state, bot.state, road)
+	window_usec += Time.get_ticks_usec() - u0
+	if ok:
 		_in_window = false
 		return
 	impossible_checks += 1
@@ -400,6 +413,8 @@ func _check_window() -> void:
 	impossible_windows += 1
 	if windows.started_in_contact:
 		impossible_player_induced += 1
+		if windows.started_in_closure:
+			impossible_in_closure += 1
 	elif _is_player_cut_in():
 		impossible_player_cut_in += 1
 	if window_examples.size() < MAX_WINDOW_EXAMPLES:
@@ -433,7 +448,9 @@ func _describe_window() -> Dictionary:
 		per_lane.append({"lane": l, "vehicles": n, "min_kmh": vmin / Units.kmh_to_mps(1.0) if n > 0 else -1.0,
 			"slow": slow})
 	var why := "other"
-	if windows.started_in_contact:
+	if windows.started_in_closure:
+		why = "player already in a closed lane or beyond the right edge"
+	elif windows.started_in_contact:
 		why = "player already within clearance of a hull (its own cut-in)"
 	elif _is_player_cut_in():
 		why = "player cut-in (pre-registered rule)"
@@ -475,6 +492,7 @@ func result() -> Dictionary:
 		"window_checks": window_checks, "impossible_checks": impossible_checks,
 		"impossible_windows": impossible_windows, "impossible_player_induced": impossible_player_induced,
 		"impossible_player_cut_in": impossible_player_cut_in, "player_offroad_ticks": player_offroad_ticks,
+		"impossible_in_closure": impossible_in_closure, "window_usec": window_usec,
 		"impossible_traffic": impossible_windows - impossible_player_induced - impossible_player_cut_in,
 		"bot": "passability" if pbot != null else "weave",
 		"bot_checks": pbot.checks if pbot != null else 0,

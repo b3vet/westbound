@@ -19,14 +19,23 @@ extends RefCounted
 ##     allowed at any moment: a relaxation of the braking and acceleration limits. A
 ##     player already below the minimum speed may hold its current speed instead (the
 ##     lower bound is min(minimum speed, current speed));
-##   - stays on the driving lanes (no shoulders);
+##   - stays on the driving lanes (no shoulders) where they are: WP6.10, a lane that
+##     ends (the road's right edge, RoadPath.lanes_right_edge_d, sampled every
+##     EDGE_SAMPLE_M and one sample wider at both ends) or that the traffic sim closes
+##     (`zones`: road works, a merge zone's lane end, the road's drops synced into the
+##     sim) is a static obstacle for every grid position whose body overlaps it; a lane
+##     that opens within the horizon is on the grid from where it exists;
 ##   - never comes within clearance_m (0.3 m) of a predicted hull (full body boxes,
 ##     axis-aligned in road space, grown by the clearance on every side).
 ## Traffic prediction (simplified; passability.gd forward-simulates the real models):
 ##   - vehicles fully behind the player at t0 are ignored: they follow the player (IDM
 ##     with the player as leader, Lives → rear-end prevention) instead of driving into it;
-##   - every other vehicle keeps its speed, but never drives through the vehicle ahead
-##     of it on its lateral path (it queues behind it at min(s0, its current gap));
+##   - every other vehicle drives with bounded acceleration toward its desired speed
+##     (WP6.10: IDM's free-road term a_max (1 - (v / v0)^delta), clamped at the
+##     traffic's max_decel_mps2; v0 capped by the sim's speed and lane-drop zones), but
+##     never drives through the vehicle ahead of it on its lateral path (it queues
+##     behind it at min(s0, its current gap)), nor into a closure of its lane before
+##     its lane change out of it starts (it stops merge_stop_margin_m before it);
 ##   - a MOVING lane change continues its smoothstep to its final d; a SIGNALING one is
 ##     assumed to happen: it starts at the end of its signal time and takes the
 ##     profile's longest move time (it may still cancel, which only frees space); a
@@ -35,6 +44,7 @@ extends RefCounted
 ## player nor any vehicle can jump over the shortest hull-plus-clearance block.
 ##
 ##   var iw := ImpossibleWindowChecker.new(tuning, registry, car)
+##   iw.zones = sim                                         # optional: the sim's closures and zones
 ##   if not iw.is_passable(sim.state, player, road): ...   # iw.fail_t, iw.lanes, ...
 
 const MAX_STATES := 64
@@ -42,6 +52,14 @@ const MAX_STATES := 64
 const SUB_STEP_BLOCK_FRAC := 0.9
 ## CarDef.zero_to_200_s is the time to this speed (mean acceleration = speed / time).
 const ZERO_TO_KMH := 200.0
+## Lane ends: the right edge is sampled this often (m) where the lane count changes; a
+## closed stretch is widened by one sample at both ends. Lane counts are compared every
+## LANE_SCAN_M first (no change and no taper: no lane end in the corridor).
+const EDGE_SAMPLE_M := 2.0
+const LANE_SCAN_M := 50.0
+## A player body this far beyond the right edge or into a closed lane is outside
+## (TrafficRuleChecker's off-road tolerance).
+const EDGE_TOL_M := 0.05
 
 var clearance: float
 var horizon: float
@@ -54,6 +72,19 @@ var player_length: float
 var player_width: float
 var vehicle_tuning: VehicleTuning
 var registry: TrafficRegistry
+var max_decel: float
+var merge_stop: float
+
+## The traffic sim's lane closures and zones (WP6.10), read when set: anything with
+## lane_closure_count(), closure_ahead(lane, s), speed_zone_count(), speed_limit_at(lane,
+## front, profile), lane_drop_zone_count() and lane_drop_limit_at(lane, front, profile)
+## (TrafficSim's public queries); anything else is ignored (null). The same sources
+## passability.gd reads; the code here is written independently.
+var zones: Object:
+	set(v):
+		zones = v if v != null and v.has_method(&"lane_closure_count") and v.has_method(&"closure_ahead") \
+			and v.has_method(&"speed_zone_count") and v.has_method(&"speed_limit_at") \
+			and v.has_method(&"lane_drop_zone_count") and v.has_method(&"lane_drop_limit_at") else null
 
 # Results of the last check.
 var checks := 0
@@ -63,12 +94,21 @@ var fail_t := INF
 ## Grid positions and obstacles of the last check.
 var positions := 0
 var obstacles := 0
-## The player overlapped a hull (+ clearance) already at t0 in the last check.
+## The player overlapped a hull (+ clearance) already at t0 in the last check, or its
+## body was already in a closed lane or beyond the lanes' right edge (started_in_closure).
 var started_in_contact := false
+var started_in_closure := false
+## Static road obstacles (lane ends and closures) of the last check.
+var road_obstacles := 0
 
 # Scratch (reused between checks).
 var _obs := PackedInt32Array()
 var _ps := PackedFloat64Array()    # predicted s, [o * (n_sub_total + 1) + g]
+var _pv := PackedFloat64Array()    # predicted v, same layout (vehicles only)
+var _st_a := PackedFloat64Array()  # static obstacles: player-center s range blocked
+var _st_b := PackedFloat64Array()
+var _st_bits := PackedInt32Array() # ... at these grid positions
+var _cl_open := PackedFloat64Array()
 var _mask := PackedInt32Array()    # blocked grid positions (bits), [o * steps + k]
 var _hl := PackedFloat64Array()    # block half length (player center frame)
 var _pos_d := PackedFloat64Array()
@@ -87,6 +127,8 @@ func _init(t: Tuning, reg: TrafficRegistry, car: CarDef) -> void:
 	min_speed = t.scoring.min_speed_mps()
 	vehicle_tuning = t.vehicle
 	registry = reg
+	max_decel = t.traffic.max_decel_mps2
+	merge_stop = t.traffic.merge_stop_margin_m
 	top_speed = Units.kmh_to_mps(car.top_speed_kmh)
 	accel = Units.kmh_to_mps(ZERO_TO_KMH) / car.zero_to_200_s
 	player_length = car.length_m
@@ -107,23 +149,38 @@ func is_passable(ts: TrafficState, player: VehicleState, road: RoadPath) -> bool
 func _search(ts: TrafficState, player: VehicleState, road: RoadPath) -> bool:
 	fail_t = INF
 	started_in_contact = false
+	started_in_closure = false
 	var s0 := player.s
-	var lanes := road.lane_count(s0)
-	var lw := road.lane_width(s0)
-	var grid := lat_step_lanes * lw
-	var d_first := road.lane_center_d(0, s0)
-	var d_last := road.lane_center_d(lanes - 1, s0)
-	var n_pos := roundi((d_last - d_first) / grid) + 1
-	positions = n_pos
-	_pos_d.resize(n_pos)
-	for j in n_pos:
-		_pos_d[j] = d_first + float(j) * grid
 	# Never slower than the minimum speed, or than the player already is: a player below
 	# it (e.g. keeping its lane behind a truck) may hold its speed, not jump to 100 km/h.
 	var v_low := minf(min_speed, maxf(player.v, 0.0))
 	var v_start := maxf(player.v, v_low)
 	var steps := ceili(horizon / step - 1e-9)
 	var v_end := minf(v_start + accel * horizon, maxf(top_speed, v_start))
+	var lw := road.lane_width(s0)
+	var grid := lat_step_lanes * lw
+	var d_first := road.lane_center_d(0, s0)
+	# The corridor the player's body can reach, and the grid over every lane in it: a
+	# lane still tapering away at s0, and a lane that opens ahead (the right edge blocks
+	# it until it exists).
+	var r_lo := s0 - player_length
+	var r_hi := s0 + v_end * horizon + player_length
+	var left := road.lanes_left_edge_d(s0)
+	var lanes := maxi(road.lane_count(s0), ceili((road.lanes_right_edge_d(s0) - left) / lw - 1e-6))
+	var uniform := absf(road.lanes_right_edge_d(s0) - left - float(road.lane_count(s0)) * lw) < 1e-6
+	var sx := s0
+	while sx < r_hi:
+		sx = minf(sx + LANE_SCAN_M, r_hi)
+		var n := road.lane_count(sx)
+		if n != road.lane_count(s0) or absf(road.lanes_right_edge_d(sx) - left - float(n) * lw) > 1e-6:
+			uniform = false
+		lanes = maxi(lanes, n)
+	var d_last := road.lane_center_d(lanes - 1, s0)
+	var n_pos := roundi((d_last - d_first) / grid) + 1
+	positions = n_pos
+	_pos_d.resize(n_pos)
+	for j in n_pos:
+		_pos_d[j] = d_first + float(j) * grid
 	var half_move_steps := maxi(1, roundi(vehicle_tuning.lane_change_target_s(v_start) * 0.5 / step))
 	var n_states := n_pos + (n_pos - 1) * half_move_steps
 	assert(n_states <= MAX_STATES, "ImpossibleWindowChecker: too many lanes for MAX_STATES")
@@ -133,6 +190,16 @@ func _search(ts: TrafficState, player: VehicleState, road: RoadPath) -> bool:
 	for p in n_pos - 1:
 		for m in half_move_steps:
 			_state_bits[n_pos + p * half_move_steps + m] = (1 << p) | (1 << (p + 1))
+	# Static road obstacles: lanes that end, lanes the sim closes.
+	_st_a.clear()
+	_st_b.clear()
+	_st_bits.clear()
+	if not uniform:
+		_load_lane_ends(road, r_lo, r_hi)
+	_load_closures(left, lw, lanes, r_lo, r_hi)
+	var n_st := _st_a.size()
+	road_obstacles = n_st
+	started_in_closure = _in_closure(road, player, left, lw, lanes)
 
 	# Obstacles: everything not fully behind the player.
 	var p_rear := s0 - player_length * 0.5 - clearance
@@ -144,13 +211,17 @@ func _search(ts: TrafficState, player: VehicleState, road: RoadPath) -> bool:
 			min_block = minf(min_block, ts.length[i] + player_length + 2.0 * clearance)
 	var n_obs := _obs.size()
 	obstacles = n_obs
+	for q in n_st:
+		min_block = minf(min_block, _st_b[q] - _st_a[q])
 	# Sub-steps: nothing may cross the shortest block within one sub-step.
 	var n_sub := 1
-	if n_obs > 0:
+	if n_obs + n_st > 0:
 		n_sub = maxi(1, ceili(step * v_end / (SUB_STEP_BLOCK_FRAC * min_block)))
 	var dt := step / float(n_sub)
 	var n_g := steps * n_sub
 	_predict(ts, road, n_obs, steps, n_sub, dt, lw)
+	_place_statics(n_obs, n_st, steps, n_g)
+	n_obs += n_st
 
 	# Initial states: the grid positions bracketing the player's d.
 	for k in n_states:
@@ -163,7 +234,7 @@ func _search(ts: TrafficState, player: VehicleState, road: RoadPath) -> bool:
 	if j_hi != j_lo:
 		_iv[j_hi].append(s0)
 		_iv[j_hi].append(s0)
-	started_in_contact = _in_contact(ts, player)
+	started_in_contact = _in_contact(ts, player) or started_in_closure
 
 	var g := 0
 	for k in steps:
@@ -292,6 +363,95 @@ func _clip(a: PackedFloat64Array, k: int, g: int, bits: int, steps: int, n_g: in
 	return a
 
 
+## Lanes that end (WP6.10): per grid position, the stretches where the player's body
+## there would stick out beyond the right edge of the driving lanes (sampled every
+## EDGE_SAMPLE_M, one sample wider at both ends) block the player's center wherever its
+## body would overlap them.
+func _load_lane_ends(road: RoadPath, lo: float, hi: float) -> void:
+	var hw := player_width * 0.5
+	var n_pos := _pos_d.size()
+	_cl_open.resize(n_pos)
+	_cl_open.fill(NAN)
+	var n := ceili((hi - lo) / EDGE_SAMPLE_M)
+	for k in n + 1:
+		var x := lo + float(k) * EDGE_SAMPLE_M
+		var edge := road.lanes_right_edge_d(x) + EDGE_TOL_M
+		for j in n_pos:
+			var out := _pos_d[j] + hw > edge
+			if out and is_nan(_cl_open[j]):
+				_cl_open[j] = x - EDGE_SAMPLE_M
+			elif not out and not is_nan(_cl_open[j]):
+				_add_static(_cl_open[j], x, 1 << j)
+				_cl_open[j] = NAN
+	for j in n_pos:
+		if not is_nan(_cl_open[j]):
+			_add_static(_cl_open[j], hi + EDGE_SAMPLE_M, 1 << j)
+
+
+## The sim's lane closures (zones): each closed stretch of a lane blocks every grid
+## position whose body overlaps that lane (its center and both half-lanes). The start
+## is exact (closure_ahead), the end sampled every EDGE_SAMPLE_M (one sample late).
+func _load_closures(left: float, lw: float, lanes: int, lo: float, hi: float) -> void:
+	if zones == null or int(zones.call(&"lane_closure_count")) == 0:
+		return
+	var hw := player_width * 0.5
+	for lane in lanes:
+		var l_lo := left + float(lane) * lw + EDGE_TOL_M
+		var l_hi := left + float(lane + 1) * lw - EDGE_TOL_M
+		var bits := 0
+		for j in _pos_d.size():
+			if _pos_d[j] - hw < l_hi and _pos_d[j] + hw > l_lo:
+				bits |= 1 << j
+		var a := lo + float(zones.call(&"closure_ahead", lane, lo))
+		while a <= hi:
+			var b := a
+			while b <= hi and float(zones.call(&"closure_ahead", lane, b)) <= 0.0:
+				b += EDGE_SAMPLE_M
+			_add_static(a, b, bits)
+			a = b + float(zones.call(&"closure_ahead", lane, b))
+	# (The road's own lane ends are also in the sim as closures: blocking twice is harmless.)
+
+
+## A static obstacle: the player's body must not overlap [a, b] at the grid bits.
+func _add_static(a: float, b: float, bits: int) -> void:
+	_st_a.append(a - player_length * 0.5)
+	_st_b.append(b + player_length * 0.5)
+	_st_bits.append(bits)
+
+
+## The static obstacles as obstacle rows n_obs.. (constant s, every step's mask).
+func _place_statics(n_obs: int, n_st: int, steps: int, n_g: int) -> void:
+	var n := n_obs + n_st
+	_ps.resize(n * (n_g + 1))
+	_mask.resize(n * steps)
+	_hl.resize(n)
+	for q in n_st:
+		var oi := n_obs + q
+		var c := (_st_a[q] + _st_b[q]) * 0.5
+		_hl[oi] = (_st_b[q] - _st_a[q]) * 0.5
+		var base := oi * (n_g + 1)
+		for g in n_g + 1:
+			_ps[base + g] = c
+		for k in steps:
+			_mask[oi * steps + k] = _st_bits[q]
+
+
+## The player's own body is already in a closed lane or beyond the right edge at t0.
+func _in_closure(road: RoadPath, player: VehicleState, left: float, lw: float, lanes: int) -> bool:
+	var hw := player_width * 0.5
+	if player.d + hw > road.lanes_right_edge_d(player.s) + EDGE_TOL_M:
+		return true
+	if zones == null or int(zones.call(&"lane_closure_count")) == 0:
+		return false
+	for lane in lanes:
+		var l_lo := left + float(lane) * lw + EDGE_TOL_M
+		var l_hi := left + float(lane + 1) * lw - EDGE_TOL_M
+		if player.d - hw < l_hi and player.d + hw > l_lo \
+				and float(zones.call(&"closure_ahead", lane, player.s - player_length * 0.5)) <= player_length:
+			return true
+	return false
+
+
 ## The player's body (+ clearance) already overlaps a hull at t0.
 func _in_contact(ts: TrafficState, player: VehicleState) -> bool:
 	for i in _obs:
@@ -305,6 +465,7 @@ func _in_contact(ts: TrafficState, player: VehicleState) -> bool:
 func _predict(ts: TrafficState, road: RoadPath, n_obs: int, steps: int, n_sub: int, dt: float, lw: float) -> void:
 	var n_g := steps * n_sub
 	_ps.resize(n_obs * (n_g + 1))
+	_pv.resize(n_obs * (n_g + 1))
 	_mask.resize(n_obs * steps)
 	_hl.resize(n_obs)
 	# Lateral span per obstacle: current d, final d, when the lateral move runs.
@@ -348,13 +509,17 @@ func _predict(ts: TrafficState, road: RoadPath, n_obs: int, steps: int, n_sub: i
 			d_now[oi] = d0   # smoothstep origin: _d_at(0) is the current d
 			t_mv0[oi] = -ts.lc_timer[i]
 			t_mv1[oi] = dur - ts.lc_timer[i]
-	# Longitudinal: front to back, constant speed, queued behind the leader on its path.
+	# Longitudinal: front to back, bounded acceleration toward the desired speed, queued
+	# behind the leader on its lateral path and stopped before a closure of its lane.
 	var order := PackedInt32Array()
 	order.resize(n_obs)
 	for oi in n_obs:
 		order[oi] = oi
 	var sorted_order := Array(order)
 	sorted_order.sort_custom(func(a: int, b: int) -> bool: return ts.s[_obs[a]] > ts.s[_obs[b]])
+	var sz := zones != null and int(zones.call(&"speed_zone_count")) > 0
+	var dz := zones != null and int(zones.call(&"lane_drop_zone_count")) > 0
+	var cz := zones != null and int(zones.call(&"lane_closure_count")) > 0
 	for q in n_obs:
 		var oi: int = sorted_order[q]
 		var i := _obs[oi]
@@ -371,20 +536,61 @@ func _predict(ts: TrafficState, road: RoadPath, n_obs: int, steps: int, n_sub: i
 				lead = oj
 				lead_s = ts.s[j]
 		var s_i := ts.s[i]
-		var v_i := ts.v[i]
+		var v_i := maxf(ts.v[i], 0.0)
+		var hl_i := ts.length[i] * 0.5
+		var p := ts.profile_id[i]
 		var floor_gap := 0.0
 		var half := 0.0
 		if lead >= 0:
 			var j := _obs[lead]
 			half = (ts.length[i] + ts.length[j]) * 0.5
-			floor_gap = clampf(ts.s[j] - s_i - half, 0.0, registry.s0[ts.profile_id[i]])
+			floor_gap = clampf(ts.s[j] - s_i - half, 0.0, registry.s0[p])
+		# A closure of its lane ahead: it stops merge_stop before it (or where it is, if
+		# already closer) until its lane change out of the lane starts.
+		var wall := INF
+		if cz:
+			var ahead := float(zones.call(&"closure_ahead", ts.lane[i], s_i + hl_i))
+			if not is_inf(ahead):
+				wall = s_i + maxf(ahead - merge_stop, 0.0)
+		# Lane-splitting motorbikes (riding a lane line, no lane change) keep their speed.
+		var accel_on := not (registry.is_motorbike[ts.type_id[i]] == 1 \
+			and ts.lc_state[i] == TrafficState.LaneChange.NONE \
+			and absf(ts.d[i] - road.lane_center_d(ts.lane[i], s_i)) > lw * 0.25)
+		var v0 := ts.v0[i]
+		var a_max := registry.a_max[p]
+		var delta := registry.delta[p]
 		var base := oi * (n_g + 1)
 		_ps[base] = s_i
+		_pv[base] = v_i
+		var x := s_i
+		var v := v_i
 		for g in range(1, n_g + 1):
-			var x := s_i + v_i * float(g) * dt
+			var t := float(g) * dt
+			var nv := v
+			if accel_on and v0 > 0.0:
+				var ve := v0
+				if sz or dz:
+					var ln := ts.lane[i] if t < t_mv1[oi] else ts.target_lane[i]
+					if sz:
+						ve = minf(ve, float(zones.call(&"speed_limit_at", ln, x + hl_i, p)))
+					if dz:
+						ve = minf(ve, float(zones.call(&"lane_drop_limit_at", ln, x + hl_i, p)))
+				var a := maxf(Idm.free_accel(v, maxf(ve, 0.01), a_max, delta), -max_decel)
+				nv = maxf(v + a * dt, 0.0)
+			var nx := x + (v + nv) * 0.5 * dt
 			if lead >= 0:
-				x = minf(x, _ps[lead * (n_g + 1) + g] - half - floor_gap)
-			_ps[base + g] = maxf(x, _ps[base + g - 1])
+				var cap := _ps[lead * (n_g + 1) + g] - half - floor_gap
+				if nx > cap:
+					nx = cap
+					nv = minf(nv, _pv[lead * (n_g + 1) + g])
+			if t < t_mv0[oi] and nx > wall:
+				nx = wall
+				nv = 0.0
+			nx = maxf(nx, x)
+			_ps[base + g] = nx
+			_pv[base + g] = nv
+			x = nx
+			v = nv
 	# Lateral: blocked grid bits per decision step.
 	for oi in n_obs:
 		var i := _obs[oi]

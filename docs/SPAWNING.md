@@ -51,7 +51,7 @@ Each lane is planned as a renewal process at `DirectorTuning.density_per_km_lane
 ## Growing it (Phase 6)
 
 - Intensity waves and blind-window caps: WP6.2, below (*Intensity waves*, *Blind crests and bends*).
-- Passability and re-rolls go between `plan_batch` and the commit in `_plan_range()` (WP6.1).
+- Passability (WP6.1, plan D21) runs **after** the commit, not between `plan_batch` and the commit: `_plan_range()` commits a batch beyond the fog as before, then the director queues the committed range and checks it with `Passability.check`, time-sliced (`director_slices_per_tick` per tick), while it is still invisible. A failing range is re-rolled (its vehicles still beyond `min_ahead_m()` despawned and the range planned again, up to `max_rerolls`), then its worst blockers are removed (up to `max_removals`), before the player can see it. See docs/PASSABILITY.md, *The director*.
 - Set pieces: `source` is `SetPieceSource` (WP6.2, [SET_PIECES.md](SET_PIECES.md)), which plans Flow around its pieces. Flow stays in charge of behind spawns and the opposite side's mix.
 
 
