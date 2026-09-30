@@ -483,11 +483,16 @@ fn ops_config_defaults_env_validation_and_redaction() {
         env(&[("WB_SERVER__RESTART_NOTICE_REMINDERS_SECS", "soon")])
     )
     .is_err());
+    // A shorter notice alone (reminders above it are skipped) stays valid.
+    let mut short = Config::default();
+    with_secrets(&mut short);
+    short.server.restart_notice_secs = 20;
+    short.validate().unwrap();
 
     for bad in [
         |c: &mut Config| c.admin.bind = "0.0.0.0:9091".into(),
         |c: &mut Config| c.admin.token = Secret::new("short"),
-        |c: &mut Config| c.server.restart_notice_reminders_secs = vec![60],
+        |c: &mut Config| c.server.restart_notice_reminders_secs = vec![0],
         |c: &mut Config| c.server.restart_notice_secs = 70_000,
         |c: &mut Config| c.server.handover_ttl_secs = 0,
         |c: &mut Config| c.backup.upload_command = vec![String::new()],

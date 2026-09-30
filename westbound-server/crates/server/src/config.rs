@@ -90,7 +90,7 @@ pub struct ServerConfig {
     /// over and the sockets close (spec: 60). The notice ends early once nobody is
     /// connected. 0 = no notice (the handover still runs).
     pub restart_notice_secs: u64,
-    /// Reminders during the notice, as seconds left (each one below the notice).
+    /// Reminders during the notice, as seconds left (those not below the notice are skipped).
     pub restart_notice_reminders_secs: Vec<u64>,
     /// How long the next instance recreates a handed-over room when a player rejoins it by
     /// code (docs/OPERATIONS.md → Restarts).
@@ -1175,14 +1175,10 @@ impl Config {
     /// N10.2: `[admin]`, the restart notice, backups' hook, the new rate limits.
     fn validate_ops(&self, errs: &mut Vec<String>) {
         let s = &self.server;
-        for r in &s.restart_notice_reminders_secs {
-            if *r == 0 || *r >= s.restart_notice_secs {
-                errs.push(
-                    "server.restart_notice_reminders_secs entries must be 1..restart_notice_secs"
-                        .into(),
-                );
-                break;
-            }
+        // Reminders at or above the notice are skipped (lowering the notice alone, e.g. to
+        // fit a platform's stop timeout, must not break startup).
+        if s.restart_notice_reminders_secs.contains(&0) {
+            errs.push("server.restart_notice_reminders_secs entries must be at least 1".into());
         }
         if s.restart_notice_secs > MAX_RESTART_NOTICE_SECS {
             errs.push(format!(

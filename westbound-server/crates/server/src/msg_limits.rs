@@ -197,7 +197,13 @@ mod tests {
             violation_burst: 10_000,
             ..WsRateLimitsConfig::default()
         };
-        for (name, per_sec, burst) in cfg.entries() {
+        let types: Vec<_> = cfg
+            .entries()
+            .into_iter()
+            .filter(|(name, _, _)| *name != "violation")
+            .collect();
+        assert_eq!(types.len(), CLIENT_TYPES - 1, "every type but hello");
+        for (name, per_sec, burst) in types {
             let i = CLIENT_TYPE_NAMES
                 .iter()
                 .position(|n| *n == name)
@@ -217,9 +223,12 @@ mod tests {
             // One token back after 1 / rate seconds.
             let refill_ms = (1_000.0 / per_sec).ceil() as u64;
             assert_eq!(l.check(tid, refill_ms), Verdict::Allow, "{name} refilled");
-            assert_eq!(l.check(tid, refill_ms), Verdict::Drop, "{name} one at a time");
+            assert_eq!(
+                l.check(tid, refill_ms),
+                Verdict::Drop,
+                "{name} one at a time"
+            );
         }
-        assert_eq!(cfg.entries().len(), CLIENT_TYPES - 1, "every type but hello");
     }
 
     #[test]

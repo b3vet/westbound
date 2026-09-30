@@ -602,3 +602,49 @@ async fn a_backup_restores_into_a_fresh_server() {
     assert_eq!(restores, 1);
     b.stop().await;
 }
+
+/// The planned restart against a **running container** (N10.2's SIGTERM check; CI or by
+/// hand, see docs/OPERATIONS.md): `WB_CONTAINER=<name> WB_CONTAINER_ADDR=127.0.0.1:8080
+/// cargo test -p server --test ops -- --ignored container`. The container must accept the
+/// all-0xAB map hash (`WB_GATEWAY__MAP_HASHES`) and have a short notice
+/// (`WB_SERVER__RESTART_NOTICE_SECS=3`).
+#[tokio::test]
+#[ignore = "needs a running container (WB_CONTAINER, WB_CONTAINER_ADDR)"]
+async fn container_sigterm_sends_the_notice_then_closes_1012() {
+    let name = std::env::var("WB_CONTAINER").expect("WB_CONTAINER");
+    let addr = std::env::var("WB_CONTAINER_ADDR").expect("WB_CONTAINER_ADDR");
+    let (_, token) = bots::http::device_account(&addr).await.expect("account");
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+        .await
+        .expect("upgrade");
+    send(
+        &mut ws,
+        &[ClientMsg::Hello(Hello {
+            protocol_version: PROTOCOL_VERSION,
+            client_build: BUILD,
+            map_hash: MAP,
+            access_token: AccessToken(token),
+        })],
+    )
+    .await;
+    let Ev::Msgs(w) = next_ev(&mut ws).await else {
+        panic!("closed before Welcome")
+    };
+    assert!(matches!(w.first(), Some(ServerMsg::Welcome(_))), "{w:?}");
+    let snap = create_room(&mut ws).await;
+    println!("in room {} ({})", snap.code.0, snap.room_id);
+    let st = std::process::Command::new("docker")
+        .args(["kill", "--signal", "TERM", &name])
+        .status()
+        .unwrap();
+    assert!(st.success());
+    let n = wait_for(&mut ws, "restart notice", |m| restart_notice(m).is_some()).await;
+    println!("notice: {n:?}");
+    let (msgs, close) = until_close(&mut ws).await;
+    let ended = msgs
+        .iter()
+        .any(|m| matches!(m, ServerMsg::RunResult(r) if r.end_reason == RunEndReason::RoomClosed));
+    println!("run ended room_closed: {ended}; close: {close:?}");
+    assert!(ended);
+    assert_eq!(close, Some(CloseCode::Restart));
+}
