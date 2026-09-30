@@ -708,8 +708,9 @@ impl Room {
                 placed,
             } => {
                 let reset = placed || offences & Offence::Teleport.bit() != 0;
+                let seat = &self.seats[i];
                 self.scoring
-                    .on_state(self.seats[i].player_id, &state, reset);
+                    .on_state(seat.player_id, &state, reset, seat.run.protected_until);
                 let seat = &mut self.seats[i];
                 if placed {
                     seat.placement = None;

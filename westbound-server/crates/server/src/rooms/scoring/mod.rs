@@ -393,8 +393,15 @@ impl RoomScoring {
         p.official.start(tick, s_mm);
     }
 
-    /// An accepted state (clamped). `reset`: a placement or a teleport.
-    pub fn on_state(&mut self, player_id: u16, st: &PlayerState, reset: bool) {
+    /// An accepted state (clamped). `reset`: a placement or a teleport; `protected_until`:
+    /// the room's spawn / rejoin protection (no traffic hits before that tick).
+    pub fn on_state(
+        &mut self,
+        player_id: u16,
+        st: &PlayerState,
+        reset: bool,
+        protected_until: u32,
+    ) {
         let Some(i) = self.index(player_id) else {
             return;
         };
@@ -409,7 +416,9 @@ impl RoomScoring {
             v: f64::from(st.speed_cms) / CM_PER_M,
             yaw: f64::from(st.heading_e4) / HEADING_PER_RAD,
             boost: st.flags.boost,
-            protected: st.run_state == RunState::Protected || st.flags.ghost,
+            protected: st.run_state == RunState::Protected
+                || st.flags.ghost
+                || tick_diff(st.tick, protected_until) > 0,
             reset,
         });
         p.pushed += 1;

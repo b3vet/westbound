@@ -201,7 +201,7 @@ impl H {
         self.tr.tick(self.now, &[]);
         for d in &self.drivers {
             let st = d.state(self.now);
-            self.sc.on_state(d.id, &st, false);
+            self.sc.on_state(d.id, &st, false, 0);
         }
         let night = self.night;
         self.sc
