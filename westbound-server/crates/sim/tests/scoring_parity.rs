@@ -44,7 +44,10 @@ fn hull_clearance_matches_road_hull() {
         exact += usize::from(got.to_bits() == want.to_bits());
         zero += usize::from(want == 0.0);
     }
-    assert!(zero > 100 && zero < cases.len() - 100, "overlaps and gaps both covered");
+    assert!(
+        zero > 100 && zero < cases.len() - 100,
+        "overlaps and gaps both covered"
+    );
     println!("hull: {exact} / {} bit-exact", cases.len());
 }
 
@@ -144,7 +147,10 @@ fn replay(text: &str) -> (usize, usize) {
         guardrail_offset: hx(&r["guardrail_offset"]),
     };
     let params = ScoringParams::builtin().expect("scoring params");
-    assert_eq!(params.body.max_active_vehicles, cap, "{name}: slot capacity");
+    assert_eq!(
+        params.body.max_active_vehicles, cap,
+        "{name}: slot capacity"
+    );
     assert_eq!(hx(&d["body"]["length"]), params.body.player_length_m);
     assert_eq!(hx(&d["body"]["width"]), params.body.player_width_m);
     let mut rules = Scoring::new(&params);
@@ -266,8 +272,16 @@ fn replay(text: &str) -> (usize, usize) {
             ei += 1;
             let at = format!("{name} tick {k} event {e}");
             assert_eq!(tick_of(e), k, "{at}: rust {got:?}");
-            assert_eq!(Some(got.kind), Kind::from_name(e[1].as_str().unwrap()), "{at}");
-            assert_eq!(Some(got.tag), Tag::from_name(e[2].as_str().unwrap()), "{at}");
+            assert_eq!(
+                Some(got.kind),
+                Kind::from_name(e[1].as_str().unwrap()),
+                "{at}"
+            );
+            assert_eq!(
+                Some(got.tag),
+                Tag::from_name(e[2].as_str().unwrap()),
+                "{at}"
+            );
             assert_eq!(got.points, e[3].as_i64().unwrap(), "{at}");
             assert_eq!(got.multiplier.to_bits(), hx(&e[4]).to_bits(), "{at}");
             let (gc, wc) = (got.clearance_m, hx(&e[5]));
@@ -286,7 +300,11 @@ fn replay(text: &str) -> (usize, usize) {
         } else {
             0.0
         };
-        assert_eq!(fill.to_bits(), want_fill.to_bits(), "{name} tick {k}: boost fill");
+        assert_eq!(
+            fill.to_bits(),
+            want_fill.to_bits(),
+            "{name} tick {k}: boost fill"
+        );
         let want: u64 = hashes[k - 1].as_str().unwrap().parse().unwrap();
         assert_eq!(
             rules.trace_hash(),
@@ -345,7 +363,15 @@ fn the_traces_cover_every_rule() {
             assert!(kinds.contains(k.name()), "no {} in the traces", k.name());
         }
     }
-    for t in ["checkpoint", "cash_out", "hit", "hesitated", "run_end", "clean", "pace"] {
+    for t in [
+        "checkpoint",
+        "cash_out",
+        "hit",
+        "hesitated",
+        "run_end",
+        "clean",
+        "pace",
+    ] {
         assert!(tags.contains(t), "no tag {t} in the traces");
     }
 }

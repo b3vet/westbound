@@ -206,7 +206,15 @@ impl ScoreEventBuffer {
 
     /// A state-change event (`kind`, value 1 on / 0 off).
     pub fn push_flag(&mut self, kind: Kind, on: bool) -> bool {
-        self.push(kind, 0, 0.0, -1.0, -1, if on { 1.0 } else { 0.0 }, Tag::None)
+        self.push(
+            kind,
+            0,
+            0.0,
+            -1.0,
+            -1,
+            if on { 1.0 } else { 0.0 },
+            Tag::None,
+        )
     }
 
     /// Forgets the events (keeps `dropped`).

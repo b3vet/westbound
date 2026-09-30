@@ -123,6 +123,12 @@ impl AppState {
             config.leaderboards.clone(),
             clock.clone(),
         ));
+        // N6.1: finished, verified multiplayer runs go to the boards.
+        rooms.set_run_sink(crate::leaderboards::mp_runs::run_sink(
+            boards.clone(),
+            db.clone(),
+            map.map.map_id.clone(),
+        ));
         Ok(Self {
             config: Arc::new(config),
             db,

@@ -290,7 +290,8 @@ mod tests {
 
     #[test]
     fn exact_overlay_is_checked() {
-        let mut bad: Value = serde_json::from_str(r#"{"a": 1.5, "exact": {"a": "3ff0000000000000"}}"#).unwrap();
+        let mut bad: Value =
+            serde_json::from_str(r#"{"a": 1.5, "exact": {"a": "3ff0000000000000"}}"#).unwrap();
         assert!(apply_exact(&mut bad).is_err());
         let mut none: Value = serde_json::from_str(r#"{"a": 1.5}"#).unwrap();
         assert!(apply_exact(&mut none).is_err());

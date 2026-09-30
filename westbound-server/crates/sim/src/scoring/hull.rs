@@ -33,8 +33,18 @@ pub fn clearance(
     let n2 = yaw2.sin();
     let ds = s2 - s1;
     let dd = d2 - d1;
-    let b1 = Axes { c: c1, n: n1, hl: hl1, hw: hw1 };
-    let b2 = Axes { c: c2, n: n2, hl: hl2, hw: hw2 };
+    let b1 = Axes {
+        c: c1,
+        n: n1,
+        hl: hl1,
+        hw: hw1,
+    };
+    let b2 = Axes {
+        c: c2,
+        n: n2,
+        hl: hl2,
+        hw: hw2,
+    };
     // Separating-axis test on the four box axes: forward (c, n) and right (-n, c).
     if !(separated(ds, dd, c1, n1, &b1, &b2)
         || separated(ds, dd, -n1, c1, &b1, &b2)
@@ -89,8 +99,18 @@ pub fn penetration(
     hw2: f64,
 ) -> f64 {
     let (c1, n1, c2, n2) = (yaw1.cos(), yaw1.sin(), yaw2.cos(), yaw2.sin());
-    let b1 = Axes { c: c1, n: n1, hl: hl1, hw: hw1 };
-    let b2 = Axes { c: c2, n: n2, hl: hl2, hw: hw2 };
+    let b1 = Axes {
+        c: c1,
+        n: n1,
+        hl: hl1,
+        hw: hw1,
+    };
+    let b2 = Axes {
+        c: c2,
+        n: n2,
+        hl: hl2,
+        hw: hw2,
+    };
     let (ds, dd) = (s2 - s1, d2 - d1);
     let mut depth = f64::INFINITY;
     for (ax, ay) in [(c1, n1), (-n1, c1), (c2, n2), (-n2, c2)] {
@@ -130,7 +150,10 @@ mod tests {
     fn side_by_side_and_overlap() {
         // Two unrotated 4 x 2 boxes, 3 m apart centre to centre laterally: 1 m clear.
         assert!((clearance(0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 3.0, 0.0, 2.0, 1.0) - 1.0).abs() < 1e-12);
-        assert_eq!(clearance(0.0, 0.0, 0.0, 2.0, 1.0, 1.0, 1.5, 0.0, 2.0, 1.0), 0.0);
+        assert_eq!(
+            clearance(0.0, 0.0, 0.0, 2.0, 1.0, 1.0, 1.5, 0.0, 2.0, 1.0),
+            0.0
+        );
         // Corner to corner: (1, 1) apart diagonally.
         let c = clearance(0.0, 0.0, 0.0, 2.0, 1.0, 5.0, 3.0, 0.0, 2.0, 1.0);
         assert!((c - 2f64.sqrt()).abs() < 1e-12);
@@ -138,7 +161,10 @@ mod tests {
 
     #[test]
     fn penetration_depth() {
-        assert_eq!(penetration(0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 3.0, 0.0, 2.0, 1.0), 0.0);
+        assert_eq!(
+            penetration(0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 3.0, 0.0, 2.0, 1.0),
+            0.0
+        );
         // 0.4 m lateral overlap.
         let p = penetration(0.0, 0.0, 0.0, 2.0, 1.0, 0.5, 1.6, 0.0, 2.0, 1.0);
         assert!((p - 0.4).abs() < 1e-12, "{p}");

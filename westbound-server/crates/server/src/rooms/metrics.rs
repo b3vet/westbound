@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::plausibility::Offence;
+use super::scoring::claims::Reject;
 
 /// Upper bounds (µs) of the tick-time buckets; the last bucket is everything above.
 pub const TICK_BUCKETS_US: [u64; 17] = [
@@ -43,6 +44,22 @@ pub struct RoomMetrics {
     tick_buckets: [AtomicU64; TICK_BUCKETS_US.len() + 1],
     offences: [AtomicU64; Offence::ALL.len()],
     drops: [AtomicU64; DROP_REASONS.len()],
+    // Scoring (N6.1).
+    pub claims_accepted: AtomicU64,
+    claims_rejected: [AtomicU64; Reject::ALL.len()],
+    /// Claims paid after their tick was scored (they arrived after the official lag).
+    pub scoring_late: AtomicU64,
+    pub score_syncs: AtomicU64,
+    pub trains: AtomicU64,
+    /// Reported traffic hits the server confirmed (the car reacts) or could not.
+    pub hits_confirmed: AtomicU64,
+    pub hits_refused: AtomicU64,
+    /// Server-detected contacts the client never reported (the run goes unverified).
+    pub hits_unreported: AtomicU64,
+    /// Wall time spent in scoring (µs, summed over room ticks).
+    pub scoring_us_sum: AtomicU64,
+    /// Multiplayer runs handed to the boards.
+    pub runs_recorded: AtomicU64,
 }
 
 impl RoomMetrics {
@@ -101,6 +118,23 @@ impl RoomMetrics {
 
     pub fn offences(&self, o: Offence) -> u64 {
         self.offences[o as usize].load(Ordering::Relaxed)
+    }
+
+    pub fn count_claim_rejected(&self, r: Reject) {
+        self.claims_rejected[r as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn claims_rejected(&self, r: Reject) -> u64 {
+        self.claims_rejected[r as usize].load(Ordering::Relaxed)
+    }
+
+    /// Rejected claims of every reason but `no_run` (claims in flight after a run ended).
+    pub fn claims_rejected_total(&self) -> u64 {
+        Reject::ALL
+            .iter()
+            .filter(|r| **r != Reject::NoRun)
+            .map(|r| self.claims_rejected(*r))
+            .sum()
     }
 
     /// Counts a drop by its `DROP_REASONS` label.
@@ -204,6 +238,81 @@ impl RoomMetrics {
                 self.offences(o)
             );
         }
+        let _ = writeln!(
+            out,
+            "# HELP wb_room_claims_total Score claims by verdict (rejections by reason)."
+        );
+        let _ = writeln!(out, "# TYPE wb_room_claims_total counter");
+        let _ = writeln!(
+            out,
+            "wb_room_claims_total{{verdict=\"accepted\"}} {}",
+            g(&self.claims_accepted)
+        );
+        for r in Reject::ALL {
+            let _ = writeln!(
+                out,
+                "wb_room_claims_total{{verdict=\"rejected\",reason=\"{}\"}} {}",
+                r.label(),
+                self.claims_rejected(r)
+            );
+        }
+        let mut metric = |name: &str, kind: &str, help: &str, value: u64| {
+            let _ = writeln!(out, "# HELP {name} {help}");
+            let _ = writeln!(out, "# TYPE {name} {kind}");
+            let _ = writeln!(out, "{name} {value}");
+        };
+        metric(
+            "wb_room_claims_late_total",
+            "counter",
+            "Accepted claims paid after their tick was scored.",
+            g(&self.scoring_late),
+        );
+        metric(
+            "wb_room_score_syncs_total",
+            "counter",
+            "ScoreSync messages sent.",
+            g(&self.score_syncs),
+        );
+        metric(
+            "wb_room_trains_total",
+            "counter",
+            "Crew train links paid.",
+            g(&self.trains),
+        );
+        metric(
+            "wb_room_hits_confirmed_total",
+            "counter",
+            "Reported traffic hits the server confirmed (the car reacts).",
+            g(&self.hits_confirmed),
+        );
+        metric(
+            "wb_room_hits_refused_total",
+            "counter",
+            "Reported traffic hits the server saw no contact for.",
+            g(&self.hits_refused),
+        );
+        metric(
+            "wb_room_hits_unreported_total",
+            "counter",
+            "Server-detected contacts the client did not report (run unverified).",
+            g(&self.hits_unreported),
+        );
+        metric(
+            "wb_room_runs_recorded_total",
+            "counter",
+            "Multiplayer runs handed to the leaderboards.",
+            g(&self.runs_recorded),
+        );
+        let _ = writeln!(
+            out,
+            "# HELP wb_room_scoring_seconds_total Wall time spent in room scoring."
+        );
+        let _ = writeln!(out, "# TYPE wb_room_scoring_seconds_total counter");
+        let _ = writeln!(
+            out,
+            "wb_room_scoring_seconds_total {}",
+            g(&self.scoring_us_sum) as f64 / 1e6
+        );
         let _ = writeln!(
             out,
             "# HELP wb_room_dropped_total Room messages dropped, by reason."

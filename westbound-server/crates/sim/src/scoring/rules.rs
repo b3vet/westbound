@@ -352,7 +352,11 @@ impl Scoring {
             if self.vid[i] != traffic.vehicle_id(i) {
                 self.vid[i] = traffic.vehicle_id(i);
                 self.cut_t[i] = f64::NEG_INFINITY;
-                self.phase[i] = if ds >= hl_sum { PHASE_AHEAD } else { PHASE_NONE };
+                self.phase[i] = if ds >= hl_sum {
+                    PHASE_AHEAD
+                } else {
+                    PHASE_NONE
+                };
             }
             if slip_ok
                 && !slip
@@ -631,7 +635,8 @@ impl Scoring {
             if !self.cut_candidate(i, lane, prev_lane, ps, traffic) {
                 continue;
             }
-            let gap = (traffic.s(i) - ps).abs() - (traffic.length(i) * 0.5 - self.inset + self.p_hl);
+            let gap =
+                (traffic.s(i) - ps).abs() - (traffic.length(i) * 0.5 - self.inset + self.p_hl);
             if gap < nearest_gap {
                 nearest_gap = gap;
                 nearest = i as i32;

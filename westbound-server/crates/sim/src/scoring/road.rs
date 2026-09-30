@@ -117,7 +117,9 @@ impl<'a> LoopRoad<'a> {
     pub fn lanes_right_edge_d(&self, s: f64) -> f64 {
         let sm = self.s_mm(s);
         let ranges = &self.map.lanes;
-        let j = ranges.partition_point(|r| r.s_start_mm <= sm).saturating_sub(1);
+        let j = ranges
+            .partition_point(|r| r.s_start_mm <= sm)
+            .saturating_sub(1);
         let r = &ranges[j];
         let mut nl = f64::from(r.count);
         if j > 0 && r.taper_mm > 0 && sm < r.s_start_mm + r.taper_mm {
@@ -139,7 +141,12 @@ impl<'a> LoopRoad<'a> {
 
 impl ScoringRoad for LoopRoad<'_> {
     fn lane_index_at(&self, d: f64, s: f64) -> i32 {
-        lane_index(d, self.lanes_left_edge_d(), self.lane_width(s), self.lane_count(s))
+        lane_index(
+            d,
+            self.lanes_left_edge_d(),
+            self.lane_width(s),
+            self.lane_count(s),
+        )
     }
 
     fn is_on_shoulder(&self, d: f64, s: f64) -> bool {
@@ -180,8 +187,8 @@ mod tests {
 
     #[test]
     fn the_loop_agrees_with_its_lane_ranges() {
-        let map =
-            LoopMap::from_json(include_str!("../../../../data/maps/loop_v1.json")).expect("loop_v1");
+        let map = LoopMap::from_json(include_str!("../../../../data/maps/loop_v1.json"))
+            .expect("loop_v1");
         let road = LoopRoad::new(&map);
         for r in &map.lanes {
             let s = f64::from(r.s_start_mm + r.taper_mm) / MM_PER_M + 1.0;
@@ -189,7 +196,10 @@ mod tests {
             assert_eq!(road.lane_count(s), n);
             let w = f64::from(r.lane_width_mm) / MM_PER_M;
             let left = road.lanes_left_edge_d();
-            assert_eq!(road.lane_index_at(left + (f64::from(n) - 0.5) * w, s), n - 1);
+            assert_eq!(
+                road.lane_index_at(left + (f64::from(n) - 0.5) * w, s),
+                n - 1
+            );
             assert_eq!(road.lane_index_at(left + (f64::from(n) + 0.5) * w, s), -1);
             assert!(road.is_on_shoulder(left + f64::from(n) * w + 0.5, s));
             // Any lap.

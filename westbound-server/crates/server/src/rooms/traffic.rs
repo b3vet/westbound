@@ -15,6 +15,8 @@
 use protocol::{Density, FrameBuilder, RunState};
 use sim::map::LoopMap;
 
+use super::car_history::CarHistory;
+
 /// A player as traffic sees it: the latest accepted state (clamped), extrapolation is the
 /// traffic's own business.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +72,18 @@ pub trait RoomTraffic: Send {
     /// scripted reaction (swerve, hard brake, hazards), streamed to every client that has
     /// the car. False when there is no such car. Nothing calls this before N6.
     fn hit_car(&mut self, _player_id: u16, _car_id: u16) -> bool {
+        false
+    }
+
+    /// N6.1: the traffic of the last room ticks (claim verification, the hit
+    /// cross-check). `None` without traffic.
+    fn car_history(&self) -> Option<&CarHistory> {
+        None
+    }
+
+    /// N6.1: whether car `car_id` is one this player's client was streamed (in its area of
+    /// interest). A claim naming any other car is rejected.
+    fn client_has(&self, _player_id: u16, _car_id: u16) -> bool {
         false
     }
 

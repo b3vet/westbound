@@ -326,3 +326,49 @@ stale_state_ms = 2000
 # dropped as in flight for this long; a state within this radius acknowledges it.
 placement_grace_ms = 2000
 placement_radius_m = 30.0
+
+[scoring]
+# Multiplayer scoring (docs/SERVER.md -> "Scoring (N6.1)"). The rules themselves are the
+# game's (sim::scoring, exported from data/tuning/scoring.tres); these are the server's.
+# Claims (spec): the event within +-300 ms of the server's view; a claimed clearance at most
+# 0.35 m under the server's (and a close pass / thread under its threshold + 0.35 m).
+claim_timing_ms = 300
+claim_clearance_tolerance_m = 0.35
+# Cuts: 20 Hz states against 120 Hz physics (not in spec).
+cut_gap_tolerance_m = 2.0
+cut_speed_tolerance_kmh = 5.0
+# A claim waits at most this long for the states that decide it; undecided claims held
+# per player (not in spec).
+claim_max_wait_ms = 1000
+claim_queue = 32
+# The official score runs this far behind the room, so a tick's claims, hits and crewmate
+# passes are all known when it is paid (not in spec; at most 2500).
+official_lag_ms = 1500
+# ScoreSync at least this often, and at every banking moment (spec: once a second).
+sync_interval_ms = 1000
+# Crew proximity (spec): +0.25x per crewmate within 30 m, capped at x2.0.
+crew_range_m = 30.0
+crew_bonus_per_mate = 0.25
+crew_factor_cap = 2.0
+# Trains (spec): the same car and side, or the same gap, within 1.0 s after a crewmate;
+# 25 base points and +2 multiplier.
+train_window_ms = 1000
+train_points = 25
+train_multiplier_gain = 2.0
+# Server hit detection (spec): hulls overlapping deeper than 0.3 m for 2+ ticks. A reported
+# hit accounts for a contact within 1.5 s; a reported traffic hit makes the car react when
+# the server saw the hulls within 1 m near its tick (not in spec).
+hit_overlap_m = 0.3
+hit_overlap_ticks = 2
+hit_match_ms = 1500
+hit_confirm_clearance_m = 1.0
+# Leaderboard verification (MP-D9): at least 90 % of a run's claims accepted, once it has
+# 20 decided claims (plus no plausibility offence and no unreported hit).
+verify_min_acceptance_pct = 90.0
+verify_min_claims = 20
+# The player hull the server measures with: the largest car (brute_v8, 4.8 x 1.95 m).
+player_length_m = 4.8
+player_width_m = 1.95
+# Cars are tracked for passes from this far ahead; crew totals go out at most this often.
+track_ahead_m = 60.0
+crew_total_interval_ms = 1000
