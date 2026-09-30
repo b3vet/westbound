@@ -157,3 +157,8 @@ Result on the integration branch with WP6.5 and WP6.6 merged (2,016 km, 72 runs,
 - Trucks came into the booths far above 50 km/h (IDM lags a falling limit): the envelope braking above; behind spawns and top-ups spawned into booth lanes at flow speed: `spawn_speed_ok`.
 
 **Metrics baseline** (`tools/soak.sh --update-baseline`, deliberately): the 16-run reference now meets WP6.3's kinds from their unlock legs (slalom 3, convoy 4, merge zone 5, road works 6, tunnel squeeze 7; no tolls, the reference keeps the default checkpoint style). 3 of 16 traces changed; density 10.00 → 9.90 (−1.0 %), gaps per km 8.65 → 8.55 (−1.1 %), lane changes per vehicle-minute 1.029 → 1.040 (+1.1 %), mean speed per lane 139.2 / 127.1 / 115.6 → 140.4 / 127.6 / 116.6 km/h (+0.8 / +0.4 / +0.8 %), set pieces per leg 0.031 → 0.023 (4 → 3 pieces in 128 legs: the picks now include kinds that often do not fit the reference's road).
+
+## WP9.6: set pieces in a real journey
+
+Placement retries a peak that did not fit, was busy or could not be placed at the next batch; road-anchored pieces scan further for a place that fits; busy tunnel and toll pieces are offered again; the meet rule uses the player's 30 s cruising pace (`set_piece_meet_pace_smoothing_s`); rolling pieces may drive through a widening (`zone_widen`), while drops, tunnels and forks still stop them. Numbers and reasoning: docs/SPAWNING.md, *Set pieces in a real journey (WP9.6)*.
+
