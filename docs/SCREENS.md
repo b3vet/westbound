@@ -77,22 +77,55 @@ screens.countdown_hold.connect(hold_countdown)
 
 ### Settings
 
-A two-column grid of rows. Each row has a label and a segmented choice of OPTION buttons, each `touch_target_px` tall. A press calls `Settings.set_value` at once. The rows follow `Events.settings_changed`, so changes from the dev rows show too. Settings changed here are saved (`Save.save_to_disk()`) when the menu resumes or quits.
+WP8.1 (docs/SAVE.md → Settings has every setting, its key and what applies it). The same `SettingsPanel` is in the pause menu and on the title (SETTINGS). Under the header (SETTINGS, ACCOUNT, DONE) a row of page tabs, left-anchored: **GAME**, **CONTROLS**, **AUDIO** (each `settings_label_width_px` wide, text size applied). Under it the shown page: a label and a segmented choice of OPTION buttons per row, each `touch_target_px` tall; full-width rows first (the camera), then two columns. The label column is as wide as the page's longest label (at most `settings_label_width_px`), so three-option rows keep their captions at 125 %. A press calls `Settings.set_value` at once and every system applies it live from `Events.settings_changed`; the rows follow that signal too, so a change from the keyboard, the HUD or the dev rows shows at once. `Save` writes the change at the end of the frame (the pause menu's RESUME / QUIT and the title's DONE also save).
 
-| Row | Key | Choices |
+| Page | Row | Key | Choices |
+| --- | --- | --- | --- |
+| GAME | CAMERA (full width) | `camera_mode` | every `camera.modes`: CHASE / FAR CHASE / HOOD / OVERHEAD / COCKPIT |
+| GAME | GRAPHICS | `quality_tier` | every `quality.tier_names`: LOW / MEDIUM / HIGH |
+| GAME | BATTERY SAVER | `battery_saver` | OFF / ON |
+| GAME | TEXT SIZE | `text_scale` | `text_scales` (100 / 125%) |
+| GAME | UNITS | `units` | KM/H / MPH |
+| GAME | REDUCED MOTION | `reduced_motion` | OFF / ON |
+| GAME | HAPTICS | `haptics` | ON / OFF |
+| CONTROLS | STEERING | `steering_mode` | DRAG / TILT (TILT disabled, marked N/A, where `is_gyro_supported()` is false) |
+| CONTROLS | THROTTLE | `throttle_mode` | AUTO / MANUAL |
+| CONTROLS | HAND | `left_handed` | RIGHT / LEFT |
+| CONTROLS | DRAG LOOK | `drag_visual` | RING / WHEEL |
+| CONTROLS | CONTROLS SIZE | `controls_scale` | `settings_controls_scales` (80 / 100 / 120%) |
+| CONTROLS | SENSITIVITY | `steer_sensitivity` | `settings_sensitivities` (75 / 100 / 135%) |
+| CONTROLS | DEAD ZONE | `steer_dead_zone` | `meta.settings_dead_zones`: SMALL / NORMAL / LARGE |
+| CONTROLS | CURVE | `steer_curve` | `meta.settings_curves`: GENTLE / NORMAL / SHARP |
+| AUDIO | MASTER, MUSIC, EFFECTS, ENGINE, INTERFACE | `volume_*` | `audio.volume_steps` (OFF, then %) |
+| AUDIO | SOUND | `audio_muted` | ON / MUTED |
+
+**CHOOSE LAYOUT** (the right end of the tab row, CONTROLS only) swaps the rows for the first-run chooser (below; the spec: "The chooser can be revisited from settings"); the button reads BACK while it shows. A tab, BACK, or closing the settings brings the rows back.
+
+## First run
+
+WP8.1 (docs/SAVE.md → First run). Spec: Controls → Settings and first run.
+
+| File | Class | Role |
 | --- | --- | --- |
-| STEERING | `steering_mode` | DRAG / TILT (TILT disabled, marked N/A, where `is_gyro_supported()` is false) |
-| THROTTLE | `throttle_mode` | AUTO / MANUAL |
-| HAND | `left_handed` | RIGHT / LEFT |
-| DRAG LOOK | `drag_visual` | RING / WHEEL |
-| CONTROLS SIZE | `controls_scale` | `settings_controls_scales` (80 / 100 / 120%) |
-| SENSITIVITY | `steer_sensitivity` | `settings_sensitivities` (75 / 100 / 135%) |
-| UNITS | `units` | KM/H / MPH |
-| TEXT SIZE | `text_scale` | `text_scales` (100 / 125%) |
-| REDUCED MOTION | `reduced_motion` | OFF / ON |
-| HAPTICS | `haptics` | ON / OFF |
+| `first_run_screen.gd` | `FirstRunScreen` | The chooser screen over the title (a RunScreen, built on first use by `TitleScreens.open_first_run`) |
+| `first_run_chooser.gd` | `FirstRunChooser` | The chooser itself: STEERING, THROTTLE, HAND and the sketch (also in the settings) |
+| `first_run_sketch.gd` | `FirstRunSketch` | A landscape phone with the chosen layout: the drag ring (steer left / right, brake down, boost up), the manual drag zone, the gas column with its boost cap and the brake, the tilted phone; mirrored for left-handed play |
+| `first_run_warmup.gd` | `FirstRunWarmupHint` | The warm-up's hint (a CanvasLayer at layer 6) |
 
-Every key already exists in `Settings.DEFAULTS`. The spec's full settings screen (dead zone, curve, graphics tier, battery saver, audio buses, camera) is WP8.1 / WP8.5.
+- **When.** On a fresh save (`Save.chooser_pending()`), the title's PLAY, DAILY DRIVE or the hub's LOOP PRACTICE opens the chooser instead of starting; the menu steps aside. Never again once answered, and never under the test runner or tools (docs/SAVE.md → Tests and tools).
+- **Layout.** HOW DO YOU DRIVE? (display face, speed-tilted) top-left and PICK YOUR CONTROLS · CHANGE THEM ANY TIME IN SETTINGS under it in the accent. The rows left-anchored: a label, then two big OPTION cards with a note each (DRAG "SLIDE A THUMB" / TILT "TILT THE PHONE", N/A without tilt; AUTO "GAS ALWAYS ON" / MANUAL "GAS + BRAKE PEDALS"; RIGHT / LEFT "MIRRORED"); the spec's default (drag + auto, right hand) preselected. Right of them the sketch and two lines naming the layout (ONE THUMB DOES IT ALL / DOWN BRAKES · FLICK UP BOOSTS, ...; the words LEFT and RIGHT swap when mirrored). DRIVE (primary, `primary_button_size_px`) in the thumb corner with SKIP (note DRAG + AUTO) beside it; both mirror at once when LEFT is chosen.
+- **Intents.** A card writes Settings at once (the settings rows follow). DRIVE keeps the choice; SKIP puts the defaults back; either records it (`Save.mark_chooser_done`) and `TitleScreens` starts the mode that asked. Enter drives; Esc goes back to the title (still pending).
+- **Warm-up hint.** During the first Journey's empty-road warm-up: a panel right-aligned under the HUD's lives, pause, camera and high-beam slots (clear of the top-centre readouts, the leg toast and the dev rows): WARM-UP · EMPTY ROAD in the accent, TRAFFIC IN n S (tabular, changes once a second), SKIP (a touch target). At the end (or SKIP) the line reads TRAFFIC AHEAD, SKIP goes, and the panel hides after `meta.warmup_end_note_s`. Under the pause menu's dim while paused. Nothing exists outside the first run.
+
+Previews:
+
+```
+tools/snap.sh src/run/run.tscn --renderer=both --state=menu --title=play --first_run=1          # the chooser from PLAY
+tools/snap.sh src/ui/screens/dev/screens_preview.tscn --renderer=both --screen=settings --sweep=page:game,controls,chooser,audio
+tools/snap.sh src/ui/screens/dev/screens_preview.tscn --renderer=both --screen=warmup --warmup_s=3
+```
+
+Tests: `tests/ui/test_settings_panel.gd`, `tests/ui/test_first_run.gd`, `tests/run/test_first_run_warmup.gd` (docs/SAVE.md → Tests and tools).
 
 ## Crash
 
@@ -147,7 +180,8 @@ tools/snap.sh src/ui/screens/dev/screens_preview.tscn --size=2496x1320 --screen=
 
 The preview is the real run (`run.tscn`) in the matching state, with the screen settled. The dev rows and dev HUD step aside unless you pass `--dev`. Options:
 
-- `--screen=countdown|pause|settings|results|results_best|crash|hold`
+- `--screen=countdown|pause|settings|results|results_best|crash|hold|warmup` (warmup: WP8.1, `--warmup_s=`)
+- `--page=game|controls|audio|chooser` (settings)
 - `--step=3|2|1|0`
 - `--gyro`
 - `--hand`, `--text_scale`, `--units`
@@ -301,7 +335,7 @@ The game boots into the title: the run's MENU state over the attract drive (docs
 - **Logo:** WESTBOUND in Chakra Petch (the display face) at `font_logo_px`, outlined and speed-tilted (speed_tilt.gdshader), CHASE THE SUN under it in the accent.
 - **Band:** ink at `title_band_pct` from the left edge to `title_band_width_px`, its right edge leaning with the speed tilt and lined with the accent. The attract drive shows through it; the car sits right of centre (the camera's frame yaw).
 - **Profile chip (top-right):** the session's `name#tag` (PLAYER before a sign-in) and its status word (ONLINE, CONNECTING, OFFLINE, ...; ONLINE OFF without a session) after a status diamond (accent online, gold connecting, hot suspended / refused, muted otherwise). It follows `status_changed` / `profile_changed`. It never reaches the logo: the name is shortened with "..." to the room right of it (and `title_chip_max_width_px`). A tap opens ACCOUNT (or the settings without a session).
-- **SETTINGS:** the pause menu's settings view: SETTINGS (at `font_title_px`) top-left, DONE and ACCOUNT top-right, the SettingsPanel (GAME / AUDIO pages) or the ProfilePanel (ACCOUNT / FRIENDS / CREW) under them, over the dim. Settings are saved when DONE closes the view or a run starts.
+- **SETTINGS:** the pause menu's settings view: SETTINGS (at `font_title_px`) top-left, DONE and ACCOUNT top-right, the SettingsPanel (GAME / CONTROLS / AUDIO pages, WP8.1) or the ProfilePanel (ACCOUNT / FRIENDS / CREW) under them, over the dim. Settings are saved when DONE closes the view or a run starts.
 - **LEADERBOARDS:** the existing LeaderboardsScreen over the title (BACK / Esc comes back).
 - **Keys:** Enter plays; Esc closes the settings view.
 - **Text size:** 100% / 125% (`text_scale`), restyled live; touch targets do not scale. Not mirrored for left-handed play (the title has no thumb-side control column; the band and logo anchor left).
@@ -327,7 +361,7 @@ A refusal shows the server's reason in hot text ("No room with that code.", "Tha
 
 | From | Intent | Run |
 | --- | --- | --- |
-| Title PLAY / Enter | `start(&"journey")` | `start_mode`: the Journey run, full 1 s countdown, same frame |
+| Title PLAY / Enter | `start(&"journey")` (WP8.1: after the first-run chooser on a fresh save) | `start_mode`: the Journey run, full 1 s countdown, same frame (the first one on a fresh save warms up) |
 | Title DAILY DRIVE | `start(&"daily")` | the day's seed (`Rng.daily_seed` of today's UTC date) |
 | Hub LOOP PRACTICE | `start(&"loop")` | loop mode (N3.2) |
 | Hub room joined (N5.2) | `room_ready(session)` | `start_room(session)`: loop mode in the room (RunRoom) |

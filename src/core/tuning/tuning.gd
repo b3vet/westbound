@@ -44,6 +44,8 @@ const DEFAULT_PATH := "res://data/tuning.tres"
 @export var loop: LoopTuning
 ## Audio: bus levels, engine crossfade, pass sounds, voices (WP7A).
 @export var audio: AudioTuning
+## Save, settings choices, the first run (WP8.1).
+@export var meta: MetaTuning
 
 static var _default: Tuning
 
@@ -69,5 +71,5 @@ func missing_sections() -> PackedStringArray:
 static func section_names() -> PackedStringArray:
 	return PackedStringArray([
 		"quality", "road", "vehicle", "controls", "camera", "traffic", "director",
-		"passability", "scoring", "lives", "sun", "legs", "feel", "hud", "progression", "traffic_view", "crash", "landmarks", "night", "net", "loop", "audio",
+		"passability", "scoring", "lives", "sun", "legs", "feel", "hud", "progression", "traffic_view", "crash", "landmarks", "night", "net", "loop", "audio", "meta",
 	])

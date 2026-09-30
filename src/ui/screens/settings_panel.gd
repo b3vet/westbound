@@ -1,42 +1,61 @@
 class_name SettingsPanel
 extends Control
-## The compact in-run settings (from the pause menu). Spec: UI → Screens ("Settings:
-## controls (steering mode, throttle mode, sensitivity, ..., left-handed) ... haptics,
-## units, ... reduced motion"); Accessibility (text size 100% / 125%, reduced motion);
-## Controls → Settings; plan D10 (drag visual, controls size). docs/SCREENS.md → Settings.
+## The settings grid, in the pause menu and on the title (SETTINGS). Spec: UI → Screens
+## ("Settings: controls (steering mode, throttle mode, sensitivity, dead zone, curve,
+## left-handed); graphics tier and battery saver; audio buses; haptics, units, camera,
+## reduced motion"); Controls → Settings and first run ("The chooser can be revisited
+## from settings"); Accessibility (text size 100% / 125%, reduced motion); Performance
+## budget (quality tiers, battery saver); plan D9 / D10 (controls size, drag look).
+## docs/SCREENS.md → Settings; docs/SAVE.md → Settings.
 ##
-## Two columns of rows; each row is a label and a segmented choice of big OPTION
-## buttons (touch_target_px tall). A press writes the value straight into Settings
-## (Settings.set_value); the rows follow Events.settings_changed, so a change made
-## elsewhere (the dev rows, the keyboard) shows at once. Only keys in Settings.DEFAULTS
-## appear. Gyro (TILT) is disabled where the platform has no tilt
-## (PlayerInput.is_gyro_supported()).
-##
-## WP7A: two pages, GAME (the rows above) and AUDIO (a volume row per bus: Master,
-## Music, SFX, Engine, UI, in AudioTuning.volume_steps, and the SOUND on/muted row),
-## switched by two tabs in the free span of the screen's header row (between the
-## siblings drawn there, e.g. the title and ACCOUNT / DONE). Only the shown page's rows
+## Three pages, switched by a row of tabs at the top of the panel's area:
+##   GAME      CAMERA (a full-width row: every CameraTuning mode), GRAPHICS (quality
+##             tier), BATTERY SAVER, TEXT SIZE, UNITS, REDUCED MOTION, HAPTICS
+##   CONTROLS  STEERING, THROTTLE, HAND, DRAG LOOK, CONTROLS SIZE, SENSITIVITY, DEAD ZONE,
+##             CURVE; CHOOSE LAYOUT (right end of the tab row) swaps the rows for the
+##             first-run chooser (FirstRunChooser) and BACK brings them back
+##   AUDIO     a volume row per bus (Master, Music, SFX, Engine, UI) and SOUND (mute)
+## Each row is a label and a segmented choice of big OPTION buttons (touch_target_px
+## tall), laid out in two columns (full-width rows first). A press writes the value
+## straight into Settings (Settings.set_value), which every system applies live from
+## Events.settings_changed (and Save writes soon after); the rows follow that signal
+## too, so a change made elsewhere (the dev rows, the keyboard, the chooser) shows at
+## once. Only keys in Settings.DEFAULTS appear. Gyro (TILT) is disabled where the
+## platform has no tilt (PlayerInput.is_gyro_supported()). Only the shown page's rows
 ## are visible and laid out.
 
 signal changed(key: StringName)
 
 const TEXT_GYRO := "TILT"
+const TEXT_CHOOSE := "CHOOSE LAYOUT"
+const TEXT_BACK := "BACK"
 const PCT_FMT := "%d%%"
 const PAGE_GAME := 0
-const PAGE_AUDIO := 1
-const PAGE_CAPTIONS: Array[String] = ["GAME", "AUDIO"]
+const PAGE_CONTROLS := 1
+const PAGE_AUDIO := 2
+const PAGE_CAPTIONS: Array[String] = ["GAME", "CONTROLS", "AUDIO"]
+## Camera captions where the mode id is not the word (default: the id upper-cased).
+const CAMERA_CAPTIONS := {"far": "FAR CHASE"}
 
 ## key, label, values, option labels ([] = percent labels from the values).
 var rows: Array[Row] = []
 var style: HudStyle
 var tuning: HudTuning
 ## The input hub (gyro support); null = assume supported.
-var hub: PlayerInput
+var hub: PlayerInput:
+	set(value):
+		hub = value
+		if chooser != null:
+			chooser.hub = value
 ## Settings writes made from this panel (tests).
 var writes: int = 0
-## The page shown (PAGE_GAME / PAGE_AUDIO) and its tabs.
+## The page shown (PAGE_GAME / PAGE_CONTROLS / PAGE_AUDIO) and its tabs.
 var page: int = PAGE_GAME
 var tabs: Array[ScreenButton] = []
+## CHOOSE LAYOUT / BACK (CONTROLS page) and the chooser it shows.
+var chooser_button: ScreenButton
+var chooser: FirstRunChooser
+var chooser_open: bool = false
 var _building_page: int = PAGE_GAME
 var _last_area := Rect2()
 
@@ -50,6 +69,8 @@ class Row:
 	var title: ScreenText
 	var buttons: Array[ScreenButton] = []
 	var page: int = 0
+	## A full-width row (many options: the camera).
+	var wide: bool = false
 
 
 func _init() -> void:
@@ -75,17 +96,48 @@ func build(t: HudTuning) -> void:
 		tab.pressed.connect(show_page.bind(i))
 		add_child(tab)
 		tabs.append(tab)
+	if chooser_button == null:
+		chooser_button = ScreenButton.make(TEXT_CHOOSE, ScreenButton.Kind.NORMAL, 20)
+		chooser_button.name = "ChooseLayout"
+		chooser_button.pressed.connect(toggle_chooser)
+		add_child(chooser_button)
+		chooser = FirstRunChooser.new()
+		chooser.visible = false
+		chooser.hub = hub
+		chooser.changed.connect(func(k: StringName) -> void:
+			writes += 1
+			changed.emit(k))
+		add_child(chooser)
+	var meta := MetaTuning.resolve()
 	_building_page = PAGE_GAME
+	var cam := Tuning.load_default().camera
+	var cam_captions: Array[String] = []
+	for m in cam.modes:
+		cam_captions.append(String(CAMERA_CAPTIONS.get(m, m.to_upper())))
+	var cam_values: Array = []
+	for m in cam.modes:
+		cam_values.append(StringName(m))
+	_add(&"camera_mode", "CAMERA", cam_values, cam_captions).wide = true
+	var tiers: Array = []
+	var tier_captions: Array[String] = []
+	for tier in Tuning.load_default().quality.tier_names:
+		tiers.append(StringName(tier))
+		tier_captions.append(tier.to_upper())
+	_add(&"quality_tier", "GRAPHICS", tiers, tier_captions)
+	_add(&"battery_saver", "BATTERY SAVER", [false, true], ["OFF", "ON"])
+	_add(&"text_scale", "TEXT SIZE", Array(t.text_scales), [])
+	_add(&"units", "UNITS", [&"kmh", &"mph"], ["KM/H", "MPH"])
+	_add(&"reduced_motion", "REDUCED MOTION", [false, true], ["OFF", "ON"])
+	_add(&"haptics", "HAPTICS", [true, false], ["ON", "OFF"])
+	_building_page = PAGE_CONTROLS
 	_add(&"steering_mode", "STEERING", [&"drag", &"gyro"], ["DRAG", TEXT_GYRO])
 	_add(&"throttle_mode", "THROTTLE", [&"auto", &"manual"], ["AUTO", "MANUAL"])
 	_add(&"left_handed", "HAND", [false, true], ["RIGHT", "LEFT"])
 	_add(&"drag_visual", "DRAG LOOK", [&"ring", &"wheel"], ["RING", "WHEEL"])
 	_add(&"controls_scale", "CONTROLS SIZE", Array(t.settings_controls_scales), [])
 	_add(&"steer_sensitivity", "SENSITIVITY", Array(t.settings_sensitivities), [])
-	_add(&"units", "UNITS", [&"kmh", &"mph"], ["KM/H", "MPH"])
-	_add(&"text_scale", "TEXT SIZE", Array(t.text_scales), [])
-	_add(&"reduced_motion", "REDUCED MOTION", [false, true], ["OFF", "ON"])
-	_add(&"haptics", "HAPTICS", [true, false], ["ON", "OFF"])
+	_add(&"steer_dead_zone", "DEAD ZONE", Array(meta.settings_dead_zones), ["SMALL", "NORMAL", "LARGE"])
+	_add(&"steer_curve", "CURVE", Array(meta.settings_curves), ["GENTLE", "NORMAL", "SHARP"])
 	_building_page = PAGE_AUDIO
 	var steps := Array(AudioTuning.resolve().volume_steps)
 	var labels: Array[String] = ["MASTER", "MUSIC", "EFFECTS", "ENGINE", "INTERFACE"]
@@ -95,10 +147,10 @@ func build(t: HudTuning) -> void:
 	refresh()
 
 
-func _add(key: StringName, label: String, values: Array, captions: Array) -> void:
-	if not Settings.DEFAULTS.has(key):
-		return
+func _add(key: StringName, label: String, values: Array, captions: Array) -> Row:
 	var r := Row.new()
+	if not Settings.DEFAULTS.has(key):
+		return r
 	r.key = key
 	r.label = label
 	r.page = _building_page
@@ -117,6 +169,7 @@ func _add(key: StringName, label: String, values: Array, captions: Array) -> voi
 		add_child(b)
 		r.buttons.append(b)
 	rows.append(r)
+	return r
 
 
 func setup(s: HudStyle) -> void:
@@ -127,6 +180,9 @@ func setup(s: HudStyle) -> void:
 		r.title.setup(s)
 		for b in r.buttons:
 			b.setup(s)
+	if chooser_button != null:
+		chooser_button.setup(s)
+		chooser.setup(s, tuning)
 
 
 func _enter_tree() -> void:
@@ -137,6 +193,13 @@ func _enter_tree() -> void:
 func _exit_tree() -> void:
 	if Events.settings_changed.is_connected(_on_setting_changed):
 		Events.settings_changed.disconnect(_on_setting_changed)
+
+
+func _notification(what: int) -> void:
+	# Closed (DONE, ACCOUNT): the next open shows the rows again, not the chooser.
+	if what == NOTIFICATION_VISIBILITY_CHANGED and not visible and chooser_open:
+		chooser_open = false
+		refresh()
 
 
 func _on_setting_changed(_key: StringName) -> void:
@@ -168,17 +231,29 @@ func selected_index(key: StringName) -> int:
 	return -1
 
 
-## Shows a page (GAME / AUDIO) and lays it out again in the last area.
+## Shows a page (GAME / CONTROLS / AUDIO) and lays it out again in the last area.
 func show_page(p: int) -> void:
 	page = clampi(p, PAGE_GAME, PAGE_CAPTIONS.size() - 1)
+	chooser_open = false
 	refresh()
-	if _last_area.size != Vector2.ZERO:
-		layout(_last_area)
+	_relayout()
+
+
+## CHOOSE LAYOUT <-> BACK: the first-run chooser in place of the CONTROLS rows.
+func toggle_chooser() -> void:
+	page = PAGE_CONTROLS
+	chooser_open = not chooser_open
+	if chooser_open:
+		chooser.refresh()
+	refresh()
+	_relayout()
 
 
 func refresh() -> void:
 	for i in tabs.size():
 		tabs[i].selected = i == page
+	if chooser_button != null:
+		chooser_button.text = TEXT_BACK if chooser_open else TEXT_CHOOSE
 	for r in rows:
 		var current: Variant = Settings.get_value(r.key)
 		var best := _closest(r.values, current)
@@ -217,101 +292,86 @@ func _choose(r: Row, index: int) -> void:
 	changed.emit(r.key)
 
 
-## Lays the shown page's rows out in two columns inside `area` (panel-local px) and
-## the page tabs in the header row above it. Returns the height used.
+func _relayout() -> void:
+	if _last_area.size != Vector2.ZERO:
+		layout(_last_area)
+
+
+## Lays the panel out inside `area` (panel-local px): the tab row on top, then the shown
+## page's rows (full-width rows first, then two columns) or the chooser. Returns the
+## height used.
 func layout(area: Rect2) -> float:
 	if style == null or tuning == null:
 		return 0.0
 	_last_area = area
 	var g := tuning.spacing_grid_px
+	var rh := tuning.touch_target_px
 	var col_gap := g * 2.0
 	var cols := 2
-	var shown := 0
+	# The tab row: the page tabs left, CHOOSE LAYOUT at the right end (CONTROLS only).
+	var tw := tuning.settings_label_width_px * style.ts
+	for t in tabs.size():
+		tabs[t].position = Vector2(area.position.x + float(t) * (tw + g), area.position.y)
+		tabs[t].size = Vector2(tw, rh)
+	var tabs_end := area.position.x + float(tabs.size()) * (tw + g)
+	if chooser_button != null:
+		var cw := maxf(tw, SocialUi.button_width(chooser_button, tuning))
+		cw = minf(cw, area.end.x - tabs_end - col_gap)
+		chooser_button.visible = page == PAGE_CONTROLS
+		chooser_button.position = Vector2(area.end.x - cw, area.position.y)
+		chooser_button.size = Vector2(cw, rh)
+		chooser.visible = chooser_open and page == PAGE_CONTROLS
+	var top := area.position.y + rh + g * 2.0
+	var body := Rect2(Vector2(area.position.x, top), Vector2(area.size.x, area.end.y - top))
+	var shown: Array[Row] = []
 	for r in rows:
-		var on := r.page == page
+		var on := r.page == page and not (chooser_open and page == PAGE_CONTROLS)
 		r.title.visible = on
 		for b in r.buttons:
 			b.visible = on
 		if on:
-			shown += 1
-	var per_col := maxi(ceili(float(shown) / float(cols)), 1)
-	var cw := (area.size.x - col_gap * float(cols - 1)) / float(cols)
-	var rh := tuning.touch_target_px
-	var lw := tuning.settings_label_width_px * style.ts
-	var i := 0
-	for r in rows:
-		if r.page != page:
-			continue
+			shown.append(r)
+	if chooser != null and chooser.visible:
+		chooser.position = Vector2.ZERO
+		chooser.size = size
+		return rh + g * 2.0 + chooser.layout(body)
+	var lw := label_width(shown)
+	var y := body.position.y
+	var narrow: Array[Row] = []
+	for r in shown:
+		if r.wide:
+			_place_row(r, body.position.x, y, body.size.x, lw, rh, g)
+			y += rh + g
+		else:
+			narrow.append(r)
+	var per_col := maxi(ceili(float(narrow.size()) / float(cols)), 1)
+	var cw2 := (body.size.x - col_gap * float(cols - 1)) / float(cols)
+	for i in narrow.size():
 		@warning_ignore("integer_division")
 		var c := i / per_col
 		var k := i % per_col
-		i += 1
-		var x := area.position.x + float(c) * (cw + col_gap)
-		var y := area.position.y + float(k) * (rh + g)
-		var ts := r.title.get_combined_minimum_size()
-		r.title.position = Vector2(x, y + (rh - ts.y) * 0.5)
-		r.title.size = Vector2(lw - g, ts.y)
-		var n := r.buttons.size()
-		var bw := (cw - lw - g * float(n - 1)) / float(n)
-		for j in n:
-			var b := r.buttons[j]
-			b.position = Vector2(x + lw + float(j) * (bw + g), y)
-			b.size = Vector2(bw, rh)
-	_layout_tabs(area, rh, g)
-	return float(per_col) * rh + float(per_col - 1) * g
+		_place_row(narrow[i], body.position.x + float(c) * (cw2 + col_gap), y + float(k) * (rh + g), cw2, lw, rh, g)
+	if not narrow.is_empty():
+		y += float(per_col) * (rh + g)
+	return y - g - area.position.y
 
 
-## The tabs: centred in the widest free span of the header row (the band of height
-## `rh` ending 2 grid steps above `area`), clear of the visible siblings drawn there.
-func _layout_tabs(area: Rect2, rh: float, g: float) -> void:
-	if tabs.is_empty():
-		return
-	var band_y := area.position.y - g * 2.0 - rh
-	var lo := area.position.x
-	var hi := area.end.x
-	# Free spans between sibling controls in the band (panel and host share one space).
-	var best_lo := lo
-	var best_hi := lo
-	var cursor := lo
-	var edges := PackedFloat64Array()
-	var parent := get_parent()
-	if parent != null:
-		for n in parent.get_children():
-			var c := n as Control
-			if c == null or c == self or not c.visible:
-				continue
-			var rc := Rect2(c.position, c.size)
-			if rc.end.y <= band_y or rc.position.y >= band_y + rh or rc.size.x >= area.size.x:
-				continue
-			edges.append(rc.position.x)
-			edges.append(rc.end.x)
-	# Sort the obstacle spans by start (few items: insertion sort on pairs).
-	@warning_ignore("integer_division")
-	var spans := edges.size() / 2
-	for a in range(1, spans):
-		var j := a
-		while j > 0 and edges[(j - 1) * 2] > edges[j * 2]:
-			var s0 := edges[j * 2]
-			var s1 := edges[j * 2 + 1]
-			edges[j * 2] = edges[(j - 1) * 2]
-			edges[j * 2 + 1] = edges[(j - 1) * 2 + 1]
-			edges[(j - 1) * 2] = s0
-			edges[(j - 1) * 2 + 1] = s1
-			j -= 1
-	for a in spans:
-		var start := edges[a * 2] - g * 2.0
-		if start - cursor > best_hi - best_lo:
-			best_lo = cursor
-			best_hi = start
-		cursor = maxf(cursor, edges[a * 2 + 1] + g * 2.0)
-	if hi - cursor > best_hi - best_lo:
-		best_lo = cursor
-		best_hi = hi
-	var n_tabs := tabs.size()
-	var want := tuning.settings_label_width_px * style.ts
-	var tw := minf(want, (best_hi - best_lo - g * float(n_tabs - 1)) / float(n_tabs))
-	var total := tw * float(n_tabs) + g * float(n_tabs - 1)
-	var x0 := (best_lo + best_hi - total) * 0.5
-	for t in n_tabs:
-		tabs[t].position = Vector2(x0 + float(t) * (tw + g), band_y)
-		tabs[t].size = Vector2(tw, rh)
+## The label column: as wide as the page's longest label (plus a grid step), at most
+## settings_label_width_px (text size applied), so 3-option rows keep their captions.
+func label_width(shown: Array[Row]) -> float:
+	var most := 0.0
+	for r in shown:
+		most = maxf(most, r.title.get_combined_minimum_size().x)
+	return minf(tuning.settings_label_width_px * style.ts, most + tuning.spacing_grid_px * 2.0)
+
+
+func _place_row(r: Row, x: float, y: float, w: float, lw: float, rh: float, g: float) -> void:
+	var ts := r.title.get_combined_minimum_size()
+	r.title.position = Vector2(x, y + (rh - ts.y) * 0.5)
+	r.title.size = Vector2(lw - g, ts.y)
+	var n := r.buttons.size()
+	var bw := (w - lw - g * float(n - 1)) / float(n)
+	for j in n:
+		var b := r.buttons[j]
+		b.position = Vector2(x + lw + float(j) * (bw + g), y)
+		b.size = Vector2(bw, rh)

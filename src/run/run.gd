@@ -126,6 +126,8 @@ var forks := RunForks.new()
 var fork_view: ForkView
 ## WP6.5: the journey finale at the coast (breather, camera swing, journey complete).
 var finale := RunFinale.new()
+## WP8.1: the first run's empty-road warm-up (armed by start_mode on a fresh save).
+var warmup := RunWarmup.new()
 var sky: SkyRig
 var hub: PlayerInput
 var rig: CameraRig
@@ -389,6 +391,7 @@ func start_mode(run_mode: StringName) -> void:
 	mode = run_mode
 	_base_seed = daily_seed_today() if run_mode == RunContext.MODE_DAILY else _journey_seed
 	_full_countdown = true
+	warmup.arm(run_mode == RunContext.MODE_JOURNEY and Save.warmup_pending())   # WP8.1
 	retry()
 
 
@@ -640,6 +643,7 @@ func _sim_tick(dt: float) -> void:
 	# 3. traffic, the player as participant, then the director.
 	sim.step(dt, st, car.params, events)
 	director.step(dt, st)
+	warmup.tick()   # WP8.1: the first run's warm-up (no traffic, then the fade-in)
 	if loop == null:
 		forks.guard_traffic()
 		finale.tick(dt, st)
@@ -900,6 +904,8 @@ func _show_results() -> void:
 	last_results[&"new_best"] = new_best
 	last_results[&"previous_best"] = best
 	last_results[&"car"] = String(car.car.id) if car != null and car.car != null else ""   # N7.2 run submission
+	if warmup.ran:
+		last_results[RunWarmup.RESULT_KEY] = true   # WP8.1: not replayable by the verifier
 	Events.run_over.emit(last_results)   # the results screen opens on it
 
 
@@ -1079,6 +1085,7 @@ func _start_run() -> void:
 	sim.set_headlights(false)
 	director.set_night(false)
 	director.set_player_params(car.params)   # WP6.1: passability checks against this car
+	warmup.begin(self)   # WP8.1: an armed first-run warm-up empties the road before the prefill
 	director.reset(car.state)
 	_update_headlights()
 	hits.reset(car.state, sim.state)

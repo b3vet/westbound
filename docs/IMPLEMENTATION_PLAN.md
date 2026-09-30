@@ -42,6 +42,10 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | D19 | Haptics table has no entry for a cut | A cut plays the pass light tick, so every scoring event has a haptic (the one-frame rule, WP7.5) | Orchestrator, WP7B |
 | D20 | Driver table: trucks, buses and cruisers at 80–95 km/h everywhere | Inside a lane-drop zone (LANE ENDS sign through the narrowing + 150 m) all lanes are harmonised to 120 km/h (dropping lane 110) and slow vehicles are sped up toward 110 km/h, so nobody merges at a standstill beside 130–190 km/h lanes (canyon soak: 53 collision pairs per 504 km → 0 per 1,008 km) | Orchestrator, WP6.8 |
 | D21 | Passability checks "the next ~300 m" before a batch is committed | The director commits a batch beyond the fog (as before) and checks it while still invisible, time-sliced (1 slice per 120 Hz tick); a failing batch is re-rolled (≤ 5) then its worst blockers removed (≤ 8) before the player can see it. The check reads the batch as an arriving player meets it. Braking in the search is unlimited, as the spec words it (open: a braking-limited bound is stricter but re-rolls more at D15 speeds) | Orchestrator, WP6.1 |
+| D22 | First-run chooser: steering and throttle | It also asks for the hand (left-handed mirror); SKIP keeps the defaults (drag + auto, right hand) | Orchestrator, WP8.1 |
+| D23 | Warm-up: 20 s of empty road on the first run | Also skippable (hint panel with SKIP); density comes back over 12 s in 4 steps; only on the first Journey started from the title | Orchestrator, WP8.1 |
+| D24 | Every run can go on the boards | A run with the first-run warm-up is not submitted: the replay verifier rebuilds runs from the seed without the empty road | Orchestrator, WP8.1 |
+| D25 | Settings: one screen | Three pages (GAME, CONTROLS, AUDIO) plus ACCOUNT; they no longer fit on two at 125 % text | Orchestrator, WP8.1 |
 
 New deviations get a row here before they are built.
 
@@ -309,7 +313,7 @@ Updated by the orchestrator at every merge.
 | 5 | M5 Sun loop & legs | ✅ sun drives the run and sky, night ×2, dawn, legs + objectives + toast, landmarks + warning signs, night lighting + manual high beams (D8); M5 gate test green; WP5.5/5.6 follow-ups and HUD polish merged | continue |
 | 6 | M6 Director, biomes, journey | ⬜ | continue |
 | 7 | M7 Audio & feel | 🟨 WP7A audio (engine, wind, pass/traffic, music, stingers, buses) + WP7B haptics/juice merged; WP7.5 one-frame check green (every scoring event sounds, pulses and shows in its frame; slipstream has none per spec). WP7.6 running: one-shot SFX from OGG to WAV (each OGG voice costs ~0.6 ms decoder setup). Owner feel check on native pending | continue |
-| 8 | M8 Meta | ⬜ | continue |
+| 8 | M8 Meta | 🟨 WP8.5 title, attract drive and online hub; WP8.1 versioned save (migrations keep existing players' settings and bests), settings in 3 pages, first-run chooser + 20 s warm-up (D22–D25). Next: WP8.2 garage, WP8.3 achievements, WP8.4 Daily Drive ghost | continue |
 | 9 | M9 Hardening & release | ⬜ | final |
 
 ## 10. Open items for the owner
