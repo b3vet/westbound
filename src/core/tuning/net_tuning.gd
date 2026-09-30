@@ -171,9 +171,10 @@ const PATH := "res://data/tuning/net.tres"
 ## (morning; golden hour). NIGHT uses the protocol's `night` mode.
 @export var room_fixed_morning_min: float = 3.0   # not in spec
 @export var room_fixed_golden_min: float = 18.0   # not in spec
-## The seam for N4.3: in a room the local traffic director keeps running as in loop
-## practice until the network traffic source replaces it (then false).
-@export var room_local_traffic: bool = true   # not in spec
+## In a room, switch to the server's traffic (N4.3's NetworkTrafficSource) as soon as
+## the server streams it; until then (and always when off: a dev escape) the local
+## traffic director runs as in loop practice.
+@export var room_network_traffic: bool = true   # not in spec
 ## Room HUD sizes, canvas px at 100% text size: the loop strip, the room line and
 ## buttons, the room panel.
 @export var room_strip_width_px: float = 520.0   # not in spec

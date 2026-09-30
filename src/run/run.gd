@@ -40,7 +40,10 @@ extends Node3D
 ## Rooms (N5.2, docs/ROOMS_CLIENT.md): start_room() drives loop mode in a room. RunRoom
 ## (`room`) holds the logic; the hooks here are the start placement (start_s_m and the
 ## car's d and speed), protection (contacts skipped), hit reports, the crash-out without a
-## results screen, room_respawn / room_teleport for placements, and leave_room.
+## results screen, room_respawn / room_teleport for placements, leave_room, and the
+## room's network traffic (N4.3's NetworkTrafficSource in place of sim.step,
+## director.step and sim.notify_hit once the server streams traffic; the opposite
+## carriageway keeps its local director; the traffic state is kept across respawns).
 
 const PLAYER_CAR_SCENE := preload("res://src/vehicle/player_car.tscn")
 const CAR_PATHS: Array[String] = [
@@ -413,7 +416,16 @@ func room_respawn() -> void:
 
 ## N5.2: a rejoin or reconnect placement: the car moves, the run goes on.
 func room_teleport(s: float, d: float, v_mps: float) -> void:
-	dev_teleport(s, v_mps)
+	if room != null and room.net_traffic != null:
+		# Network traffic stays (dev_teleport's director.reset would drop the server's cars).
+		road.ensure_generated_to(_view_ahead(s))
+		legs.plan_ahead(road, _plan_ahead_to(s))
+		car.place_at(s, d, v_mps)
+		var smp := road.sample(s)
+		origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
+		builder.build_all_now(s)
+	else:
+		dev_teleport(s, v_mps)
 	legs.skip_to(s)
 	car.place_at(s, d, v_mps)
 	hits.reset(car.state, sim.state)
@@ -640,9 +652,13 @@ func _sim_tick(dt: float) -> void:
 	# The fork at the split (WP6.5): may swap the road's branch and move the car's d.
 	if loop == null:
 		forks.tick(st)
-	# 3. traffic, the player as participant, then the director.
-	sim.step(dt, st, car.params, events)
-	director.step(dt, st)
+	# 3. traffic, the player as participant, then the director (N5.2: or the room's
+	# network traffic).
+	if room != null and room.net_traffic != null:
+		room.step_traffic(dt, st, events)
+	else:
+		sim.step(dt, st, car.params, events)
+		director.step(dt, st)
 	warmup.tick()   # WP8.1: the first run's warm-up (no traffic, then the fade-in)
 	if loop == null:
 		forks.guard_traffic()
@@ -710,7 +726,10 @@ func _count_hit() -> void:
 	scoring.notify_hit(events)
 	legs.notify_hit()
 	if _contact.source == HitDetection.HIT_TRAFFIC and _contact.slot >= 0:
-		sim.notify_hit(_contact.slot)
+		if room != null and room.net_traffic != null:
+			room.net_traffic.notify_hit(_contact.slot)   # N5.2: the server confirms with intents
+		else:
+			sim.notify_hit(_contact.slot)
 
 
 func _forward_scoring(from: int, to: int) -> void:
@@ -720,7 +739,8 @@ func _forward_scoring(from: int, to: int) -> void:
 			if loop == null:   # loop mode: no sun meter
 				sun.lift(events.value[i], events)
 		elif k == Scoring.KIND_NEAR_MISS:
-			sim.notify_close_pass(events.slot[i])
+			if room == null or room.net_traffic == null:   # network cars: the server's
+				sim.notify_close_pass(events.slot[i])
 		elif k == ScoreEvents.THREAD:
 			legs.notify_thread()
 			_objective_scored(k)
@@ -792,14 +812,19 @@ func _update_headlights() -> void:
 	if on != _headlights:
 		_headlights = on
 		sim.set_headlights(on)
+		if room != null:
+			room.set_traffic_headlights(on)
 		director.set_night(on)
 
 
 ## Crash (fallback): traffic keeps moving and brakes, the car skids; no hits, no score.
 func _crash_tick(dt: float) -> void:
 	var st := car.state
-	sim.step(dt, st, car.params, events)
-	director.step(dt, st)
+	if room != null and room.net_traffic != null:
+		room.step_traffic(dt, st, events)
+	else:
+		sim.step(dt, st, car.params, events)
+		director.step(dt, st)
 	if loop == null:
 		forks.guard_traffic()
 	traffic_view.capture_tick()
@@ -869,6 +894,8 @@ func _start_crash_sequence() -> bool:
 ## swerve away from the player) within lives.crash_brake_radius_m. Crash only;
 ## allocation-free.
 func _brake_surrounding_traffic() -> void:
+	if room != null and room.net_traffic != null:
+		return   # N5.2: network cars react on the server (the hit car locally)
 	var ts := sim.state
 	var ps := car.state.s
 	var radius := tuning.lives.crash_brake_radius_m
@@ -1027,20 +1054,23 @@ func _start_run() -> void:
 	_next_forget_s = start_s + FORGET_EVERY_M
 
 	var car_def: CarDef = load(CAR_PATHS[car_index % CAR_PATHS.size()])
-	sim = TrafficSim.new(ctx, road, registry)
-	director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types,
-		car_def.length_m, car_def.width_m)
-	director.set_fog_end(builder.view_distance_m())
-	director.events = events
-	director.set_biome(biome_director.current())
-	if loop == null:
-		forks.start()
-	director.checkpoint_style = biome_director.checkpoint_style   # WP6.3: toll gantries
-	traffic_view.setup(ctx, road, origin, registry, sim.state, director.opposite.state)
-	set_piece_view.setup(ctx, road, origin)
-	set_piece_view.bind(director.set_pieces)
-	works_query = WorksPropQuery.new(director.set_pieces, tuning.lives)
-	hits.set_prop_query(works_query)
+	# N5.2: a room's respawn keeps the network traffic (the server sends each car once).
+	var keep_traffic := room != null and room.net_traffic != null and sim != null
+	if not keep_traffic:
+		sim = TrafficSim.new(ctx, road, registry)
+		director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types,
+			car_def.length_m, car_def.width_m)
+		director.set_fog_end(builder.view_distance_m())
+		director.events = events
+		director.set_biome(biome_director.current())
+		if loop == null:
+			forks.start()
+		director.checkpoint_style = biome_director.checkpoint_style   # WP6.3: toll gantries
+		traffic_view.setup(ctx, road, origin, registry, sim.state, director.opposite.state)
+		set_piece_view.setup(ctx, road, origin)
+		set_piece_view.bind(director.set_pieces)
+		works_query = WorksPropQuery.new(director.set_pieces, tuning.lives)
+		hits.set_prop_query(works_query)
 	tunnel_light = TunnelLight.new(road)
 
 	headlights.setup(ctx, road, origin)
@@ -1086,7 +1116,8 @@ func _start_run() -> void:
 	director.set_night(false)
 	director.set_player_params(car.params)   # WP6.1: passability checks against this car
 	warmup.begin(self)   # WP8.1: an armed first-run warm-up empties the road before the prefill
-	director.reset(car.state)
+	if not keep_traffic:
+		director.reset(car.state)
 	_update_headlights()
 	hits.reset(car.state, sim.state)
 	stats.reset(car.state.s)

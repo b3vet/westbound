@@ -76,6 +76,8 @@ var failure_reason: String = ""
 var failure_message: String = ""
 var pings_sent: int = 0
 var pongs_received: int = 0
+## Bytes of the frame being handed out by frame_received (N5.2: network traffic stats).
+var last_frame_bytes: int = 0
 
 var _transport: NetTransport
 var _tuning: NetTuning
@@ -234,6 +236,7 @@ func close() -> void:
 
 func _on_frame(bytes: PackedByteArray, now: int) -> void:
 	_last_recv_us = now
+	last_frame_bytes = bytes.size()
 	var err := codec.decode_server_frame_into(bytes, frame)
 	if err != "":
 		_fail(REASON_MALFORMED, CLOSE_PROTOCOL)

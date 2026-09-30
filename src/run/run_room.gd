@@ -25,9 +25,16 @@ extends RefCounted
 ## - **Remote players:** sampled at server_now() − 100 ms, placed near the player's
 ##   unwrapped s (LoopRoadPath.unwrap_near) in a pooled RemoteCarView, ghosted by
 ##   distance, with nametags and strip dots in their crew color.
-## - **Traffic seam (N4.3):** NetTuning.room_local_traffic keeps the local traffic director
-##   running as in loop practice. N4.3's network traffic source replaces it here
-##   (use_local_traffic()); nothing else in the run changes.
+## - **Traffic (N4.3):** the local traffic director runs as in loop practice until the
+##   server streams traffic in this room (its first traffic message, `traffic_frame`);
+##   then N4.3's NetworkTrafficSource takes the run's TrafficState over (the local cars
+##   go) and the run calls step_traffic() in place of sim.step + director.step (the
+##   opposite carriageway's director keeps running) and the source's notify_hit in place
+##   of sim.notify_hit; hit reports carry the network car id. The source (and the
+##   TrafficState) is kept across respawns and teleports: the server sends each car once
+##   for the area around the player. A reconnect clears it (the server sends the whole
+##   area with the new snapshot). NetTuning.room_network_traffic = false keeps the local
+##   director (dev).
 
 const MS_PER_S := 1000.0   # lint: allow-number unit conversion
 ## Brake input above this reads as braking for the brake-light flag.
@@ -38,6 +45,8 @@ var session: NetRoomSession
 var net: NetTuning
 var view: RemoteCarView
 var hud: RoomHud
+## N4.3's source once the server streams traffic (null: the local director).
+var net_traffic: NetworkTrafficSource
 
 ## The pending start (the first placement, or a respawn's): road-space s (unwrapped), d, v.
 var start_valid: bool = false
@@ -57,6 +66,10 @@ var rejoin_requested: bool = false
 var tick_rate: float = 20.0
 
 var _crash_banked: int = 0
+var _headlights: bool = false
+var _stats_frames: int = 0
+## The network traffic rows of the dev HUD update every this many frames.
+const STATS_EVERY_FRAMES := 10
 ## Dev (snaps): demo players keep their places around the car (snap_room).
 var demo_remotes: int = 0
 
@@ -74,6 +87,8 @@ func _init(owner_run: Run, room_session: NetRoomSession, net_tuning: NetTuning =
 	session.reconnecting.connect(_on_reconnecting)
 	session.left.connect(_on_left)
 	session.notice.connect(_on_notice)
+	session.traffic_frame.connect(_on_traffic_frame)
+	session.rejoined.connect(_on_rejoined)
 	if _read_placement():
 		start_valid = true
 
@@ -96,7 +111,8 @@ func install() -> void:
 
 ## Removes the nodes and lets go of the session's signals (the run is leaving the room).
 func uninstall() -> void:
-	for s: Signal in [session.run_result, session.chat, session.reconnecting, session.left, session.notice]:
+	for s: Signal in [session.run_result, session.chat, session.reconnecting, session.left, session.notice,
+			session.traffic_frame, session.rejoined]:
 		for c: Dictionary in s.get_connections():
 			if (c["callable"] as Callable).get_object() == self:
 				s.disconnect(c["callable"])
@@ -117,7 +133,8 @@ func on_run_started() -> void:
 	_car_len = run.car.car.length_m
 	_car_w = run.car.car.width_m
 	hud.bind_run(run)
-	use_local_traffic(net.room_local_traffic)
+	if net_traffic != null:
+		net_traffic.set_player_body(_car_len, _car_w)
 	_follow_clock()
 	if start_valid:
 		# The run was built at the placement: drive from there, protected.
@@ -131,11 +148,44 @@ func on_run_started() -> void:
 		run.hold_countdown(true)   # no placement yet: wait (frame() starts it)
 
 
-## N4.3 seam: true = the local traffic director (loop practice's), false = the network
-## traffic source (not built yet: the director's density goes to zero).
-func use_local_traffic(on: bool) -> void:
-	if not on:
-		run.director.set_density_scale(0.0)
+## Per 120 Hz tick with network traffic, in place of sim.step + director.step: the
+## source at the room clock (the player a participant), the opposite carriageway locally.
+func step_traffic(dt: float, st: VehicleState, events: ScoreEventBuffer) -> void:
+	var now := session.server_tick()
+	if now >= 0.0:
+		net_traffic.step(now, st, events)
+	run.director.opposite.step(dt, st.s)
+
+
+## The run's headlights (the room clock's night) on the network cars too.
+func set_traffic_headlights(on: bool) -> void:
+	_headlights = on
+	if net_traffic != null:
+		net_traffic.set_headlights(on)
+
+
+## The first traffic message of the room: the source takes the run's TrafficState over.
+func _begin_network_traffic() -> void:
+	var t := run.ctx.tuning
+	net_traffic = NetworkTrafficSource.new(net, t.traffic, run.road, run.registry, run.sim.state)
+	net_traffic.set_headway_scale(t.director.headway_scale(run.loop.tuning.director_leg))
+	net_traffic.set_player_body(run.car.car.length_m, run.car.car.width_m)
+	net_traffic.set_headlights(_headlights)
+
+
+func _on_traffic_frame(f: NetServerFrame) -> void:
+	if not net.room_network_traffic or run.sim == null or run.loop == null:
+		return
+	if net_traffic == null:
+		_begin_network_traffic()
+	net_traffic.note_frame_bytes(session.last_frame_bytes)
+	net_traffic.apply_frame(f, run.car.state.s, session.server_tick(), session.one_way_ticks())
+
+
+## A reconnect: the server sends the whole area again with the snapshot.
+func _on_rejoined(_room: NetRoomState) -> void:
+	if net_traffic != null:
+		net_traffic.clear()
 
 
 ## Per 120 Hz tick (RUNNING): protection counts down.
@@ -168,7 +218,9 @@ func _send_hit(contact: HitDetection.Contact, lives_left: int) -> void:
 		target = "barrier"
 	elif contact.source != HitDetection.HIT_TRAFFIC:
 		target = "roadside"
-	var car_id := 0   # N4.3: the network car id of the traffic slot
+	var car_id := 0
+	if net_traffic != null and target == "traffic" and contact.slot >= 0:
+		car_id = maxi(net_traffic.car_id(contact.slot), 0)   # the wire id (0: not traffic)
 	session.send_hit(_room_tick(), target, car_id, lives_left)
 
 
@@ -214,6 +266,11 @@ func frame(real_dt: float) -> void:
 	DevStats.report(&"room_ping_ms", roundi(session.ping_ms()))
 	DevStats.report(&"room_remotes", session.remotes.active_count())
 	DevStats.report(&"room_states_sent", session.states_sent)
+	if net_traffic != null:
+		_stats_frames += 1
+		if _stats_frames % STATS_EVERY_FRAMES == 0:
+			net_traffic.stats.report_dev_stats()
+			NetTrafficStats.report_link(session.client.clock)
 
 
 ## Takes the session's pending placement into start_* (s unwrapped next to the car, never
@@ -501,15 +558,15 @@ static func snap_hub(r: Run, which: String) -> void:
 ## places around the car (a state per tick).
 func _demo_step(real_dt: float) -> void:
 	session.demo_tick += real_dt * tick_rate
-	var tick := floori(session.demo_tick)
+	var at := floori(session.demo_tick)
 	var road := run.loop.road
 	var me := run.car.state
 	var lane := road.lane_index_at(me.d, me.s)
 	for i in demo_remotes:
 		var k := session.remotes.slot_of(i)
-		if k < 0 or session.remotes.tracks[k].newest_tick >= tick:
+		if k < 0 or session.remotes.tracks[k].newest_tick >= at:
 			continue
 		var o: Array = DEMO_OFFSETS[i]
 		var s := me.s + float(o[0])
 		var d := road.lane_center_d(clampi(lane + int(o[1]), 0, road.lane_count(s) - 1), s)
-		session.remotes.tracks[k].push(tick, road.wrap_s(s), d, 0.0, me.v, 0, NetRoomSession.RUN_DRIVING)
+		session.remotes.tracks[k].push(at, road.wrap_s(s), d, 0.0, me.v, 0, NetRoomSession.RUN_DRIVING)

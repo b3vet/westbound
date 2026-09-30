@@ -339,3 +339,23 @@ func test_room_clock_follows_the_server() -> void:
 	var loop_t := LoopTuning.load_default()
 	near(loop_t.room_cycle_s() * 1000.0, 1_920_000.0, 1e-6, "the loop's cycle is the server's")
 	near(loop_t.room_day_s() * 1000.0, 1_320_000.0, 1e-6)
+
+
+func test_the_join_frame_signals_after_its_placement_and_before_its_traffic() -> void:
+	server.set("answer_joins", false)
+	var order: Array[String] = []
+	rs.joined.connect(func(_r: NetRoomState) -> void:
+		order.append("joined placement=%s" % rs.has_placement()))
+	rs.traffic_frame.connect(func(f: NetServerFrame) -> void:
+		order.append("traffic %d" % f.sp_count))
+	rs.quick_join()
+	_run(0.3)
+	var tick := floori(float(server.call("server_ticks")))
+	_send([server.call("snapshot", tick), server.call("placement", tick),
+		{"type": "traffic_spawn", "cars": [{"car_id": 5, "vehicle": 0, "color": 0, "profile": 0, "lane": 0,
+			"s_mm": 1_100_000, "d_cm": 700, "speed_cms": 3000, "lc_phase": "none", "lc_target_lane": 0,
+			"lc_move_start_tick": 0, "lc_duration_ms": 0, "flags": {"hazard": false, "braking": false}}]}])
+	_run(0.1)
+	eq(order, ["joined placement=true", "traffic 1"] as Array[String])
+	check(rs.traffic_streamed)
+	check(rs.server_tick() >= float(tick), "the room clock from the snapshot before the first Pong")

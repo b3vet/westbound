@@ -27,6 +27,10 @@ signal state_changed(state: State)
 signal joined(room: NetRoomState)
 ## The snapshot after a reconnect (same seat, run intact).
 signal rejoined(room: NetRoomState)
+## A frame with traffic messages (spawn, despawn, intent, correction) while in the room,
+## after joined / rejoined and the frame's placement (N4.3's NetworkTrafficSource applies
+## it; the frame object is reused: consume it in the handler).
+signal traffic_frame(frame: NetServerFrame)
 ## A join was refused or timed out: `code` (the protocol's error code or a REASON_*), text.
 signal join_failed(code: String, message: String)
 ## Out of the room: `reason` = room_left's (left, kicked, closed, timed_out) or a
@@ -98,6 +102,10 @@ var frames_in: int = 0
 ## Dev (snaps, previews): the room clock stands at this tick instead of the server's
 ## (-1 = off). See enter_demo().
 var demo_tick: float = -1.0
+## The server streams traffic in this room (a traffic message arrived since the join).
+var traffic_streamed: bool = false
+## Bytes of the frame traffic_frame hands out.
+var last_frame_bytes: int = 0
 
 var _request: Request = Request.NONE
 var _request_settings: Dictionary = {}
@@ -111,6 +119,14 @@ var _reconnect_deadline_us: int = 0
 var _next_retry_us: int = 0
 var _chat_next_us: int = 0
 var _out := NetPlayerState.new()
+## The last snapshot's room tick and its arrival (the room clock before the first Pong).
+var _snap_tick: int = -1
+var _snap_at_us: int = 0
+## What the frame being handled brought: ARRIVED_* (signals go out after its placement).
+var _arrived: int = 0
+const ARRIVED_NONE := 0
+const ARRIVED_JOINED := 1
+const ARRIVED_REJOINED := 2
 
 
 func _init(transport: NetTransport, net_tuning: NetTuning, loop_length_m: float,
@@ -209,7 +225,18 @@ func reconnect_left_s() -> float:
 func server_tick() -> float:
 	if demo_tick >= 0.0:
 		return demo_tick
-	return client.clock.server_now() if client.clock.has_sync() else -1.0
+	if client.clock.has_sync():
+		return client.clock.server_now()
+	if _snap_tick >= 0 and state == State.IN_ROOM:
+		# Before the first Pong of the room: the snapshot's tick plus the time since it
+		# arrived (behind by the one-way delay; the clock then steps forward).
+		return float(_snap_tick) + float(time.now_usec() - _snap_at_us) / USEC_PER_S * room.tick_rate
+	return -1.0
+
+
+## The one-way delay estimate in room ticks (half the best round trip; 0 before a sample).
+func one_way_ticks() -> float:
+	return client.clock.best_rtt_s * 0.5 * room.tick_rate
 
 
 ## Dev (snaps, previews): a room without a server: `snapshot` (vector JSON) applied as if
@@ -458,6 +485,8 @@ func _on_server_error(code: String, fatal: bool, _detail: String) -> void:
 func _on_frame(frame: NetServerFrame) -> void:
 	if state == State.IN_ROOM:
 		frames_in += 1
+	last_frame_bytes = client.last_frame_bytes
+	_arrived = ARRIVED_NONE
 	for msg: Dictionary in frame.messages:
 		_on_message(msg)
 	if state != State.IN_ROOM:
@@ -477,6 +506,21 @@ func _on_frame(frame: NetServerFrame) -> void:
 			placement_speed = NetCodec.speed_from_wire(frame.ps_speed_cms[k])
 			_placement_pending = true
 	remotes.ingest_into(frame, you)
+	# The join's signals after its placement is known (the run starts at it).
+	var arrived := _arrived
+	_arrived = ARRIVED_NONE
+	if arrived == ARRIVED_JOINED:
+		joined.emit(room)
+		room_changed.emit()
+	elif arrived == ARRIVED_REJOINED:
+		reconnecting.emit(false)
+		rejoined.emit(room)
+		room_changed.emit()
+	if state != State.IN_ROOM:
+		return
+	if frame.sp_count + frame.ds_count + frame.in_count + frame.co_count > 0:
+		traffic_streamed = true
+		traffic_frame.emit(frame)
 
 
 func _on_message(msg: Dictionary) -> void:
@@ -534,17 +578,15 @@ func _on_snapshot(msg: Dictionary) -> void:
 	client.clock.reset()
 	client.ping_now()
 	last_sent_tick = -1
+	_snap_tick = int(msg.get("tick", 0))
+	_snap_at_us = time.now_usec()
 	if not same_room:
 		_seen_placement_tick = -1
 		_placement_pending = false
+		traffic_streamed = false
 	_request = Request.NONE
 	_set_state(State.IN_ROOM)
-	if back:
-		reconnecting.emit(false)
-		rejoined.emit(room)
-	else:
-		joined.emit(room)
-	room_changed.emit()
+	_arrived = ARRIVED_REJOINED if back else ARRIVED_JOINED
 
 
 func _send_room(msg: Dictionary) -> bool:
@@ -565,6 +607,8 @@ func _clear_room() -> void:
 	_placement_pending = false
 	_seen_placement_tick = -1
 	last_sent_tick = -1
+	_snap_tick = -1
+	traffic_streamed = false
 
 
 static func text_for(code: String) -> String:

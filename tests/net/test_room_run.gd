@@ -294,3 +294,118 @@ func test_a_lost_seat_goes_back_to_the_hub() -> void:
 	eq(run.state, Game.MENU)
 	check(run.room == null)
 	eq(run.title.online_hub.room_message, "Lost the connection to the room.")
+
+
+# ---------------------------------------------------------------- Network traffic (N4.3)
+
+## A traffic frame: `cars` spawned (car id, metres ahead of the car, lane from the right)
+## and dated by a correction batch at the current server tick.
+func _traffic_spawn(cars: Array) -> void:
+	var me := run.car.state
+	var road := run.loop.road
+	var tick := floori(float(server.call("server_ticks")))
+	var spawns := []
+	var corr := []
+	for c: Array in cars:
+		var at := me.s + float(c[1])
+		var s := road.wrap_s(at)
+		var lane := road.lane_count(at) - 1 - int(c[2])
+		var d := road.lane_center_d(lane, at)
+		spawns.append({"car_id": c[0], "vehicle": 0, "color": 1, "profile": 0, "lane": c[2],
+			"s_mm": roundi(s * 1000.0), "d_cm": roundi(d * 100.0), "speed_cms": roundi(me.v * 100.0),
+			"lc_phase": "none", "lc_target_lane": 0, "lc_move_start_tick": 0, "lc_duration_ms": 0,
+			"flags": {"hazard": false, "braking": false}})
+		corr.append({"car_id": c[0], "s_mm": roundi(s * 1000.0), "d_cm": roundi(d * 100.0),
+			"speed_cms": roundi(me.v * 100.0)})
+	server.call("send", [{"type": "traffic_spawn", "cars": spawns},
+		{"type": "traffic_correction", "tick": tick, "cars": corr}])
+
+
+func test_network_traffic_takes_over_when_the_server_streams_it() -> void:
+	_join()
+	_seconds(0.5)
+	check(run.room.net_traffic == null, "local traffic until the server streams")
+	check(run.sim.state.count > 2, "the local director's cars (%d)" % run.sim.state.count)
+	var state_before := run.sim.state
+	_traffic_spawn([[41, 80.0, 0], [42, 140.0, 1]])
+	_frames(2)
+	var src := run.room.net_traffic
+	if not check(src != null, "the network source took over"):
+		return
+	check(run.sim.state == state_before, "it publishes into the run's TrafficState")
+	eq(run.sim.state.count, 2, "only the server's cars")
+	var slot := src.slot_of(41)
+	check(slot >= 0 and run.sim.state.active[slot] == 1)
+	var s0 := run.sim.state.s[slot]
+	_seconds(1.0)
+	eq(run.sim.state.count, 2, "the local director spawns nothing")
+	check(run.sim.state.s[slot] > s0 + 10.0, "the network car drives (the model at server time)")
+	check(run.director.opposite.state.count > 0, "the opposite carriageway stays local")
+	# A hit on a network car carries its car id.
+	_seconds(net.room_protection_s)
+	run.force_hit(HitDetection.HIT_TRAFFIC, slot, 1)
+	_frames(2)
+	_net(0.1)
+	var hits: Array[Dictionary] = server.get("hits")
+	if eq(hits.size(), 1):
+		eq(hits[0]["target"], "traffic")
+		eq(hits[0]["car_id"], 41, "the wire car id")
+
+
+## Frames for `seconds` while the server keeps the network cars alive (a correction
+## every few frames at the client's own published state: a car not heard of for 3 s goes).
+func _seconds_alive(seconds: float) -> void:
+	var src := run.room.net_traffic
+	var n := roundi(seconds / FRAME_S)
+	for f in n:
+		if f % 6 == 0 and src != null and rs.is_in_room():
+			var st := run.sim.state
+			var corr := []
+			for i in st.capacity:
+				if st.active[i] == 1:
+					corr.append({"car_id": src.car_id(i), "s_mm": roundi(run.loop.road.wrap_s(st.s[i]) * 1000.0),
+						"d_cm": roundi(st.d[i] * 100.0), "speed_cms": roundi(st.v[i] * 100.0)})
+			if not corr.is_empty():
+				server.call("send", [{"type": "traffic_correction",
+					"tick": floori(float(server.call("server_ticks"))), "cars": corr}])
+		_frames(1)
+
+
+func test_network_traffic_survives_a_respawn_and_clears_on_a_reconnect() -> void:
+	_join()
+	_seconds(0.2)
+	_traffic_spawn([[7, 60.0, 0], [8, 120.0, 1], [9, 200.0, 0]])
+	_frames(2)
+	var src := run.room.net_traffic
+	if not check(src != null):
+		return
+	eq(run.sim.state.count, 3)
+	# Crash out and respawn nearby: the same source and state, the cars still known.
+	_seconds_alive(net.room_protection_s + 0.2)
+	run.force_hit(HitDetection.HIT_BARRIER)
+	_frames(2)
+	_seconds_alive(Tuning.load_default().lives.ghost_period_s + 0.1)
+	run.force_hit(HitDetection.HIT_BARRIER)
+	_frames(2)
+	eq(run.state, Game.CRASH)
+	var here := roundi(run.loop.road.wrap_s(run.car.state.s) * 1000.0)
+	var tick := floori(float(server.call("server_ticks")))
+	server.call("send", [server.call("placement", tick, here - 40_000)])
+	_seconds_alive(0.1)
+	eq(run.state, Game.RUNNING, "respawned")
+	check(run.room.net_traffic == src, "the same source")
+	eq(run.sim.state.count, 3, "the server's cars stay known across the respawn")
+	# A rejoin (teleport) keeps them too.
+	_seconds_alive(net.room_protection_s + 0.2)
+	run.room.request_rejoin()
+	_net(0.05)
+	tick = floori(float(server.call("server_ticks")))
+	server.call("send", [server.call("placement", tick, here)])
+	_seconds_alive(0.1)
+	eq(run.room.teleports, 1)
+	eq(run.sim.state.count, 3, "a teleport keeps the network cars")
+	# A reconnect: the server sends the whole area again, so the source starts over.
+	server.call("drop")
+	_seconds(1.5)
+	eq(rs.state, NetRoomSession.State.IN_ROOM)
+	eq(run.sim.state.count, 0, "cleared for the new snapshot's area")
