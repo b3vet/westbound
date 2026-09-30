@@ -1015,8 +1015,8 @@ world.set_density(Density::Rush); world.set_road_works(zone, true); world.notify
 ```
 
 - **Players** are `PlayerInput`s in road space: `s` (m, wrapped or not), `d`, `s_dot`, `d_dot`, body size and the tick the state describes. `PlayerInput::from_vehicle` converts speed, lateral velocity and heading relative to the road as the client's `TrafficSim._read_player` does (the server has no curvature: pass 0; the error is under 0.5 %). The sim extrapolates each report linearly to the current tick, at most `player_max_extrapolation_s`.
-- **Events** (`SimEvent`, fixed-capacity buffer, cleared by `tick`): `Signal` is the intent: `tick` (blinker on), `move_start_tick` (the tick the lateral move starts: the curve's u = 0 there, so d(t) = d0 + (target - d0) · smoothstep((t - move_start) / duration)), `target_lane`, `target_d` and `duration_s` (the move time, drawn when the blinker comes on). `Cancel` ends a signal. `Hazards` (value 1 on / 0 off, tag `Hit`), `Horn` (blind spot, close pass) and `BrakeTap` (cut-in) are the client model's reactions; the handoff keeps horns client-side. `Spawned` / `Despawned` carry the slot and `vehicle_id`; tags `Ramp` (an on-ramp entry) and `Exit` (an off-ramp exit).
-- **For N4.2** (encoding decisions, not made here):
+- **Events** (`SimEvent`, fixed-capacity buffer, cleared by `tick`): `Signal` is the intent: `tick` (blinker on), `move_start_tick` (the tick the lateral move starts: the curve's u = 0 there, so d(t) = d0 + (target - d0) · smoothstep((t - move_start) / duration)), `target_lane`, `target_d` and `duration_s` (the move time, drawn when the blinker comes on and rounded to whole ms since N4.2, so the wire's `duration_ms` is exactly the sim's; MP only: the parity configs draw it at the move). `will_cancel(slot)` (N4.2): a hesitant signal that will cancel at its end. `Cancel` ends a signal. `Hazards` (value 1 on / 0 off, tag `Hit`), `Horn` (blind spot, close pass) and `BrakeTap` (cut-in) are the client model's reactions; the handoff keeps horns client-side. `Spawned` / `Despawned` carry the slot and `vehicle_id`; tags `Ramp` (an on-ramp entry) and `Exit` (an off-ramp exit).
+- **For N4.2** (encoding decisions, not made here; N4.2 made them, see "Traffic streaming (N4.2)": wire lanes from the right, the ramp pseudo-lane as lane 7 (MP-D6), car ids from a free list held 30 s, hits as `hazard` + `hard_brake` intents plus per-tick corrections):
   - lanes in the sim count from the median (0 = leftmost, as the client and the map's spawn points); the protocol's `lane` counts from the right (`n - 1 - lane`);
   - `vehicle_id` is an `i32` that grows by one per spawn; `car_id` is `u16` (wraps after 65,536 spawns, about 18 h of churn in one room);
   - ramp cars sit in a **pseudo-lane** one right of the rightmost lane (`TrafficSim::ramp_lane(s)`, `lane == lane_count(s)`): an on-ramp car spawns there, an exit's `Signal` targets it. The protocol's `target_lane` (0 = rightmost, 0–7) has no value for it: an exit could be sent as a lane change to the rightmost lane plus a new intent kind, or `target_lane = 7` reserved (**needs a protocol decision**). `TrafficSpawn.d_cm` carries an entry's position as is;
@@ -1135,7 +1135,7 @@ The N10 target (20 rooms × 8 players ≤ 50 % of 1 vCPU, room tick p99 < 5 ms) 
 
 ### Open questions
 
-- **Protocol:** how to send ramp exits and entries (the pseudo-lane), and lane-splitting boundary targets (see "For N4.2").
+- **Protocol:** lane-splitting boundary targets (see "For N4.2"). Ramp exits and entries: decided (MP-D6, lane 7; "Traffic streaming (N4.2)").
 - **The three safety extensions** (MP-D5): approve, and schedule their port to `traffic_sim.gd` so the client's network IDM (N4.3) matches the server.
 - **Ramps:** no ramp geometry on the client yet (docs/LOOP_MAP.md): an exiting car moves one lane right onto the shoulder and is gone; an entering car appears on the shoulder at the on-ramp. N4.3 should fade them.
 
@@ -1152,6 +1152,7 @@ WP N5.1 (server side), in `crates/server/src/rooms/`. Spec: [multiplayer handoff
 | `plausibility.rs` | `PlayerState` checks (pure) |
 | `road.rs` | Lane centres, the lane at a `d`, lateral bounds, flow speeds, the start gantry's spawn points |
 | `traffic.rs`, `sim_traffic.rs` | The traffic seam `RoomTraffic` (`NoTraffic`; `SimTraffic` over `sim::traffic::TrafficWorld`) |
+| `traffic_stream.rs`, `car_ids.rs` | N4.2: each client's traffic stream and the car ids (see "Traffic streaming (N4.2)") |
 | `metrics.rs` | Room metrics |
 | `tests.rs` | The room core without sockets (commands and ticks by hand) |
 
@@ -1245,8 +1246,9 @@ The car numbers are the game's (`data/cars/*.tres`, `data/tuning/vehicle.tres`);
 
 A room owns a `Box<dyn RoomTraffic>`: `tick(tick, players)` after the tick's states (every seated player's latest state, clamped, with heading, lateral velocity and protection), `set_density`, `set_night` (headlights when night starts or ends), `write_client(player_id, s, joined, frame)` (N4.2 streams spawns, despawns, intents and corrections into the client's tick frame), `player_left`, and `free_gap(map, want)`.
 
-- `rooms.traffic = "none"` (default): `NoTraffic`. Nothing is simulated and every spawn spot is free: nobody would see the cars until N4.2 streams them.
-- `rooms.traffic = "sim"`: `SimTraffic` owns a `sim::traffic::TrafficWorld` (N4.1) seeded per room, filled at the room's density. Players go in as `PlayerInput`s (player index = a free slot of 8, body size from the exported tuning); the world steps in lock-step with the room tick (a room that missed ticks catches up, at most 20 steps, else re-anchors); spawns take real gaps. `write_client` is empty until N4.2. Cheap: N4.1 measured 199 µs per tick at normal density in release.
+- `rooms.traffic = "sim"` (default since N4.2): `SimTraffic` owns a `sim::traffic::TrafficWorld` (N4.1) seeded per room, filled at the room's density. Players go in as `PlayerInput`s (player index = a free slot of 8, body size from the exported tuning); the world steps in lock-step with the room tick (a room that missed ticks catches up, at most 20 steps, else re-anchors); spawns take real gaps; `write_client` streams each client's area (see "Traffic streaming (N4.2)"). N4.1 measured 199 µs per tick at normal density in release; streaming to 8 clients adds about 60 µs.
+- `rooms.traffic = "none"`: `NoTraffic`. Nothing is simulated and every spawn spot is free.
+- `hit_car(player_id, car_id)` (default: nothing) applies an accepted hit's scripted reaction; N6 calls it once it accepts a hit (N4.2 does not call it from `hit_report`: the hit cross-check is N6's).
 
 ### Presence
 
@@ -1280,7 +1282,8 @@ Logs at INFO: `room created` (id, code, settings), `room seat taken` / `taken ba
 | `protection_ms` / `crash_respawn_ms` | `3000` / `3000` | Spawn and rejoin protection; the crash-out results toast before the respawn (spec) |
 | `spawn_behind_leader_m` | `40.0` | Spawns land this far behind the crew leader (spec) |
 | `spawn_search_m` / `spawn_step_m` / `spawn_clear_m` | `60.0` / `5.0` / `15.0` | The free-gap search around a spawn spot (not in spec) |
-| `traffic` | `none` | `none` or `sim` (see "Traffic seam") |
+| `traffic` | `sim` | `sim` or `none` (see "Traffic seam") |
+| `traffic_aoi_*`, `traffic_near_*`, `traffic_far_hz`, `traffic_car_id_hold_ms` | see "Traffic streaming → Configuration" | The area of interest, correction rates and car-id hold (N4.2) |
 | `cycle_len_ms` / `day_len_ms` / `clock_epoch_unix_ms` | `1920000` / `1320000` / `0` | The room clock (loop.tres; spec 32 / 22 min) |
 | `command_queue` / `join_timeout_ms` | `256` / `2000` | Each room's queue; how long a join waits for the room (not in spec) |
 | `max_speed_kmh` / `speed_tolerance_pct` | `307.8` / `10.0` | The fastest car with boost; spec × 1.1 |
@@ -1301,7 +1304,7 @@ Logs at INFO: `room created` (id, code, settings), `room seat taken` / `taken ba
 
 ### Bench: 20 rooms × 8 bots
 
-`cargo test --release -p server --test rooms bench_ -- --ignored --nocapture` (`ROOMS_BENCH_SECS`, `ROOMS_BENCH_TRAFFIC=none|sim`). 20 private rooms of 8 `BotClient`s drive for 20 s over real loopback WebSockets, **bots and server in the same process** on 2 tokio workers. The room tick time comes from `wb_room_tick_seconds`; the process CPU includes the 160 bots' own work (encoding, decoding, their sockets).
+`cargo test --release -p server --test rooms bench_ -- --ignored --nocapture` (`ROOMS_BENCH_SECS`, `ROOMS_BENCH_TRAFFIC=sim|none` (default `sim` since N4.2), `ROOMS_BENCH_DENSITY=normal|light|rush`). 20 private rooms of 8 `BotClient`s drive for 20 s over real loopback WebSockets, **bots and server in the same process** on 2 tokio workers. The room tick time comes from `wb_room_tick_seconds`; the process CPU includes the 160 bots' own work (encoding, decoding, their sockets).
 
 Measured 2026-09-30 (release without LTO, the 4-vCPU dev box shared with a Godot soak and other builds: load average 7–8, so wall-time numbers are pessimistic):
 
@@ -1309,9 +1312,12 @@ Measured 2026-09-30 (release without LTO, the 4-vCPU dev box shared with a Godot
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `none` (N5.1 default) | 9,595 | 57 µs | ≤ 25 µs | ≤ 1 ms | 8.7 ms | 2.0 % of a core | 18 % | 2.5 KB/s | 300 B | 0 |
 | `sim` (`TrafficWorld`, normal density, 857 cars per room) | 9,594 | 427 µs | ≤ 300 µs | ≤ 4 ms | 17.6 ms | 14.8 % of a core | 30 % | 2.5 KB/s | 301 B | 0 |
+| **N4.2** `sim` + streaming, normal (≈ 43 cars per player) | 9,595 | 496 µs | ≤ 500 µs | ≤ 4 ms | 18.7 ms | 17.3 % of a core | 29 % | 3.6 KB/s on the wire (3.2 KB/s payload) | 1,731 B | 0 |
+| **N4.2** `sim` + streaming, rush (1,200 cars per room, ≈ 59 per player) | 9,599 | 605 µs | ≤ 500 µs | ≤ 4 ms | 15.7 ms | 21.0 % of a core | 32 % | 3.8 KB/s on the wire (3.4 KB/s payload) | 2,482 B | 0 |
 
 - **Per room tick:** 57 µs for rooms alone (8 seats: take the tick's states, build and queue 8 frames); about 370 µs more with the traffic ring. The N10 target (20 full rooms ≤ 50 % of one vCPU, tick p99 < 5 ms) holds with room to spare for streaming (N4.2) and scoring (N6); the bench asserts p99 ≤ 5 ms in release. The maxima are scheduler stalls on the loaded box (the tick is wall time).
-- **Downstream** is `player_states` only today (7 × 24 B + headers each tick): 2.5 KB/s per player at the socket payload level, against the spec's 10 KB/s budget with traffic still to come (PROTOCOL.md §11 budgets 4.9 KB/s in all).
+- **Downstream** (N5.1 rows) was `player_states` only (7 × 24 B + headers each tick): 2.5 KB/s per player at the socket payload level.
+- **N4.2 rows** (2026-09-30, same box, load average 6–7; at load 12 the same bench missed the p99 bound with 337 offences from starved bots, so compare like with like): streaming to 8 clients costs about 50 µs per room tick (`tests/traffic_stream.rs` `bench_streaming_cost_per_room_tick`, release, one thread: 8 clients' writes mean 51 µs / p50 40 µs / p99 74 µs at normal, 55 / 47 / 110 µs at rush; the ring's step with the stream's bookkeeping 234 / 307 µs mean). The join frames are the largest, 1.7–2.5 KB. Traffic messages average 0.7 KB/s (normal) and 0.9 KB/s (rush) per player; the "down per player" column divides by the whole run including the 160 sequential joins, so it understates the steady state: with 8 bots driving at rush in one room, `rush_hour_downstream_stays_in_budget_with_8_bots` measures **5.0–5.2 KB/s per player on the wire** (framing included) against the 10 KB/s budget. Every bot's traffic mirror ended with 0 violations. p99 stays within the 5 ms target.
 - 20 rooms × 20 Hz × 20 s = 8,000 ticks; the rest ran while the 160 bots were joining.
 
 ### For the client (N5.2)
@@ -1323,7 +1329,132 @@ Measured 2026-09-30 (release without LTO, the 4-vCPU dev box shared with a Godot
 - On a dropped connection, reconnect and join the same room by code within 15 s: same seat, run intact, placed where you were.
 - `room_event.connection` fades a member's car; `leave` / `kick` remove it; `host_change`, `settings` (new clock), `crew` as in PROTOCOL.md. `run_result` for everyone (your results toast when `player_id` is you).
 - The room clock: `clock.cycle_ms` at the snapshot's `tick`, advanced with `server_now()` in `cycle` mode; night ×2 when `cycle_ms ≥ day_len_ms` (the loop mode's `RoomClock` with a server-given phase).
+- Traffic (N4.3): clear your cars on every `room_snapshot`; then follow "Traffic streaming (N4.2)" below (message order, the frame's tick, lanes, intents, corrections).
 
+
+## Traffic streaming (N4.2)
+
+WP N4.2, in `crates/server/src/rooms/`. Spec: [multiplayer handoff](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Traffic: server-authoritative with intents → What the server sends (area of interest, correction schedule), Resource budget (≤ 10 KB/s down per player); [PROTOCOL.md](PROTOCOL.md) §4 (`traffic_*`), §11 (streaming batches), §12 (lanes, car ids); MP-D6. The client side is N4.3 ([NET_TRAFFIC.md](NET_TRAFFIC.md)); this section is what the server sends, item for item against its "Checklist for N4.2".
+
+| File | What |
+| --- | --- |
+| `sim_traffic.rs` | `SimTraffic`: the room's `TrafficWorld` (N4.1) + its `TrafficStream`; `write_client` streams; `notify_hit` for N6 |
+| `traffic_stream.rs` | `TrafficStream`: sim slot ↔ `car_id`, the tick's intents, each car's wire state once per tick, hit reactions; per client the cars it has |
+| `car_ids.rs` | `CarIds`: the u16 id free list (MP-D6) |
+| `bots/src/traffic.rs` | `TrafficMirror`: a bot's copy of what it was told, with the client-side checks |
+
+`rooms.traffic = "sim"` is the default now (`"none"` still turns traffic off).
+
+### Every tick, in each client's frame
+
+After `player_states`, the client's tick frame carries up to four kinds of traffic message, **in this order**, each only when it has entries. A list that passes 128 entries (64 for intents) continues in a second message of the same type.
+
+| # | Message | Entries |
+| --- | --- | --- |
+| 1 | `traffic_despawn` | Cars the client has that left its area (past the hysteresis) or left the ring (an off-ramp exit whose move into lane 7 completed, or any sim despawn) |
+| 2 | `traffic_spawn` | Every car inside the area that the client does not have, with its full state (below) |
+| 3 | `traffic_intent` | This tick's decisions for cars the client had **before** this frame; then, for cars spawned in this frame, what they bring along: a hesitant signal's dated cancel, and a running hit reaction's `hazard` (and `hard_brake` while it lasts) with the hit's own ticks. Other intents for a car spawned in this frame are not sent: the spawn carries its state |
+| 4 | `traffic_correction` | `tick` = this frame's room tick. First every car spawned in this frame and every car given an intent in this frame, then every car the schedule has due (below) |
+
+**The frame's tick** is the `traffic_correction.tick`: the state after the room tick's step, i.e. the car at `server_now = tick`. Every frame that carries a spawn or an intent also carries a correction for each of those cars, so a spawn's `s_mm`, `d_cm` and `speed_cms` are the car's state at that tick. A decision's intent has `start_tick` = that tick (after a stalled room catches up, a few ticks older: late).
+
+A tick with nothing to say sends no traffic message; there is no traffic keepalive.
+
+### Area of interest
+
+- **Centre:** the player's latest accepted state extrapolated to the tick, as the sim uses it (`TrafficSim::state_player_s`: linear, at most `player_max_extrapolation_s` 0.5 s); the reported `s` before the player is in the sim. **Δ** = the car's `s` minus the centre, the wrapped signed difference on the loop (`LoopMap::signed_delta_mm`, in `[-L/2, L/2)`).
+- **Spawned** when −300 m ≤ Δ ≤ +900 m (`traffic_aoi_behind_m`, `traffic_aoi_ahead_m`).
+- **Despawned** when Δ < −320 m or Δ > +920 m (`traffic_aoi_hysteresis_m` = 20 m), so a car at the edge does not flap. At normal density a player has about 40 cars, at rush 45–95 (the city and the 4-lane stretches; NET_TRAFFIC.md's client capacity is 90).
+- **Joining and reconnecting:** on the tick the client gets its `room_snapshot` (a join, a reconnect, a seat taken over), the server forgets what it had sent it: every car in the area is spawned in that frame, and nothing is despawned. **A client clears its traffic on every `room_snapshot`**, before reading the rest of the frame.
+- A placement (respawn, rejoin) moves the centre: cars out of the new area are despawned, new ones spawned, in the next frame.
+
+### Spawn entries
+
+| Field | Value |
+| --- | --- |
+| `car_id` | See "Car ids" |
+| `vehicle` | The sim's `type_id`: index into `types` of the exported `traffic_params.json` (`TrafficRegistry` type order) |
+| `color` | `color_index`: the palette index the car was drawn with |
+| `profile` | `profile_id`: index into `profiles` (driver profile) |
+| `lane` | The current lane on the wire (see "Lanes") |
+| `s_mm`, `d_cm`, `speed_cms` | Position (wrapped into `[0, L)`, rounded to mm), lateral offset (+ right of travel, the sim's d), speed along the road, at the frame's tick |
+| `lc_phase` | `none`, `signaling` (blinker on, not moving yet) or `moving` |
+| `lc_target_lane` | The lane-change target on the wire; 0 when `none` |
+| `lc_move_start_tick` | The sim's `lc_move_tick`: the room tick the lateral move starts (`signaling`) or started (`moving`); 0 when `none` |
+| `lc_duration_ms` | The move time (whole ms, exactly the sim's; see "Intents"); 0 when `none` |
+| `flags.hazard` | `FLAG_HAZARD` (a hit reaction; the intents after the spawns say from when and for how long) |
+| `flags.braking` | `FLAG_BRAKE`: brake lights (decelerating harder than `brake_light_decel_mps2`) |
+
+Not sent: the model variant (the client uses `car_id`), headlights (the room clock's night turns them on for every car), the blinker side (it follows from `d` and the target lane).
+
+### Intents
+
+| `kind` | When | `start_tick` | `move_start_tick` | `target_lane` | `duration_ms` |
+| --- | --- | --- | --- | --- | --- |
+| `lane_change` | A car signals (MOBIL, a merge, a ramp exit, an on-ramp car merging) | Blinker on: this tick | The sim's `lc_move_tick`: the tick `tick_signaling`'s accumulation reaches the signal time, **≥ `start_tick` + 20** (the 1.0 s floor; 21 ticks in practice) | Target on the wire, with n at the car's s at `start_tick` (7 = the off-ramp) | The move time, drawn when the blinker comes on and **rounded to whole ms in the sim** (`start_signal`, MP only), so the client's curve uses exactly the server's |
+| `cancel` (hesitant) | A hesitant driver's signal is decided to cancel when its blinker comes on (the sim's `will_cancel`): sent **in the same batch, right after its `lane_change`**, dated ahead. The sim's own cancel at that tick is not sent again | The signal's end: the lane change's `move_start_tick` | = `start_tick` | 0 | 0 |
+| `cancel` | Any other cancel while signalling (a player entered the gap, the move became unsafe at the signal's end, a hit): it can arrive with `start_tick` = the change's `move_start_tick` (the last check failed): the car never moved on the server | This tick | = `start_tick` | 0 | 0 |
+| `hazard` | A hit reaction starts (first hit, or hit again while recovering) | The hit's tick | = `start_tick` | 0 | `hit_recover_s` (4000) |
+| `hard_brake` | With the hit's `hazard` (same car, same batch): the hit's hard brake, `hit_brake_decel_mps2`. Alone: a cut-in brake tap (a player cut in closer than `cut_in_brake_tap_distance_m`), `brake_tap_decel_mps2` | This tick (the hit's) | = `start_tick` | 0 | `hit_brake_s` (1000) or `brake_tap_s` (500) |
+| `horn` | Never sent: horns stay client-side (spec) | | | | |
+
+**The lane-change curve** (the sim's `tick_moving`): no lateral motion before `move_start_tick` M. At room tick t ≥ M, u = min(1, (t − M) × 0.05 s / duration); d(t) = d0 + (d_target − d0) × u² (3 − 2u), with d0 = the car's `d` at M and d_target the target lane's centre. From the first tick with u ≥ 1 the car is at d_target; its lane becomes the target one tick later and the blinker goes off.
+
+**Hit reactions** (the sim's `notify_hit`, called by N6 through `RoomTraffic::hit_car` once it accepts a hit; nothing calls it before N6): the car swerves away from the hitting player (`hit_swerve_m` 0.5 m out and back over `hit_swerve_s` 1.2 s), brakes hard and shows hazards. The protocol has no swerve kind (PROTOCOL.md §12), so the swerve reaches clients as **corrections every tick** for the first 25 ticks after the hit, to every client that has the car.
+
+**Ramps:** an exit is a `lane_change` to wire lane 7, then a despawn when the move completes; an entry spawns on lane 7 and merges with a `lane_change` (to wire lane 0) when it finds its gap.
+
+### Corrections
+
+Each entry is `{car_id, s_mm, d_cm, speed_cms}` at the batch's tick (d rounded to 1 cm and clamped to ±100 m, speed to 1 cm/s, PROTOCOL.md §3). A car the client has is in the tick's batch when:
+
+- it was spawned or given an intent in this frame (always, see above);
+- **near** the player (|Δ| ≤ 100 m, `traffic_near_m`) and `(tick + car_id) % 4 == 0` (**5 Hz**, `traffic_near_hz`);
+- otherwise `(tick + car_id) % 20 == 0` (**1 Hz**, `traffic_far_hz`);
+- it is in the first 25 ticks of a hit reaction.
+
+So no car goes more than 20 ticks without a correction, a car within 100 m no more than 4 once it is near, and the stagger by car id spreads the 1 Hz corrections over the second (a joined client's 40–90 cars do not all land on one tick).
+
+### Lanes
+
+On the wire, `lane`, `lc_target_lane` and `target_lane` count from the right: **wire = n − 1 − sim lane**, where the sim lane counts from the median (0 = the fast lane, as the client's `TrafficSim`) and **n = the road-space lane count at the car's `s_mm` in this frame** (the spawn entry's; for an intent the car's s at `start_tick`, which is also its correction's in the same frame; lane ranges step at each range's `s_start_mm`, `LoopMap::lane_count_at`). A sim lane ≥ n is **7** (MP-D6): an on-ramp car, an exit's target (the off-ramp pseudo-lane `lane_count(s)`), and a car still in a dropping lane where the range already counts one lane fewer. Back on the client: **7 → n**, else n − 1 − wire. The round trip is exact for every sim lane ≤ n.
+
+### Car ids
+
+`car_id` is allocated per room when a car enters the ring (the fill, an on-ramp), from 1 (never 0: `hit_report.car_id` 0 means "not traffic"), and stays with that car while it is in the ring: a car that leaves a client's area and comes back is spawned again with the same id. When the car leaves the ring its id is released and **not handed out again for 30 s** (`traffic_car_id_hold_ms`; MP-D6); released ids come back oldest first, else a fresh id. The room maps the sim's `(slot, vehicle_id)` to the id after every step, so a slot reused by a new car always gets a new id.
+
+### Bytes
+
+Measured (8 bots in one rush-hour room over real sockets, `rush_hour_downstream_stays_in_budget_with_8_bots`; every frame counted with its WebSocket header and a TLS record, PROTOCOL.md §11):
+
+| Per player | Bytes/s |
+| --- | --- |
+| Everything on the wire (7 remote players' states, traffic, framing) | **5.0–5.2 KB/s** (budget 10 KB/s) |
+| Traffic messages alone | about 1.4 KB/s: corrections ~1.15 KB/s (≈ 100 entries/s), spawns and despawns ~0.18 KB/s, intents ~0.05 KB/s |
+
+Without sockets (`tests/traffic_stream.rs`, 8 players spread round the loop at 25–70 m/s, rush): 0.8–1.7 KB/s of traffic messages per player, 36–90 cars each. The first frame after a join carries the whole area: about 60 × (23 + 10) B ≈ 2 KB.
+
+### Guarantees the tests pin
+
+| Test | What |
+| --- | --- |
+| `tests/traffic_stream.rs` | No sockets: a rush ring with 8 players, every frame decoded into a `bots::TrafficMirror` every tick for 60 s: the mirror equals the server's set for that client, every car in the area is there, nothing past the hysteresis stays, every car due by the stagger is corrected on its tick and none goes 20 ticks without one, corrections carry the server's `s`, no violation (message order, unknown ids, missing same-frame corrections, intent leads < 20 ticks); spawns' lanes, lane-change state and indices against the sim; intents reach every client that has the car at decision time, hesitant cancels ahead with their lane change and never twice, the car never moving at that tick; a hit streams `hazard` (4000) + `hard_brake` (1000) and per-tick corrections through the swerve, and a client joining mid-reaction gets the same hazard; a reconnect resends the whole area; ids never reused within the hold while the ramps churn; determinism (same seed, same frames) |
+| `tests/traffic_alloc.rs` | A counting allocator: 400 ticks of a rush room with 8 players, a hit and the ramps, streaming to all 8 frames: **0 allocations** |
+| `tests/rooms.rs` | Over sockets: `traffic_mirrors_match_the_server_at_quiescent_points` (3 bots; the room's traffic wrapped in a probe that can pause it; at two quiescent points every bot's mirror equals the server's set, no violation, gaps ≤ 20 ticks, leads ≥ 20); `rush_hour_downstream_stays_in_budget_with_8_bots` (≤ 10 KB/s each, framing included); the bench |
+| `rooms::car_ids::tests`, `rooms::traffic_stream::tests` | The 30 s hold under churn and across the tick wrap; wire lanes and their inverse; the stagger; the fast wrapped distance against the map's |
+| `tests/config.rs` | The `rooms.traffic_*` defaults, their conversion to ticks and their validation |
+
+### Configuration
+
+`[rooms]`:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `traffic` | `sim` | `sim`: the ring runs and streams; `none`: no traffic |
+| `traffic_aoi_behind_m` / `traffic_aoi_ahead_m` | `300.0` / `900.0` | The area of interest (spec) |
+| `traffic_aoi_hysteresis_m` | `20.0` | A sent car stays until it is this much further out (not in spec; N4.3's contract) |
+| `traffic_near_m` / `traffic_near_hz` / `traffic_far_hz` | `100.0` / `5` / `1` | Correction rates (spec); the periods are `tick_rate_hz / hz` ticks |
+| `traffic_car_id_hold_ms` | `30000` | A released car id is not reused for this long (MP-D6) |
 
 ## Configuration reference
 

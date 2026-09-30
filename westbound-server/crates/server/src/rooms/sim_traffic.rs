@@ -1,9 +1,10 @@
 //! [`RoomTraffic`] backed by the `sim` crate's [`TrafficWorld`] (N4.1): the room's players
-//! go into the sim every tick, the ring steps in lock-step with the room tick, and spawn
-//! requests move to a real gap. Streaming (`write_client`) is N4.2's; until then this
-//! adapter only runs the ring (`rooms.traffic = "sim"`; the default is `"none"`, since
-//! nobody sees the cars yet). Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → Traffic → Server
-//! simulation ("Players are in the simulation"), Players → Spawning ("a gap in traffic").
+//! go into the sim every tick, the ring steps in lock-step with the room tick, spawn
+//! requests move to a real gap, and each client's frame gets its traffic (N4.2,
+//! [`TrafficStream`]: area of interest, spawns, despawns, intents, corrections). This is
+//! the default (`rooms.traffic = "sim"`). Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → Traffic
+//! → Server simulation ("Players are in the simulation"), What the server sends; Players →
+//! Spawning ("a gap in traffic").
 //!
 //! Tick alignment: the world counts its own ticks from 0; the room tick it was created at
 //! is its origin, and every room tick steps the world up to the same number (a room that
@@ -20,6 +21,7 @@ use sim::traffic::{
 use super::plausibility::tick_diff;
 use super::road::{lane_center_d_mm, lane_width_mm};
 use super::traffic::{PlayerView, RoomTraffic, SpawnSpot};
+use super::traffic_stream::{ReactionTimes, StreamRules, TrafficStream};
 
 /// Most world steps one room tick may run to catch up.
 pub const MAX_CATCH_UP: u32 = 20;
@@ -62,6 +64,7 @@ pub struct SimTraffic {
     length_m: f64,
     width_m: f64,
     gap: GapRules,
+    stream: TrafficStream,
 }
 
 pub fn density(d: Density) -> SimDensity {
@@ -73,7 +76,7 @@ pub fn density(d: Density) -> SimDensity {
 }
 
 impl SimTraffic {
-    /// A filled ring at `density`, anchored at room tick `origin`.
+    /// A filled ring at `density`, anchored at room tick `origin`, streamed by `rules`.
     pub fn new(
         data: &SimTrafficData,
         map: &LoopMap,
@@ -81,20 +84,55 @@ impl SimTraffic {
         seed: i64,
         origin: u32,
         gap: GapRules,
+        rules: StreamRules,
     ) -> Self {
         let world = TrafficWorld::new(&data.params, &data.mp, map, density(d), seed);
+        let t = &data.params.tuning;
+        let react = ReactionTimes {
+            hit_recover_s: t.hit_recover_s,
+            hit_brake_s: t.hit_brake_s,
+            hit_swerve_s: t.hit_swerve_s,
+            brake_tap_s: t.brake_tap_s,
+            tick_dt: world.dt(),
+        };
+        let stream = TrafficStream::new(rules, react, map, &world.sim, origin);
         Self {
             slots: vec![0; data.mp.max_players],
             world,
             origin,
-            length_m: data.params.tuning.player_length_m,
-            width_m: data.params.tuning.player_width_m,
+            length_m: t.player_length_m,
+            width_m: t.player_width_m,
             gap,
+            stream,
         }
     }
 
     pub fn world(&self) -> &TrafficWorld {
         &self.world
+    }
+
+    /// The streaming state (car ids, what each client knows).
+    pub fn stream(&self) -> &TrafficStream {
+        &self.stream
+    }
+
+    /// The room tick the world is at.
+    pub fn room_tick(&self) -> u32 {
+        self.origin.wrapping_add(self.world.tick_index())
+    }
+
+    /// A player's accepted hit on car `car_id` (N6): the sim's scripted reaction (swerve,
+    /// hard brake, hazards), streamed as `hazard` + `hard_brake` intents and corrections
+    /// every tick through the swerve. False when the car or the player is unknown.
+    pub fn notify_hit(&mut self, player_id: u16, car_id: u16) -> bool {
+        let Some(p) = self.slots.iter().position(|&id| id == player_id && id != 0) else {
+            return false;
+        };
+        let Some(slot) = self.stream.slot_of(car_id) else {
+            return false;
+        };
+        self.world.notify_hit(slot, p);
+        true
     }
 
     fn slot_of(&mut self, player_id: u16) -> Option<usize> {
@@ -147,16 +185,20 @@ impl RoomTraffic for SimTraffic {
             );
             self.world.set_player(p, input);
         }
+        self.stream.begin_tick();
         let behind = tick_diff(self.world.tick_index(), self.world_tick_of(tick));
         if behind > i64::from(MAX_CATCH_UP) {
             // Far behind (a stalled task): step once and re-anchor the origin.
             self.world.tick();
             self.origin = tick.wrapping_sub(self.world.tick_index());
-            return;
+            self.stream.after_step(&self.world.sim, self.origin);
+        } else {
+            for _ in 0..behind.max(0) {
+                self.world.tick();
+                self.stream.after_step(&self.world.sim, self.origin);
+            }
         }
-        for _ in 0..behind.max(0) {
-            self.world.tick();
-        }
+        self.stream.end_tick(&self.world.sim);
     }
 
     fn set_density(&mut self, d: Density) {
@@ -167,14 +209,20 @@ impl RoomTraffic for SimTraffic {
         self.world.set_headlights(night);
     }
 
-    fn write_client(
-        &mut self,
-        _player_id: u16,
-        _s_mm: u32,
-        _joined: bool,
-        _frame: &mut FrameBuilder,
-    ) {
-        // N4.2: TrafficSpawn / Despawn / Intent / Correction for the client's area.
+    fn write_client(&mut self, player_id: u16, s_mm: u32, joined: bool, frame: &mut FrameBuilder) {
+        // The area's centre: the player's latest state extrapolated to this tick, as the
+        // sim uses it (at most `player_max_extrapolation_s`); the reported s before the
+        // player is in the sim.
+        let center = match self.slots.iter().position(|&id| id == player_id) {
+            Some(p) if self.world.sim.player_active(p) => {
+                let s = self.world.sim.state_player_s(p);
+                let len = i64::from(self.stream.length_mm());
+                ((s * MM_PER_M).round() as i64).rem_euclid(len) as u32
+            }
+            _ => s_mm,
+        };
+        self.stream
+            .write_client(&self.world.sim, player_id, center, joined, frame);
     }
 
     fn player_left(&mut self, player_id: u16) {
@@ -182,6 +230,11 @@ impl RoomTraffic for SimTraffic {
             self.slots[p] = 0;
             self.world.remove_player(p);
         }
+        self.stream.player_left(player_id);
+    }
+
+    fn hit_car(&mut self, player_id: u16, car_id: u16) -> bool {
+        self.notify_hit(player_id, car_id)
     }
 
     fn free_gap(&self, map: &LoopMap, want: SpawnSpot) -> SpawnSpot {
@@ -235,7 +288,8 @@ mod tests {
         let map = crate::map::builtin().expect("loop_v1");
         let data = SimTrafficData::builtin().expect("sim data");
         let origin = 1_000;
-        let mut t = SimTraffic::new(&data, &map.map, Density::Rush, 7, origin, GAP);
+        let rules = crate::rooms::RoomParams::from_config(&crate::Config::default()).stream;
+        let mut t = SimTraffic::new(&data, &map.map, Density::Rush, 7, origin, GAP, rules);
         // A player at 40 m/s in lane 1.
         let mut view = PlayerView {
             player_id: 3,

@@ -18,6 +18,8 @@ extends CanvasLayer
 ## never show together (RunScreens shows nothing in MENU).
 
 signal start(mode: StringName)
+## WP8.2: the garage closed (the run gives the attract drive the selected car and look).
+signal garage_closed()
 
 const LAYER := 60
 ## The online hub's LOOP PRACTICE starts this mode (Run.MODE_LOOP).
@@ -37,6 +39,8 @@ var screens: Array[RunScreen] = []
 var runs: NetRunsClient
 ## WP8.1: the first-run chooser (built on first use: the first PLAY on a fresh save).
 var first_run: FirstRunScreen
+## WP8.2: the garage (built on first use: the first GARAGE).
+var garage: GarageScreen
 
 var _theme: Theme
 var _pinned: bool = false
@@ -102,7 +106,31 @@ func open_hub() -> void:
 
 
 func is_open() -> bool:
-	return is_built() and (title.visible or online_hub.visible or (first_run != null and first_run.visible))
+	return is_built() and (title.visible or online_hub.visible or (first_run != null and first_run.visible)
+			or (garage != null and garage.visible))
+
+
+## WP8.2: the garage over the attract drive (the title's GARAGE, the results' GARAGE);
+## DONE comes back to the title.
+func open_garage() -> void:
+	_build()
+	if garage == null:
+		garage = GarageScreen.new()
+		add_child(garage)
+		screens.append(garage)
+		garage.done.connect(_on_garage_done)
+		garage.setup(style, tuning)
+		_relayout()
+	title.close(false)
+	online_hub.close(false)
+	_poll_accent()
+	garage.open()
+
+
+func _on_garage_done() -> void:
+	garage.close(false)
+	open_title()
+	garage_closed.emit()
 
 
 ## Every screen's transitions to their end (tests, snaps).
@@ -149,6 +177,7 @@ func _build() -> void:
 	title.play.connect(_on_play)
 	title.online.connect(open_hub)
 	title.settings_closed.connect(_on_settings_closed)
+	title.garage.connect(open_garage)
 	online_hub.back.connect(open_title)
 	online_hub.loop_practice.connect(func() -> void: _on_play(MODE_LOOP))
 	online_hub.social.connect(_on_social)

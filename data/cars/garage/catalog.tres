@@ -1,0 +1,248 @@
+[gd_resource type="Resource" script_class="GarageCatalog" load_steps=30 format=3]
+
+[ext_resource type="Script" path="res://src/meta/garage_catalog.gd" id="1_catalog"]
+[ext_resource type="Script" path="res://src/meta/garage_slot.gd" id="2_slot"]
+[ext_resource type="Script" path="res://src/meta/paint_option.gd" id="3_paint"]
+[ext_resource type="Script" path="res://src/vehicle/rim_style.gd" id="4_rim"]
+
+[sub_resource type="Resource" id="slot_0"]
+script = ExtResource("2_slot")
+id = &"falcon_gt"
+car_path = "res://data/cars/falcon_gt.tres"
+unlock = &"start"
+unlock_level = 1
+
+[sub_resource type="Resource" id="slot_1"]
+script = ExtResource("2_slot")
+id = &"night_viper"
+car_path = "res://data/cars/night_viper.tres"
+unlock = &"level"
+unlock_level = 4
+
+[sub_resource type="Resource" id="slot_2"]
+script = ExtResource("2_slot")
+id = &"brute_v8"
+car_path = "res://data/cars/brute_v8.tres"
+unlock = &"leg"
+unlock_level = 1
+
+[sub_resource type="Resource" id="slot_3"]
+script = ExtResource("2_slot")
+id = &"slot_4"
+car_path = ""
+unlock = &"level"
+unlock_level = 8
+
+[sub_resource type="Resource" id="slot_4"]
+script = ExtResource("2_slot")
+id = &"slot_5"
+car_path = ""
+unlock = &"coast"
+unlock_level = 1
+
+[sub_resource type="Resource" id="slot_5"]
+script = ExtResource("2_slot")
+id = &"slot_6"
+car_path = ""
+unlock = &"level"
+unlock_level = 12
+
+[sub_resource type="Resource" id="slot_6"]
+script = ExtResource("2_slot")
+id = &"slot_7"
+car_path = ""
+unlock = &"daily_streak"
+unlock_level = 1
+
+[sub_resource type="Resource" id="slot_7"]
+script = ExtResource("2_slot")
+id = &"slot_8"
+car_path = ""
+unlock = &"threads"
+unlock_level = 1
+
+[sub_resource type="Resource" id="paint_0"]
+script = ExtResource("3_paint")
+id = &"factory"
+display_name = "FACTORY"
+color = Color(1, 1, 1, 1)
+factory = true
+unlock_level = 1
+
+[sub_resource type="Resource" id="paint_1"]
+script = ExtResource("3_paint")
+id = &"sunset"
+display_name = "SUNSET"
+color = Color(0.98, 0.45, 0.12, 1)
+factory = false
+unlock_level = 2
+
+[sub_resource type="Resource" id="paint_2"]
+script = ExtResource("3_paint")
+id = &"pearl"
+display_name = "PEARL"
+color = Color(0.9, 0.89, 0.86, 1)
+factory = false
+unlock_level = 3
+
+[sub_resource type="Resource" id="paint_3"]
+script = ExtResource("3_paint")
+id = &"teal"
+display_name = "TEAL"
+color = Color(0.05, 0.55, 0.55, 1)
+factory = false
+unlock_level = 5
+
+[sub_resource type="Resource" id="paint_4"]
+script = ExtResource("3_paint")
+id = &"midnight"
+display_name = "MIDNIGHT"
+color = Color(0.08, 0.12, 0.32, 1)
+factory = false
+unlock_level = 6
+
+[sub_resource type="Resource" id="paint_5"]
+script = ExtResource("3_paint")
+id = &"flamingo"
+display_name = "FLAMINGO"
+color = Color(0.95, 0.32, 0.55, 1)
+factory = false
+unlock_level = 7
+
+[sub_resource type="Resource" id="paint_6"]
+script = ExtResource("3_paint")
+id = &"canary"
+display_name = "CANARY"
+color = Color(0.97, 0.8, 0.12, 1)
+factory = false
+unlock_level = 9
+
+[sub_resource type="Resource" id="paint_7"]
+script = ExtResource("3_paint")
+id = &"graphite"
+display_name = "GRAPHITE"
+color = Color(0.2, 0.21, 0.23, 1)
+factory = false
+unlock_level = 10
+
+[sub_resource type="Resource" id="paint_8"]
+script = ExtResource("3_paint")
+id = &"violet"
+display_name = "VIOLET"
+color = Color(0.45, 0.22, 0.75, 1)
+factory = false
+unlock_level = 11
+
+[sub_resource type="Resource" id="paint_9"]
+script = ExtResource("3_paint")
+id = &"mint"
+display_name = "MINT"
+color = Color(0.45, 0.88, 0.66, 1)
+factory = false
+unlock_level = 13
+
+[sub_resource type="Resource" id="paint_10"]
+script = ExtResource("3_paint")
+id = &"gold_rush"
+display_name = "GOLD RUSH"
+color = Color(0.8, 0.6, 0.2, 1)
+factory = false
+unlock_level = 15
+
+[sub_resource type="Resource" id="paint_11"]
+script = ExtResource("3_paint")
+id = &"obsidian"
+display_name = "OBSIDIAN"
+color = Color(0.05, 0.05, 0.06, 1)
+factory = false
+unlock_level = 18
+
+[sub_resource type="Resource" id="rim_0"]
+script = ExtResource("4_rim")
+id = &"stock"
+display_name = "STOCK"
+model_default = true
+unlock_level = 1
+spokes = 5
+radius_frac = 0.62
+spoke_width_frac = 0.12
+lip_frac = 0
+face_color = Color(0.56, 0.56, 0.58, 1)
+spoke_color = Color(0.2, 0.2, 0.21, 1)
+lip_color = Color(0.8, 0.8, 0.82, 1)
+
+[sub_resource type="Resource" id="rim_1"]
+script = ExtResource("4_rim")
+id = &"mesh"
+display_name = "MESH"
+model_default = false
+unlock_level = 3
+spokes = 10
+radius_frac = 0.64
+spoke_width_frac = 0.05
+lip_frac = 0
+face_color = Color(0.62, 0.62, 0.66, 1)
+spoke_color = Color(0.16, 0.16, 0.18, 1)
+lip_color = Color(0.8, 0.8, 0.82, 1)
+
+[sub_resource type="Resource" id="rim_2"]
+script = ExtResource("4_rim")
+id = &"dish"
+display_name = "DEEP DISH"
+model_default = false
+unlock_level = 4
+spokes = 6
+radius_frac = 0.68
+spoke_width_frac = 0.08
+lip_frac = 0.22
+face_color = Color(0.3, 0.3, 0.33, 1)
+spoke_color = Color(0.12, 0.12, 0.13, 1)
+lip_color = Color(0.86, 0.86, 0.9, 1)
+
+[sub_resource type="Resource" id="rim_3"]
+script = ExtResource("4_rim")
+id = &"blackout"
+display_name = "BLACKOUT"
+model_default = false
+unlock_level = 6
+spokes = 5
+radius_frac = 0.62
+spoke_width_frac = 0.14
+lip_frac = 0
+face_color = Color(0.08, 0.08, 0.09, 1)
+spoke_color = Color(0.28, 0.28, 0.3, 1)
+lip_color = Color(0.8, 0.8, 0.82, 1)
+
+[sub_resource type="Resource" id="rim_4"]
+script = ExtResource("4_rim")
+id = &"gold"
+display_name = "GOLD"
+model_default = false
+unlock_level = 8
+spokes = 6
+radius_frac = 0.64
+spoke_width_frac = 0.1
+lip_frac = 0.12
+face_color = Color(0.75, 0.56, 0.2, 1)
+spoke_color = Color(0.3, 0.22, 0.08, 1)
+lip_color = Color(0.9, 0.74, 0.36, 1)
+
+[sub_resource type="Resource" id="rim_5"]
+script = ExtResource("4_rim")
+id = &"turbine"
+display_name = "TURBINE"
+model_default = false
+unlock_level = 11
+spokes = 12
+radius_frac = 0.64
+spoke_width_frac = 0.04
+lip_frac = 0.14
+face_color = Color(0.86, 0.86, 0.9, 1)
+spoke_color = Color(0.36, 0.36, 0.4, 1)
+lip_color = Color(0.2, 0.2, 0.22, 1)
+
+[resource]
+script = ExtResource("1_catalog")
+slots = Array[ExtResource("2_slot")]([SubResource("slot_0"), SubResource("slot_1"), SubResource("slot_2"), SubResource("slot_3"), SubResource("slot_4"), SubResource("slot_5"), SubResource("slot_6"), SubResource("slot_7")])
+paints = Array[ExtResource("3_paint")]([SubResource("paint_0"), SubResource("paint_1"), SubResource("paint_2"), SubResource("paint_3"), SubResource("paint_4"), SubResource("paint_5"), SubResource("paint_6"), SubResource("paint_7"), SubResource("paint_8"), SubResource("paint_9"), SubResource("paint_10"), SubResource("paint_11")])
+rims = Array[ExtResource("4_rim")]([SubResource("rim_0"), SubResource("rim_1"), SubResource("rim_2"), SubResource("rim_3"), SubResource("rim_4"), SubResource("rim_5")])

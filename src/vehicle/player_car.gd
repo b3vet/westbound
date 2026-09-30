@@ -48,6 +48,8 @@ var car: CarDef
 var road: RoadPath
 var origin: FloatingOrigin
 var model: CarModel
+## WP8.2: the paint and rims the model wears (set by setup).
+var look: CarLook
 var visual: CarVisual
 ## False while a camera hides the body (cockpit). Effects that toggle the visual
 ## (the ghost flicker) respect it.
@@ -60,10 +62,12 @@ var _placed := false
 
 ## Builds the physics params (VehicleParams.build, ~0.35 s) unless `prebuilt_params`
 ## is given, loads the car model (CarModel, stubbing missing convention nodes) under
-## the CarVisual, applies the car's default paint, and places the car at s = 0, d = 0
+## the CarVisual, applies the look (default: the car's own paint), and places the car at s = 0, d = 0
 ## at rest (call place_at next).
+## WP8.2: `car_look` (the garage's paint and rims; null = the car's factory look) is
+## applied before the draws are merged (visual only).
 func setup(ctx: RunContext, road_path: RoadPath, floating_origin: FloatingOrigin, car_def: CarDef,
-		prebuilt_params: VehicleParams = null) -> void:
+		prebuilt_params: VehicleParams = null, car_look: CarLook = null) -> void:
 	car = car_def
 	road = road_path
 	origin = floating_origin
@@ -72,7 +76,9 @@ func setup(ctx: RunContext, road_path: RoadPath, floating_origin: FloatingOrigin
 	if model != null and is_instance_valid(model.root):
 		model.root.free()
 	model = CarModel.load_model(car_def.model_scene_path, car_def)
-	model.apply_paint(car_def.default_paint)
+	look = car_look if car_look != null else CarLook.factory(car_def)
+	model.apply_rim(look.rim)
+	model.apply_paint(look.paint)
 	visual.add_child(model.root)
 	visual.bind(model, ctx.tuning.vehicle)
 	if not Events.origin_shifted.is_connected(_on_origin_shifted):

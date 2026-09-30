@@ -9,18 +9,20 @@ extends RunScreen
 ##
 ## Over the run's attract drive (Run in MENU: the car drives itself and cannot be hit).
 ## Left-anchored, stacked up from the bottom-left thumb:
-##   - a row of LEADERBOARDS, SETTINGS and GARAGE (disabled, SOON until WP8.2);
+##   - a row of LEADERBOARDS, SETTINGS and GARAGE (WP8.2: emits `garage`);
 ##   - PLAY (primary: Journey), DAILY DRIVE (today's UTC date under it), ONLINE (the hub);
 ##   - the WESTBOUND logo and CHASE THE SUN top-left, on a slanted ink band.
 ## Top-right: the profile chip (name#tag, online status; a tap opens ACCOUNT).
 ## SETTINGS swaps the menu for the in-run SettingsPanel (GAME / AUDIO pages) with DONE
 ## and ACCOUNT (the ProfilePanel with FRIENDS / CREW, shown when a session exists), laid
 ## out like the pause menu's. LEADERBOARDS opens the LeaderboardsScreen over the title.
-## Emits intents only (play, online); TitleScreens and the run act on them. Buttons are
+## Emits intents only (play, online, garage); TitleScreens and the run act on them. Buttons are
 ## ScreenButtons (emulated mouse events: raw touch ids never index anything).
 
 signal play(mode: StringName)
 signal online()
+## WP8.2: GARAGE (TitleScreens opens the GarageScreen).
+signal garage()
 ## The settings view closed (DONE); `to_hub`: it was opened from the online hub.
 signal settings_closed(to_hub: bool)
 
@@ -104,9 +106,7 @@ func _init() -> void:
 	play_button = _button(TEXT_PLAY, ScreenButton.Kind.PRIMARY, func() -> void: play.emit(MODE_JOURNEY))
 	boards_button = _button(TEXT_LEADERBOARDS, ScreenButton.Kind.NORMAL, open_leaderboards)
 	settings_button = _button(TEXT_SETTINGS, ScreenButton.Kind.NORMAL, open_settings)
-	garage_button = _button(TEXT_GARAGE, ScreenButton.Kind.NORMAL, func() -> void: pass)
-	garage_button.note = TEXT_SOON
-	garage_button.disabled = true
+	garage_button = _button(TEXT_GARAGE, ScreenButton.Kind.NORMAL, garage.emit)
 	chip = TitleProfileChip.new()
 	chip.pressed.connect(func() -> void: open_account())
 	add_child(chip)
