@@ -110,6 +110,9 @@ var car_look: CarLook
 @export var forks_enabled: bool = true
 ## WP8.5: boot into the title (MENU) even when the run is not the main scene (tests).
 @export var title_on_boot: bool = false
+## WP8.4: the Daily Drive's UTC date ("YYYY-MM-DD"); "" = today's (the game). Tools and
+## tests pin a date (the determinism check's run: `?determinism=daily&date=`).
+@export var daily_date: String = ""
 
 ## StringName of Game.* (BOOT, COUNTDOWN, RUNNING, PAUSED, CRASH, RESULTS).
 var state: StringName = &"boot"
@@ -177,6 +180,10 @@ var dev: RunDevPanel
 ## WP8.5: the title and the online hub (intents in: start_mode), and the attract drive.
 var title: TitleScreens
 var attract := RunAttract.new()
+## WP8.4: the Daily Drive's ghost (record, keep the day's best, play it back).
+var daily: DailyDrive
+## WP8.4: the date the current Daily Drive runs on (fixed at start_mode; retries keep it).
+var active_daily_date: String = ""
 ## The Events.run_over payload of the last finished run.
 var last_results: Dictionary = {}
 ## The controller while driving (PlayerController on the input hub by default;
@@ -250,6 +257,14 @@ func _ready() -> void:
 			set_process(false)
 			get_tree().change_scene_to_file.call_deferred(DRIVE_SCENE if target == "drive" else SANDBOX_SCENE)
 			return
+		# WP8.4: `?determinism=daily&date=YYYY-MM-DD&seconds=N` runs the cross-platform
+		# determinism check's scripted Daily run and prints its trace (docs/DAILY.md).
+		# Only the main scene switches: the check's own run (a child) builds as usual.
+		if not url_param(DailyTrace.BOOT_PARAM).is_empty() and get_tree().current_scene == self:
+			set_physics_process(false)
+			set_process(false)
+			get_tree().change_scene_to_file.call_deferred(DailyTrace.SCENE)
+			return
 	# N3.2: `?mode=loop` (web) or `--mode=loop` (native) opens the loop test mode.
 	var boot_mode := boot_param("mode")
 	if boot_mode == String(MODE_LOOP) or boot_mode == String(RunContext.MODE_DAILY) \
@@ -262,7 +277,7 @@ func _ready() -> void:
 	_base_seed = run_seed if run_seed != 0 else Rng.random_seed()
 	_journey_seed = _base_seed
 	if mode == RunContext.MODE_DAILY:
-		_base_seed = daily_seed_today()
+		_base_seed = _start_daily()
 
 	sky = $Sky
 	hub = $PlayerInput
@@ -327,6 +342,9 @@ func _ready() -> void:
 	_install_title()
 	_build_headlight_lut()
 	_install_hud()
+	daily = DailyDrive.new()   # WP8.4
+	add_child(daily)
+	daily.bind(self)
 	dev = RunDevPanel.new()
 	dev.name = "RunDev"
 	add_child(dev)
@@ -406,7 +424,7 @@ func enter_menu() -> void:
 ## `run_mode` from a full countdown, in the same frame (no scene load). RETRY keeps it.
 func start_mode(run_mode: StringName) -> void:
 	mode = run_mode
-	_base_seed = daily_seed_today() if run_mode == RunContext.MODE_DAILY else _journey_seed
+	_base_seed = _start_daily() if run_mode == RunContext.MODE_DAILY else _journey_seed
 	_full_countdown = true
 	warmup.arm(run_mode == RunContext.MODE_JOURNEY and Save.warmup_pending())   # WP8.1
 	_use_garage()   # WP8.2
@@ -527,6 +545,22 @@ func is_menu() -> bool:
 static func daily_seed_today() -> int:
 	var d := Time.get_date_dict_from_system(true)
 	return Rng.daily_seed(int(d["year"]), int(d["month"]), int(d["day"]))
+
+
+## WP8.4: the Daily Drive's seed for "YYYY-MM-DD" (today's when not a valid date).
+static func daily_seed_for(date: String) -> int:
+	if not DailyGhostStore.valid_date(date):
+		return daily_seed_today()
+	return Rng.daily_seed(date.substr(0, 4).to_int(), date.substr(5, 2).to_int(), date.substr(8, 2).to_int())
+
+
+## WP8.4: a Daily Drive starts: its date (daily_date, else today's UTC date) and seed.
+## Retries keep both. No boot parameter picks the date: a player must not practise
+## tomorrow's route (the determinism check sets daily_date on its own run).
+func _start_daily() -> int:
+	var d := daily_date
+	active_daily_date = d if DailyGhostStore.valid_date(d) else DailyGhostStore.today_utc()
+	return daily_seed_for(active_daily_date)
 
 
 ## MENU: the attract drive. The car (its bot) and traffic as in RUNNING, the forks (the
@@ -686,10 +720,12 @@ func tick() -> void:
 		Game.RUNNING:
 			car.tick(dt)
 			_sim_tick(dt)
+			daily.after_tick(true)   # WP8.4: the ghost's recorder and clock
 		Game.CRASH:
 			if not _crash_by_sequence:
 				car.tick(dt)   # the fallback skid; the cinematic's body carries the car
 			_crash_tick(dt)
+			daily.after_tick(false)
 		Game.MENU:
 			_attract_tick(dt)
 	tick_count += 1
@@ -998,6 +1034,7 @@ func _show_results() -> void:
 	if warmup.ran:
 		last_results[RunWarmup.RESULT_KEY] = true   # WP8.1: not replayable by the verifier
 	if record_best:
+		daily.on_run_over(last_results)   # WP8.4: the day's best ghost (before the save is written)
 		Garage.award_run(last_results)   # WP8.2: XP, driver level, unlocks (payload keys)
 	Events.run_over.emit(last_results)   # the results screen opens on it
 
@@ -1043,6 +1080,7 @@ func frame(real_dt: float) -> void:
 	sky.set_tunnel_light(tunnel_light.factor_at(s), tl.tunnel_dark_frac, tl.tunnel_lamp_on)
 	sky.update_view(s)
 	traffic_view.update_view(s)
+	daily.update_view()   # WP8.4: the ghost car
 	_update_night_lights(s)
 	_fill_feed()
 	_report_dev_stats()
@@ -1214,6 +1252,7 @@ func _start_run() -> void:
 	fx.reset()
 	last_results = {}
 	sky.sky_t = sun.sky_t
+	daily.on_run_started()   # WP8.4: a Daily run records and plays the day's ghost
 	if _menu_build:
 		# WP8.5: the title over the attract drive (no countdown, no run_started), under
 		# its own held sky.

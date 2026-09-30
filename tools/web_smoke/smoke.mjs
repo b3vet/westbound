@@ -7,6 +7,7 @@
 //   node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000]
 //        [--settle 3000] [--screenshot build/web_smoke.png] [--headed]
 //        [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...]
+//        [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE]
 //
 // --query: the page's query string (default server=off; e.g. the loop test mode:
 // "mode=loop&server=off&at=city&bot=keep"). --expect: a console line must match
@@ -14,7 +15,10 @@
 // first boot, reload the page in the same browser profile (same IndexedDB) and boot
 // again; --expect-reload: a console line of the second boot must match REGEX (the
 // save's persistence check: --query "server=off&save_probe=1" --reload
-// --expect-reload "Save probe: loaded 1 boot").
+// --expect-reload "Save probe: loaded 1 boot"). --wait-for: after the boot, wait (up to
+// --wait-timeout, default 600000 ms) until a console line matches REGEX, then settle as
+// usual (the determinism check: --query "determinism=daily&date=2026-09-30&seconds=60"
+// --wait-for "^DT done"). --console-out: write every console line to FILE (one per line).
 //
 // Needs `npm ci` in tools/web_smoke once. Browser: Playwright's Chromium
 // (`npx playwright install chromium`), or CHROMIUM_PATH=/path/to/chrome.
@@ -37,6 +41,9 @@ function parseArgs(argv) {
     expect: [],
     reload: false,
     expectReload: [],
+    waitFor: null,
+    waitTimeout: 600000,
+    consoleOut: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s, 2);
@@ -51,16 +58,19 @@ function parseArgs(argv) {
       case '--expect': opts.expect.push(new RegExp(value())); break;
       case '--reload': opts.reload = true; break;
       case '--expect-reload': opts.expectReload.push(new RegExp(value())); opts.reload = true; break;
+      case '--wait-for': opts.waitFor = new RegExp(value()); break;
+      case '--wait-timeout': opts.waitTimeout = Number(value()); break;
+      case '--console-out': opts.consoleOut = path.resolve(value()); break;
       case '-h': case '--help':
-        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]...');
+        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]... [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE]');
         process.exit(0);
       default:
         console.error(`smoke: unknown argument ${argv[i]}`);
         process.exit(2);
     }
   }
-  if (!Number.isFinite(opts.timeout) || !Number.isFinite(opts.settle)) {
-    console.error('smoke: --timeout and --settle take milliseconds');
+  if (!Number.isFinite(opts.timeout) || !Number.isFinite(opts.settle) || !Number.isFinite(opts.waitTimeout)) {
+    console.error('smoke: --timeout, --settle and --wait-timeout take milliseconds');
     process.exit(2);
   }
   return opts;
@@ -276,6 +286,19 @@ async function main() {
     };
     await waitBoot(0);
 
+    if (!failures.length && opts.waitFor) {
+      const deadline = Date.now() + opts.waitTimeout;
+      console.log(`smoke: waiting up to ${opts.waitTimeout} ms for a console line matching ${opts.waitFor}`);
+      while (!failures.length && !consoleLines.some((l) => opts.waitFor.test(l))) {
+        if (Date.now() > deadline) {
+          failures.push(`no console line matched ${opts.waitFor} within ${opts.waitTimeout} ms`);
+          break;
+        }
+        await page.waitForTimeout(250);
+      }
+      if (!failures.length) console.log(`smoke: ${opts.waitFor} seen after ${elapsed()}`);
+    }
+
     if (!failures.length) {
       console.log(`smoke: engine started after ${elapsed()}; letting it run ${opts.settle} ms`);
       const frames = await page.evaluate((ms) => new Promise((resolve) => {
@@ -329,6 +352,11 @@ async function main() {
   } finally {
     if (browser) await browser.close();
     server.close();
+    if (opts.consoleOut) {
+      fs.mkdirSync(path.dirname(opts.consoleOut), { recursive: true });
+      fs.writeFileSync(opts.consoleOut, consoleLines.join('\n') + '\n');
+      console.log(`smoke: ${consoleLines.length} console lines written to ${opts.consoleOut}`);
+    }
   }
 
   if (failures.length) {

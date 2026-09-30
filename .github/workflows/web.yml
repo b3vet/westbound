@@ -60,6 +60,9 @@ jobs:
       - name: Smoke test (headless Chromium)
         run: node tools/web_smoke/smoke.mjs --timeout 90000
 
+      - name: Daily Drive determinism (native vs wasm, 15 s)
+        run: tools/determinism/compare.sh --seconds=15 --no-export
+
       - name: Upload smoke screenshot
         if: always()
         uses: actions/upload-artifact@v4

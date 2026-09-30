@@ -1,0 +1,25 @@
+[gd_resource type="Resource" script_class="DailyTuning" format=3]
+
+[ext_resource type="Script" path="res://src/meta/daily/daily_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+ghost_enabled = true
+ghost_sample_hz = 20
+ghost_keep_days = 2
+ghost_reserve_s = 900.0
+ghost_view_ahead_m = 900.0
+ghost_view_behind_m = 150.0
+check_driver = &"script"
+check_bot_seed = 11
+check_bot_speed_kmh = 190.0
+check_seconds = 60.0
+check_script_period_s = 4.0
+check_script_pulse_s = 0.35
+check_script_steer = 0.25
+check_script_throttle = 1.0
+check_script_brake_every_s = 11.0
+check_script_brake_s = 0.5
+check_script_brake = 0.6
+check_ticks_per_frame = 2
+check_web_ticks_per_step = 120
