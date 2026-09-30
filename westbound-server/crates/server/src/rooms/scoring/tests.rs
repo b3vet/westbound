@@ -627,3 +627,63 @@ fn a_run_ending_decides_only_its_own_claims() {
     assert!(h.rejected(2).is_empty(), "{:?}", h.events(2));
     assert_eq!(RoomMetrics::get(&h.metrics.claims_accepted), 1);
 }
+
+/// N10.1 shadow contacts: B drives through A (ghosted) 10 m/s faster in the same lane: one
+/// contact over the ticks their boxes overlap, at the pair's speed, with no disagreement
+/// (both drive straight: the extrapolated views are exact).
+#[test]
+fn a_player_driving_through_another_is_one_shadow_contact() {
+    let mut h = H::new();
+    h.driver(1, 0, 1_000.0, 30.0, 1);
+    h.driver(2, 0, 980.0, 40.0, 1);
+    h.ticks(120);
+    let out = std::mem::take(&mut h.sc.shadow.out);
+    assert_eq!(out.len(), 1, "{out:?}");
+    let c = out[0];
+    assert_eq!((c.player_a, c.player_b), (1, 2));
+    // Overlap while the centres are within one hull length (2 × 2.32 m) of each other:
+    // 9.28 m at 0.5 m per tick.
+    assert!((17..=20).contains(&c.ticks), "{c:?}");
+    assert!((c.speed_mps - 35.0).abs() < 0.3, "{c:?}");
+    assert!((c.closing_mps - 10.0).abs() < 0.01, "{c:?}");
+    assert!(c.depth_m > 1.5, "side by side: the full width: {c:?}");
+    assert!(c.disagreement_m < 0.01, "{c:?}");
+    assert_eq!(RoomMetrics::get(&h.metrics.shadow_contacts), 1);
+    assert_eq!(
+        RoomMetrics::get(&h.metrics.shadow_contact_ticks),
+        u64::from(c.ticks)
+    );
+    // Two players checked per tick since the horizon reached their runs.
+    let pt = RoomMetrics::get(&h.metrics.shadow_player_ticks);
+    assert!((170..=182).contains(&pt), "{pt}");
+}
+
+#[test]
+fn players_in_neighbouring_lanes_never_touch() {
+    let mut h = H::new();
+    h.driver(1, 0, 1_000.0, 30.0, 1);
+    h.driver(2, 0, 980.0, 40.0, 2);
+    h.ticks(120);
+    h.sc.shadow.flush(&h.metrics);
+    assert!(h.sc.shadow.out.is_empty());
+    assert_eq!(RoomMetrics::get(&h.metrics.shadow_contacts), 0);
+}
+
+/// A lane change into the other car during the contact: the views, extrapolated from
+/// 100 ms before, miss the step: the disagreement is the step.
+#[test]
+fn a_lane_change_during_a_contact_is_a_disagreement() {
+    let mut h = H::new();
+    h.driver(1, 0, 1_000.0, 30.0, 1);
+    let k = h.driver(2, 0, 990.0, 31.0, 2);
+    // B's centre reaches A's after 10 s at 1 m/s closing; it steps into A's lane at 8 s,
+    // 2 m behind A's centre (inside the hull length): an overlap from that tick.
+    h.drivers[k].lane_change = Some((h.now + 160, LANE[1]));
+    h.ticks(260);
+    h.sc.shadow.flush(&h.metrics);
+    let out = std::mem::take(&mut h.sc.shadow.out);
+    assert_eq!(out.len(), 1, "{out:?}");
+    let c = out[0];
+    assert!((c.disagreement_m - 3.6).abs() < 0.05, "{c:?}");
+    assert_eq!(h.metrics.shadow_disagreement()[5], 1, "the 2–4 m bucket");
+}

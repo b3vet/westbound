@@ -2,11 +2,67 @@
 //! listener. Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Server tech stack" (logging and
 //! metrics: a small Prometheus-text `/metrics` endpoint on localhost).
 //! Plain atomics: no registry crate, no locks on the hot path.
+//!
+//! N10.1: the process's own CPU time and resident memory ([`ProcessStats`], from `/proc`)
+//! as `process_cpu_seconds_total` and `process_resident_memory_bytes`, so the load test and
+//! the admin stats read them off the running server (spec: Resource budget, "20 full rooms
+//! at no more than 50% of one core", "server memory under 300 MB").
 
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::http::StatusCode;
+
+/// The kernel's clock ticks per second for `/proc/<pid>/stat` times (`USER_HZ`: 100 on
+/// every Linux the server runs on).
+const USER_HZ: f64 = 100.0;
+const BYTES_PER_KB: u64 = 1_024;
+
+/// The process's CPU time and memory (Linux `/proc/self`; zeros elsewhere).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ProcessStats {
+    /// User + system CPU seconds since the process started.
+    pub cpu_seconds: f64,
+    /// Resident set size (bytes) and its peak (`VmHWM`).
+    pub rss_bytes: u64,
+    pub rss_peak_bytes: u64,
+    pub threads: u64,
+    /// Seconds since the process started.
+    pub uptime_s: f64,
+}
+
+impl ProcessStats {
+    pub fn read() -> Self {
+        let mut p = ProcessStats::default();
+        if let Ok(stat) = std::fs::read_to_string("/proc/self/stat") {
+            // After the command name (in parentheses): state is field 3; utime, stime are
+            // 14 and 15; num_threads 20; starttime 22 (clock ticks after boot).
+            if let Some((_, rest)) = stat.rsplit_once(')') {
+                let f: Vec<&str> = rest.split_whitespace().collect();
+                let num = |i: usize| f.get(i).and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
+                p.cpu_seconds = (num(11) + num(12)) / USER_HZ;
+                p.threads = num(17) as u64;
+                let boot_up = std::fs::read_to_string("/proc/uptime")
+                    .ok()
+                    .and_then(|u| u.split_whitespace().next()?.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                p.uptime_s = (boot_up - num(19) / USER_HZ).max(0.0);
+            }
+        }
+        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+            let kb = |key: &str| {
+                status
+                    .lines()
+                    .find_map(|l| l.strip_prefix(key))
+                    .and_then(|v| v.split_whitespace().next()?.parse::<u64>().ok())
+                    .unwrap_or(0)
+            };
+            p.rss_bytes = kb("VmRSS:") * BYTES_PER_KB;
+            p.rss_peak_bytes = kb("VmHWM:") * BYTES_PER_KB;
+        }
+        p
+    }
+}
 
 /// HTTP status classes counted by `http_requests_total{class=...}`.
 const STATUS_CLASSES: [&str; 5] = ["1xx", "2xx", "3xx", "4xx", "5xx"];
@@ -379,6 +435,29 @@ impl Metrics {
                 g(&self.http_requests[i])
             );
         }
+        let p = ProcessStats::read();
+        let _ = writeln!(
+            out,
+            "# HELP process_cpu_seconds_total User and system CPU time of the server process."
+        );
+        let _ = writeln!(out, "# TYPE process_cpu_seconds_total counter");
+        let _ = writeln!(out, "process_cpu_seconds_total {}", p.cpu_seconds);
+        let _ = writeln!(
+            out,
+            "# HELP process_resident_memory_bytes Resident memory of the server process."
+        );
+        let _ = writeln!(out, "# TYPE process_resident_memory_bytes gauge");
+        let _ = writeln!(out, "process_resident_memory_bytes {}", p.rss_bytes);
+        let _ = writeln!(
+            out,
+            "# HELP process_resident_memory_peak_bytes Peak resident memory of the server process."
+        );
+        let _ = writeln!(out, "# TYPE process_resident_memory_peak_bytes gauge");
+        let _ = writeln!(
+            out,
+            "process_resident_memory_peak_bytes {}",
+            p.rss_peak_bytes
+        );
         let _ = writeln!(out, "# HELP wb_build_info Build information.");
         let _ = writeln!(out, "# TYPE wb_build_info gauge");
         let _ = writeln!(

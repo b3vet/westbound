@@ -94,6 +94,7 @@ impl T {
             presence: Arc::new(PresenceHub::new(sessions)),
             metrics: Arc::new(RoomMetrics::default()),
             registry: Mutex::new(Registry::default()),
+            shadows: Mutex::new(None),
             runs: Mutex::new(None),
         });
         let time = RoomTime {

@@ -138,6 +138,11 @@ impl AppState {
             db.clone(),
             map.map.map_id.clone(),
         ));
+        // N10.1: shadow contacts between players go to `shadow_contacts`.
+        rooms.set_shadow_sink(crate::rooms::shadow_log::db_sink(
+            db.clone(),
+            rooms.metrics().clone(),
+        ));
         Ok(Self {
             config: Arc::new(config),
             db,
@@ -421,6 +426,8 @@ async fn count_requests(State(state): State<AppState>, req: Request, next: Next)
 fn metrics_router(state: AppState) -> Router {
     Router::new()
         .route("/metrics", get(http::metrics))
+        // N10.1: the admin stats view (same localhost-only listener).
+        .route("/admin/stats", get(crate::metrics_admin::handler))
         .with_state(state)
 }
 

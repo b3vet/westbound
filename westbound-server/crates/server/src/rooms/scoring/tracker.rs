@@ -54,6 +54,8 @@ pub struct StateRec {
     pub v: f64,
     /// Heading relative to the road (rad).
     pub yaw: f64,
+    /// Lateral velocity (m/s; N10.1: the shadow contacts' extrapolation).
+    pub v_lat: f64,
     pub boost: bool,
     /// Spawn / rejoin protection (no traffic hits).
     pub protected: bool,
@@ -120,6 +122,11 @@ pub struct Contact {
     pub car_id: u16,
     pub tick: u32,
     pub resolved: bool,
+    /// The overlap's depth at detection (m) and the player's and the car's speeds (m/s)
+    /// (N10.1: the shadow logs).
+    pub depth: f64,
+    pub speed: f64,
+    pub car_speed: f64,
 }
 
 /// A car within `confirm_m` of the player at a tick.
@@ -243,8 +250,8 @@ impl Tracker {
                         clearance: clr,
                     });
                 }
-                let deep = clr <= 0.0
-                    && hull::penetration(
+                let depth = if clr <= 0.0 {
+                    hull::penetration(
                         0.0,
                         st.d,
                         st.yaw,
@@ -255,14 +262,20 @@ impl Tracker {
                         c.yaw(),
                         c_hl,
                         c_hw,
-                    ) > r.overlap_m;
-                if deep {
+                    )
+                } else {
+                    0.0
+                };
+                if depth > r.overlap_m {
                     t.deep += 1;
                     if t.deep == r.overlap_ticks {
                         self.contacts.push(Contact {
                             car_id: c.car_id,
                             tick: st.tick,
                             resolved: false,
+                            depth,
+                            speed: st.v,
+                            car_speed: f64::from(c.v),
                         });
                     }
                 } else {

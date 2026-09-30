@@ -39,6 +39,7 @@ pub mod http;
 pub mod leaderboards;
 pub mod map;
 pub mod metrics;
+pub mod metrics_admin;
 pub mod msg_limits;
 pub mod names;
 pub mod presence;
