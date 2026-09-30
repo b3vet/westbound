@@ -27,6 +27,8 @@ The release image built from `westbound-server/Dockerfile` (`westbound-server:n1
 | Up per player (payload) | ~1 KB/s | 0.50 KB/s | 0.50 KB/s |
 | Largest frame | | 1,754 B (a join's area) | 2,350 B |
 
+**After merging N10.2 (ops) and N8.2 (DetMath in the `sim` crate)** the same load at normal density for 300 s on a quieter box (load average 1–3): 36.3 % of the core, room tick p99 ≤ 1.5 ms (mean 0.51 ms, max 183 ms), 99.9 MB, 4.91 KB/s worst player, 7,027 of 7,027 claims, correction p99 0.275 m, 0.08 late intents per 10 bot-minutes, 0 offences, 0 false hits, not throttled.
+
 ### Netcode acceptance at 150 ms RTT, ±30 ms jitter, 2 % loss
 
 The same run (160 bots × 10 min: 27.5 bot-hours), and the in-process test (`acceptance_30s`, 1 room × 8 bots, rush, 30 s, debug build):
