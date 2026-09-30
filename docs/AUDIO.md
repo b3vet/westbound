@@ -91,18 +91,25 @@ Worst case: 16 one-shots + 4 engine + 2 + 3 + 1 = **26 mixing voices**; typical 
 
 ## Assets
 
-All sounds are mono OGG Vorbis at 22.05 kHz except music (32 kHz stereo). Total: **about 4.0 MB** (music 3.7 MB, effects about 0.35 MB). Everything is logged in `assets/LICENSES.md`.
+Two formats, by how a sound plays:
+
+- **Loops and music: OGG Vorbis.** The engine loops, `wind_loop`, `tire_hum_loop` and `intake_loop` are mono 22.05 kHz; music is 32 kHz stereo. A loop's decoder is set up once when it starts and then streams.
+- **One-shots: WAV, imported with QOA compression** (`compress/mode=2` in each `.wav.import`, about 3.2 bits per sample). The source files are mono 16-bit 22.05 kHz. This is WP7.6's fix for the burst hitch: `play()` on an OGG Vorbis stream sets up a new Vorbis decoder, about 0.55–0.65 ms per voice, so a 20-event frame (32 voices) took about 20 ms mean on the main thread. A QOA voice starts in about 0.05–0.07 ms (it decodes its first 5120-sample frame), and the same burst drains in about 2 ms mean. `tests/feel/test_one_frame.gd` asserts the burst budget (mean ≤ 6 ms with audio, ≤ 0.25 ms of audio per voice), and `tests/audio/test_audio.gd` (`test_one_shots_are_wav`) fails if an OGG one-shot comes back.
+  - *Why QOA and not IMA-ADPCM or PCM* (measured in the container). IMA-ADPCM starts in about 1 µs, but Godot's encoder breaks down on the loud broadband noise sounds: the whoosh, zip, air brake and boost come out about 14 dB hotter and distorted (SNR below 0 dB), so it's unusable here. Plain PCM starts in about 1 µs and saves about 1 ms more per 20-event burst, but it is 4.6 times the size (0.48 MB against 0.10 MB). QOA's SNR against the PCM source is 12–17 dB on the noise sounds (the error is itself noise, under the sound) and 24–53 dB on the tonal ones. Switching one file to PCM is just `compress/mode=0` in its `.import`.
+  - *Unchanged to the ear.* Durations match the old OGGs to the sample, and RMS is within 1 dB for every file. The WAVs are the synth's own output, and the old Vorbis encode had added about 1–1.5 dB of hiss above 5 kHz on the noise sounds (whoosh, air brake, zip, boost whoosh), so those are now up to 1 dB quieter overall and slightly less hissy. The stingers, chimes, horn, thump and Kenney impacts match within 0.2 dB RMS. Played through Godot, sample peaks are within 0.5 dB, except whoosh (2.3 dB lower) and zip (1.4 dB lower), where QOA's noise-like error moves a single sample of broadband noise; their RMS is unchanged from PCM.
+
+Sizes. **Packed** (the imported files an export ships): one-shots **0.10 MB** as QOA (the OGG one-shots were 0.13 MB), loops 0.25 MB, music 3.89 MB, so audio totals **about 4.24 MB** (was 4.27 MB). **In the repo**, the one-shot sources are 16-bit WAV (0.47 MB), so `assets/audio` grew from 4.0 MB to 4.4 MB; that doesn't reach the pack. Everything is logged in `assets/LICENSES.md`.
 
 - **Synthesized in-house** (`tools/audio/gen_audio.py synth`, numpy + soundfile, deterministic seeds). The engine loops are an 8-cylinder pulse train with slightly uneven firing (the V8 burble), convolved with an exhaust resonance, plus firing-modulated combustion noise and a half-order rumble; the off-throttle loops are softer and low-passed. Also wind, tire hum, intake, the whoosh (a band-pass sweep up then down, like a doppler pass-by), zip, thump, horn, air brake, boost whoosh, and the musical stingers and chimes (additive plucks and bells in C major pentatonic).
 - **Kenney CC0 packs** (`tools/audio/gen_audio.py cc0` downloads and converts them): the hit impact, crash metal and glass, the scrape, a UI click.
 - **Music, CC0 from OpenGameArt**: "Midnight Drive" (congusbongus), "Cyber Runner" (ansimuz), "Slampe" (fupi). They are re-encoded to 32 kHz stereo at about 55 kbps.
 - **Not used: the cool_drive MP3s.** They are Suno generations (the ID3 tags link to suno.com) with no licence note in the repo, their rights depend on the owner's Suno plan, and they are 4–5.5 MB each. The owner can drop them in later (see below).
 
-Regenerate with `pip install numpy soundfile`, then `python3 tools/audio/gen_audio.py all`, then `tools/godot.sh --headless --path . --import`. Loop files have `loop=true` in their `.import`: `engine_*`, `wind_loop`, `tire_hum_loop`, `intake_loop`. Rebuild the bus layout with `tools/godot.sh --headless --path . --script res://tools/audio/build_bus_layout.gd`.
+Regenerate with `pip install numpy soundfile`, then `python3 tools/audio/gen_audio.py all`, then `tools/godot.sh --headless --path . --import`. Loop files have `loop=true` in their `.import`: `engine_*`, `wind_loop`, `tire_hum_loop`, `intake_loop`. The script writes one-shots as `.wav`, plus a QOA `.wav.import` stub when a file has none; Godot fills in the rest on import. The sample data is deterministic (fixed seeds, and the WAVs come out byte-identical), but libsndfile gives each OGG a random stream serial, so a re-run rewrites the loop and music bytes without changing their audio. Commit only the files you meant to change. Rebuild the bus layout with `tools/godot.sh --headless --path . --script res://tools/audio/build_bus_layout.gd`.
 
 ## Swapping in licensed audio
 
-1. **Same name, same path.** Replace `assets/audio/<name>.ogg` with the new file, keeping the name; for a loop, keep `loop=true` in its `.import` (or tick Loop in the import dock). Record the source and licence in `assets/LICENSES.md`.
+1. **Same name, same path.** Replace `assets/audio/<name>.ogg` (a loop) or `assets/audio/<name>.wav` (a one-shot) with the new file, keeping the name. For a loop, keep `loop=true` in its `.import` (or tick Loop in the import dock). A one-shot stays WAV with QOA compression (`compress/mode=2`); convert an OGG or MP3 source to WAV first, since an OGG one-shot costs about 0.6 ms per play and fails `test_one_shots_are_wav`. Record the source and licence in `assets/LICENSES.md`.
 2. **Engine recordings.** Record or buy loops at a few steady rpm values, on and off throttle. Name them `engine_on_<rpm>.ogg` / `engine_off_<rpm>.ogg` and set `engine_step_rpm` in `data/tuning/audio.tres` to those rpm values. Any count of steps works (at least 2 recommended).
 3. **Music.** Edit `music_tracks` (and `music_bpm` if the tempo is known, which starts the music clock) in `data/tuning/audio.tres`. Keep tracks at 128 kbps or less for the web pack; 32–44.1 kHz OGG is fine.
 4. **Levels.** Adjust the per-sound `*_db` and per-bus `*_db` values in `data/tuning/audio.tres`; no code changes are needed.
@@ -124,7 +131,7 @@ Regenerate with `pip install numpy soundfile`, then `python3 tools/audio/gen_aud
 - horns (lower for trucks), the air brake (tap, hard-brake edge, cooldown) and tire hum on the nearest cars;
 - the night filter on night and dawn, and the tunnel reverb on entry and exit (a straight road with a tunnel feature);
 - the music playlist and the clock;
-- loop import flags;
+- loop import flags, and every one-shot being a non-looping QOA WAV (no OGG one-shots);
 - the voice cap and priority stealing;
 - no new nodes or leftover objects per event;
 - the run attaching the audio.

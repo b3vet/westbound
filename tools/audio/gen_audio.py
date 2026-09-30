@@ -6,9 +6,16 @@
     python3 tools/audio/gen_audio.py cc0            # download + convert the CC0 files
     python3 tools/audio/gen_audio.py all
 
-Everything is deterministic (fixed numpy seeds), mono OGG Vorbis at 22.05 kHz for the
-effects, and 32 kHz stereo for music, to keep the web pack small. Loops are built
-periodic (FFT noise with integer bins, whole engine cycles), so they loop seamlessly.
+Everything is deterministic (fixed numpy seeds). Loops (engine, wind, tire hum, intake)
+are mono OGG Vorbis at 22.05 kHz and music is 32 kHz stereo OGG, to keep the web pack
+small. Loops are built periodic (FFT noise with integer bins, whole engine cycles), so
+they loop seamlessly.
+
+One-shots are mono 16-bit WAV at 22.05 kHz, imported by Godot with QOA compression
+(`compress/mode=2` in their .import, ~3.2 bits per sample): starting an OGG Vorbis voice
+sets up a new Vorbis decoder (~0.6 ms per play() on the audio thread), a WAV voice starts
+in microseconds (WP7.6, docs/AUDIO.md -> Assets). `write_oneshot` also writes a minimal
+.import stub (QOA, no loop) for a new file; Godot fills in the rest on import.
 
 Engine loops: one file per RPM step, on and off throttle. The step rpm values are
 exact (22050 * 120 / rpm is a whole number of samples per engine cycle); they are
@@ -40,7 +47,7 @@ KENNEY = {
     "impact-sounds": "https://kenney.nl/media/pages/assets/impact-sounds/87b4ddecda-1677589768/kenney_impact-sounds.zip",
     "interface-sounds": "https://kenney.nl/media/pages/assets/interface-sounds/fa43c1dd4d-1677589452/kenney_interface-sounds.zip",
 }
-# (out name, pack, file inside Audio/, gain)
+# (out name, pack, file inside Audio/, gain): all one-shots (WAV)
 KENNEY_FILES = [
     ("hit_impact", "impact-sounds", "impactMetal_heavy_001.ogg", 1.0),
     ("crash_metal", "impact-sounds", "impactPlate_heavy_000.ogg", 1.0),
@@ -69,6 +76,38 @@ def write(name, x, sr=SR, quality=SFX_QUALITY):
         for i in range(0, len(x), 8192):
             f.write(x[i:i + 8192])
     print("  %-26s %6.2f s  %7d bytes" % (name + ".ogg", len(x) / sr, os.path.getsize(path)))
+
+
+# The .import stub for a new one-shot WAV (Godot 4 "wav" importer; compress/mode 2 = QOA).
+ONESHOT_IMPORT = """[remap]
+
+importer="wav"
+type="AudioStreamWAV"
+
+[params]
+
+force/8_bit=false
+force/mono=false
+force/max_rate=false
+force/max_rate_hz=44100
+edit/trim=false
+edit/normalize=false
+edit/loop_mode=0
+edit/loop_begin=0
+edit/loop_end=-1
+compress/mode=2
+"""
+
+
+def write_oneshot(name, x, sr=SR):
+    """A one-shot effect: 16-bit PCM WAV (Godot compresses it to QOA on import)."""
+    x = np.clip(np.asarray(x, dtype=np.float64), -1.0, 1.0)
+    path = os.path.join(OUT, name + ".wav")
+    sf.write(path, x, sr, format="WAV", subtype="PCM_16")
+    if not os.path.exists(path + ".import"):
+        with open(path + ".import", "w") as f:
+            f.write(ONESHOT_IMPORT)
+    print("  %-26s %6.2f s  %7d bytes" % (name + ".wav", len(x) / sr, os.path.getsize(path)))
 
 
 def norm(x, peak=0.89):
@@ -409,20 +448,20 @@ def synth():
     write("wind_loop", wind_loop(np.random.default_rng(11)))
     write("tire_hum_loop", tire_hum_loop(np.random.default_rng(12)))
     write("intake_loop", intake_loop(np.random.default_rng(13)))
-    write("whoosh", whoosh(np.random.default_rng(21)))
-    write("zip", zip_sfx(np.random.default_rng(22)))
-    write("thump", thump(np.random.default_rng(23)))
-    write("horn", horn(np.random.default_rng(24)))
-    write("air_brake", air_brake(np.random.default_rng(25)))
-    write("boost_whoosh", boost_whoosh(np.random.default_rng(26)))
-    write("sting_pass", sting_pass())
-    write("sting_close", sting_close())
-    write("sting_cut", sting_cut())
-    write("sting_thread", sting_thread())
-    write("chime_tick", chime_tick())
-    write("chime_bank", chime_bank())
-    write("sting_hesitated", sting_hesitated())
-    write("sting_hit", sting_hit(np.random.default_rng(31)))
+    write_oneshot("whoosh", whoosh(np.random.default_rng(21)))
+    write_oneshot("zip", zip_sfx(np.random.default_rng(22)))
+    write_oneshot("thump", thump(np.random.default_rng(23)))
+    write_oneshot("horn", horn(np.random.default_rng(24)))
+    write_oneshot("air_brake", air_brake(np.random.default_rng(25)))
+    write_oneshot("boost_whoosh", boost_whoosh(np.random.default_rng(26)))
+    write_oneshot("sting_pass", sting_pass())
+    write_oneshot("sting_close", sting_close())
+    write_oneshot("sting_cut", sting_cut())
+    write_oneshot("sting_thread", sting_thread())
+    write_oneshot("chime_tick", chime_tick())
+    write_oneshot("chime_bank", chime_bank())
+    write_oneshot("sting_hesitated", sting_hesitated())
+    write_oneshot("sting_hit", sting_hit(np.random.default_rng(31)))
     print("engine_step_rpm =", ENGINE_STEPS)
 
 
@@ -456,7 +495,7 @@ def cc0():
         x, sr = sf.read(io.BytesIO(z.read(member)), dtype="float64")
         if x.ndim == 2:
             x = x.mean(axis=1)
-        write(name, norm(resample(x, sr, SR)) * gain)
+        write_oneshot(name, norm(resample(x, sr, SR)) * gain)
     for name, url in MUSIC:
         x, sr = sf.read(fetch(url), dtype="float64")
         write(name, norm(resample(x, sr, MUSIC_SR), 0.95), MUSIC_SR, MUSIC_QUALITY)

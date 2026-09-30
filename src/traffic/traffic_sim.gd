@@ -308,6 +308,7 @@ func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
 	_psplit = reg.lane_split.duplicate()
 	_tlen = reg.length.duplicate()
 	_twid = reg.width.duplicate()
+	_init_weave(reg)   # WP6.9
 	var max_len := 0.0
 	for x in _tlen:
 		max_len = maxf(max_len, x)
@@ -1327,6 +1328,7 @@ func _merge_gap_accel(i: int, k: int, vi: float, v0: float, p: int, hw_t: float)
 func step(dt: float, player: VehicleState, _player_params: VehicleParams, out_events: ScoreEventBuffer) -> void:
 	if _n_pending > 0:
 		_emit_pending(out_events)
+	_wclock += dt   # WP6.9: the lane-change cap's clock
 	_read_player(player)
 	_edge = road.lanes_left_edge_d(_ps)
 	_lw = road.lane_width(_ps)
@@ -1433,7 +1435,11 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 	var hw_t := _pT[p] if _hz_n == 0 else _pT[p] * headway_scale_at(si)   # WP6.3 headway zones
 	if lead >= 0:
 		gap = _ks[lead] - si - _khl[lead] - _khl[i]
-		a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor)
+		if _pweave[p] == 1 and lead != _P:
+			# WP6.9: a weaving profile behind a traffic car (never behind the player).
+			a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _wb[p], hw_t * _wTk[p], _ws0[p], _pdl[p], _gap_floor)
+		else:
+			a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor)
 	else:
 		a = Idm.free_accel(vi, v0, _pa[p], _pdl[p])
 	if _cl_n > 0:
@@ -1576,7 +1582,7 @@ func _tick_moving(i: int, mdt: float) -> void:
 		state.flags[i] &= ~_BLINKERS
 		_split[i] = _lc_split[i]
 		_lc_split[i] = 0
-		_mobil_t[i] = _cooldown
+		_mobil_t[i] = _cooldown_of(i)
 		stat_completed += 1
 		return
 	var d0 := state.lc_start_d[i]
@@ -1645,6 +1651,14 @@ func _consider_lane_change(i: int) -> void:
 	var cur := state.lane[i]
 	var gl := _eval_target(i, cur - 1, true)
 	var gr := _eval_target(i, cur + 1, true)
+	if _pweave[state.profile_id[i]] == 1:
+		# WP6.9: weaving racers look ahead (and keep to their lane-change cap).
+		if not _weave_cap_ok(i):
+			return
+		gl += _weave_bonus(i, cur - 1, cur)
+		gr += _weave_bonus(i, cur + 1, cur)
+		if gl > 0.0 or gr > 0.0:
+			_weave_note_change(i)
 	if gl > 0.0 and gl >= gr:
 		_start_signal(i, cur - 1, _lane_d(cur - 1), 0)
 	elif gr > 0.0:
@@ -1741,7 +1755,7 @@ func _cancel(i: int) -> void:
 	state.lc_duration[i] = 0.0
 	state.flags[i] &= ~_BLINKERS
 	_will_cancel[i] = 0
-	_mobil_t[i] = _cooldown
+	_mobil_t[i] = _cooldown_of(i)
 	if _lc_split[i] == 0 and absf(state.d[i] - _lane_d(state.lane[i])) > _lw * 0.5 * 0.5:
 		# A cancelled return from a lane split keeps riding the boundary.
 		_split[i] = 1 if state.d[i] > _lane_d(state.lane[i]) else -1
@@ -1805,15 +1819,19 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool 
 	var v0 := state.v0[i]
 	if v0 < _drop_v_merge and (_cl_n > 0 or _dz_n > 0) and _split[i] == 0:
 		v0 += (_drop_v_merge - v0) * _match[i]   # WP6.8: as in _step_accel (its last model tick)
-	var bsafe := _pbsafe[p]
+	var bsafe := _pbsafe[p] if _pweave[p] == 0 else _wbsafe[p]   # WP6.9: toward traffic followers
 	var a_c_new: float
 	if lead >= 0:
 		var gl := _ks[lead] - si - _khl[lead] - _khl[i]
 		if gl <= 0.0:
 			_q_player = lead == _P
 			return -INF
-		a_c_new = Idm.accel(vi, v0, gl, vi - _kv[lead], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor)
-		if a_c_new < -bsafe:
+		if _pweave[p] == 1 and lead != _P:
+			a_c_new = Idm.accel(vi, v0, gl, vi - _kv[lead], _pa[p], _wb[p], _pT[p] * _wTk[p], _ws0[p], _pdl[p],
+				_gap_floor)   # WP6.9: its IDM toward traffic
+		else:
+			a_c_new = Idm.accel(vi, v0, gl, vi - _kv[lead], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor)
+		if a_c_new < -(bsafe if lead != _P else _pbsafe[p]):
 			_q_player = lead == _P
 			return -INF
 	else:
@@ -1863,7 +1881,8 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool 
 	var a_n := 0.0
 	if foll >= 0:
 		if lead >= 0:
-			a_n = _follower_accel(foll, _ks[lead] - _ks[foll] - _khl[lead] - _khl[foll], _kv[foll] - _kv[lead])
+			a_n = _follower_accel(foll, _ks[lead] - _ks[foll] - _khl[lead] - _khl[foll], _kv[foll] - _kv[lead],
+				lead == _P)
 		else:
 			a_n = _follower_accel(foll, INF, 0.0)
 	# Old follower (physical path behind i).
@@ -1885,7 +1904,7 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool 
 		a_o = _follower_accel(of, si - _ks[of] - _khl[i] - _khl[of], _kv[of] - vi)
 		var ol := _lead[i]
 		if ol >= 0 and ol != of:
-			a_o_new = _follower_accel(of, _ks[ol] - _ks[of] - _khl[ol] - _khl[of], _kv[of] - _kv[ol])
+			a_o_new = _follower_accel(of, _ks[ol] - _ks[of] - _khl[ol] - _khl[of], _kv[of] - _kv[ol], ol == _P)
 		else:
 			a_o_new = _follower_accel(of, INF, 0.0)
 	var inc := Mobil.incentive(a_c_new, _a_raw[i], a_n_new, a_n, a_o_new, a_o, _ppol[p])
@@ -1902,11 +1921,15 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool 
 
 
 ## IDM acceleration of follower f (slot or the player) at this gap / closing speed.
-## The player is judged as holding its speed (interaction term only).
-func _follower_accel(f: int, gap: float, dv: float) -> float:
+## The player is judged as holding its speed (interaction term only). `lead_is_player`:
+## the leader is the player (a weaving follower then uses its ordinary IDM, WP6.9).
+func _follower_accel(f: int, gap: float, dv: float, lead_is_player: bool = false) -> float:
 	if f == _P:
 		return Idm.interaction_accel(_kv[_P], gap, dv, _pl_a, _pl_b, _pl_T, _pl_s0, _gap_floor)
 	var p := state.profile_id[f]
+	if _pweave[p] == 1 and not lead_is_player:
+		return Idm.accel(_kv[f], state.v0[f], gap, dv, _pa[p], _wb[p], _pT[p] * _wTk[p], _ws0[p], _pdl[p],
+			_gap_floor)   # WP6.9: a weaving profile behind traffic
 	return Idm.accel(_kv[f], state.v0[f], gap, dv, _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor)
 
 
@@ -2059,3 +2082,189 @@ func _cache_tuning() -> void:
 	_drop_floor = Units.kmh_to_mps(t.lane_drop_merge_floor_kmh)
 	_drop_floor_until = t.lane_drop_merge_floor_until_m
 	_drop_narrow_max = t.lane_drop_narrow_max_m
+
+
+# ---------------------------------------------------------------- Racers weave harder (plan D17, WP6.9)
+# Profiles with any DriverProfile "Weaving" field set (the racer) weave through traffic:
+#   - toward a TRAFFIC leader they follow with their own T / s0 / b (_step_accel, and
+#     wherever MOBIL predicts their IDM: _follower_accel);
+#   - MOBIL's b_safe toward a TRAFFIC new follower (and for their own braking behind a
+#     traffic new leader) is their own, never above the 6 m/s^2 clamp; the data keeps it
+#     well below (the follower's braking can still grow a little after the cut-in:
+#     RacerPassSurvey measures the hardest raw IDM braking a cut-in causes), so the car
+#     they cut in front of never needs the clamp;
+#   - lookahead lane choice: MOBIL's incentive gains lookahead_gain_per_s x (target
+#     lane's pace - own lane's pace) within +-lookahead_incentive_max_mps2, a lane's pace
+#     being the mean speed it could make there over lookahead_lane_choice_m (_weave_pace):
+#     a racer boxed in behind slower traffic heads for the lane that is moving;
+#   - their own cooldown, and at most lane_change_cap_count discretionary lane changes
+#     started in any lane_change_cap_window_s (readability: no zig-zag).
+# Toward the PLAYER nothing changes: behind the player the ordinary T / s0 / b (rear-end
+# prevention), the player as new follower keeps player_b_safe_mps2 (min with theirs), the
+# player as new leader the ordinary b_safe, no-ambush, the telegraphing (the profile's
+# blinker, >= signal_time_floor_s). Allocation-free after _init.
+
+## Longest lane-change cap a profile may ask for (per-slot ring size).
+const WEAVE_CAP_MAX := 8
+
+var _pweave := PackedByteArray()      # per profile: weaves (any weaving field set)
+var _wTk := PackedFloat64Array()      # T toward traffic / T
+var _ws0 := PackedFloat64Array()      # s0 toward traffic
+var _wb := PackedFloat64Array()       # b toward traffic
+var _wbsafe := PackedFloat64Array()   # b_safe toward traffic followers (<= the clamp)
+var _wlook := PackedFloat64Array()    # lookahead distance (0 = off)
+var _wgain := PackedFloat64Array()
+var _wmax := PackedFloat64Array()
+var _wcool := PackedFloat64Array()    # MOBIL cooldown after a lane change
+var _wcap := PackedInt32Array()       # lane changes per window (0 = no cap)
+var _wwin := PackedFloat64Array()
+var _wclock := 0.0                    # sim time (s)
+var _wvid := PackedInt32Array()       # per slot: the vehicle the ring below belongs to
+var _wn := PackedInt32Array()         # per slot: lane changes noted
+var _wt := PackedFloat64Array()       # per slot x WEAVE_CAP_MAX: their start times (ring)
+
+
+func _init_weave(reg: TrafficRegistry) -> void:
+	var n := reg.profile_count()
+	_pweave.resize(n)
+	_wTk.resize(n)
+	_ws0.resize(n)
+	_wb.resize(n)
+	_wbsafe.resize(n)
+	_wlook.resize(n)
+	_wgain.resize(n)
+	_wmax.resize(n)
+	_wcool.resize(n)
+	_wcap.resize(n)
+	_wwin.resize(n)
+	for p in n:
+		var d := reg.profiles[p]
+		var hw := d.idm_headway_vs_traffic_s
+		_wTk[p] = hw / d.idm_headway_s if hw >= 0.0 and d.idm_headway_s > 0.0 else 1.0
+		_ws0[p] = d.idm_s0_vs_traffic_m if d.idm_s0_vs_traffic_m >= 0.0 else _ps0[p]
+		_wb[p] = d.idm_b_comfort_vs_traffic_mps2 if d.idm_b_comfort_vs_traffic_mps2 > 0.0 else _pb[p]
+		var bs := d.mobil_b_safe_vs_traffic_mps2 if d.mobil_b_safe_vs_traffic_mps2 > 0.0 else _pbsafe[p]
+		_wbsafe[p] = minf(bs, _max_decel)
+		_wlook[p] = maxf(d.lookahead_lane_choice_m, 0.0)
+		_wgain[p] = d.lookahead_gain_per_s
+		_wmax[p] = d.lookahead_incentive_max_mps2
+		_wcool[p] = d.lane_change_cooldown_s if d.lane_change_cooldown_s >= 0.0 else _cooldown
+		_wcap[p] = clampi(d.lane_change_cap_count, 0, WEAVE_CAP_MAX)
+		_wwin[p] = d.lane_change_cap_window_s
+		var on := hw >= 0.0 or d.idm_s0_vs_traffic_m >= 0.0 or d.idm_b_comfort_vs_traffic_mps2 > 0.0 \
+			or d.mobil_b_safe_vs_traffic_mps2 > 0.0 or _wlook[p] > 0.0 or d.lane_change_cooldown_s >= 0.0 \
+			or _wcap[p] > 0
+		_pweave[p] = 1 if on else 0
+	_wvid.resize(_cap)
+	_wvid.fill(-1)
+	_wn.resize(_cap)
+	_wt.resize(_cap * WEAVE_CAP_MAX)
+
+
+## True when profile p weaves (any DriverProfile "Weaving" field set).
+func weaves(p: int) -> bool:
+	return _pweave[p] == 1
+
+
+## b_safe a weaving profile p uses toward a traffic new follower (tests).
+func weave_b_safe(p: int) -> float:
+	return _wbsafe[p]
+
+
+## The lookahead pace of lane `lane` for vehicle `slot` (m/s; _weave_pace with its
+## profile's lookahead; its desired speed when the profile has none). Sandbox, tests.
+func weave_lane_pace(slot: int, lane: int) -> float:
+	var look := _wlook[state.profile_id[slot]]
+	if look <= 0.0:
+		return state.v0[slot]
+	return _weave_pace(slot, _lane_d(lane), look)
+
+
+## IDM of a weaving profile p behind a traffic car (its traffic T, s0 and b; the leg
+## scale applies). Sandbox readout (MobilProbe).
+func weave_idm_accel(p: int, v: float, v0: float, gap: float, dv: float) -> float:
+	return Idm.accel(v, v0, gap, dv, _pa[p], _wb[p], _pT[p] * _wTk[p], _ws0[p], _pdl[p], _gap_floor)
+
+
+## The lookahead term MOBIL adds for a discretionary move of `slot` into `lane`
+## (_consider_lane_change). Sandbox readout (MobilProbe).
+func weave_bonus(slot: int, lane: int) -> float:
+	if _pweave[state.profile_id[slot]] == 0:
+		return 0.0
+	return _weave_bonus(slot, lane, state.lane[slot])
+
+
+## MOBIL cooldown of vehicle i after a lane change (its profile's when it weaves).
+func _cooldown_of(i: int) -> float:
+	var p := state.profile_id[i]
+	return _cooldown if _pweave[p] == 0 else _wcool[p]
+
+
+## The lookahead term of a move of vehicle i from lane `cur` into lane t (0 when off, or
+## t is not a lane; the move itself is judged by _eval_target, which it never overrides:
+## -INF stays -INF).
+func _weave_bonus(i: int, t: int, cur: int) -> float:
+	var p := state.profile_id[i]
+	var look := _wlook[p]
+	if look <= 0.0 or t < 0 or t >= road.lane_count(_ks[i]):
+		return 0.0
+	var diff := _weave_pace(i, _lane_d(t), look) - _weave_pace(i, _lane_d(cur), look)
+	return clampf(_wgain[p] * diff, -_wmax[p], _wmax[p])
+
+
+## The pace of the lane centred at `c` ahead of vehicle i (m/s): the mean speed it can
+## make there over the lookahead, H = look / its desired speed. Every vehicle j (the
+## player included) whose path overlaps i's body there within `look` ahead bounds it:
+## within H, i gets at most to its own following gap behind j, (gap_j + v_j H - (s0 +
+## v_j T)) / H with its IDM toward traffic; its desired speed when nothing does. A slow
+## car close ahead costs more than one far ahead, and a long gap beside a slow leader
+## (room to get past it) is worth moving into. Allocation-free.
+func _weave_pace(i: int, c: float, look: float) -> float:
+	var p := state.profile_id[i]
+	var hw := state.width[i] * 0.5
+	var lo := c - hw - _lat_m
+	var hi := c + hw + _lat_m
+	var si := _ks[i]
+	var v0 := state.v0[i]
+	var h := look / v0
+	var t_gap := _pT[p] * _wTk[p]
+	var pace := v0
+	var kk := _rank[i] + 1
+	while kk < _n:
+		var j := _ord[kk]
+		kk += 1
+		if _ks[j] - si > look:
+			break
+		if _klo[j] < hi and _khi[j] > lo:
+			var vj := _kv[j]
+			var gap := _ks[j] - si - _khl[j] - _khl[i]
+			pace = minf(pace, maxf(gap + vj * h - _ws0[p] - vj * t_gap, 0.0) / h)
+	return pace
+
+
+## Vehicle i may start another discretionary lane change (its cap allows it).
+func _weave_cap_ok(i: int) -> bool:
+	var p := state.profile_id[i]
+	var cap := _wcap[p]
+	if cap <= 0:
+		return true
+	if _wvid[i] != state.vehicle_id[i]:
+		_wvid[i] = state.vehicle_id[i]
+		_wn[i] = 0
+	var n := _wn[i]
+	if n < cap:
+		return true
+	# The cap-th most recent change must be at least the window ago.
+	return _wclock - _wt[i * WEAVE_CAP_MAX + (n - cap) % WEAVE_CAP_MAX] >= _wwin[p]
+
+
+## Notes that vehicle i may be starting a discretionary lane change now (called when
+## MOBIL accepts a side; a move later refused still counts, conservatively).
+func _weave_note_change(i: int) -> void:
+	if _wcap[state.profile_id[i]] <= 0:
+		return
+	if _wvid[i] != state.vehicle_id[i]:
+		_wvid[i] = state.vehicle_id[i]
+		_wn[i] = 0
+	_wt[i * WEAVE_CAP_MAX + _wn[i] % WEAVE_CAP_MAX] = _wclock
+	_wn[i] += 1

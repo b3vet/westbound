@@ -18,7 +18,10 @@ extends RefCounted
 ##   - a_c is the car's IDM acceleration at its last model update (sim.idm_accel),
 ##     and the old leader is sim.leader_of(slot);
 ##   - the player is judged with player_idm_* holding its speed (interaction term),
-##     and tightens b_safe to player_b_safe_mps2.
+##     and tightens b_safe to player_b_safe_mps2;
+##   - a weaving profile (the racer, WP6.9) uses its IDM toward traffic behind a traffic
+##     car (sim.weave_idm_accel), its b_safe toward traffic (sim.weave_b_safe), and its
+##     lookahead term (sim.weave_bonus, in `lookahead`, added to the incentive).
 ## Differences from the sim's own evaluation, all small: the sim evaluates inside its
 ## tick (vehicles later in its lateral pass have not moved yet), and a motorbike's
 ## split-move target is inferred from its blinker and start position. The verdict
@@ -69,6 +72,7 @@ class Result:
 	var bias: float = 0.0                 ## keep-right bias + lane discipline
 	var incentive: float = NAN
 	var threshold: float = NAN
+	var lookahead: float = 0.0            ## WP6.9: a weaving profile's lookahead term (in incentive)
 
 	## Incentive minus threshold (the sim's return value when the move is safe).
 	func margin() -> float:
@@ -184,21 +188,25 @@ func evaluate_into(slot: int, target_lane: int, out: Result) -> void:
 	out.lead = lead
 	out.follower = foll
 	var v0 := st.v0[slot]
-	var bsafe := registry.b_safe[p]
+	var weave := sim.weaves(p)
+	var bsafe := sim.weave_b_safe(p) if weave else registry.b_safe[p]
+	var pi := sim.player_index()
 	# New leader: overlap, then the car's own braking behind it.
 	var gl := INF
 	var dvl := 0.0
 	if lead >= 0:
 		gl = _s(lead) - si - _hl(lead) - hl
 		dvl = vi - _v(lead)
-		out.a_c_new = Idm.accel(vi, v0, gl, dvl, registry.a_max[p], registry.b_comfort[p], sim.headway(p),
-			registry.s0[p], registry.delta[p], gap_floor)
+		if weave and lead != pi:
+			out.a_c_new = sim.weave_idm_accel(p, vi, v0, gl, dvl)
+		else:
+			out.a_c_new = Idm.accel(vi, v0, gl, dvl, registry.a_max[p], registry.b_comfort[p], sim.headway(p),
+				registry.s0[p], registry.delta[p], gap_floor)
 	else:
 		out.a_c_new = Idm.free_accel(vi, v0, registry.a_max[p], registry.delta[p])
-	var pi := sim.player_index()
 	if lead >= 0 and gl <= 0.0:
 		_refuse(out, Refusal.LEADER_OVERLAP, lead == pi)
-	elif lead >= 0 and out.a_c_new < -bsafe:
+	elif lead >= 0 and out.a_c_new < -(bsafe if lead != pi else registry.b_safe[p]):
 		_refuse(out, Refusal.OWN_BRAKE, lead == pi)
 	# New follower: overlap, then its braking with the car ahead.
 	if foll >= 0:
@@ -217,7 +225,8 @@ func evaluate_into(slot: int, target_lane: int, out: Result) -> void:
 	# Incentive terms (also shown for refused moves).
 	if foll >= 0:
 		if lead >= 0:
-			out.a_n = _follower_accel(foll, _s(lead) - _s(foll) - _hl(lead) - _hl(foll), _v(foll) - _v(lead))
+			out.a_n = _follower_accel(foll, _s(lead) - _s(foll) - _hl(lead) - _hl(foll), _v(foll) - _v(lead),
+				lead == pi)
 		else:
 			out.a_n = _follower_accel(foll, INF, 0.0)
 	var of := _old_follower(slot, si, lat_m)
@@ -226,11 +235,12 @@ func evaluate_into(slot: int, target_lane: int, out: Result) -> void:
 		out.a_o = _follower_accel(of, si - _s(of) - hl - _hl(of), _v(of) - vi)
 		var ol := sim.leader_of(slot)
 		if ol >= 0 and ol != of:
-			out.a_o_new = _follower_accel(of, _s(ol) - _s(of) - _hl(ol) - _hl(of), _v(of) - _v(ol))
+			out.a_o_new = _follower_accel(of, _s(ol) - _s(of) - _hl(ol) - _hl(of), _v(of) - _v(ol), ol == pi)
 		else:
 			out.a_o_new = _follower_accel(of, INF, 0.0)
+	out.lookahead = sim.weave_bonus(slot, target_lane)
 	out.incentive = Mobil.incentive(out.a_c_new, out.a_c, out.a_n_new, out.a_n, out.a_o_new, out.a_o,
-		registry.politeness[p])
+		registry.politeness[p]) + out.lookahead
 	var bias := registry.a_bias[p]
 	var disc := tuning.lane_discipline_bias_mps2
 	if out.to_right:
@@ -339,12 +349,16 @@ func _claim_hi(j: int) -> float:
 	return maxf(st.d[j] + st.width[j] * 0.5, move_target_d(j) + st.width[j] * 0.5)
 
 
-## IDM acceleration of follower f (slot or the player) at this gap / closing speed.
-func _follower_accel(f: int, gap: float, dv: float) -> float:
+## IDM acceleration of follower f (slot or the player) at this gap / closing speed
+## (`lead_is_player`: its leader is the player; a weaving follower then uses its
+## ordinary IDM, as TrafficSim._follower_accel).
+func _follower_accel(f: int, gap: float, dv: float, lead_is_player: bool = false) -> float:
 	var gap_floor := tuning.idm_gap_floor_m
 	if f == sim.player_index():
 		return Idm.interaction_accel(_pv, gap, dv, tuning.player_idm_a_max_mps2, tuning.player_idm_b_comfort_mps2,
 			tuning.player_idm_headway_s, tuning.player_idm_s0_m, gap_floor)
 	var p := sim.state.profile_id[f]
+	if sim.weaves(p) and not lead_is_player:
+		return sim.weave_idm_accel(p, sim.state.v[f], sim.state.v0[f], gap, dv)
 	return Idm.accel(sim.state.v[f], sim.state.v0[f], gap, dv, registry.a_max[p], registry.b_comfort[p],
 		sim.headway(p), registry.s0[p], registry.delta[p], gap_floor)

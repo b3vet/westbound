@@ -36,7 +36,7 @@ func _gate(res: Dictionary, label: String) -> void:
 
 func test_tiny_soak_leg8_dense() -> void:
 	# Leg-8 density, 2 x 600 m, with every check (fast tier).
-	var r := TrafficSoakRun.new(0, SEED, 2, 600.0, null, 8)
+	var r := TrafficSoakRun.new(0, SEED, 2, 600.0, null, 8, null, false, TrafficSoakRun.BOT_PASSABILITY)
 	r.run_to_end()
 	_gate(r.result(), "tiny leg 8")
 
@@ -44,7 +44,7 @@ func test_tiny_soak_leg8_dense() -> void:
 func _trace_of(runs: PackedInt32Array, base_seed: int) -> PackedInt64Array:
 	var out := PackedInt64Array()
 	for k in runs:
-		var r := TrafficSoakRun.new(k, base_seed, 2, 300.0)
+		var r := TrafficSoakRun.new(k, base_seed, 2, 200.0, null, 0, null, false, TrafficSoakRun.BOT_PASSABILITY)
 		r.check_windows = false
 		r.run_to_end()
 		gt(r.time, 5.0, "the trace covers several seconds")
@@ -70,7 +70,7 @@ func soak_short_soak_every_lane_count() -> void:
 	# One run per soak lane count (3, 3, 2, 4), legs 1-8 of 1 km: every rule, per tick.
 	var t := Tuning.load_default()
 	for k in t.traffic.soak_lane_counts.size():
-		var r := TrafficSoakRun.new(k, SEED, -1, 1000.0)
+		var r := TrafficSoakRun.new(k, SEED, -1, 1000.0, null, 0, null, false, TrafficSoakRun.BOT_PASSABILITY)
 		r.run_to_end()
 		_gate(r.result(), "run %d" % k)
 
@@ -82,9 +82,13 @@ func soak_canyon_lane_drops() -> void:
 	if not check(canyon != null, "data/biomes/canyon.tres"):
 		return
 	for k in 2:
-		var r := TrafficSoakRun.new(k, SEED, -1, -1.0, null, 0, canyon)
+		var r := TrafficSoakRun.new(k, SEED, -1, -1.0, null, 0, canyon, false, TrafficSoakRun.BOT_PASSABILITY)
 		r.run_to_end()
 		var res := r.result()
-		print("      canyon run %d: %d merges, %d set pieces" % [k, res["merges"], res["set_pieces"]])
+		print(("      canyon run %d: %d merges, %d set pieces, player off the lanes %d ticks, bot no-path %d/%d, "
+			+ "batches %d failed %d re-rolls %d removed %d unresolved %d") % [
+			k, res["merges"], res["set_pieces"], res["player_offroad_ticks"], res["bot_no_path_checks"],
+			res["bot_checks"], res["pass_batches"], res["pass_failed"], res["pass_rerolls"], res["pass_removed"],
+			res["pass_unresolved"]])
 		_gate(res, "canyon run %d" % k)
 		gt(int(res["merges"]), 0, "traffic merged for the tunnels")

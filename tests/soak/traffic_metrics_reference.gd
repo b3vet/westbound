@@ -38,7 +38,7 @@ static func run(which: String) -> Dictionary:
 	var km := 0.0
 	var sim_s := 0.0
 	for k in n:
-		var r := TrafficSoakRun.new(k, SEED, -1, leg_m, t)
+		var r := TrafficSoakRun.new(k, SEED, -1, leg_m, t, 0, null, false, TrafficSoakRun.BOT_WEAVE)
 		r.check_windows = false
 		r.run_to_end()
 		total.merge(r.metrics)

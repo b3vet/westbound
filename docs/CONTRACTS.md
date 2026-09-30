@@ -178,7 +178,7 @@ Iterate with `for i in capacity: if active[i] == 0: continue`.
 | --- | --- |
 | `traffic_view`, sandbox | Everything, read-only; interpolates between ticks |
 | scoring | `s, d, v, length, width, lane, vehicle_id`, `active` |
-| passability | Works on its own `copy_from` copy and forward-simulates that |
+| passability | Copies only the vehicles that matter (in range of the player or the batch) into its own preallocated forward sim and simulates that; a full `copy_from` cost ~16 ms per check (WP6.1, docs/PASSABILITY.md) |
 | collisions | `s, d, v_lat, v, length, width` |
 
 Events use the **slot index** (`Events.traffic_horn(vehicle_id=slot, ...)` etc.).
@@ -393,6 +393,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | 2026-09-29 | §6 Flow shaper / lane guard, SetPieceSource + Controller API, set-piece events via the run buffer, TrafficSim lane-closure API (`add_lane_closure`, `remove_lane_closures`, `closure_ahead`, `sync_road_closures`), `TrafficDirector.events` (WP6.2; see docs/SET_PIECES.md) | Orchestrator merge review |
 | 2026-09-29 | §3 sun side per leg (`BiomeRoadRules.sun_side_for_leg`, `WaterDef.road_sun_side`: the sun sets over the sea at the coast), `SIGN lane_ends` rendered; §13 `SkyRig.horizon_material()`, one horizon shader with the biome extensions, `RoadBuilder.set_ground_drop` (WP6.4c) | Orchestrator merge review |
 | 2026-09-29 | §3 biome plan, any-order lane scheduling, tapered edges, TUNNEL/lane_ends features; §10 BiomeDef look/road fields (cliffs, horizon layers, heat shimmer, rock colours, bend sight clearance); SkyRig `set_fog_tint_offset` / `set_horizon_blend` / `set_heat_shimmer` (WP6.4a) | Orchestrator merge review |
+| 2026-09-30 | §5 passability copies only the relevant vehicles, not a full `copy_from` (WP6.1) | Orchestrator merge review |
 | 2026-09-29 | Cap 90; camera-independent behind-spawn view check (WP4.8, D11) | Orchestrator merge review |
 | 2026-09-29 | §14 Run, HudFeed, Hud, theme path, screens, CrashSequence (Phase 4) | Orchestrator, pre-Phase 4 |
 | 2026-09-28 | Initial contracts (WP0.2) | Orchestrator brief for WP0.2 |

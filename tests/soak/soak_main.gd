@@ -5,7 +5,9 @@ extends SceneTree
 ##
 ##   godot --headless --path . --script res://tests/soak/soak_main.gd -- \
 ##       --shard=0 --shards=4 --km=10000 [--seed=N] [--legs=8] [--leg-km=3.5] \
-##       [--out=tests/out/soak/shard_0.json] [--no-windows] [--all-pieces] [--canyon]
+##       [--out=tests/out/soak/shard_0.json] [--no-windows] [--all-pieces] [--canyon] [--runs=I,J,...]
+##   --runs: exactly these run indices (resume an interrupted soak into another
+##   shard_N.json in the same directory, then `tools/soak.sh --merge --out=DIR`)
 ##   godot ... -- --metrics=fast|reference --out=FILE     # a metrics reference run only
 ##   godot ... -- --density [--lanes=3,4] [--legs=1,...,8] [--profile=scripted|bot|soak] [--seeds=3]
 ##       [--run-legs=2] [--out=FILE]                   # the D11 density survey (DensitySurvey)
@@ -14,6 +16,8 @@ extends SceneTree
 ##       [--racer=FIRST,LAST] [--aggressive=FIRST,LAST] [--jitter=PCT] [--tolerance=KMH] [--lookahead=M]
 ##       [--set=profile.field=X;...]                  # fast-traffic what-ifs (plan D15)
 ##       [--breather=PCT] [--peak=PCT]                # wave density what-ifs (plan D17)
+##   godot ... -- --passes [--lanes=3] [--legs=4,8] [--speeds=170,200,230] [--seeds=4] [--run-legs=2]
+##       [--set=profile.field=X;...] [--out=FILE]      # racers passing a fast player (RacerPassSurvey, WP6.9)
 ##
 ## Runs are numbered 0..ceil(km / run_km)-1; shard i runs every r with
 ## (r + r / N) % N == i: round robin, rotated by one every N runs, so the lane-count
@@ -59,6 +63,9 @@ func _main() -> void:
 	if args.has("density"):
 		quit(_density(args))
 		return
+	if args.has("passes"):
+		quit(_passes(args))
+		return
 	var shard := int(args.get("shard", "0"))
 	var shards := maxi(1, int(args.get("shards", "1")))
 	var t := Tuning.load_default()
@@ -75,15 +82,21 @@ func _main() -> void:
 	var last_print := t0
 	var done_km := 0.0
 	var mine := PackedInt32Array()
-	for k in n_runs:
-		if (k + floori(float(k) / float(shards))) % shards == shard:
-			mine.append(k)
+	if args.has("runs"):
+		# Explicit run indices (resuming an interrupted soak into extra shard files).
+		for x in String(args["runs"]).split(","):
+			mine.append(int(x))
+	else:
+		for k in n_runs:
+			if (k + floori(float(k) / float(shards))) % shards == shard:
+				mine.append(k)
 	print("soak shard %d/%d: runs %d of %d (%.1f km each), seed %d" % [shard, shards, mine.size(), n_runs, run_km,
 		base_seed])
 	# --canyon: every run on the canyon's road (curves, crests, tunnels and their lane drops).
 	var biome: BiomeDef = BiomePlan.load_biome(&"canyon") if args.has("canyon") else null
 	for r in mine:
-		var run := TrafficSoakRun.new(r, base_seed, legs, leg_m, null, 0, biome, args.has("all-pieces"))
+		var run := TrafficSoakRun.new(r, base_seed, legs, leg_m, null, 0, biome, args.has("all-pieces"),
+			TrafficSoakRun.BOT_PASSABILITY)
 		run.check_windows = windows
 		while not run.finished:
 			run.advance(60.0)
@@ -208,19 +221,7 @@ func _density(args: Dictionary) -> int:
 		t.traffic.idm_lookahead_m = float(args["lookahead"])
 	if args.has("tolerance"):
 		t.traffic.spawn_lane_speed_tolerance_kmh = float(args["tolerance"])
-	var held: Array[Resource] = []   # keeps the edited profiles cached for the registry
-	if args.has("set"):
-		for item in String(args["set"]).split(";", false):
-			var kv := item.split("=")
-			var path := kv[0].split(".")
-			var prof := load(TrafficRegistry.PROFILE_DIR + path[0] + ".tres") as DriverProfile
-			var old: Variant = prof.get(path[1])
-			if typeof(old) == TYPE_INT:
-				prof.set(path[1], int(kv[1]))
-			else:
-				prof.set(path[1], float(kv[1]))
-			held.append(prof)
-			print("set %s.%s = %s (was %s)" % [path[0], path[1], kv[1], str(old)])
+	var held := _set_profiles(args)   # keeps the edited profiles cached for the registry
 	var rows: Array[Dictionary] = []
 	var t0 := Time.get_ticks_msec()
 	for lanes in lane_counts:
@@ -229,6 +230,53 @@ func _density(args: Dictionary) -> int:
 			rows.append(row)
 			print(DensitySurvey.format_row(row))
 	print("density survey: %d cells, %.0f s" % [rows.size(), (Time.get_ticks_msec() - t0) / 1000.0])
+	held.clear()
+	var out := String(args.get("out", ""))
+	if not out.is_empty():
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out).get_base_dir())
+		var f := FileAccess.open(out, FileAccess.WRITE)
+		if f != null:
+			f.store_string(JSON.stringify(rows, "  "))
+			f.close()
+	return 0 if _errors.messages.is_empty() else 1
+
+
+## `--set=profile.field=X;...`: edits the cached DriverProfile resources (the registry
+## loads the same instances). Returns them: the caller keeps them alive while it runs.
+func _set_profiles(args: Dictionary) -> Array[Resource]:
+	var held: Array[Resource] = []
+	if not args.has("set"):
+		return held
+	for item in String(args["set"]).split(";", false):
+		var kv := item.split("=")
+		var path := kv[0].split(".")
+		var prof := load(TrafficRegistry.PROFILE_DIR + path[0] + ".tres") as DriverProfile
+		var old: Variant = prof.get(path[1])
+		if typeof(old) == TYPE_INT:
+			prof.set(path[1], int(kv[1]))
+		else:
+			prof.set(path[1], float(kv[1]))
+		held.append(prof)
+		print("set %s.%s = %s (was %s)" % [path[0], path[1], kv[1], str(old)])
+	return held
+
+
+## Racers passing a fast player through full traffic (RacerPassSurvey, WP6.9): one line
+## per (lanes, leg, speed) cell, JSON to `out`.
+func _passes(args: Dictionary) -> int:
+	var held := _set_profiles(args)
+	var seeds := int(args.get("seeds", "4"))
+	var run_legs := int(args.get("run-legs", "2"))
+	var rows: Array[Dictionary] = []
+	var t0 := Time.get_ticks_msec()
+	for lanes_txt in String(args.get("lanes", "3")).split(","):
+		for leg_txt in String(args.get("legs", "4,8")).split(","):
+			for kmh_txt in String(args.get("speeds", "170,200,230")).split(","):
+				var row := RacerPassSurvey.cell(int(lanes_txt), int(leg_txt), float(kmh_txt), seeds, run_legs)
+				rows.append(row)
+				print(RacerPassSurvey.format_row(row))
+	print("racer pass survey: %d cells, %.0f s" % [rows.size(), (Time.get_ticks_msec() - t0) / 1000.0])
+	held.clear()
 	var out := String(args.get("out", ""))
 	if not out.is_empty():
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out).get_base_dir())
