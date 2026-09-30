@@ -146,3 +146,16 @@ Two export-template facts shaped it: **templates ignore `--script` and `--main-p
 - **The server's claim checks** (`crates/server/src/rooms/car_history.rs`: a traffic car's heading by `f64::atan2`) are within tolerance of the client's (±0.35 m), not bit-exact; they could use `sim::detmath` and the velocity-direction form like the client (server crate, not this WP).
 - **Phones are not measured.** iOS and Android are expected to match (no FMA contraction in the templates, DetMath everywhere in the simulation), but no device run was compared. The `DT detmath` line of a device's determinism check (`?determinism=daily` also works in a native build with `--determinism=daily`) answers it.
 - The N8.1 knife edges (the director's density controller, `keeps_live_gaps` on its boundary) are unchanged: exact re-simulation makes them fall the same way; the kinematic fallback still diverges on them.
+
+## Tests
+
+| File | Covers |
+| --- | --- |
+| `tests/unit/test_det_math.gd` | Accuracy against libm per function (ulp bounds above); the shared vectors bit for bit; edge cases (zeros, infinities, NaN, subnormals, overflow and underflow of `exp`, `log` at the ends of the range, `pow` specials); `sin_cos` = (`sin`, `cos`); cost per call (WBBench) |
+| `westbound-server/crates/sim/tests/detmath.rs`, `src/detmath.rs` tests | The vectors bit for bit; `sin_cos`; the power-of-two table; closeness to `std` |
+| `tests/run/test_sim_horizon.gd` | The horizon covers every tier; the Daily run at the low and the high tier's view distance is the same run (trace and planner horizon) |
+| `tests/platform/test_governor_run.gd`, `test_quality_governor.gd` | The view-distance rung live mid-run without changing the run; the WP9.1 hold still works when switched on; live by default |
+| `tests/net/test_replay_recorder.gd` | The input stream (round trip, optional trailing section, samples' inputs rebuilt, quantization, size budget) |
+| `tests/verifier/test_verifier.gd` | Re-simulation (honest accepted exactly, tampering → `path_mismatch` / `malformed`, Daily date), kinematic fallback; soak: 6 long honest runs, 100 % |
+| `tests/meta/test_daily_run.gd` | The determinism check's lines (with `DT detmath`) |
+| `tools/lint --self-test` | WB105 fixtures (`bad_sim.gd`, `src/net/net_sim.gd`, `src/vehicle/vehicle_params.gd`) |

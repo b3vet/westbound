@@ -294,9 +294,15 @@ func min_ahead_m() -> float:
 	return fog_end_m + traffic_tuning.spawn_fog_margin_m
 
 
-## How far ahead batches are kept planned (~750 m, never inside the fog end).
+## How far ahead batches are kept planned (~750 m, never inside the fog end). When the fog
+## end (the simulation horizon, N8.2: 800 m on every tier) pushes past spawn_ahead_m, the
+## planning edge stays one fog margin beyond the first allowed spawn point, so the next
+## batch still starts where the last one ended (no holes of a tick's travel between them).
 func ahead_distance() -> float:
-	return maxf(traffic_tuning.spawn_ahead_m, min_ahead_m())
+	var lo := min_ahead_m()
+	if lo >= traffic_tuning.spawn_ahead_m:
+		return lo + traffic_tuning.spawn_fog_margin_m
+	return traffic_tuning.spawn_ahead_m
 
 
 ## The leg's target density around the player (vehicles per km per lane): the leg
