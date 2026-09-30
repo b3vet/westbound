@@ -35,6 +35,8 @@ var online_hub: OnlineHubScreen
 var screens: Array[RunScreen] = []
 ## The runs client for the leaderboards (null: NetRunsClient.ensure()).
 var runs: NetRunsClient
+## WP8.1: the first-run chooser (built on first use: the first PLAY on a fresh save).
+var first_run: FirstRunScreen
 
 var _theme: Theme
 var _pinned: bool = false
@@ -42,6 +44,7 @@ var _pinned_full: Rect2 = Rect2()
 var _pinned_safe: Rect2 = Rect2()
 var _sky: SkyRig
 var _accent_rgba: int = 0
+var _pending_mode: StringName = &""
 
 
 func _init() -> void:
@@ -99,7 +102,7 @@ func open_hub() -> void:
 
 
 func is_open() -> bool:
-	return is_built() and (title.visible or online_hub.visible)
+	return is_built() and (title.visible or online_hub.visible or (first_run != null and first_run.visible))
 
 
 ## Every screen's transitions to their end (tests, snaps).
@@ -156,7 +159,37 @@ func _build() -> void:
 
 func _on_play(mode: StringName) -> void:
 	_save_settings()
+	if Save.chooser_pending():
+		open_first_run(mode)
+		return
 	start.emit(mode)
+
+
+## WP8.1: the first-run chooser before the first run of a fresh save (Save.chooser_pending);
+## DRIVE or SKIP records it and starts `mode`, Esc comes back to the title.
+func open_first_run(mode: StringName) -> void:
+	_build()
+	_pending_mode = mode
+	if first_run == null:
+		first_run = FirstRunScreen.new()
+		add_child(first_run)
+		screens.append(first_run)
+		first_run.done.connect(_on_first_run_done)
+		first_run.back.connect(func() -> void:
+			first_run.close(false)
+			open_title())
+		first_run.setup(style, tuning)
+		_relayout()
+	first_run.hub = hub
+	title.close(false)
+	online_hub.close(false)
+	first_run.open()
+
+
+func _on_first_run_done(_skipped: bool) -> void:
+	Save.mark_chooser_done()
+	first_run.close(false)
+	start.emit(_pending_mode)
 
 
 ## FRIENDS / CREW from the hub: the title's account view on that tab (DONE comes back).

@@ -56,7 +56,7 @@ func test_audio_page_writes_volumes_and_mute() -> void:
 	s.finish_animations()
 	var sp := p.settings
 	eq(sp.page, SettingsPanel.PAGE_GAME, "opens on the game page")
-	eq(sp.tabs.size(), 2)
+	eq(sp.tabs.size(), SettingsPanel.PAGE_CAPTIONS.size())   # WP8.1: GAME, CONTROLS, AUDIO
 	check(sp.tabs[0].selected and not sp.tabs[1].selected)
 	for k in AudioBuses.VOLUME_KEYS:
 		check(sp.row(k) != null, "row %s" % k)
@@ -69,7 +69,7 @@ func test_audio_page_writes_volumes_and_mute() -> void:
 		check(not r.intersects(p.title.get_global_rect()), "tab clear of the title")
 		check(not r.intersects(p.done_button.get_global_rect()), "tab clear of DONE")
 		check(SCREEN.encloses(r), "tab on screen")
-	_tap(sp.tabs[1])
+	_tap(sp.tabs[SettingsPanel.PAGE_AUDIO])
 	eq(sp.page, SettingsPanel.PAGE_AUDIO, "AUDIO tab")
 	check(not sp.row(&"haptics").buttons[0].visible, "game rows hidden")
 	var steps := AudioTuning.resolve().volume_steps
@@ -87,7 +87,7 @@ func test_audio_page_writes_volumes_and_mute() -> void:
 	for k in AudioBuses.VOLUME_KEYS:
 		var b := sp.row(k).buttons[0]
 		check(b.visible and SCREEN.encloses(b.get_global_rect()), "%s row on screen" % k)
-	_tap(sp.tabs[0])
+	_tap(sp.tabs[SettingsPanel.PAGE_GAME])
 	eq(sp.page, SettingsPanel.PAGE_GAME)
 	check(sp.row(&"haptics").buttons[0].visible, "back to the game rows")
 
