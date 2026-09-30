@@ -449,9 +449,22 @@ pub struct RoomsConfig {
     pub spawn_search_m: f64,
     pub spawn_step_m: f64,
     pub spawn_clear_m: f64,
-    /// Room traffic: `none` (no cars, until N4.2 streams them) or `sim` (the `sim`
-    /// crate's ring runs with the players in it; spawns use its gaps).
+    /// Room traffic: `sim` (the `sim` crate's ring runs with the players in it, spawns use
+    /// its gaps, and each client is streamed its area of interest) or `none` (no cars).
     pub traffic: String,
+    /// Traffic streaming (N4.2; spec: "each client receives the cars from 300 m behind to
+    /// 900 m ahead"): a car is sent when it enters this area around the player's s...
+    pub traffic_aoi_behind_m: f64,
+    pub traffic_aoi_ahead_m: f64,
+    /// ...and despawned once it is this much further out (not in spec: no flapping at
+    /// the edge).
+    pub traffic_aoi_hysteresis_m: f64,
+    /// Correction rates (spec: 5 Hz within 100 m, at least 1 Hz otherwise).
+    pub traffic_near_m: f64,
+    pub traffic_near_hz: u32,
+    pub traffic_far_hz: u32,
+    /// A despawned car's id is not reused for this long (MP-D6: 30 s).
+    pub traffic_car_id_hold_ms: u64,
     /// The day/night cycle and its day part (loop.tres `room_cycle_min`, `room_day_min`).
     pub cycle_len_ms: u32,
     pub day_len_ms: u32,
@@ -489,6 +502,8 @@ pub struct RoomsConfig {
 pub const ROOM_TRAFFIC_NONE: &str = "none";
 pub const ROOM_TRAFFIC_SIM: &str = "sim";
 const ROOM_TRAFFIC: &[&str] = &[ROOM_TRAFFIC_NONE, ROOM_TRAFFIC_SIM];
+/// The area of interest must stay well inside the 25 km loop's half (wrapped distances).
+const MAX_AOI_SPAN_M: f64 = 10_000.0;
 
 /// Production domain (owner, 2026-09-29).
 pub const DEFAULT_PUBLIC_ORIGIN: &str = "https://westbound.sipsakrandevu.com";
@@ -725,7 +740,14 @@ impl Default for RoomsConfig {
             spawn_search_m: 60.0,
             spawn_step_m: 5.0,
             spawn_clear_m: 15.0,
-            traffic: ROOM_TRAFFIC_NONE.into(),
+            traffic: ROOM_TRAFFIC_SIM.into(),
+            traffic_aoi_behind_m: 300.0,
+            traffic_aoi_ahead_m: 900.0,
+            traffic_aoi_hysteresis_m: 20.0,
+            traffic_near_m: 100.0,
+            traffic_near_hz: 5,
+            traffic_far_hz: 1,
+            traffic_car_id_hold_ms: 30_000,
             cycle_len_ms: 32 * 60_000,
             day_len_ms: 22 * 60_000,
             clock_epoch_unix_ms: 0,
@@ -1228,6 +1250,10 @@ impl Config {
             ("lateral_margin_m", r.lateral_margin_m),
             ("position_slack_m", r.position_slack_m),
             ("placement_radius_m", r.placement_radius_m),
+            ("traffic_aoi_behind_m", r.traffic_aoi_behind_m),
+            ("traffic_aoi_ahead_m", r.traffic_aoi_ahead_m),
+            ("traffic_aoi_hysteresis_m", r.traffic_aoi_hysteresis_m),
+            ("traffic_near_m", r.traffic_near_m),
         ] {
             if !(v.is_finite() && v >= 0.0) {
                 errs.push(format!("rooms.{name} must be a number >= 0"));
@@ -1245,6 +1271,25 @@ impl Config {
         }
         if !ROOM_TRAFFIC.contains(&r.traffic.as_str()) {
             errs.push(format!("rooms.traffic must be one of {ROOM_TRAFFIC:?}"));
+        }
+        let rate = u32::from(self.gateway.tick_rate_hz);
+        for (name, v) in [
+            ("traffic_near_hz", r.traffic_near_hz),
+            ("traffic_far_hz", r.traffic_far_hz),
+        ] {
+            // (A zero tick rate is the gateway's error.)
+            if v == 0 || (rate > 0 && v > rate) {
+                errs.push(format!(
+                    "rooms.{name} must be between 1 and gateway.tick_rate_hz"
+                ));
+            }
+        }
+        if r.traffic_aoi_behind_m + r.traffic_aoi_ahead_m + 2.0 * r.traffic_aoi_hysteresis_m
+            >= MAX_AOI_SPAN_M
+        {
+            errs.push(format!(
+                "rooms.traffic_aoi_* must span less than {MAX_AOI_SPAN_M} m (half the loop)"
+            ));
         }
     }
 

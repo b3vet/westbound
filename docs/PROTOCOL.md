@@ -318,3 +318,9 @@ Both stay under the 10 KB/s downstream budget. A typical tick is `player_states`
   - **`car_id`:** the server allocates it and never reuses one within 30 s of its despawn (MP-D6).
   - **Placement:** there is no spawn message. When the server places a player (join, respawn, rejoin), it puts that player's own id in `player_states` with `run_state = protected` and the placement tick. It repeats this every tick until the client reports a state near it. The client teleports there, applies each placement tick once, and starts 3 s of protection. States the client sent before the placement are dropped for 2 s.
   - **`pong.server_tick` outside a room** is the server-wide tick, not 0.
+- **Traffic streaming clarifications (2026-09-30, orchestrator, N4.2 + N4.3; no wire change).** The full contract is in SERVER.md → *Traffic streaming (N4.2)* and NET_TRAFFIC.md.
+  - **Frame order:** each tick frame carries `traffic_despawn`, then `traffic_spawn`, then `traffic_intent`, then `traffic_correction`.
+  - **Spawns are dated by the same frame's correction batch:** every spawned car, and every car that gets an intent, is also in that frame's `traffic_correction`, and the batch's tick dates it. Clients clear their traffic on every `room_snapshot`, and the whole area of interest follows.
+  - **Hesitant cancels** are sent in the same batch, right after their `lane_change`, dated at the signal's end tick. They are not sent again when they happen.
+  - **Wire lane** = n − 1 − sim lane, where n is the lane count at the car's `s`. Any lane ≥ n, the ramp, is 7.
+  - **A hit** sends `hazard` (4,000 ms) and `hard_brake` (1,000 ms) from the hit's tick, plus a correction every tick for 25 ticks, because there is no swerve kind. A lone 500 ms `hard_brake` is a cut-in brake tap.

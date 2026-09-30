@@ -58,6 +58,9 @@ const SMOOTH_A: f64 = 3.0;
 const SMOOTH_D: f64 = 6.0;
 /// Bound on the intent's move-start tick search (a degenerate zero tick_dt).
 const MOVE_TICKS_MAX: u32 = 1 << 20;
+/// MP: the move time drawn at the signal is rounded to whole ms (the intent's
+/// `duration_ms`), so a client's curve uses exactly the server's value.
+const MOVE_TIME_STEPS_PER_S: f64 = 1_000.0;
 
 /// What a sim event is. The first three are `TrafficSim.KIND_*` (the GDScript sim's
 /// ScoreEventBuffer); the rest are the server's.
@@ -926,6 +929,12 @@ impl TrafficSim {
     /// The d the signaled or running lateral move ends at.
     pub fn lc_target_d(&self, slot: usize) -> f64 {
         self.lc_target_d[slot]
+    }
+
+    /// MP: a signaled lane change that will be cancelled when its signal time ends (a
+    /// hesitant driver's, decided when the blinker came on).
+    pub fn will_cancel(&self, slot: usize) -> bool {
+        self.state.lc_state[slot] == LC_SIGNALING && self.will_cancel[slot] == 1
     }
 
     /// MP: signaled or moving into an off-ramp.
@@ -2649,6 +2658,7 @@ impl TrafficSim {
             } else {
                 self.rng_lc.float_range(mn, mx)
             };
+            move_dur = (move_dur * MOVE_TIME_STEPS_PER_S).round() / MOVE_TIME_STEPS_PER_S;
             self.lc_move_dur[i] = move_dur;
         }
         let sig = self.state.lc_duration[i];

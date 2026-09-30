@@ -366,3 +366,37 @@ fn social_defaults_validation_and_env() {
     assert_eq!(c.social.crew_max_members, 8);
     assert_eq!(c.rate_limits.social_burst, 5);
 }
+
+#[test]
+fn rooms_traffic_streaming_defaults_and_validation() {
+    let mut c = Config::default();
+    with_secrets(&mut c);
+    // N4.2: the sim ring streams by default (spec: 300 m behind, 900 m ahead; 5 Hz within
+    // 100 m, 1 Hz otherwise; MP-D6: ids held 30 s).
+    let r = &c.rooms;
+    assert_eq!(r.traffic, westbound_server::config::ROOM_TRAFFIC_SIM);
+    assert_eq!(
+        (r.traffic_aoi_behind_m, r.traffic_aoi_ahead_m),
+        (300.0, 900.0)
+    );
+    assert_eq!(
+        (r.traffic_near_m, r.traffic_near_hz, r.traffic_far_hz),
+        (100.0, 5, 1)
+    );
+    assert_eq!(r.traffic_car_id_hold_ms, 30_000);
+    let p = westbound_server::rooms::RoomParams::from_config(&c).stream;
+    assert_eq!(
+        (p.aoi_behind_mm, p.aoi_ahead_mm, p.near_mm),
+        (300_000, 900_000, 100_000)
+    );
+    assert_eq!((p.near_period_ticks, p.far_period_ticks), (4, 20));
+    assert_eq!(p.car_id_hold_ticks, 600);
+    c.validate().unwrap();
+
+    c.rooms.traffic_near_hz = 0;
+    c.rooms.traffic_far_hz = 21;
+    c.rooms.traffic_aoi_hysteresis_m = -1.0;
+    c.rooms.traffic_aoi_ahead_m = 12_000.0;
+    let errs = c.validate().unwrap_err().0;
+    assert_eq!(errs.len(), 4, "{errs:#?}");
+}
