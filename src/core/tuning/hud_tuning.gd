@@ -220,6 +220,15 @@ extends Resource
 @export var settings_controls_scales: PackedFloat64Array = [0.8, 1.0, 1.2]   # not in spec
 @export var settings_sensitivities: PackedFloat64Array = [0.75, 1.0, 1.35]   # not in spec
 
+@export_group("Title")
+## The title screen (WP8.5, docs/SCREENS.md → Title): the WESTBOUND logo (Chakra Petch,
+## speed-tilted), the slanted ink band behind the left-anchored menu (ink at this
+## opacity; the attract drive shows through), and the profile chip's name width cap.
+@export var font_logo_px: int = 96   # not in spec
+@export var title_band_pct: float = 58.0   # not in spec
+@export var title_band_width_px: float = 560.0   # not in spec
+@export var title_chip_max_width_px: float = 440.0   # not in spec
+
 @export_group("High beams")
 ## The high-beam button (plan D8) fades in and out over this while the headlights come
 ## on at dusk and go off at dawn (modulate only: no redraws).

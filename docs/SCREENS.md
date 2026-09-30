@@ -23,7 +23,8 @@ screens.bind(hub, feed)                       # PlayerInput (gyro) and HudFeed (
 screens.resume.connect(resume)
 screens.recalibrate.connect(hub.recalibrate_gyro)
 screens.retry.connect(retry)
-screens.quit.connect(retry)                   # no title screen until Phase 8
+screens.quit.connect(enter_menu)              # WP8.5: back to the title
+screens.results_screen.menu.connect(enter_menu)   # WP8.5: the results' MENU
 screens.skip.connect(skip)
 screens.countdown_hold.connect(hold_countdown)
 ```
@@ -72,7 +73,7 @@ screens.countdown_hold.connect(hold_countdown)
 
   Each is at least `touch_target_px` (88) tall and `menu_button_width_px` wide.
 - **Input.** The tree is paused, so every screen has `PROCESS_MODE_ALWAYS`; tweens bound to them keep running. Esc, P or Start toggles the pause through the hub. Enter or Space resumes.
-- **QUIT** starts a fresh run (`run.retry()`) until the title screen exists (Phase 8).
+- **QUIT** goes back to the title (`run.enter_menu()`, WP8.5).
 
 ### Settings
 
@@ -108,7 +109,7 @@ The whole screen takes the tap during CRASH and emits `skip`, and keys still rea
     - a first record: FIRST RECORD.
 - **Tiles.** DISTANCE (km or mi), LEGS (n, then OF 8 TO THE COAST, or COAST REACHED in gold), TOP SPEED (km/h or mph).
 - **List.** BEST CHAIN, BEST MULTIPLIER (the HUD's × format), THREADS, CLOSE PASSES, TIME AT NIGHT (m:ss), HITS, COAST REACHED.
-- **Buttons.** RETRY is primary, `primary_button_size_px`, bottom-right in thumb reach and mirrored when left-handed. GARAGE is disabled with SOON until Phase 8.
+- **Buttons.** RETRY is primary, `primary_button_size_px`, bottom-right in thumb reach and mirrored when left-handed. GARAGE is disabled with SOON until WP8.2. MENU (WP8.5) sits next to LEADERBOARDS, away from RETRY, and goes back to the title; it obeys the same tap guard.
 - **Guard.** RETRY ignores taps (and Enter) for `results_input_delay_s`, so the tap that skipped the crash never lands on it.
 - **Motion.** The screen fades in, the tiles and rows slide in staggered by `results_row_stagger_s`, and the badge pops.
 
@@ -171,7 +172,6 @@ The preview is the real run (`run.tscn`) in the matching state, with the screen 
 ## Deviations
 
 - **Quick retry countdown.** The spec wants a 3-2-1 countdown (with gyro calibration) and also "Retry puts the player back on the road within 2 seconds". Retry reaches COUNTDOWN on the road in the same frame. The retry countdown runs at 0.5 s a step, so the player is driving 1.5 s after RETRY. The first run keeps 1 s steps.
-- **QUIT** starts a fresh run until the title screen exists (Phase 8).
 - **GARAGE** is disabled until Phase 8.
 
 
@@ -280,3 +280,59 @@ tools/snap.sh src/ui/screens/dev/social_preview.tscn --size=2496x1320 --text_sca
 ```
 
 **Tests:** `tests/ui/test_social_screens.gd` (tabs, rows and presence, the JOIN seam, add / accept / cancel with errors inline, remove / block confirms, the blocked list, paging, offline, report flow and rate limit, crew create / join errors, the role UI per role, crew confirms, copy, the web prompt, key muting, the pause-menu path and zero draw items when hidden) and `tests/ui/test_social_text_fit.gd` (every state with 16-W names and 24-W crew names, every note text shown whole, touch targets and safe area, both text sizes, both hands, 1280x720 and a notched 1560x720).
+
+
+## Title (WP8.5)
+
+The game boots into the title: the run's MENU state over the attract drive (docs/RUN.md → Title and attract). Spec: UI → Screens ("Title: the attract camera drives the selected car; Play, Daily Drive, Garage, Leaderboards, Settings"); Design system; Accessibility; multiplayer handoff → Client changes (Online hub).
+
+| File | Class | Role |
+| --- | --- | --- |
+| `title_screens.gd` | `TitleScreens` | CanvasLayer (layer 60, like RunScreens; they never show together): built on first use, opened by the run in MENU, emits `start(mode)` |
+| `title_screen.gd` | `TitleScreen` | the title: logo, menu, profile chip, settings / account view, leaderboards |
+| `online_hub_screen.gd` | `OnlineHubScreen` | the online hub stub |
+| `title_profile_chip.gd` | `TitleProfileChip` | `name#tag` and the online status (a ScreenButton) |
+| `title_band.gd` | `TitleBand` | the slanted ink band behind the left-anchored menus (one draw call) |
+
+### Layout
+
+- **Left-anchored, up from the bottom-left thumb:** a row of LEADERBOARDS, SETTINGS and GARAGE (disabled, SOON until WP8.2); above it PLAY (primary, `primary_button_size_px` tall, `menu_button_width_px` wide: Journey), DAILY DRIVE (today's UTC date under the label: "WED SEP 30") and ONLINE ("LOOP PRACTICE · ROOMS SOON"). Every button is at least `touch_target_px` tall.
+- **Logo:** WESTBOUND in Chakra Petch (the display face) at `font_logo_px`, outlined and speed-tilted (speed_tilt.gdshader), CHASE THE SUN under it in the accent.
+- **Band:** ink at `title_band_pct` from the left edge to `title_band_width_px`, its right edge leaning with the speed tilt and lined with the accent. The attract drive shows through it; the car sits right of centre (the camera's frame yaw).
+- **Profile chip (top-right):** the session's `name#tag` (PLAYER before a sign-in) and its status word (ONLINE, CONNECTING, OFFLINE, ...; ONLINE OFF without a session) after a status diamond (accent online, gold connecting, hot suspended / refused, muted otherwise). It follows `status_changed` / `profile_changed`. It never reaches the logo: the name is shortened with "..." to the room right of it (and `title_chip_max_width_px`). A tap opens ACCOUNT (or the settings without a session).
+- **SETTINGS:** the pause menu's settings view: SETTINGS (at `font_title_px`) top-left, DONE and ACCOUNT top-right, the SettingsPanel (GAME / AUDIO pages) or the ProfilePanel (ACCOUNT / FRIENDS / CREW) under them, over the dim. Settings are saved when DONE closes the view or a run starts.
+- **LEADERBOARDS:** the existing LeaderboardsScreen over the title (BACK / Esc comes back).
+- **Keys:** Enter plays; Esc closes the settings view.
+- **Text size:** 100% / 125% (`text_scale`), restyled live; touch targets do not scale. Not mirrored for left-handed play (the title has no thumb-side control column; the band and logo anchor left).
+
+### Online hub
+
+ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS OFF IN THIS BUILD · LOOP PRACTICE STILL WORKS") top-left, BACK top-right (Esc too). A ROOMS panel (COMING SOON in gold): QUICK JOIN, ROOM BROWSER, PRIVATE ROOM, JOIN BY CODE, disabled with SOON until N5. LOOP PRACTICE (primary, bottom-left, "SOLO ON THE LOOP · WORKS OFFLINE" over it) starts the run in loop mode, the same as `?mode=loop`. FRIENDS, CREW and LEADERBOARDS go up from the right thumb: FRIENDS / CREW open the title's account view on that tab and DONE comes back to the hub (disabled, ONLINE OFF, without a session); LEADERBOARDS opens on the Loop board.
+
+### Flow
+
+| From | Intent | Run |
+| --- | --- | --- |
+| Title PLAY / Enter | `start(&"journey")` | `start_mode`: the Journey run, full 1 s countdown, same frame |
+| Title DAILY DRIVE | `start(&"daily")` | the day's seed (`Rng.daily_seed` of today's UTC date) |
+| Hub LOOP PRACTICE | `start(&"loop")` | loop mode (N3.2) |
+| Pause QUIT | `quit` | `enter_menu()` |
+| Results MENU | `menu` | `enter_menu()` |
+| Results RETRY | `retry` | `retry()`: the same mode (Daily keeps the day's seed) |
+
+### Cost
+
+Nothing exists before the game first shows the title (tests and tools that never do pay nothing). Hidden = `visible = false`: `TitleScreens.visible_item_count() == 0` outside MENU, tested. Buttons are ScreenButtons: emulated mouse events, never a raw touch index.
+
+### Preview
+
+```
+tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=sky_t:0.2,0.42,0.72   # day, golden (the title's own sky), night
+tools/snap.sh src/run/run.tscn --state=menu --attract_s=24                               # later in the attract drive
+tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=title:hub,settings,play   # the hub, the settings view, PLAY -> countdown
+tools/snap.sh src/run/run.tscn --state=menu --shot=pass --attract_s=1.5
+```
+
+### Tests
+
+`tests/ui/test_title_screen.gd` (every button's intent through iOS-id taps, Enter / Esc, the left-anchored layout and touch targets, the settings and account views, the profile chip following a fake session, FRIENDS / CREW from the hub into the account tabs and back, the Loop board, the text size, nothing drawn when hidden), `tests/ui/test_title_text_fit.gd` (menu with the widest name#tag, settings GAME / AUDIO, account, hub with and without a session; both text sizes, 1280x720 and a notched 1560x720), `tests/run/test_title_flow.gd` (see docs/RUN.md).

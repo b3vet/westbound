@@ -362,10 +362,10 @@ func test_pause_buttons_work_while_the_tree_is_paused() -> void:
 	check(not tree.paused)
 	check((r.hud as CanvasLayer).visible, "HUD back")
 	r.pause()
-	var seed_before := r.current_seed
 	_tap(p.quit_button)
-	eq(r.state, Game.COUNTDOWN, "QUIT: a fresh run (no title screen yet)")
-	ne(r.current_seed, seed_before)
+	eq(r.state, Game.MENU, "QUIT: back to the title (WP8.5)")
+	eq(Game.state, Game.MENU)
+	check(r.title.is_open(), "the title shows")
 	check(not tree.paused)
 
 

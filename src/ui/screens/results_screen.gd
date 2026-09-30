@@ -18,9 +18,12 @@ extends RunScreen
 ## OFFLINE — WILL SUBMIT, UPDATE REQUIRED) and animates in when the server answers; the
 ## results never wait for it. LEADERBOARDS (on the side away from RETRY) opens the
 ## LeaderboardsScreen over this one.
+## WP8.5: MENU (beside LEADERBOARDS, away from RETRY) emits `menu`: back to the title.
+## RETRY keeps the run's mode (the run's retry()).
 
 signal retry()
 signal garage()
+signal menu()
 
 const TILT_SHADER := preload("res://src/ui/theme/speed_tilt.gdshader")
 const TEXT_HEADER := "RUN OVER"
@@ -31,6 +34,7 @@ const TEXT_FIRST := "FIRST RECORD"
 const TEXT_RETRY := "RETRY"
 const TEXT_GARAGE := "GARAGE"
 const TEXT_LEADERBOARDS := "LEADERBOARDS"
+const TEXT_MENU := "MENU"
 const TEXT_SOON := "SOON"
 const TEXT_COAST := "COAST REACHED"
 const TEXT_TO_COAST := "OF %d TO THE COAST"
@@ -78,6 +82,8 @@ var badge_text: ScreenText
 var compare: ScreenText
 var retry_button: ScreenButton
 var garage_button: ScreenButton
+## WP8.5: back to the title.
+var menu_button: ScreenButton
 var stats_panel: ScreenPanel
 ## N7.2: the online line, LEADERBOARDS, and the runs client they follow.
 var online: ResultsOnline
@@ -173,6 +179,10 @@ func _init() -> void:
 	retry_button.name = "Retry"
 	retry_button.pressed.connect(_on_retry)
 	add_child(retry_button)
+	menu_button = ScreenButton.make(TEXT_MENU, ScreenButton.Kind.NORMAL, 24)
+	menu_button.name = "Menu"
+	menu_button.pressed.connect(_on_menu)
+	add_child(menu_button)
 	online = ResultsOnline.new()
 	online.visible = false
 	add_child(online)
@@ -213,6 +223,7 @@ func _restyled() -> void:
 	badge_text.use_tilt(TILT_SHADER, tuning.speed_tilt_rad())
 	retry_button.size_px = tuning.font_screen_button_px
 	garage_button.size_px = tuning.font_screen_button_px
+	menu_button.size_px = tuning.font_screen_button_px
 	boards_button.size_px = tuning.font_screen_button_px
 	if leaderboards != null:
 		leaderboards.setup(style, tuning)
@@ -308,11 +319,17 @@ func _apply_accepting() -> void:
 	retry_button.mouse_filter = f
 	garage_button.mouse_filter = f
 	boards_button.mouse_filter = f
+	menu_button.mouse_filter = f
 
 
 func _on_retry() -> void:
 	if accepting:
 		retry.emit()
+
+
+func _on_menu() -> void:
+	if accepting:
+		menu.emit()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -554,6 +571,11 @@ func _layout() -> void:
 	var lbw := maxf(gw, HudDraw.text_width(style.label, boards_button.text, boards_button.font_px()) + g * 5.0)
 	boards_button.size = Vector2(lbw, th)
 	boards_button.position = Vector2(a.end.x - lbw if mirrored else left, a.end.y - th)
+	# WP8.5: MENU next to LEADERBOARDS (in the corner itself when there are no boards).
+	var mw := maxf(gw, HudDraw.text_width(style.label, menu_button.text, menu_button.font_px()) + g * 5.0)
+	var inner := lbw + g * 2.0 if boards_button.visible else 0.0
+	menu_button.size = Vector2(mw, th)
+	menu_button.position = Vector2(a.end.x - inner - mw if mirrored else left + inner, a.end.y - th)
 
 
 ## GARAGE: a share of the menu width. Stats panel: how much it grows with the text
