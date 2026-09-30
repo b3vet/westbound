@@ -246,7 +246,7 @@ WP N1.2: the device account, token refresh, the profile and the account panel. I
 | --- | --- | --- |
 | `src/net/api.gd` | `NetApi` | HTTP client: JSON in and out, retries, 429, typed errors, bearer token, refresh-and-retry once |
 | `src/net/api_result.gd` | `NetApiResult` | The typed outcome of a call (`ok`, `status`, `error`, `data`, `retry_after_s`, `banned_until`, `next_rename_at`) |
-| `src/net/http_backend.gd`, `http_node.gd`, `http_response.gd` | `NetHttpBackend`, `NetHttpNode`, `NetHttpResponse` | The injectable transport: `request()` and `wait()` coroutines; the real one uses one `HTTPRequest` node per request |
+| `src/net/http_backend.gd`, `http_node.gd`, `http_response.gd` | `NetHttpBackend`, `NetHttpNode`, `NetHttpResponse` | The injectable transport: `request()` and `wait()` coroutines; the real one uses one `HTTPRequest` node per request, its timeout and `wait()` on the monotonic `NetTimeSource` (not `HTTPRequest.timeout`, which a long frame fires early) |
 | `src/net/fake_accounts.gd` | `NetFakeAccounts` | An in-memory Accounts API behind the same interface (tests, the panel preview) |
 | `src/net/session.gd` | `NetSession` | The session Node (autoload candidate): state machine, storage, signals, rename, delete, logout |
 | `src/net/profile.gd` | `NetProfile` | `GET /me` as a typed object |

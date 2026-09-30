@@ -17,6 +17,15 @@ extends SceneTree
 const TEST_ROOT := "res://tests"
 const SKIP_DIRS := ["lib", "out", "baselines", "fixtures"]
 const SLOW_FAST_TEST_S := 5.0
+## Frames awaited after loading the test scripts, before the first test. Loading them all
+## takes one long frame (seconds on a loaded machine), and the engine's *raw* process step
+## (Engine::get_process_step, which Timer nodes, SceneTreeTimers and Tweens that ignore the
+## time scale count down by) is not clamped by max_physics_steps_per_frame the way the
+## process delta is. The load runs from a deferred call flushed in the physics phase, so
+## the first await resumes in that same frame, the second in the next one before its
+## timers tick with the long step, and only the third is past it. Without this, an
+## HTTPRequest's 3 s timeout fired ~0 ms after a test started it.
+const SETTLE_FRAMES := 3
 
 ## Captures errors logged through the engine (OS.add_logger) while tests run.
 class ErrorCapture extends Logger:
@@ -89,6 +98,10 @@ func _run() -> void:
 	var failures := PackedStringArray()
 	var t_start := Time.get_ticks_msec()
 
+	# Load every script first, then let the tree settle: see SETTLE_FRAMES.
+	var loaded: Array[Script] = []
+	var loaded_paths := PackedStringArray()
+	var loaded_methods: Array[PackedStringArray] = []
 	for path in scripts:
 		var script: Script = load(path)
 		if script == null or not script.can_instantiate():
@@ -99,6 +112,16 @@ func _run() -> void:
 		var methods := _test_methods(script, prefixes, path)
 		if methods.is_empty():
 			continue
+		loaded.append(script)
+		loaded_paths.append(path)
+		loaded_methods.append(methods)
+	for i in SETTLE_FRAMES:
+		await process_frame
+
+	for k in loaded.size():
+		var script := loaded[k]
+		var path := loaded_paths[k]
+		var methods := loaded_methods[k]
 		var suite: Object = script.new()
 		if not suite is WBTest:
 			failed += 1
