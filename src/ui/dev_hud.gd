@@ -21,6 +21,13 @@ extends CanvasLayer
 ## the tier button shows the tier ("*" while overridden) and goes back to it. The
 ## draws row adds the 3D share (the root viewport's draws, dev overlays excluded) and
 ## the 3d scale row the internal 3D resolution.
+##
+## Governor (WP9.1, docs/QUALITY.md): the governor row shows the rung and its name, what
+## the governor sees (calm / hold / frames / thermal / idle), the last step's reason, the
+## frame-time p95 and the missed-frame share over its window; the thermal row adds the
+## source when there is one ("native", "forced"). THERMAL <state> forces the thermal state
+## for the session (auto → nominal → fair → serious → critical → auto) to check the governor
+## on a device (M9 gate); the boot override is `?thermal=` / `--thermal=`.
 
 const QUALITY_SCRIPT := preload("res://src/platform/quality.gd")
 
@@ -47,11 +54,14 @@ const COLOR_HOT := Color("#ff5a4d")
 ## Quality-row button text (flat buttons: the color marks them as tappable).
 const COLOR_ACCENT := Color("#7fd4ff")
 
-enum Row { FPS, FRAME, DRAWS, TRIS, SCALE, MSAA, VEHICLES, SIM, THERMAL, QUALITY, NET_CORR, NET_LINK }
+## GOVERNOR (WP9.1) is last so the earlier rows keep their indices.
+enum Row { FPS, FRAME, DRAWS, TRIS, SCALE, MSAA, VEHICLES, SIM, THERMAL, QUALITY, NET_CORR, NET_LINK,
+	GOVERNOR }
 const ROW_NAMES: PackedStringArray = [
 	"fps", "frame", "draws", "tris", "3d scale", "msaa", "vehicles", "sim tick", "thermal", "quality",
-	"net corr", "net link",
+	"net corr", "net link", "governor",
 ]
+const PCT := 100.0
 ## Network traffic rows (N4.3, NetTrafficStats keys): m → cm, bytes → kB.
 const NET_CM_PER_M := 100.0
 const NET_BYTES_PER_KB := 1000.0
@@ -69,6 +79,7 @@ var _copy_button: Button
 var _scale_button: Button
 var _msaa_button: Button
 var _tier_button: Button
+var _thermal_button: Button
 var _hot: PackedByteArray = PackedByteArray()
 
 var _last_frame_usec: int = 0
@@ -222,7 +233,11 @@ func refresh() -> void:
 		_set_row(Row.SIM, PLACEHOLDER)
 
 	var thermal: Variant = DevStats.get_value(DevStats.THERMAL)
-	_set_row(Row.THERMAL, PLACEHOLDER if thermal == null else String(thermal))
+	var source := String(DevStats.get_value(QUALITY_SCRIPT.DEV_THERMAL_SOURCE, Thermal.SOURCE_NONE))
+	var thermal_text := PLACEHOLDER if thermal == null else String(thermal)
+	if thermal != null and source != String(Thermal.SOURCE_NONE):
+		thermal_text += "  " + source
+	_set_row(Row.THERMAL, thermal_text)
 	_set_hot(Row.THERMAL, thermal == Thermal.SERIOUS or thermal == Thermal.CRITICAL)
 
 	var tier: Variant = DevStats.get_value(DevStats.QUALITY_TIER)
@@ -231,8 +246,39 @@ func refresh() -> void:
 	_set_row(Row.QUALITY, PLACEHOLDER if tier == null else "%s%s  gov %d" % [
 		tier, OVERRIDE_MARK if dev else "", rung])
 	_set_hot(Row.QUALITY, rung > 0)
+	_refresh_governor_row(rung)
 	_refresh_quality_buttons(scale_3d, tier, dev)
+	_set_text(_thermal_button, "THERMAL %s" % (String(thermal) if source == String(Thermal.SOURCE_FORCED)
+		and thermal != null else "auto"))
 	_refresh_net_rows()
+
+
+## "r2 particles  frames  last thermal  p95 17.5 ms  miss 12%" ("-" before the governor
+## reports; red while a step is held).
+func _refresh_governor_row(rung: int) -> void:
+	var pressure: Variant = DevStats.get_value(QUALITY_SCRIPT.DEV_GOVERNOR_PRESSURE)
+	if pressure == null:
+		_set_row(Row.GOVERNOR, PLACEHOLDER)
+		return
+	var names: PackedStringArray = QUALITY_SCRIPT.RUNG_NAMES
+	var rung_name := names[clampi(rung, 0, names.size() - 1)]
+	var reason := String(DevStats.get_value(QUALITY_SCRIPT.DEV_GOVERNOR_REASON, "none"))
+	var p95: float = DevStats.get_value(QUALITY_SCRIPT.DEV_GOVERNOR_P95_MS, 0.0)
+	var miss: float = DevStats.get_value(QUALITY_SCRIPT.DEV_GOVERNOR_MISS, 0.0)
+	var text := "r%d %s  %s" % [rung, rung_name, String(pressure)]
+	if rung > 0:
+		text += "  last %s" % reason
+	text += "  p95 %.1f ms  miss %.0f%%" % [p95, miss * PCT]
+	if bool(DevStats.get_value(QUALITY_SCRIPT.DEV_COOLING, false)):
+		text += "  cooling"
+	_set_row(Row.GOVERNOR, text)
+	_set_hot(Row.GOVERNOR, rung > 0)
+
+
+## Dev thermal button: cycles the forced thermal state (session only).
+func cycle_thermal() -> void:
+	Quality.cycle_dev_thermal()
+	refresh()
 
 
 ## Network traffic (N4.3; spec: multiplayer handoff → Client network traffic, "Dev HUD adds
@@ -306,6 +352,11 @@ func quality_button_texts() -> PackedStringArray:
 	return PackedStringArray([_scale_button.text, _msaa_button.text, _tier_button.text])
 
 
+## The thermal button's text (tests).
+func thermal_button_text() -> String:
+	return _thermal_button.text
+
+
 ## Current text of a readout (tests).
 func get_row_text(row: Row) -> String:
 	return _value_labels[row].text
@@ -362,6 +413,8 @@ func _build_buttons() -> void:
 	_tier_button = _add_button(row, "TIER", reset_quality)
 	for b: Button in [_scale_button, _msaa_button, _tier_button]:
 		b.add_theme_color_override(&"font_color", COLOR_ACCENT)
+	_thermal_button = _add_button(box, "THERMAL auto", cycle_thermal)
+	_thermal_button.add_theme_color_override(&"font_color", COLOR_ACCENT)
 	_copy_button = Button.new()
 	_copy_button.text = "COPY"
 	_copy_button.focus_mode = Control.FOCUS_NONE

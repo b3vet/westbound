@@ -21,7 +21,8 @@ extends Control
 ## slipstream, the longest label), --chain=<n> (the chain shown, e.g. 186400),
 ## --world=true (the 3D look preview behind instead of the flat background),
 ## --zones=true (plan D14: the thumb zones, pedal clearances, traffic area and cluster
-## drawn over the HUD, thumb_zone_overlay.gd).
+## drawn over the HUD, thumb_zone_overlay.gd), --cooling=true (WP9.1: the governor's
+## cooling icon under [II]).
 ## Prints the frame's draw calls and the HUD's visible canvas items ("snap: ...").
 
 const LOOK_PREVIEW := "res://src/sun/dev/look_preview.tscn"
@@ -103,6 +104,8 @@ func snap_setup(args: Dictionary) -> void:
 		add_zone_overlay(self, hud)
 	Events.run_started.emit(&"journey", 1)
 	hub.set_high_beam(bool(args.get("high_beam", false)))
+	if bool(args.get("cooling", false)):
+		hud.set_cooling(true)
 	await get_tree().process_frame
 	_objective_id = StringName(String(args.get("objective", "")))
 	if _objective_id != &"":
