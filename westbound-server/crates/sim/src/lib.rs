@@ -3,5 +3,6 @@
 
 pub mod map;
 pub mod rng;
+pub mod scoring;
 pub mod trace_hash;
 pub mod traffic;
