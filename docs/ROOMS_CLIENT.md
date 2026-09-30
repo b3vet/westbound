@@ -330,10 +330,103 @@ tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=title:rooms,
 
 `--room=demo` (RunRoom.snap_room) drives the run in a room with no server: `--remotes=N` players around the car (the nearest within 15 m, translucent), a chat on a nametag and in the feed; `--title=rooms*` (RunRoom.snap_hub) opens the hub's room flows with a server-less rooms service.
 
+## Parties (N9.3)
+
+WP N9.3, the client side of parties, invites, invite links and the room-dependent social parts. Spec: multiplayer handoff → Rooms, parties and matchmaking (Parties, Friends and presence: the Join button, Private rooms: invite links, host rules), Client changes (`lobby.gd`: presence, parties, invites, deep-link handling; Party panel and friends list; Room menu: invite, host settings). Server contract: SERVER.md → Parties (N9.3), Invite links and deep links.
+
+| File | Class | What |
+| --- | --- | --- |
+| `src/net/rooms/party.gd` | `NetParty` | The party (code, leader, members in join order, `me` from Welcome) and the invites waiting (newest first, one per code, at most `party_invites_max`, `party_invite_show_s` old at most) |
+| `src/net/rooms/room_session.gd` | `NetRoomSession` | `party_create / party_join / party_invite / party_leave / party_kick`, `decline_invite`, `connect_lobby`; `party_changed`, `party_invited`, `party_left`, `lobby_error`; `accept_follows`; `invite_url()` |
+| `src/net/rooms/rooms_service.gd` | `NetRooms` | The same with a fresh token; `connect_lobby()`; `invite_url(code)`; attaches `NetSocialClient` (presence) to the room connection |
+| `src/net/rooms/invite_link.gd` | `NetInviteLink` | The code the game was opened with: `?room=` (web) / `--room=` (native; `demo` is the snap room, not a code); `from_url()` for links the OS hands the app |
+| `src/ui/screens/online_hub_screen.gd` | `OnlineHubScreen` | PARTY (third column of the ROOMS panel) over the party's line; opens the lobby connection; invites while it shows; party moves to the run; the friends list's JOIN / INVITE seams; invite links |
+| `src/ui/screens/room_lobby_panel.gd` | `RoomLobbyPanel` | PARTY, JOIN PARTY (code), PARTY INVITE views; a friend's room; invite links (room, else party) |
+| `src/ui/screens/friends_panel.gd` | `FriendsPanel` | INVITE on online friends (`NetSocialClient.invite_handler`); JOIN is live (`join_handler`) |
+| `src/ui/hud/room_menu.gd` | `RoomMenu` | The ROOM tab: invite link, host settings, REMOVE A PLAYER |
+| `src/ui/screens/dev/party_preview.tscn` | | Snap scene |
+
+**The lobby connection.** Parties need the WebSocket. The hub opens it when it shows (`NetRooms.connect_lobby`) and it stays up (presence rides on it: N5.2 left `attach_lobby` unwired). Party commands connect first when needed and are sent after the Welcome. A room request made while the connection is on its way waits for the Welcome instead of opening a second one. A lobby connection that drops **while in a party** reconnects every `party_reconnect_retry_s` for `party_reconnect_window_s` (the server holds the place 15 s): the server sends the state in the Welcome's frame; a Welcome without it means the server let the place go, and the party is dropped (`party_left lost`, "Lost the connection to your party.").
+
+**Party moves.** When the leader takes a seat, the server seats the other members (SERVER.md → Parties): a member's client sees `room_left {left}` from its old room, if any, then a `room_snapshot` it did not ask for. `NetRoomSession.accept_follows` (true while the hub shows) takes it as a join (`joined`, placement, the run); otherwise (a single-player run, the title) the seat is left again. The hub hands a join nobody on it asked for to the run (`room_ready`). A member in a room going with the leader goes through the hub (`left` → the hub → `joined`). A member's QUICK JOIN goes to the leader's room (the server's rule); `not_party_leader` ("Your party leader picks the room.") shows while the leader has none.
+
+**Refusals.** Party refusals (`party_not_found`, `party_full`, `blocked`) and anything refused outside a join (a follow that could not seat, `not_allowed` for an invite) come as `lobby_error(code, text)`, never as a join failure; the party views show them in hot text.
+
+**The hub.** ROOMS gets a third column: PARTY over the party's line (`NO PARTY YET`; `3/8 · YOU LEAD`; `3/8 · Dusty#1234 LEADS`; gold `Dusty#1234 INVITES YOU`; shortened with "..." to the column). PARTY opens (a waiting invite first):
+
+| View | Shows | Buttons |
+| --- | --- | --- |
+| PARTY (none) | "PLAY TOGETHER: A PARTY MOVES BETWEEN ROOMS AS ONE CREW" | BACK, JOIN PARTY, CREATE PARTY |
+| PARTY `K7QX2M` | the members, two columns (`name#1234`, LEADER / YOU; names shortened to the button); who picks the room | INVITE FRIENDS (the friends list), SHARE LINK (the share sheet, else the clipboard: COPY LINK; "LINK COPIED"), LEAVE PARTY; BACK. The leader taps a member (TAP AGAIN TO REMOVE) and again within `confirm_tap_s` to kick |
+| JOIN PARTY | the code field (normalized like room codes) | BACK (to PARTY), JOIN |
+| PARTY INVITE | gold `Dusty#1234 INVITES YOU`, "JOIN THEIR PARTY: YOU MOVE BETWEEN ROOMS TOGETHER" | DECLINE (nothing sent), ACCEPT (`party_join` with the code; the leader's room follows) |
+
+An invite that arrives while the hub shows opens its card; otherwise it waits behind PARTY (in a room it waits for the hub; the room HUD does not show it, see Deviations).
+
+**Friends.** JOIN on a friend in a room with space opens the hub with "FRIEND'S ROOM · JOINING ROOM 12..." (`room_join_id`); INVITE on an online friend sends `party_invite` (a party is made first) and says "Invite sent to Ali.". Both seams are set while the hub exists and cleared with it.
+
+**Invite links.** `https://<domain>/r/<code>` (SERVER.md → Invite links) opens the web build with `?room=<code>`; natively `--room=<code>`. Once signed in and on the title (or the hub), the hub opens and follows it: "INVITE LINK · JOINING K7QX2M..." by code; when no room has the code (`room_not_found`), the party with it (the PARTY view); neither: "No room or party with that code." Taken once. `NetRooms.invite_url(code)` builds the link from the session's server (`invite_path`, `/r/`).
+
+**Host settings (room menu → ROOM).** INVITE `westbound.sipsakrandevu.com/r/K7QX2M` (the code alone when the link does not fit) with COPY LINK (and SHARE where the browser has a share sheet). The host of a private room: TRAFFIC (LIGHT / NORMAL / RUSH HOUR) and TIME OF DAY (CYCLE / MORNING / GOLDEN / NIGHT, the fixed times of PRIVATE ROOM) sent as `room_host_command`s, the room's current settings selected (from `room_event.settings`); REMOVE A PLAYER switches PLAYERS to removing (TAP TO REMOVE, TAP AGAIN TO REMOVE within `confirm_tap_s`, then `kick`; mute taps come back after, and with any other tab). Everyone else: "ONLY THE HOST CHANGES TRAFFIC AND TIME"; public rooms: "PUBLIC ROOM · NORMAL TRAFFIC ON THE WORLD CLOCK". The header is two rows now (title and settings line with CLOSE; CHAT / PLAYERS / ROOM under them).
+
+**Ping in the room browser:** N5.2's rows already carry `· 42 MS` (the round trip to the one server; rooms share it).
+
+**Tuning** (`data/tuning/net.tres`, "Parties (N9.3)"): `party_invite_show_s` 120, `party_invites_max` 4, `party_max_members` 8 (spec), `party_reconnect_retry_s` 2, `party_reconnect_window_s` 15, `invite_path` `/r/` (spec), `confirm_tap_s` 3 (not in spec unless marked).
+
+**Tests.**
+
+| File | Covers |
+| --- | --- |
+| `tests/net/test_room_party.gd` | create (connecting first; the creator leads), join by code (normalized; members, leader), refusals as lobby errors (also during a join), invites (kept, capped, one per code, accepted with `party_join`, declined without a message, expired), a kick, party moves taken only with `accept_follows` (else the seat is left; without a party too), the party across a lobby reconnect and dropped when the Welcome carries no state or the window ends, invite URLs, `?room=` / `--room=` / `demo` / links from the OS, presence subscribed on the room connection, `NetParty` bookkeeping |
+| `tests/ui/test_party_ui.gd` | through iOS-style touch ids (`1_893_457_201`): the hub opens the lobby connection and takes party moves only while it shows; CREATE PARTY and the members; JOIN PARTY by code (validation, BACK) and LEAVE PARTY; SHARE LINK copying; the leader's two-tap removal; an invite's card (DECLINE sends nothing, ACCEPT joins), an invite waiting behind PARTY; a party move handed to the run; the friends list's JOIN (the hub, `room_join_id`, the run) and INVITE seams, gone with the hub; invite links (room, else party, else the message); INVITE FRIENDS; text fit of the hub and the party views (eight 16-W names, the leader's armed removal, an invite from a 16-W name) at 100 % / 125 % on 1280x720 and a notched 1560x720 |
+| `tests/ui/test_room_menu_host.gd` | the ROOM tab: the link and COPY LINK; locked for players and public rooms; the host's TRAFFIC and TIME OF DAY commands and the settings shown; REMOVE A PLAYER with two taps; text fit at 100 % / 125 % on both canvases |
+| `tests/ui/test_social_screens.gd` | INVITE on online friends only, through the seam |
+| `tests/net/fake_party_server.gd` | The scripted room server plus parties (not a test file) |
+
+### Live check
+
+`tests/net/live_party_check.gd`: four throwaway device accounts on a running server (it refuses the production host). A and B become friends over HTTP, A invites B (the invite reaches B, B accepts with its code), C joins with the party code and the server's invite page for it answers, A Quick Joins and B and C follow into the same public room as one crew, a solo D Quick Joins the fullest room with a crew of their own, the party passes to B when A leaves.
+
+```sh
+# the server (this branch, its own target dir), dev env, a scratch directory: see "Live check" above
+tools/godot.sh --headless --path . --script res://tests/net/live_party_check.gd -- http://127.0.0.1:18693
+```
+
+Against `westbound-server` at this branch (dev env, `rooms.traffic = "sim"`), 2026-09-30:
+
+```
+accounts                   ok    A 5, B 6, C 7, D 8
+friends                    ok    BraveRover#8121 + BraveMustang#4848
+lobby connections          ok    4 sockets
+invite reaches B           ok    from BraveRover#8121
+A leads a party            ok    code UBSF3E
+B accepts                  ok    2 members, leader BraveRover#8121
+C joins by code            ok    3 members
+invite page                ok    http://127.0.0.1:18693/r/UBSF3E -> 200, opens the web build with ?room=UBSF3E
+party quick join           ok    room 1 (public), 3/8
+one crew                   ok    crew slots A 0 B 0 C 0
+solo quick join            ok    room 1, 4/8
+solo crew                  ok    D 1 vs party 0
+party left                 ok    B leads now
+LIVE_PARTY ok (0 failed)
+```
+
+The server logged `party created`, `party invite`, `party joined` ×2, `joined room ... party=2 follow=false`, `party moves ... followers=2`, two `joined room ... follow=true`, `party leader passed`; `/metrics` showed 0 offences.
+
+### Snaps
+
+```
+tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --sweep=party:none,lead,member,kick,invite,link,hub
+tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --seconds=2.5 --sweep=party:room_host,room_player
+tools/snap.sh src/ui/screens/dev/party_preview.tscn --size=2496x1320 --text_scale=1.25 --party=lead
+```
+
 ## Deviations and open questions
 
 - **Pause in a room** still pauses the local run (the tree): no states go up, so the others see the car fade after 250 ms; the seat is kept (the socket stays up). A room-aware pause (the car keeps driving under the menu) is left open.
-- **Host settings in the room** (kick, density, time mode after creation) are wired in `NetRoomSession.send_host` but have no UI yet; the host picks density and time when creating the room (PRIVATE ROOM).
-- **Invite links / party** (N9) are not here (crew proximity and the train counter: N6.2, above). Until the server streams traffic, the room's density does not change the local director.
+- **Host settings in the room:** done in N9.3 (the room menu's ROOM tab, see Parties → Host settings).
+- **Invite links / party:** N9.3 (see Parties). Until the server streams traffic, the room's density does not change the local director.
 - **Remote players as IDM leaders for network cars** (the server has them as participants): not added. N4.3's `NetworkTrafficSource` models one participant (the local player, index `_P` in its sorted order); remote players would need extra participant entries in its sort and leader search (`src/net/traffic/**`, N4.3's file). The per-car bias and the corrections cover the difference meanwhile. Hook: `RunRoom._draw_remotes` already samples every remote at the room clock.
-- **Presence over the room socket:** `NetSocialClient.attach_lobby(rooms.session.client)` would move presence onto this connection; not wired (the friends list keeps polling).
+- **Party invites inside a room** (N9.3) wait for the hub: the room HUD (`room_hud.gd`, N5.2's file, not this WP's) does not show them. A line on the chat feed ("Dusty#1234 INVITES YOU") would be a small follow-up there.
+- **A party move while not on the hub** (a single-player run, the title) is declined by the client (the seat is left again); the member can QUICK JOIN later, which goes to the leader's room.
+- **Presence over the room socket:** wired in N9.3 (`NetRooms.setup` attaches `NetSocialClient` to the room connection; the friends list polls only while it is down).

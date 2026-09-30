@@ -19,6 +19,10 @@ extends RunScreen
 ##   - FRIENDS, CREW and LEADERBOARDS up from the right thumb. FRIENDS and CREW open the
 ##     account view on that tab (they need a session: disabled, ONLINE OFF, without one);
 ##     LEADERBOARDS opens on the Loop season board.
+##   - N9.3: PARTY (a third column of the ROOMS panel) over the party's line; the lobby
+##     connection opens while the hub shows (presence, party, invites); an invite opens
+##     its card; a party move (the leader took the party to a room) goes to the run; the
+##     friends list's JOIN / INVITE seams; invite links (`?room=` / `--room=`).
 ## Emits intents only (loop_practice, social, back, room_ready).
 
 signal loop_practice()

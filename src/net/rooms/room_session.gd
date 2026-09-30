@@ -18,6 +18,11 @@ extends RefCounted
 ##   RECONNECTING --room_reconnect_window_s over--> IDLE (`left`, timed_out)
 ##   IN_ROOM --leave() / room_left--> LOBBY (`left`) ; any fatal error --> FAILED
 ##
+## N9.3 (docs/ROOMS_CLIENT.md → Parties): the party commands and events on the same
+## connection (`party`, a NetParty), invites, a party move (an unrequested snapshot taken
+## while `accept_follows`), and a dropped lobby connection reconnecting while the server
+## holds the party place. Spec: Rooms, parties and matchmaking → Parties.
+##
 ## Placements (PROTOCOL.md §12): the server puts this client's own id in player_states with
 ## run_state `protected`; each placement tick is taken once (has_placement / take_placement)
 ## and the client teleports there. Everyone else's states go to `remotes`.
