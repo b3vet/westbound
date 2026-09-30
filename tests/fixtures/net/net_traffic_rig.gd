@@ -20,6 +20,8 @@ var t: float = 0.0
 ## Client ticks where a car moved sideways faster than LATERAL_SIGNAL_MPS with neither
 ## blinker nor hazards on.
 var unsignaled_ticks: int = 0
+## The first few unsignaled ticks, described (diagnostics).
+var unsignaled_log := PackedStringArray()
 ## Shortest time a blinker was on before its car started moving sideways (cars that
 ## arrived already blinking excluded).
 var blinker_lead_min_s: float = INF
@@ -96,6 +98,11 @@ func run(seconds: float) -> void:
 				if lat > LATERAL_SIGNAL_MPS:
 					if not lit:
 						unsignaled_ticks += 1
+						if unsignaled_log.size() < 8:
+							var src := harness.source
+							unsignaled_log.append("t %.2f car %d ds %.0f lat %.2f m/s d %.2f -> %.2f lc %d plan %d off_d %.3f last_err %.3f" % [
+								t, src.car_id(i), st.s[i] - p, lat, _prev_d[i], st.d[i], st.lc_state[i],
+								1 if src.has_lane_change(i) else 0, src.offset_d(i), src.last_correction_error(i)])
 					elif _moving[i] == 0 and not is_inf(_blink_on[i]):
 						blinker_lead_min_s = minf(blinker_lead_min_s, t - _blink_on[i])
 					_moving[i] = 1

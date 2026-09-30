@@ -112,6 +112,28 @@ func test_wire_lanes_d_and_s() -> void:
 	near(NetTrafficWire.s_unwrap(open, 123456.0, 5.0), 123456.0, 0.0, "an open road does not wrap")
 
 
+## The handoff's numbers live in NetTuning (Tuning reference: area of interest, correction
+## rate and blending, multiplayer signal time; Client network traffic: 0.2 s catch-up).
+func test_tuning_holds_the_traffic_spec_numbers() -> void:
+	var n := tuning.net
+	eq(n.traffic_aoi_behind_m, 300.0)
+	eq(n.traffic_aoi_ahead_m, 900.0)
+	eq(n.traffic_correction_near_m, 100.0)
+	eq(n.traffic_correction_near_hz, 5.0)
+	eq(n.traffic_correction_far_hz, 1.0)
+	eq(n.traffic_blend_small_m, 0.5)
+	eq(n.traffic_blend_small_s, 0.3)
+	eq(n.traffic_blend_medium_m, 5.0)
+	eq(n.traffic_blend_medium_s, 0.15)
+	eq(n.traffic_signal_floor_s, 1.0)
+	eq(n.traffic_late_catchup_s, 0.2)
+	eq(n.traffic_car_id_reuse_s, 30.0)
+	eq(n.test_link_rtt_ms, 150.0)
+	eq(n.test_link_jitter_ms, 30.0)
+	eq(n.test_link_loss, 0.02)
+	lt(n.traffic_late_min_blinker_s, n.traffic_signal_floor_s, "the late minimum is well inside the 1 s lead")
+
+
 # ---------------------------------------------------------------- The stream through the codec
 
 ## Every frame the fake authority sends decodes (generic and hot path agree), re-encodes to
@@ -620,6 +642,52 @@ func test_no_allocation_per_tick() -> void:
 	eq(grow_frames, 0, "decode + apply_frame allocate nothing")
 	eq(grow_steps, 0, "step allocates nothing")
 	le(Performance.get_monitor(Performance.OBJECT_COUNT) - obj0, 0.0, "no objects")
+
+
+## Cost per 120 Hz client tick (step: the 20 Hz model pass every 6th tick, the publish
+## pass every tick) and per applied frame, replaying a recorded stream in the city (the
+## loop's densest section). Budgets ~3x the local median (WBBench).
+func test_client_tick_cost() -> void:
+	var road := RunLoop.loop_road(tuning)
+	var r := NetTrafficRig.on_loop(28, (road as LoopRoadPath).layout.elevated_s0[0] + 200.0, 130.0, true)
+	r.harness.record = true
+	r.run(10.0)
+	var trace := r.harness.trace_log
+	var reg := TrafficRegistry.load_default(tuning.traffic)
+	var st := TrafficState.new(tuning.traffic.max_active_vehicles)
+	var src := NetworkTrafficSource.new(tuning.net, tuning.traffic, road, reg, st)
+	var codec := NetCodec.new()
+	var frame := NetServerFrame.new()
+	var p := VehicleState.new()
+	var step_us := 0
+	var steps := 0
+	var frame_us := 0
+	var frames := 0
+	var cars := 0
+	for k in trace.size():
+		var e: Array = trace[k]
+		if e[0] == "frame":
+			var t0 := Time.get_ticks_usec()
+			codec.decode_server_frame_into(e[1], frame)
+			src.apply_frame(frame, e[2], e[3], e[4])
+			frame_us += Time.get_ticks_usec() - t0
+			frames += 1
+		else:
+			p.s = e[2]
+			p.d = e[3]
+			var syncs := src.zone_syncs
+			var t0 := Time.get_ticks_usec()
+			src.step(e[1], p, null)
+			if src.zone_syncs == syncs and k > trace.size() >> 1:
+				step_us += Time.get_ticks_usec() - t0
+				steps += 1
+				cars += st.count
+	var per_step := float(step_us) / float(maxi(steps, 1))
+	var per_frame := float(frame_us) / float(maxi(frames, 1))
+	WBBench.report("network traffic step, %.0f cars" % (float(cars) / float(maxi(steps, 1))), per_step, 600.0)
+	WBBench.report("network traffic frame (decode + apply)", per_frame, 600.0)
+	le(per_step, WBBench.budget(600.0), "step usec")
+	le(per_frame, WBBench.budget(600.0), "frame usec")
 
 
 # ---------------------------------------------------------------- Soak

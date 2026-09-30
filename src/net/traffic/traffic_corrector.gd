@@ -180,8 +180,11 @@ func add_offset(i: int, ds: float, dd: float, visible: bool, blink_first: bool, 
 	return kind
 
 
-## Runs slot i's offset out over dt_s seconds of server time `now` (ticks).
+## Runs slot i's offset out over dt_s seconds of server time `now` (ticks). The blinker of
+## an unsignaled slide stays on through the tick the slide ends in.
 func decay(i: int, dt_s: float, now: float) -> void:
+	if off_d[i] == 0.0:
+		blink_dir[i] = 0
 	var os := off_s[i]
 	if os != 0.0:
 		var step := rate_s[i] * dt_s
@@ -192,8 +195,6 @@ func decay(i: int, dt_s: float, now: float) -> void:
 		var step := rate_d[i] * dt_s
 		od = 0.0 if absf(od) <= step else od - signf(od) * step
 		off_d[i] = od
-	if od == 0.0:
-		blink_dir[i] = 0
 
 
 ## m/s the published s / d moves by because of the offset now (0 while held).

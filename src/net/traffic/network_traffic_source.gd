@@ -662,7 +662,7 @@ func _spawn_from(f: NetServerFrame, k: int, frame_tick: int, player_s: float, no
 	_lc[i] = 0
 	var phase := f.sp_lc_phase[k]
 	if phase != _NONE:
-		var tl := NetTrafficWire.lane_from_wire(f.sp_lc_target_lane[k], lanes)
+		var tl := _target_lane(i, f.sp_lc_target_lane[k], s)
 		var move_t := float(f.sp_lc_move_start_tick[k])
 		var dur_t := NetTrafficWire.ms_to_s(f.sp_lc_duration_ms[k]) / tick_dt
 		var to_d := road.lane_center_d(tl, s)
@@ -698,9 +698,11 @@ func _intent_from(f: NetServerFrame, k: int, now: float) -> void:
 			stats.intents += 1
 			if _lc[i] == 1:
 				_complete_plan(i, now)
+			# The lane numbering is converted at the car's s at the signal tick (the server's).
 			var s := _ms[i]
-			var lanes := road.lane_count(s)
-			var tl := NetTrafficWire.lane_from_wire(f.in_target_lane[k], lanes)
+			if corrector.lookup(i, f.in_start_tick[k]):
+				s = corrector.q_s
+			var tl := _target_lane(i, f.in_target_lane[k], s)
 			var from_d := _base_d[i]
 			_set_plan(i, tl, maxf(start, now), move_t, dur_t, from_d, road.lane_center_d(tl, s))
 			if now > move_t - corrector.min_blinker_ticks():
@@ -842,6 +844,28 @@ func _estimate(i: int, n: int, v_srv: float, e_v: float) -> void:
 
 
 # ---------------------------------------------------------------- Lateral
+
+## Wire target lane → sim lane for car i at s (the lane count at s, as the server converts
+## it). A lane change always goes to a lane next to the car's: when the count at s gives
+## one that is not (the car within metres of a lane-count change, the two sides' positions
+## a hair apart), the count one lane either side decides.
+func _target_lane(i: int, wire: int, s: float) -> int:
+	var n := road.lane_count(s)
+	var tl := NetTrafficWire.lane_from_wire(wire, n)
+	if wire == NetTrafficWire.RAMP_LANE:
+		return tl
+	var cur := state.lane[i]
+	if absi(tl - cur) == 1:
+		return tl
+	var lo := NetTrafficWire.lane_from_wire(wire, n - 1)
+	if absi(lo - cur) == 1:
+		return lo
+	var hi := NetTrafficWire.lane_from_wire(wire, n + 1)
+	if absi(hi - cur) == 1:
+		return hi
+	stats.bad_values += 1
+	return tl
+
 
 func _set_plan(i: int, lane: int, blink_t: float, move_t: float, dur_t: float, from_d: float,
 		to_d: float) -> void:
