@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="AchievementTuning" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/meta/achievements/achievement_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+catalog_path = "res://data/achievements/catalog.tres"
+toast_s = 3.2
+toast_in_s = 0.2
+toast_out_s = 0.5
+toast_size_px = Vector2(340, 74)
+toast_queue_max = 4
+toast_header_px = 13
+toast_title_scale = 1.0
+toast_layer = 70
+screen_columns = 3
+screen_rows = 3
+card_title_px = 19
+card_state_px = 14
+card_desc_px = 15
+card_bar_px = 6.0
+card_pad_cells = 1.5

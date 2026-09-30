@@ -9,20 +9,23 @@ extends RunScreen
 ##
 ## Over the run's attract drive (Run in MENU: the car drives itself and cannot be hit).
 ## Left-anchored, stacked up from the bottom-left thumb:
-##   - a row of LEADERBOARDS, SETTINGS and GARAGE (WP8.2: emits `garage`);
+##   - a row of LEADERBOARDS, SETTINGS, GARAGE (WP8.2: emits `garage`) and ACHIEVEMENTS
+##     (WP8.3: emits `achievements`);
 ##   - PLAY (primary: Journey), DAILY DRIVE (today's UTC date under it), ONLINE (the hub);
 ##   - the WESTBOUND logo and CHASE THE SUN top-left, on a slanted ink band.
 ## Top-right: the profile chip (name#tag, online status; a tap opens ACCOUNT).
 ## SETTINGS swaps the menu for the in-run SettingsPanel (GAME / AUDIO pages) with DONE
 ## and ACCOUNT (the ProfilePanel with FRIENDS / CREW, shown when a session exists), laid
 ## out like the pause menu's. LEADERBOARDS opens the LeaderboardsScreen over the title.
-## Emits intents only (play, online, garage); TitleScreens and the run act on them. Buttons are
+## Emits intents only (play, online, garage, achievements); TitleScreens and the run act on them. Buttons are
 ## ScreenButtons (emulated mouse events: raw touch ids never index anything).
 
 signal play(mode: StringName)
 signal online()
 ## WP8.2: GARAGE (TitleScreens opens the GarageScreen).
 signal garage()
+## WP8.3: ACHIEVEMENTS (TitleScreens opens the AchievementsScreen).
+signal achievements()
 ## The settings view closed (DONE); `to_hub`: it was opened from the online hub.
 signal settings_closed(to_hub: bool)
 
@@ -37,6 +40,7 @@ const TEXT_ONLINE := "ONLINE"
 const TEXT_ONLINE_NOTE := "LOOP PRACTICE · ROOMS"
 const TEXT_LEADERBOARDS := "LEADERBOARDS"
 const TEXT_GARAGE := "GARAGE"
+const TEXT_ACHIEVEMENTS := "ACHIEVEMENTS"
 const TEXT_SOON := "SOON"
 const TEXT_SETTINGS := "SETTINGS"
 const TEXT_ACCOUNT := "ACCOUNT"
@@ -56,6 +60,7 @@ var daily_button: ScreenButton
 var online_button: ScreenButton
 var boards_button: ScreenButton
 var garage_button: ScreenButton
+var achievements_button: ScreenButton
 var settings_button: ScreenButton
 var chip: TitleProfileChip
 var settings: SettingsPanel
@@ -107,6 +112,7 @@ func _init() -> void:
 	boards_button = _button(TEXT_LEADERBOARDS, ScreenButton.Kind.NORMAL, open_leaderboards)
 	settings_button = _button(TEXT_SETTINGS, ScreenButton.Kind.NORMAL, open_settings)
 	garage_button = _button(TEXT_GARAGE, ScreenButton.Kind.NORMAL, garage.emit)
+	achievements_button = _button(TEXT_ACHIEVEMENTS, ScreenButton.Kind.NORMAL, achievements.emit)
 	chip = TitleProfileChip.new()
 	chip.pressed.connect(func() -> void: open_account())
 	add_child(chip)
@@ -160,7 +166,7 @@ func _restyled() -> void:
 
 func _buttons() -> Array[ScreenButton]:
 	return [play_button, daily_button, online_button, boards_button, settings_button, garage_button,
-			done_button, account_button]
+			achievements_button, done_button, account_button]
 
 
 ## The menu (from the top: the logo, then the column and the row, staggered in).
@@ -185,7 +191,7 @@ func _slide_menu() -> void:
 	var dx := -tuning.screen_slide_px
 	var i := 0
 	for c: Control in [logo, tagline, online_button, daily_button, play_button, boards_button, settings_button,
-			garage_button]:
+			garage_button, achievements_button]:
 		slide_in(c, dx, tuning.screen_fade_in_s, float(i) * tuning.results_row_stagger_s)
 		i += 1
 
@@ -264,7 +270,7 @@ func _runs() -> NetRunsClient:
 func _apply_mode() -> void:
 	var menu := not settings_open
 	for c: CanvasItem in [band, logo, tagline, play_button, daily_button, online_button, boards_button,
-			settings_button, garage_button, chip]:
+			settings_button, garage_button, achievements_button, chip]:
 		c.visible = menu
 	dim.visible = settings_open
 	logo.text = TEXT_LOGO
@@ -368,7 +374,7 @@ func _layout() -> void:
 	var x := a.position.x
 	var y := a.end.y - th
 	var row_min := bw * ROW_MIN_WIDTH
-	for b: ScreenButton in [boards_button, settings_button, garage_button]:
+	for b: ScreenButton in [boards_button, settings_button, garage_button, achievements_button]:
 		var w := maxf(SocialUi.button_width(b, tuning), row_min)
 		b.position = Vector2(x, y)
 		b.size = Vector2(w, th)

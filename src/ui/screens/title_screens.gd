@@ -16,6 +16,10 @@ extends CanvasLayer
 ## no canvas item draws in gameplay (visible_item_count() == 0). Always processes. The
 ## layer is RunScreens' (60): above the dev rows (50), below the dev HUD (100); the two
 ## never show together (RunScreens shows nothing in MENU).
+##
+## WP8.3: the achievements screen (ACHIEVEMENTS, built on first use), and the achievement
+## service (AchievementService.ensure: made here until the `Achievements` autoload exists;
+## the run always builds the title).
 
 signal start(mode: StringName)
 ## WP8.2: the garage closed (the run gives the attract drive the selected car and look).
@@ -41,6 +45,8 @@ var runs: NetRunsClient
 var first_run: FirstRunScreen
 ## WP8.2: the garage (built on first use: the first GARAGE).
 var garage: GarageScreen
+## WP8.3: the achievements (built on first use: the first ACHIEVEMENTS).
+var achievements: AchievementsScreen
 
 var _theme: Theme
 var _pinned: bool = false
@@ -54,6 +60,10 @@ var _pending_mode: StringName = &""
 func _init() -> void:
 	layer = LAYER
 	process_mode = Node.PROCESS_MODE_ALWAYS
+
+
+func _ready() -> void:
+	AchievementService.ensure(self)   # WP8.3
 
 
 func _exit_tree() -> void:
@@ -107,7 +117,7 @@ func open_hub() -> void:
 
 func is_open() -> bool:
 	return is_built() and (title.visible or online_hub.visible or (first_run != null and first_run.visible)
-			or (garage != null and garage.visible))
+			or (garage != null and garage.visible) or (achievements != null and achievements.visible))
 
 
 ## WP8.2: the garage over the attract drive (the title's GARAGE, the results' GARAGE);
@@ -131,6 +141,28 @@ func _on_garage_done() -> void:
 	garage.close(false)
 	open_title()
 	garage_closed.emit()
+
+
+## WP8.3: the achievements over the attract drive (the title's ACHIEVEMENTS); DONE comes
+## back to the title.
+func open_achievements() -> void:
+	_build()
+	if achievements == null:
+		achievements = AchievementsScreen.new()
+		add_child(achievements)
+		screens.append(achievements)
+		achievements.done.connect(_on_achievements_done)
+		achievements.setup(style, tuning)
+		_relayout()
+	title.close(false)
+	online_hub.close(false)
+	_poll_accent()
+	achievements.open()
+
+
+func _on_achievements_done() -> void:
+	achievements.close(false)
+	open_title()
 
 
 ## Every screen's transitions to their end (tests, snaps).
@@ -178,6 +210,7 @@ func _build() -> void:
 	title.online.connect(open_hub)
 	title.settings_closed.connect(_on_settings_closed)
 	title.garage.connect(open_garage)
+	title.achievements.connect(open_achievements)
 	online_hub.back.connect(open_title)
 	online_hub.loop_practice.connect(func() -> void: _on_play(MODE_LOOP))
 	online_hub.social.connect(_on_social)
