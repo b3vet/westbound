@@ -204,12 +204,46 @@ pub struct HttpConfig {
     pub trusted_proxies: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// Deep links (N9.3; docs/SERVER.md → "Invite links and deep links"): the association
+/// files and the `/r/<code>` invite page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeepLinksConfig {
-    /// Directory holding `apple-app-site-association` and `assetlinks.json`.
-    /// Empty, or a missing file, serves the built-in placeholder.
+    /// Directory holding `apple-app-site-association` and `assetlinks.json`. A file there
+    /// wins; without one the file is generated from the app ids below, and without those
+    /// the built-in (empty) placeholder is served.
     pub dir: PathBuf,
+    /// Where the invite page's button opens the web build: `{code}` is the room or party
+    /// code, `{origin}` is `server.public_origin` (for a web build on another host that must
+    /// be told which server to use).
+    pub web_join_url: String,
+    /// iOS Universal Links: app ids (`TEAMID.bundle.id`) for `apple-app-site-association`.
+    pub apple_app_ids: Vec<String>,
+    /// Android App Links: the package name for `assetlinks.json`.
+    pub android_package: String,
+    /// Android App Links: SHA-256 fingerprints of the signing certificates (`AA:BB:...`).
+    pub android_cert_sha256: Vec<String>,
+    /// Store links on the invite page (empty: "coming soon").
+    pub app_store_url: String,
+    pub play_store_url: String,
+    /// A custom URL scheme the native app registers (`<scheme>://r/<code>`); empty: the page
+    /// shows no "open in the app" button (Universal / App Links open the app anyway).
+    pub app_scheme: String,
+}
+
+impl Default for DeepLinksConfig {
+    fn default() -> Self {
+        Self {
+            dir: PathBuf::new(),
+            web_join_url: "https://b3vet.github.io/westbound/?room={code}".into(),
+            apple_app_ids: Vec::new(),
+            android_package: String::new(),
+            android_cert_sha256: Vec::new(),
+            app_store_url: String::new(),
+            play_store_url: String::new(),
+            app_scheme: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -323,6 +357,11 @@ pub struct SocialConfig {
     pub reports_per_day: u32,
     /// Largest `context` of a report, as compact JSON.
     pub report_context_max_bytes: u32,
+    /// Members per party, the leader included (N9.3; spec: up to 8; the wire allows 16).
+    pub party_max_members: u32,
+    /// A party member whose connection ended keeps their place this long; a new session
+    /// takes it back (not in spec).
+    pub party_member_hold_ms: u64,
 }
 
 /// Replay uploads, the verification queue and replay retention (N8.1; docs/SERVER.md →
@@ -873,6 +912,8 @@ impl Default for SocialConfig {
             crew_invite_code_len: 8,
             reports_per_day: 10,
             report_context_max_bytes: 1_024,
+            party_max_members: 8,
+            party_member_hold_ms: 15_000,
         }
     }
 }
@@ -1237,6 +1278,7 @@ impl Config {
         }
         self.validate_leaderboards(&mut errs);
         self.validate_social(&mut errs);
+        self.validate_deeplinks(&mut errs);
         self.validate_replays(&mut errs);
         self.validate_rooms(&mut errs);
         self.validate_scoring(&mut errs);
@@ -1444,10 +1486,17 @@ impl Config {
             ("max_blocks", s.max_blocks),
             ("crew_max_members", s.crew_max_members),
             ("reports_per_day", s.reports_per_day),
+            ("party_max_members", s.party_max_members),
         ] {
             if v == 0 {
                 errs.push(format!("social.{name} must be at least 1"));
             }
+        }
+        if s.party_max_members > u32::from(protocol::messages::MAX_PARTY_MEMBERS) {
+            errs.push(format!(
+                "social.party_max_members must be 1..={}",
+                protocol::messages::MAX_PARTY_MEMBERS
+            ));
         }
         if !(MIN_INVITE_CODE_LEN..=MAX_INVITE_CODE_LEN).contains(&s.crew_invite_code_len) {
             errs.push(format!(
@@ -1459,6 +1508,48 @@ impl Config {
         {
             errs.push(format!(
                 "social.report_context_max_bytes must be {MIN_REPORT_CONTEXT_BYTES}..={MAX_REPORT_CONTEXT_BYTES}"
+            ));
+        }
+    }
+
+    fn validate_deeplinks(&self, errs: &mut Vec<String>) {
+        let d = &self.deeplinks;
+        let url = d.web_join_url.as_str();
+        if !(url.starts_with("https://") || url.starts_with("http://")) || !url.contains("{code}") {
+            errs.push("deeplinks.web_join_url must be an http(s) URL containing {code}".into());
+        }
+        for id in &d.apple_app_ids {
+            if !is_apple_app_id(id) {
+                errs.push(format!(
+                    "deeplinks.apple_app_ids: `{id}` is not TEAMID.bundle.id"
+                ));
+            }
+        }
+        if !d.android_package.is_empty() && !is_android_package(&d.android_package) {
+            errs.push(format!(
+                "deeplinks.android_package `{}` is not a package name",
+                d.android_package
+            ));
+        }
+        for f in &d.android_cert_sha256 {
+            if !is_sha256_fingerprint(f) {
+                errs.push(format!(
+                    "deeplinks.android_cert_sha256: `{f}` is not 32 hex pairs separated by ':'"
+                ));
+            }
+        }
+        for (name, v) in [
+            ("app_store_url", &d.app_store_url),
+            ("play_store_url", &d.play_store_url),
+        ] {
+            if !v.is_empty() && !v.starts_with("https://") {
+                errs.push(format!("deeplinks.{name} must be an https:// URL"));
+            }
+        }
+        if !d.app_scheme.is_empty() && !is_url_scheme(&d.app_scheme) {
+            errs.push(format!(
+                "deeplinks.app_scheme `{}` is not a URL scheme",
+                d.app_scheme
             ));
         }
     }
@@ -1512,6 +1603,47 @@ fn is_origin(s: &str) -> bool {
         .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"));
     matches!(rest, Some(r) if !r.is_empty() && !r.contains('/') && !r.contains(char::is_whitespace))
+}
+
+/// Bytes in a SHA-256 certificate fingerprint (`deeplinks.android_cert_sha256`).
+const SHA256_BYTES: usize = 32;
+
+/// `TEAMID.bundle.id`: an alphanumeric team id, a dot, then a bundle id.
+fn is_apple_app_id(id: &str) -> bool {
+    let Some((team, bundle)) = id.split_once('.') else {
+        return false;
+    };
+    !team.is_empty()
+        && team.chars().all(|c| c.is_ascii_alphanumeric())
+        && !bundle.is_empty()
+        && bundle
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+}
+
+/// `com.example.app`: at least two dot-separated identifiers.
+fn is_android_package(p: &str) -> bool {
+    p.split('.').count() >= 2
+        && p.split('.').all(|part| {
+            part.starts_with(|c: char| c.is_ascii_alphabetic())
+                && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+}
+
+/// `AA:BB:...`: 32 hex pairs separated by colons.
+fn is_sha256_fingerprint(f: &str) -> bool {
+    let parts: Vec<&str> = f.split(':').collect();
+    parts.len() == SHA256_BYTES
+        && parts
+            .iter()
+            .all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// RFC 3986: a letter, then letters, digits, `+`, `-`, `.`.
+fn is_url_scheme(s: &str) -> bool {
+    s.starts_with(|c: char| c.is_ascii_alphabetic())
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
 }
 
 /// `HH:MM` → minutes after midnight.

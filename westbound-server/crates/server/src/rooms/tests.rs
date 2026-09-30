@@ -112,6 +112,11 @@ impl T {
     }
 
     fn join(&mut self, c: &mut Client) -> Result<Joined, Refusal> {
+        self.join_party(c, None)
+    }
+
+    /// N9.3: a join as a member of `party`.
+    fn join_party(&mut self, c: &mut Client, party: Option<u32>) -> Result<Joined, Refusal> {
         let (reply, mut rx) = oneshot::channel();
         let identity = Identity {
             account_id: c.h.account_id,
@@ -123,6 +128,7 @@ impl T {
                 session: c.h.clone(),
                 identity,
                 crew_tag: CrewTag::default(),
+                party,
                 reply,
             }),
             self.now,
@@ -792,6 +798,53 @@ fn host_rules_kick_density_and_time_mode() {
     t.tick();
     let r = run_results(&a.msgs());
     assert!(r[0].flags.verified && !r[0].flags.leaderboard_eligible);
+}
+
+/// N9.3: in a public room a party is one crew (its members share a crew slot); players
+/// alone or in another party get crews of their own. Private rooms stay one crew.
+#[test]
+fn a_party_is_one_crew_in_a_public_room() {
+    let mut t = T::new(settings(Visibility::Public, 8));
+    let mut a = Client::new(10, 1);
+    let mut b = Client::new(11, 2);
+    let mut c = Client::new(12, 3);
+    let mut d = Client::new(13, 4);
+    t.join_party(&mut a, Some(7)).unwrap();
+    t.join(&mut c).unwrap();
+    t.join_party(&mut b, Some(7)).unwrap();
+    t.join_party(&mut d, Some(9)).unwrap();
+    t.tick();
+    let m = d.msgs();
+    let Some(ServerMsg::RoomSnapshot(s)) = m.first() else {
+        panic!("{m:?}");
+    };
+    let slot = |pid: u16| {
+        s.members
+            .iter()
+            .find(|m| m.player_id == pid)
+            .map(|m| m.crew_slot)
+            .unwrap()
+    };
+    assert_eq!(slot(a.pid), slot(b.pid), "party 7 shares a crew");
+    assert_ne!(slot(a.pid), slot(c.pid), "a solo player is a crew of one");
+    assert_ne!(slot(d.pid), slot(a.pid));
+    assert_ne!(slot(d.pid), slot(c.pid));
+    assert_eq!(
+        s.crews.len(),
+        3,
+        "three crews: party 7, the solo player, party 9"
+    );
+    // A private room ignores parties: everyone is crew 0.
+    let mut t = T::new(settings(Visibility::Private, 8));
+    let (mut e, mut f) = (Client::new(20, 5), Client::new(21, 6));
+    t.join_party(&mut e, Some(1)).unwrap();
+    t.join_party(&mut f, Some(2)).unwrap();
+    t.tick();
+    let m = f.msgs();
+    let Some(ServerMsg::RoomSnapshot(s)) = m.first() else {
+        panic!("{m:?}");
+    };
+    assert!(s.members.iter().all(|m| m.crew_slot == 0));
 }
 
 #[test]

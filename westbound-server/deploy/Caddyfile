@@ -21,12 +21,14 @@
 localhost:{$WB_TLS_PORT:8443}, 127.0.0.1:{$WB_TLS_PORT:8443} {
 	tls internal
 
-	@server path /api/* /ws /ws/* /.well-known/*
+	# /r/* are the invite links (N9.3): the server answers them with a small page that
+	# opens the web build; Universal Links / App Links claim the same paths for the app.
+	@server path /api/* /ws /ws/* /.well-known/* /r/*
 	handle @server {
 		# WebSocket upgrades pass through reverse_proxy unchanged.
 		reverse_proxy {$WB_UPSTREAM:127.0.0.1:8080}
 	}
 	handle {
-		respond "westbound local TLS proxy: /api/*, /ws, /ws/* and /.well-known/* go to the server" 404
+		respond "westbound local TLS proxy: /api/*, /ws, /ws/*, /.well-known/* and /r/* go to the server" 404
 	}
 }

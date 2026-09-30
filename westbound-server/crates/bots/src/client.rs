@@ -65,11 +65,15 @@ impl BotClient {
         c.send(&[hello]).await?;
         let deadline = Instant::now() + ANSWER_TIMEOUT;
         loop {
-            let msgs = c.recv_raw(deadline).await?;
+            let (msgs, bytes) = c.recv_raw(deadline).await?;
             for m in msgs {
                 match m {
                     ServerMsg::Welcome(w) => {
                         c.welcome = w;
+                        // What came with Welcome (N9.3: a reconnect's party state) goes to
+                        // the bot.
+                        let now = c.now_ms();
+                        c.bot.on_frame(&bytes, now)?;
                         return Ok(c);
                     }
                     ServerMsg::Error(e) => bail!("handshake refused: {:?} {}", e.code, e.detail.0),
@@ -93,14 +97,14 @@ impl BotClient {
         Ok(())
     }
 
-    /// Decoded messages of the next binary frame (not fed to the bot).
-    async fn recv_raw(&mut self, deadline: Instant) -> anyhow::Result<Vec<ServerMsg>> {
+    /// Decoded messages of the next binary frame (not fed to the bot), and its bytes.
+    async fn recv_raw(&mut self, deadline: Instant) -> anyhow::Result<(Vec<ServerMsg>, Vec<u8>)> {
         loop {
             let next = tokio::time::timeout_at(deadline, self.ws.next())
                 .await
                 .context("timed out waiting for the server")?;
             match next {
-                Some(Ok(Message::Binary(b))) => return Ok(decode_server_frame(&b)?),
+                Some(Ok(Message::Binary(b))) => return Ok((decode_server_frame(&b)?, b.to_vec())),
                 Some(Ok(Message::Close(c))) => bail!("closed by the server: {c:?}"),
                 Some(Ok(_)) => continue,
                 Some(Err(e)) => bail!("websocket: {e}"),

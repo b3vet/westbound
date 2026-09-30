@@ -165,17 +165,17 @@ async fn full_handshake_welcome_session_and_pong() {
     let msgs = recv(&mut ws).await;
     assert!(matches!(msgs.as_slice(), [ServerMsg::Pong(p)] if p.client_time_ms == 5));
 
-    // A party command gets a non-fatal answer until N9.
+    // N9.3: a party command outside a party gets a non-fatal refusal.
     send(
         &mut ws,
-        &[ClientMsg::LobbyCommand(LobbyCommand::PartyCreate(
+        &[ClientMsg::LobbyCommand(LobbyCommand::PartyLeave(
             Default::default(),
         ))],
     )
     .await;
     let msgs = recv(&mut ws).await;
     assert!(
-        matches!(msgs.as_slice(), [ServerMsg::Error(e)] if e.code == ErrorCode::NotAllowed && !e.fatal),
+        matches!(msgs.as_slice(), [ServerMsg::Error(e)] if e.code == ErrorCode::PartyNotFound && !e.fatal),
         "{msgs:?}"
     );
 

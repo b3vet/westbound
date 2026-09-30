@@ -24,6 +24,15 @@ cors_allowed_origins = ["*"]
 device_create_per_hour = 1000
 device_create_burst = 100
 
+[deeplinks]
+# Invite links on a local run open a web build served on :8000 against this server
+# (tools/export_web.sh, then `python3 -m http.server 8000` in build/web). Placeholder app
+# ids so the association files show their real shape (docs/SERVER.md → deep links).
+web_join_url = "http://127.0.0.1:8000/index.html?room={code}&server={origin}"
+apple_app_ids = ["ABCDE12345.com.sipsakrandevu.westbound"]
+android_package = "com.sipsakrandevu.westbound"
+android_cert_sha256 = ["00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF"]
+
 [gateway]
 # dev with no map hashes: /ws accepts any Hello.map_hash (tests/net/live_ws_check.gd sends
 # all zeros). N3 adds loop_v1's hash here and to production.

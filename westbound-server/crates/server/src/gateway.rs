@@ -23,8 +23,10 @@
 //!    `room_browse`) → the rooms registry (N5.1, `rooms/`); a seated session's
 //!    `player_state`, `run_event`, `hit_report`, `quick_chat` and `room_host_command` go to
 //!    its room task through its bounded queue (`try_send`: a full queue drops, counted).
-//!    Party commands have no owner yet (N9). When the connection ends, a seated player's
-//!    seat is held (`rooms::RoomLink::disconnected`).
+//!    Party commands go to the parties registry (N9.3, `social/parties.rs`); a party
+//!    leader's join moves the party (the members' connections get a follow order and take
+//!    a seat in the same room). When the connection ends, a seated player's seat is held
+//!    (`rooms::RoomLink::disconnected`) and so is their party place.
 //! 5. **Keepalive**: `ServerKeepalive` (protocol `Keepalive`), dead after 8 s of silence.
 //! 6. **Fatal errors** are sent, then the close frame follows once the client has closed or
 //!    `gateway.fatal_close_delay_ms` passed (see `linger`).
@@ -42,10 +44,10 @@ use protocol::handshake::{
     fatal_error, Action, AuthError, Handshake, HandshakePolicy, DETAIL_BANNED,
 };
 use protocol::{
-    decode_client_frame, AccountId, ClientMsg, DecodeError, ErrorCode, ErrorMsg, FrameBuilder,
-    LobbyCommand, LobbyEvent, MapHash, Pong, RoomList, ServerMsg, Text,
+    decode_client_frame, AccountId, ClientMsg, CrewTag, DecodeError, ErrorCode, ErrorMsg,
+    FrameBuilder, Identity, LobbyCommand, LobbyEvent, MapHash, Pong, RoomList, ServerMsg, Text,
 };
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use crate::app::AppState;
 use crate::auth::{self, AuthFailure};
@@ -53,8 +55,9 @@ use crate::config::{parse_map_hash, Config};
 use crate::map::ServerMap;
 use crate::metrics::{HandshakeResult, Metrics};
 use crate::msg_limits::{client_type_index, MessageLimits, Verdict};
-use crate::rooms::{JoinTarget, RoomLink};
+use crate::rooms::{JoinOpts, JoinTarget, RoomLink};
 use crate::sessions::{Kick, SessionHandle};
+use crate::social::parties::{self, Follow};
 use crate::tick::{TickClock, TickTime};
 use crate::ws::{error_label, next_message, payload_len, CloseReason, Outbound, ServerKeepalive};
 
@@ -66,7 +69,7 @@ pub const DETAIL_RATE_LIMITED: &str = "Too many messages; some were dropped.";
 pub const DETAIL_FLOOD: &str = "Too many messages.";
 pub const DETAIL_INTERNAL: &str = "Server error. Please try again.";
 pub const DETAIL_NO_LOBBY: &str = "The lobby is not available yet.";
-pub const DETAIL_NO_PARTIES: &str = "Parties are not available yet.";
+pub const DETAIL_PARTIES_UNAVAILABLE: &str = "Parties are unavailable. Try again.";
 pub const DETAIL_ROOMS_UNAVAILABLE: &str = "Rooms are unavailable. Try again.";
 pub const DETAIL_PRESENCE_UNAVAILABLE: &str = "Friends presence is unavailable. Try again.";
 pub const DETAIL_NOT_IN_ROOM: &str = "You are not in a room.";
@@ -193,6 +196,8 @@ struct Conn<'a> {
     kick_rx: Option<watch::Receiver<Option<Kick>>>,
     /// The session's room seat (N5.1).
     room: Option<RoomLink>,
+    /// N9.3: the party's follow orders for this session (the leader moved the party).
+    follow_rx: Option<mpsc::Receiver<Follow>>,
 }
 
 /// The connection's next step after a message.
@@ -401,11 +406,18 @@ impl Conn<'_> {
             replaced = replaced.is_some(),
             "session established"
         );
+        let session_id = handle.session_id;
         self.session = Some(handle);
         self.kick_rx = Some(kick_rx);
-        match self.reply(welcome) {
-            Ok(()) => Step::Continue,
-            Err(r) => Step::Close(r),
+        if let Err(r) = self.reply(welcome) {
+            return Step::Close(r);
+        }
+        // N9.3: the party's follow orders; a reconnect gets its party state after Welcome.
+        let (rx, party) = self.state.parties.attach(session_id, account);
+        self.follow_rx = Some(rx);
+        match party.map(|m| self.reply(&m)) {
+            Some(Err(r)) => Step::Close(r),
+            _ => Step::Continue,
         }
     }
 
@@ -458,10 +470,36 @@ impl Conn<'_> {
 
     /// `room_create` / `room_join_*` / `quick_join`: takes a seat through the registry.
     async fn room_join(&mut self, target: JoinTarget) -> Step {
+        self.room_join_as(target, None).await
+    }
+
+    /// Takes a seat. `follow`: the party's leader moved the party there (N9.3): a seat
+    /// held in another room is left first and the party rules below are skipped.
+    ///
+    /// **Party rules** (N9.3; docs/SERVER.md → "Parties"), in a party of two or more:
+    /// - the **leader** moves the party: Quick Join needs a seat for every connected member
+    ///   (and a join by code or id refuses a room without them, `room_full`); once seated,
+    ///   every other connected member follows;
+    /// - a **member**'s Quick Join goes to the leader's room (`not_party_leader` while the
+    ///   leader has none); a member who creates or joins any other room leaves the party
+    ///   and goes alone.
+    ///
+    /// Quick Join never picks a room with a player blocked either way with a mover.
+    async fn room_join_as(&mut self, mut target: JoinTarget, follow: Option<Follow>) -> Step {
         let Some(session) = self.session.clone() else {
             return Step::Close(CloseReason::Error);
         };
-        if self.seat().is_some() {
+        let me = session.account_id;
+        if let Some(f) = follow {
+            match self.seat() {
+                Some(link) if link.room_id == f.room_id => return Step::Continue,
+                Some(link) => {
+                    link.leave().await;
+                    self.room = None;
+                }
+                None => {}
+            }
+        } else if self.seat().is_some() {
             let e = error_msg(
                 ErrorCode::AlreadyInRoom,
                 false,
@@ -469,11 +507,63 @@ impl Conn<'_> {
             );
             return self.reply_step(&e);
         }
+        let rooms = self.state.rooms.clone();
+        let party = self.state.parties.view(me);
+        let mut opts = JoinOpts {
+            party: party.as_ref().map(|p| p.id),
+            movers: vec![me],
+            avoid: Vec::new(),
+        };
+        let mut leads = false;
+        if let (Some(p), None) = (&party, follow) {
+            if p.is_group() && p.is_leader(me) {
+                leads = true;
+                opts.movers = p.connected.clone();
+                if !opts.movers.contains(&me) {
+                    opts.movers.push(me);
+                }
+            } else if p.is_group() {
+                let leader_room = rooms.seat_of(p.leader);
+                if target == JoinTarget::Quick {
+                    match leader_room {
+                        Some(r) => target = JoinTarget::Id(r),
+                        None => {
+                            let e = error_msg(
+                                ErrorCode::NotPartyLeader,
+                                false,
+                                parties::DETAIL_LEADER_PICKS,
+                            );
+                            return self.reply_step(&e);
+                        }
+                    }
+                } else {
+                    let dest = rooms.target_room(&target);
+                    let own = rooms.seat_of(me);
+                    if dest.is_none() || (dest != leader_room && dest != own) {
+                        // Going alone: out of the party first.
+                        let _ = self.state.parties.leave(me);
+                        opts.party = None;
+                    }
+                }
+            }
+        }
         let ident = match self.state.db.acquire().await {
-            Ok(mut conn) => crate::rooms::identity_of(&mut conn, session.account_id).await,
+            Ok(mut conn) => {
+                let id = crate::rooms::identity_of(&mut conn, me).await;
+                match (id, target == JoinTarget::Quick) {
+                    (Ok(v), true) => {
+                        let ids: Vec<i64> = opts.movers.iter().map(|a| a.0 as i64).collect();
+                        crate::social::blocked_either(&mut conn, &ids)
+                            .await
+                            .map(|b| (v, b))
+                    }
+                    (Ok(v), false) => Ok((v, Vec::new())),
+                    (Err(e), _) => Err(e),
+                }
+            }
             Err(e) => Err(e),
         };
-        let (identity, crew_tag) = match ident {
+        let ((identity, crew_tag), blocked) = match ident {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!(error = %e, "database error reading the room identity");
@@ -481,29 +571,159 @@ impl Conn<'_> {
                 return self.reply_step(&e);
             }
         };
+        opts.avoid = blocked.into_iter().map(|b| AccountId(b as u64)).collect();
         // Earlier replies of this frame go first; the room's snapshot follows on its tick.
         if let Err(r) = self.flush() {
             return Step::Close(r);
         }
-        match self
-            .state
-            .rooms
-            .join(target, &session, identity, crew_tag)
+        match rooms
+            .join(target, &session, identity, crew_tag, &opts)
             .await
         {
             Ok(link) => {
                 tracing::info!(
                     client = %self.client,
-                    account = session.account_id.0,
+                    account = me.0,
                     room = link.room_id,
                     player = link.player_id,
                     reconnected = link.reconnected,
+                    party = opts.party,
+                    follow = follow.is_some(),
                     "joined room"
                 );
+                let room_id = link.room_id;
                 self.room = Some(link);
+                if leads {
+                    let n = self.state.parties.follow(me, room_id);
+                    tracing::info!(account = me.0, room = room_id, followers = n, "party moves");
+                }
                 Step::Continue
             }
             Err(refusal) => self.reply_step(&refusal.to_msg()),
+        }
+    }
+
+    /// A follow order from the party (the leader took a seat): join that room, unless this
+    /// session left the party meanwhile.
+    async fn on_follow(&mut self, f: Follow) -> Step {
+        let Some(session) = self.session.as_ref() else {
+            return Step::Continue;
+        };
+        if self.state.parties.view(session.account_id).map(|p| p.id) != Some(f.party_id) {
+            return Step::Continue;
+        }
+        let step = self.room_join_as(JoinTarget::Id(f.room_id), Some(f)).await;
+        if let Step::Close(_) = step {
+            return step;
+        }
+        match self.flush() {
+            Ok(()) => Step::Continue,
+            Err(r) => Step::Close(r),
+        }
+    }
+
+    /// The account's room identity (name, tag, crew tag), or the reply that it failed.
+    async fn identity(&mut self) -> Result<(Identity, CrewTag), Step> {
+        let Some(session) = self.session.as_ref() else {
+            return Err(Step::Close(CloseReason::Error));
+        };
+        let account = session.account_id;
+        let ident = match self.state.db.acquire().await {
+            Ok(mut conn) => crate::rooms::identity_of(&mut conn, account).await,
+            Err(e) => Err(e),
+        };
+        match ident {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                tracing::error!(error = %e, "database error reading the party identity");
+                let e = error_msg(ErrorCode::Internal, false, DETAIL_PARTIES_UNAVAILABLE);
+                Err(self.reply_step(&e))
+            }
+        }
+    }
+
+    /// `party_create` / `party_join` / `party_invite` / `party_leave` / `party_kick`
+    /// (N9.3). The state goes to the members from the parties registry; refusals are
+    /// non-fatal errors. A joiner follows the leader into the leader's room.
+    async fn party_command(&mut self, cmd: &LobbyCommand) -> Step {
+        let Some(session) = self.session.clone() else {
+            return Step::Close(CloseReason::Error);
+        };
+        let me = session.account_id;
+        // Earlier replies of this frame go first (the party's state is sent directly).
+        if let Err(r) = self.flush() {
+            return Step::Close(r);
+        }
+        let parties = self.state.parties.clone();
+        let mut follow = None;
+        let result = match cmd {
+            LobbyCommand::PartyCreate(_) => match self.identity().await {
+                Ok((ident, _)) => parties.create(ident).map(|_| ()),
+                Err(step) => return step,
+            },
+            LobbyCommand::PartyJoin(c) => {
+                let (ident, _) = match self.identity().await {
+                    Ok(v) => v,
+                    Err(step) => return step,
+                };
+                let blocked = match self.state.db.acquire().await {
+                    Ok(mut conn) => crate::social::blocked_either(&mut conn, &[me.0 as i64]).await,
+                    Err(e) => Err(e),
+                };
+                let blocked = match blocked {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::error!(error = %e, "database error reading blocks for a party");
+                        let e = error_msg(ErrorCode::Internal, false, DETAIL_PARTIES_UNAVAILABLE);
+                        return self.reply_step(&e);
+                    }
+                };
+                parties.join(ident, &c.code, &blocked).map(|v| {
+                    if v.leader != me {
+                        follow = self.state.rooms.seat_of(v.leader).map(|room_id| Follow {
+                            room_id,
+                            party_id: v.id,
+                        });
+                    }
+                })
+            }
+            LobbyCommand::PartyInvite(a) => {
+                let target = a.account_id;
+                let friends = match self.state.db.acquire().await {
+                    Ok(mut conn) => crate::social::friend_ids(&mut conn, me.0 as i64).await,
+                    Err(e) => Err(e),
+                };
+                let is_friend = match friends {
+                    Ok(f) => f.unwrap_or_default().contains(&(target.0 as i64)),
+                    Err(e) => {
+                        tracing::error!(error = %e, "database error reading friends for an invite");
+                        let e = error_msg(ErrorCode::Internal, false, DETAIL_PARTIES_UNAVAILABLE);
+                        return self.reply_step(&e);
+                    }
+                };
+                if !is_friend {
+                    // Blocking removes the friendship, so a blocked player lands here too.
+                    Err(crate::rooms::Refusal::new(
+                        ErrorCode::NotAllowed,
+                        parties::DETAIL_CANT_INVITE,
+                    ))
+                } else {
+                    match self.identity().await {
+                        Ok((ident, _)) => parties.invite(ident, target).map(|_| ()),
+                        Err(step) => return step,
+                    }
+                }
+            }
+            LobbyCommand::PartyLeave(_) => parties.leave(me),
+            LobbyCommand::PartyKick(a) => parties.kick(me, a.account_id),
+            _ => return Step::Continue,
+        };
+        if let Err(refusal) = result {
+            return self.reply_step(&refusal.to_msg());
+        }
+        match follow {
+            Some(f) => self.on_follow(f).await,
+            None => Step::Continue,
         }
     }
 
@@ -553,14 +773,12 @@ impl Conn<'_> {
                         rooms,
                     })))
                 }
-                // N9: parties.
+                // N9.3: parties.
                 LobbyCommand::PartyCreate(_)
                 | LobbyCommand::PartyInvite(_)
                 | LobbyCommand::PartyJoin(_)
                 | LobbyCommand::PartyLeave(_)
-                | LobbyCommand::PartyKick(_) => {
-                    Some(error_msg(ErrorCode::NotAllowed, false, DETAIL_NO_PARTIES))
-                }
+                | LobbyCommand::PartyKick(_) => return self.party_command(cmd).await,
             },
             ClientMsg::RoomHostCommand(c) => match self.seat() {
                 Some(link) => {
@@ -652,6 +870,7 @@ pub async fn run(socket: WebSocket, state: &AppState, client: &str) -> CloseReas
         session: None,
         kick_rx: None,
         room: None,
+        follow_rx: None,
     };
     let hello_deadline = tokio::time::sleep(state.config.hello_timeout());
     tokio::pin!(hello_deadline);
@@ -674,6 +893,11 @@ pub async fn run(socket: WebSocket, state: &AppState, client: &str) -> CloseReas
             }
             kick = wait_kick(conn.kick_rx.as_mut()), if established => {
                 if let Step::Close(r) = conn.on_kick(kick) {
+                    break r;
+                }
+            }
+            follow = wait_follow(conn.follow_rx.as_mut()), if established => {
+                if let Step::Close(r) = conn.on_follow(follow).await {
                     break r;
                 }
             }
@@ -726,6 +950,8 @@ pub async fn run(socket: WebSocket, state: &AppState, client: &str) -> CloseReas
         }
     }
     if let Some(s) = conn.session.take() {
+        // N9.3: the party place is held for a while (a reconnect takes it back).
+        state.parties.detach(s.session_id, s.account_id);
         state.presence.unsubscribe(s.account_id, s.session_id);
         if state.sessions.unregister(s.account_id, s.session_id) {
             state.presence.on_offline(s.account_id);
@@ -757,6 +983,18 @@ async fn linger(stream: &mut futures_util::stream::SplitStream<WebSocket>, state
                 Some(Ok(_)) => {}
             },
         }
+    }
+}
+
+/// The next follow order of the session's party (pending forever without a session, or
+/// when the parties registry dropped the channel for a newer session).
+async fn wait_follow(rx: Option<&mut mpsc::Receiver<Follow>>) -> Follow {
+    let Some(rx) = rx else {
+        return std::future::pending().await;
+    };
+    match rx.recv().await {
+        Some(f) => f,
+        None => std::future::pending().await,
     }
 }
 

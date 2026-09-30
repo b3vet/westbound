@@ -383,6 +383,41 @@ pub enum JoinTarget {
     Quick,
 }
 
+/// Who is joining besides the seat itself (N9.3): the party, how many seats it needs and
+/// whom Quick Join must keep away.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct JoinOpts {
+    /// The joiner's party: members of one party share a crew in public rooms.
+    pub party: Option<u32>,
+    /// The party's members moving with this join (the joiner included; empty = alone).
+    /// A room must have a free seat for each one not seated there yet.
+    pub movers: Vec<AccountId>,
+    /// Accounts blocked either way with a mover: Quick Join never picks a room they are
+    /// seated in (spec: "a blocked player is never matched into your room through Quick
+    /// Join").
+    pub avoid: Vec<AccountId>,
+}
+
+impl JoinOpts {
+    /// Seats `room_id` still needs: one per mover not seated there yet (a held seat is
+    /// taken back, not added); one without movers.
+    fn seats_needed(&self, reg: &Registry, room_id: u32) -> usize {
+        if self.movers.is_empty() {
+            return 1;
+        }
+        self.movers
+            .iter()
+            .filter(|a| reg.seats.get(a) != Some(&room_id))
+            .count()
+    }
+
+    fn avoided_in(&self, reg: &Registry, room_id: u32) -> bool {
+        self.avoid
+            .iter()
+            .any(|a| reg.seats.get(a) == Some(&room_id))
+    }
+}
+
 /// The rooms registry (`AppState.rooms`).
 pub struct Rooms {
     shared: Arc<Shared>,
@@ -593,8 +628,20 @@ impl Rooms {
         Ok(id)
     }
 
+    /// The live room `target` names without creating one (`Create` and `Quick` name none).
+    pub fn target_room(&self, target: &JoinTarget) -> Option<u32> {
+        match target {
+            JoinTarget::Code(c) => self.find_code(c),
+            JoinTarget::Id(id) => self.shared.lock().rooms.contains_key(id).then_some(*id),
+            JoinTarget::Create(_) | JoinTarget::Quick => None,
+        }
+    }
+
     /// Resolves `target` (creating a room for `Create` and, when nothing fits, `Quick`).
-    fn resolve(&self, target: &JoinTarget) -> Result<u32, Refusal> {
+    /// N9.3: Quick Join picks the public room with the most players that has a seat for
+    /// every mover and no avoided account; a join by code or id refuses a room without
+    /// seats for the whole party (`room_full`).
+    fn resolve(&self, target: &JoinTarget, opts: &JoinOpts) -> Result<u32, Refusal> {
         match target {
             JoinTarget::Create(s) => {
                 if s.visibility != Visibility::Private {
@@ -602,15 +649,24 @@ impl Rooms {
                 }
                 self.create(s.clone())
             }
-            JoinTarget::Code(c) => self
-                .find_code(c)
-                .ok_or(Refusal::new(ErrorCode::RoomNotFound, DETAIL_ROOM_NOT_FOUND)),
-            JoinTarget::Id(id) => {
-                if self.shared.lock().rooms.contains_key(id) {
-                    Ok(*id)
-                } else {
-                    Err(Refusal::new(ErrorCode::RoomNotFound, DETAIL_ROOM_NOT_FOUND))
+            JoinTarget::Code(_) | JoinTarget::Id(_) => {
+                let id = self
+                    .target_room(target)
+                    .ok_or(Refusal::new(ErrorCode::RoomNotFound, DETAIL_ROOM_NOT_FOUND))?;
+                if opts.movers.len() > 1 {
+                    let reg = self.shared.lock();
+                    if let Some(e) = reg.rooms.get(&id) {
+                        let free = usize::from(e.info.max_players)
+                            .saturating_sub(usize::from(e.info.players()));
+                        if opts.seats_needed(&reg, id) > free {
+                            return Err(Refusal::new(
+                                ErrorCode::RoomFull,
+                                crate::social::parties::DETAIL_PARTY_TOO_BIG,
+                            ));
+                        }
+                    }
                 }
+                Ok(id)
             }
             JoinTarget::Quick => {
                 let best = {
@@ -618,8 +674,12 @@ impl Rooms {
                     reg.rooms
                         .values()
                         .filter(|e| {
+                            let id = e.info.room_id;
+                            let free = usize::from(e.info.max_players)
+                                .saturating_sub(usize::from(e.info.players()));
                             e.info.visibility == Visibility::Public
-                                && e.info.players() < e.info.max_players
+                                && opts.seats_needed(&reg, id) <= free
+                                && !opts.avoided_in(&reg, id)
                         })
                         .max_by_key(|e| (e.info.players(), std::cmp::Reverse(e.info.room_id)))
                         .map(|e| e.info.room_id)
@@ -634,14 +694,16 @@ impl Rooms {
 
     /// Takes a seat for `session` (its account) in the target room, or takes back the
     /// account's seat there. A seat the account holds in another room is released first.
+    /// `opts`: the party moving with this join (N9.3; `JoinOpts::default()` alone).
     pub async fn join(
         &self,
         target: JoinTarget,
         session: &SessionHandle,
         identity: Identity,
         crew_tag: CrewTag,
+        opts: &JoinOpts,
     ) -> Result<RoomLink, Refusal> {
-        let room_id = self.resolve(&target)?;
+        let room_id = self.resolve(&target, opts)?;
         let account = session.account_id;
         let (entry, elsewhere) = {
             let reg = self.shared.lock();
@@ -667,6 +729,7 @@ impl Rooms {
             session: session.clone(),
             identity,
             crew_tag,
+            party: opts.party,
             reply,
         });
         let busy = Refusal::new(ErrorCode::Internal, DETAIL_ROOM_BUSY);
