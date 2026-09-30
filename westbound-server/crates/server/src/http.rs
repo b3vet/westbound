@@ -97,10 +97,11 @@ pub async fn assetlinks(State(state): State<AppState>) -> Response {
 }
 
 pub async fn metrics(State(state): State<AppState>) -> Response {
-    (
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        state.metrics.render(crate::VERSION, crate::BUILD),
-    )
+    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], {
+        let mut out = state.metrics.render(crate::VERSION, crate::BUILD);
+        state.rooms.metrics().render(&mut out);
+        out
+    })
         .into_response()
 }
 

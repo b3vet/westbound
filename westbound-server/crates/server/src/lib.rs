@@ -17,6 +17,10 @@
 //! N8.1: replay uploads (`POST /api/v1/runs/{run_id}/replay`), the verification queue
 //! (one verifier process at a time, timeouts, retries; none configured = jobs wait) and
 //! replay retention (top-N entries keep their files).
+//! N5.1: rooms and players (`rooms`): room tasks at 20 Hz, private rooms with codes and
+//! host rules, public rooms (Quick Join, the browser), the `PlayerState` relay with
+//! plausibility checks, spawns, crash-out respawns, rejoin crew, the 15 s seat hold and
+//! the room clock; the gateway routes room messages to the session's room.
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Architecture", "Server tech stack",
 //! "Resource budget and deployment"; docs/MULTIPLAYER_PLAN.md → N0, MP-D1.
 
@@ -42,6 +46,7 @@ pub mod profanity;
 pub mod profile;
 pub mod ratelimit;
 pub mod replays;
+pub mod rooms;
 pub mod runs;
 pub mod sessions;
 pub mod shutdown;

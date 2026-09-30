@@ -266,3 +266,51 @@ poll_interval_secs = 30
 keep_top_n = 100
 # The retention sweep (and orphan files) runs this often.
 cleanup_interval_secs = 3600
+
+[rooms]
+# Rooms and players (docs/SERVER.md → "Rooms"). The room cap is limits.max_rooms.
+# Seats per room (spec: up to 8; a private room may ask for fewer).
+max_players = 8
+# An empty room closes after this long (spec: 60 s).
+empty_close_ms = 60000
+# A dropped player's seat and run are held this long (spec: 15 s).
+seat_hold_ms = 15000
+# Spawn / rejoin protection, and the results toast before a crash-out respawn (spec: 3 s).
+protection_ms = 3000
+crash_respawn_ms = 3000
+# Spawns land this far behind the crew leader (spec: about 40 m).
+spawn_behind_leader_m = 40.0
+# The free-gap search around a spawn spot: +-60 m in 5 m steps, 15 m clear in its lane.
+spawn_search_m = 60.0
+spawn_step_m = 5.0
+spawn_clear_m = 15.0
+# Room traffic: "none" (no cars until N4.2 streams them) or "sim" (the sim crate's ring
+# runs with the players in it; spawns use its gaps).
+traffic = "none"
+# The room clock: a 32 min cycle, the first 22 min day; cycles start at this UTC ms
+# (the game's data/tuning/loop.tres; tests/rooms_data.rs keeps them equal).
+cycle_len_ms = 1920000
+day_len_ms = 1320000
+clock_epoch_unix_ms = 0
+# Each room task's bounded command queue, and how long a join waits for its answer.
+command_queue = 256
+join_timeout_ms = 2000
+# PlayerState plausibility (spec: speed <= top speed x 1.1 with boost; acceleration and
+# lateral movement within 1.2x the car's). The fastest car with boost: 285 km/h x 1.08.
+max_speed_kmh = 307.8
+speed_tolerance_pct = 10.0
+# Engine traction 9 + boost thrust 3 m/s^2; lateral movement (m/s).
+max_accel_mps2 = 12.0
+max_lateral_speed_mps = 12.0
+capability_tolerance_pct = 20.0
+# d beyond the median barrier or guardrail by more than this is clamped (an offence).
+lateral_margin_m = 1.0
+# Slack on the distance checks (quantization, jitter).
+position_slack_m = 2.0
+# States stamped this far ahead of the room clock are refused; this far behind, dropped.
+future_tolerance_ms = 500
+stale_state_ms = 2000
+# After a server placement (spawn, respawn, rejoin, reconnect): states far from it are
+# dropped as in flight for this long; a state within this radius acknowledges it.
+placement_grace_ms = 2000
+placement_radius_m = 30.0
