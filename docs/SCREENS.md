@@ -330,7 +330,7 @@ The game boots into the title: the run's MENU state over the attract drive (docs
 
 ### Layout
 
-- **Left-anchored, up from the bottom-left thumb:** a row of LEADERBOARDS, SETTINGS and GARAGE (WP8.2: the garage); above it PLAY (primary, `primary_button_size_px` tall, `menu_button_width_px` wide: Journey), DAILY DRIVE (today's UTC date under the label: "WED SEP 30") and ONLINE ("LOOP PRACTICE · ROOMS SOON"). Every button is at least `touch_target_px` tall.
+- **Left-anchored, up from the bottom-left thumb:** a row of LEADERBOARDS, SETTINGS, GARAGE (WP8.2: the garage) and ACHIEVEMENTS (WP8.3); above it PLAY (primary, `primary_button_size_px` tall, `menu_button_width_px` wide: Journey), DAILY DRIVE (today's UTC date under the label: "WED SEP 30") and ONLINE ("LOOP PRACTICE · ROOMS SOON"). Every button is at least `touch_target_px` tall.
 - **Logo:** WESTBOUND in Chakra Petch (the display face) at `font_logo_px`, outlined and speed-tilted (speed_tilt.gdshader), CHASE THE SUN under it in the accent.
 - **Band:** ink at `title_band_pct` from the left edge to `title_band_width_px`, its right edge leaning with the speed tilt and lined with the accent. The attract drive shows through it; the car sits right of centre (the camera's frame yaw).
 - **Profile chip (top-right):** the session's `name#tag` (PLAYER before a sign-in) and its status word (ONLINE, CONNECTING, OFFLINE, ...; ONLINE OFF without a session) after a status diamond (accent online, gold connecting, hot suspended / refused, muted otherwise). It follows `status_changed` / `profile_changed`. It never reaches the logo: the name is shortened with "..." to the room right of it (and `title_chip_max_width_px`). A tap opens ACCOUNT (or the settings without a session).
@@ -355,6 +355,7 @@ ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS O
 | Results RETRY | `retry` | `retry()`: the same mode (Daily keeps the day's seed) |
 | Title GARAGE | `TitleScreens.open_garage` | none while open; DONE → `garage_closed` → `refresh_menu_car()` (the attract drive takes the selected car and look) |
 | Results GARAGE | `garage` | `open_garage()`: `enter_menu()`, then the garage over the title |
+| Title ACHIEVEMENTS | `TitleScreens.open_achievements` (WP8.3) | none; DONE comes back to the title |
 
 ### Cost
 
@@ -411,3 +412,38 @@ tools/snap.sh src/ui/screens/dev/screens_preview.tscn --screen=results --xp=3000
 ### Tests
 
 `tests/ui/test_garage.gd`, `tests/ui/test_garage_text_fit.gd`, `tests/meta/test_garage_run.gd` (see GARAGE.md → Tests).
+
+## Achievements (WP8.3)
+
+The achievements, their progress and what is hidden. Spec: Garage and progression ("About 25 achievements"); UI → Screens; Accessibility. The achievements themselves, the tracking, the save, the unlock toast and the platform mirror: [ACHIEVEMENTS.md](ACHIEVEMENTS.md).
+
+| File | Class | Role |
+| --- | --- | --- |
+| `achievements_screen.gd` | `AchievementsScreen` | the screen (a RunScreen under TitleScreens, built on the first ACHIEVEMENTS; modal) |
+| `achievements_card.gd` | `AchievementsCard` | one achievement: a ScreenPanel with its title, state line, line and bar |
+
+### Layout
+
+- **Top row:** ACHIEVEMENTS (display face, `font_title_px`, speed-tilted) top-left; DONE (primary) top-right; left of it, right-aligned, "8 / 25 UNLOCKED" (tabular).
+- **Tabs:** DRIVING / THE ROAD / CAREER (`AchievementCatalog.groups`; OPTION buttons, `touch_target_px` tall, as wide as the widest label).
+- **Grid:** the tab's achievements in `achievements.screen_columns` × `screen_rows` (3 × 3) cards across the safe width, as tall as their text needs (never past the safe area). A card: the title (display face, `card_title_px`) and, right-aligned on its line, the state (label face, tabular): UNLOCKED (gold), "17 / 25" / "287 / 300 KM/H" / "32× / 50×" (the best run or the total), LOCKED (a one-off), ??? (hidden); under it the line (body face, muted) with its numbers in the player's units; at the bottom the bar (accent; full and gold once unlocked; none for a hidden or one-off lock). Unlocked cards have a gold edge and tab. A locked hidden one reads HIDDEN / KEEP DRIVING TO REVEAL IT.
+- Colour is never the only cue: every state has its word. Not mirrored for left-handed play (like the garage).
+
+### Behaviour
+
+- Reads the save's unlocked ids and the service's progress (a snapshot of the save and the garage when no service runs); never writes.
+- **Keys:** Esc and Enter = DONE; Left / Right change the tab (wrapping). **Touch:** ScreenButtons (emulated mouse events, never a raw touch index); the cards take no touches.
+- **Cost:** nothing exists before the first ACHIEVEMENTS; closed = `visible = false` under the title's layer, so nothing draws in gameplay (`TitleScreens.visible_item_count() == 0`).
+- **Text size:** 100% / 125%; every title and line shows whole at both sizes on 1280×720 and a notched 1560×720 (tested).
+
+### Preview
+
+```
+tools/snap.sh src/ui/screens/dev/achievements_preview.tscn --renderer=both --view=screen
+tools/snap.sh src/ui/screens/dev/achievements_preview.tscn --view=screen --tab=2 --text_scale=1.25 --size=1560x720
+tools/snap.sh src/ui/screens/dev/achievements_preview.tscn --renderer=both --view=toast   # the unlock toast in a run
+```
+
+### Tests
+
+`tests/ui/test_achievements_screen.gd`, `tests/ui/test_achievements_text_fit.gd`, `tests/ui/test_achievements_toast.gd` (see ACHIEVEMENTS.md → Tests).
