@@ -439,7 +439,9 @@ func _place_statics(n_obs: int, n_st: int, steps: int, n_g: int) -> void:
 ## The player's own body is already in a closed lane or beyond the right edge at t0.
 func _in_closure(road: RoadPath, player: VehicleState, left: float, lw: float, lanes: int) -> bool:
 	var hw := player_width * 0.5
-	if player.d + hw > road.lanes_right_edge_d(player.s) + EDGE_TOL_M:
+	var edge := minf(road.lanes_right_edge_d(player.s), minf(road.lanes_right_edge_d(player.s - player_length * 0.5),
+		road.lanes_right_edge_d(player.s + player_length * 0.5)))
+	if player.d + hw > edge + EDGE_TOL_M:
 		return true
 	if zones == null or int(zones.call(&"lane_closure_count")) == 0:
 		return false
