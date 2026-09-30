@@ -259,6 +259,37 @@ func test_invite_urls_and_links() -> void:
 	eq(NetInviteLink.take(), "")
 
 
+## N9.3 wires N9.2's presence onto the room connection (N5.2 left attach_lobby unwired):
+## once the rooms service connects, the friends presence is subscribed there.
+func test_presence_rides_on_the_room_connection() -> void:
+	var fake := NetFakeSocial.new()
+	var s := NetSession.new()
+	s.auto_start = false
+	s.configure(fake, NetSessionStore.new(), net, time, "https://social.test/api/v1", 4)
+	tree.root.add_child(s)
+	var l2 := NetLoopbackLink.new(time, Rng.new(5))
+	l2.latency_s = 0.03
+	l2.ordered = true
+	var srv := FakePartyServer.new(l2)
+	var r := NetRooms.new()
+	r.setup(s, l2.client, net, time, RunLoop.loop_road(t).length())
+	r.session.configure("loop://rooms", 1, NetCodec.hex_to_bytes(MAP_HASH), func() -> String: return "token")
+	r.set_process(false)
+	s.add_child(r)
+	var social := NetSocialClient.of(s)
+	check(social != null)
+	check(not social.ws_live(), "not before the connection")
+	r.session.connect_lobby()
+	for i in 30:
+		time.advance_s(0.01)
+		srv.poll()
+		r.session.poll()
+	var subs := srv.lobby_commands.filter(func(m: Dictionary) -> bool: return m["kind"] == "presence_subscribe")
+	eq(subs.size(), 1, "subscribed after the Welcome")
+	check(social.ws_live(), "presence comes over the room socket; no polling")
+	s.free()
+
+
 func test_party_state_bookkeeping() -> void:
 	var p := NetParty.new()
 	p.me = "7"
