@@ -417,6 +417,12 @@ player_width_m = 1.95
 # Cars are tracked for passes from this far ahead; crew totals go out at most this often.
 track_ahead_m = 60.0
 crew_total_interval_ms = 1000
+# Shadow collision logging (N10.1, docs/SERVER.md -> "Shadow collisions"): each player sees
+# the other this far behind when their views' disagreement is estimated (spec: remote cars
+# shown 100 ms behind); one in this many of a room's shadow records is logged (target
+# wb::shadow), the first always.
+shadow_view_delay_ms = 100
+shadow_log_every = 10
 
 [admin]
 # N10.2: the admin API the `admin` CLI talks to (live rooms, notices, kicks, stats), on its

@@ -1,0 +1,63 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"contacts!: i64\",\n                  COUNT(DISTINCT player_a || ':' || player_b) AS \"pairs!: i64\",\n                  COALESCE(AVG(speed), 0.0) AS \"speed!: f64\",\n                  COALESCE(AVG(disagreement_m), 0.0) AS \"dis!: f64\",\n                  COALESCE(MAX(disagreement_m), 0.0) AS \"dis_max!: f64\",\n                  COALESCE(SUM(disagreement_m > 1.0), 0) AS \"over!: i64\",\n                  COALESCE(AVG(ticks), 0.0) AS \"ticks!: f64\"\n           FROM shadow_contacts WHERE created_at >= ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "contacts!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "pairs!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "speed!: f64",
+        "ordinal": 2,
+        "type_info": "Float",
+        "origin": "Expression"
+      },
+      {
+        "name": "dis!: f64",
+        "ordinal": 3,
+        "type_info": "Float",
+        "origin": "Expression"
+      },
+      {
+        "name": "dis_max!: f64",
+        "ordinal": 4,
+        "type_info": "Float",
+        "origin": "Expression"
+      },
+      {
+        "name": "over!: i64",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "ticks!: f64",
+        "ordinal": 6,
+        "type_info": "Float",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7b4fe4522e0c2f56afc84ae45791713b0b9a09b3ab3687874956f7c66d95caec"
+}

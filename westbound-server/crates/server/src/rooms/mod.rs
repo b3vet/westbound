@@ -17,7 +17,8 @@
 //! | `car_ids` | N4.2: wire car ids (MP-D6: never reused within 30 s) |
 //! | `car_history` | N6.1: the traffic of the last ticks (claim verification, the hit cross-check) |
 //! | `scoring` | N6.1: claims, verification, the official score, `ScoreSync`, hits, sectors, crew proximity, trains, crew totals |
-//! | `metrics` | `wb_rooms`, `wb_room_tick_seconds`, offences, drops |
+//! | `metrics` | `wb_rooms`, `wb_room_tick_seconds`, offences, drops; N10.1: shadow contacts |
+//! | `shadow_log` | N10.1: shadow contacts to SQLite (`shadow_contacts`) and their aggregates for the admin stats |
 //!
 //! **Locks.** The registry (`Shared::registry`, one `std::sync::Mutex`) is taken to create,
 //! find or unregister a room and when a seat is taken or released: never per tick and never
@@ -32,6 +33,7 @@ pub mod plausibility;
 pub mod road;
 pub mod room;
 pub mod scoring;
+pub mod shadow_log;
 pub mod sim_traffic;
 mod task;
 #[cfg(test)]
@@ -257,6 +259,27 @@ pub struct FinishedRun {
 /// collect them).
 pub type RunSink = Arc<dyn Fn(FinishedRun) + Send + Sync>;
 
+/// N10.1: a shadow contact between two players, for `shadow_contacts` (see
+/// `scoring::shadow`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ShadowRow {
+    pub room_id: u32,
+    pub tick: u32,
+    /// The players' accounts (0: the seat was gone when the contact ended).
+    pub account_a: AccountId,
+    pub account_b: AccountId,
+    pub speed_mps: f64,
+    pub disagreement_m: f64,
+    pub closing_mps: f64,
+    pub depth_m: f64,
+    pub ticks: u32,
+    /// Unix seconds when the contact ended.
+    pub at: i64,
+}
+
+/// Where rooms hand shadow contacts (the app writes them to SQLite; tests collect them).
+pub type ShadowSink = Arc<dyn Fn(ShadowRow) + Send + Sync>;
+
 /// What the registry and every room share.
 pub struct Shared {
     pub params: RoomParams,
@@ -265,6 +288,7 @@ pub struct Shared {
     pub metrics: Arc<RoomMetrics>,
     registry: Mutex<Registry>,
     runs: Mutex<Option<RunSink>>,
+    shadows: Mutex<Option<ShadowSink>>,
 }
 
 impl Shared {
@@ -310,6 +334,18 @@ impl Shared {
         if let Some(sink) = sink {
             RoomMetrics::inc(&self.metrics.runs_recorded);
             sink(run);
+        }
+    }
+
+    /// Hands a shadow contact to the sink, if one is set.
+    fn record_shadow(&self, row: ShadowRow) {
+        let sink = self
+            .shadows
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        if let Some(sink) = sink {
+            sink(row);
         }
     }
 
@@ -482,6 +518,7 @@ impl Rooms {
                 metrics: Arc::new(RoomMetrics::default()),
                 registry: Mutex::new(Registry::default()),
                 runs: Mutex::new(None),
+                shadows: Mutex::new(None),
             }),
             draining: AtomicBool::new(false),
             next_id: AtomicU32::new(1),
@@ -503,6 +540,15 @@ impl Rooms {
     /// Where finished, verified runs go (the app: the leaderboards; N6.1).
     pub fn set_run_sink(&self, sink: RunSink) {
         *self.shared.runs.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
+    }
+
+    /// N10.1: where shadow contacts between players go (the app: `shadow_contacts`).
+    pub fn set_shadow_sink(&self, sink: ShadowSink) {
+        *self
+            .shared
+            .shadows
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(sink);
     }
 
     pub fn params(&self) -> &RoomParams {

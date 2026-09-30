@@ -29,6 +29,7 @@
 pub mod claims;
 pub mod official;
 pub mod ring;
+pub mod shadow;
 #[cfg(test)]
 mod tests;
 pub mod tracker;
@@ -50,6 +51,7 @@ use crate::config::ScoringConfig;
 use claims::{Accepted, Claim, Decision, Evidence, Reject, VerifyRules};
 use official::{Counts, Official, StepCtx};
 use ring::Ring;
+use shadow::{Shadow, ShadowRules};
 use tracker::{StateRec, TrackRules, Tracker};
 
 const MS_PER_S: f64 = 1_000.0;
@@ -70,6 +72,8 @@ const TRAIN_LOG: usize = 128;
 const CREW_STATE_TICKS: u32 = 2;
 /// Score events one player's step may announce.
 const STEP_OUT: usize = 16;
+/// The log target of the shadow records (N10.1): `RUST_LOG=wb::shadow=info`.
+pub const SHADOW_LOG: &str = "wb::shadow";
 
 /// The compiled-in scoring export, parsed once.
 pub fn builtin_params() -> Arc<ScoringParams> {
@@ -103,6 +107,10 @@ pub struct ScoringRules {
     pub crew_total_ticks: u32,
     /// Traffic history depth (ticks).
     pub history_ticks: usize,
+    /// N10.1: shadow contacts between players; one in `log_every` of the room's shadow
+    /// records (player contacts, unreported traffic contacts, refused hits) is logged.
+    pub shadow: ShadowRules,
+    pub log_every: u64,
 }
 
 impl ScoringRules {
@@ -159,6 +167,13 @@ impl ScoringRules {
             verify_min_claims: c.verify_min_claims,
             crew_total_ticks: ticks(c.crew_total_interval_ms).max(1),
             history_ticks: (ticks(stale_state_ms) as usize + 2).max(STATE_RING / 2),
+            shadow: ShadowRules {
+                view_ticks: ticks(c.shadow_view_delay_ms),
+                p_hl,
+                p_hw,
+                tick_dt: 1.0 / rate,
+            },
+            log_every: c.shadow_log_every.max(1),
             params,
         }
     }
@@ -303,11 +318,17 @@ pub struct RoomScoring {
     pub crew_events: Vec<RoomCrew>,
     hit_cars: Vec<(u16, u16)>,
     metrics: Arc<RoomMetrics>,
+    /// N10.1: contacts between players (the room drains `shadow.out`), the room's id for
+    /// the logs, and how many shadow records the room has had (log sampling).
+    pub shadow: Shadow,
+    room_id: u32,
+    shadow_records: u64,
 }
 
 impl RoomScoring {
     pub fn new(rules: ScoringRules, map: &LoopMap, metrics: Arc<RoomMetrics>) -> Self {
         let cap = usize::from(protocol::messages::MAX_ROOM_PLAYERS);
+        let shadow = Shadow::new(rules.shadow, map.length_mm());
         Self {
             rules,
             loop_len_mm: map.length_mm().max(1),
@@ -318,7 +339,23 @@ impl RoomScoring {
             crew_events: Vec::with_capacity(usize::from(protocol::messages::MAX_CREWS)),
             hit_cars: Vec::with_capacity(cap),
             metrics,
+            shadow,
+            room_id: 0,
+            shadow_records: 0,
         }
+    }
+
+    /// The room's id (for the logs).
+    pub fn with_room_id(mut self, room_id: u32) -> Self {
+        self.room_id = room_id;
+        self
+    }
+
+    /// Counts a shadow record; true when this one is logged (the first, then one in
+    /// `log_every`).
+    pub fn log_sample(&mut self) -> bool {
+        self.shadow_records += 1;
+        self.shadow_records == 1 || self.shadow_records.is_multiple_of(self.rules.log_every)
     }
 
     pub fn rules(&self) -> &ScoringRules {
@@ -417,6 +454,7 @@ impl RoomScoring {
             d: f64::from(st.d_cm) / CM_PER_M,
             v: f64::from(st.speed_cms) / CM_PER_M,
             yaw: f64::from(st.heading_e4) / HEADING_PER_RAD,
+            v_lat: f64::from(st.lat_vel_cms) / CM_PER_M,
             boost: st.flags.boost,
             protected: st.run_state == RunState::Protected
                 || st.flags.ghost
@@ -501,6 +539,7 @@ impl RoomScoring {
             self.score_until(i, Some(horizon), map, night);
             self.resolve_contacts(i, Some(horizon));
         }
+        self.shadow.tick(&self.players, horizon, &self.metrics);
         self.crew_totals(now, false);
     }
 
@@ -569,6 +608,22 @@ impl RoomScoring {
                     }
                 } else {
                     RoomMetrics::inc(&self.metrics.hits_refused);
+                    // N10.1: the reverse of an unreported contact (a hit the server saw
+                    // nothing for), sampled.
+                    self.shadow_records += 1;
+                    let n = self.shadow_records;
+                    if n == 1 || n.is_multiple_of(self.rules.log_every) {
+                        tracing::info!(
+                            target: SHADOW_LOG,
+                            kind = "refused_hit",
+                            room = self.room_id,
+                            player = p.player_id,
+                            car = h.car_id,
+                            tick = h.tick,
+                            sample = n,
+                            "shadow: reported traffic hit with no contact in the server's view"
+                        );
+                    }
                 }
                 // Drop entry k (the ring keeps order).
                 remove_at(&mut p.pending_hits, k);
@@ -717,6 +772,24 @@ impl RoomScoring {
                         car = c.car_id,
                         tick = c.tick,
                         "server-detected contact the client did not report; run unverified"
+                    );
+                }
+                // N10.1: every one counted, a sample logged with its numbers.
+                self.shadow_records += 1;
+                let n = self.shadow_records;
+                if n == 1 || n.is_multiple_of(r.log_every) {
+                    tracing::info!(
+                        target: SHADOW_LOG,
+                        kind = "unreported_contact",
+                        room = self.room_id,
+                        player = p.player_id,
+                        car = c.car_id,
+                        tick = c.tick,
+                        depth_m = c.depth,
+                        speed_mps = c.speed,
+                        car_speed_mps = c.car_speed,
+                        sample = n,
+                        "shadow: server-detected traffic contact the client did not report"
                     );
                 }
             }

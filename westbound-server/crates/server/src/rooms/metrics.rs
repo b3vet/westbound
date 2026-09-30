@@ -1,7 +1,9 @@
 //! Room metrics for `/metrics` (N5.1): live rooms and seats, tick cost (a fixed-bucket
 //! histogram, so the p99 against the spec's 5 ms can be read off it), plausibility offences
 //! and dropped room messages. Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → Resource budget
-//! ("Room tick time: p99 under 5 ms per 20 Hz tick").
+//! ("Room tick time: p99 under 5 ms per 20 Hz tick"). N10.1: the shadow contacts between
+//! players (Players → shadow collision logging: contacts, their speeds and the
+//! disagreement of the two views, as histograms) and the largest tick.
 
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,6 +17,12 @@ pub const TICK_BUCKETS_US: [u64; 17] = [
     25, 50, 100, 200, 300, 500, 750, 1_000, 1_500, 2_000, 3_000, 4_000, 5_000, 10_000, 20_000,
     50_000, 100_000,
 ];
+
+/// N10.1: upper bounds of the shadow contacts' disagreement (m) and speed (km/h) buckets;
+/// the last bucket of each is everything above.
+pub const SHADOW_DISAGREEMENT_M: [f64; 8] = [0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0];
+pub const SHADOW_SPEED_KMH: [f64; 6] = [50.0, 100.0, 150.0, 200.0, 250.0, 300.0];
+const KMH_PER_MPS: f64 = 3.6;
 
 /// Why a message for a room never reached it or was not taken.
 pub const DROP_REASONS: [&str; 6] = [
@@ -60,6 +68,19 @@ pub struct RoomMetrics {
     pub scoring_us_sum: AtomicU64,
     /// Multiplayer runs handed to the boards.
     pub runs_recorded: AtomicU64,
+    // Shadow collision logging (N10.1).
+    /// Player states the shadow check looked at (one per player per tick: player-ticks
+    /// driven, the base of the contacts-per-hour rate).
+    pub shadow_player_ticks: AtomicU64,
+    /// Contacts between two players, and the pair-ticks they overlapped.
+    pub shadow_contacts: AtomicU64,
+    pub shadow_contact_ticks: AtomicU64,
+    shadow_disagreement: [AtomicU64; SHADOW_DISAGREEMENT_M.len() + 1],
+    shadow_speed: [AtomicU64; SHADOW_SPEED_KMH.len() + 1],
+    /// Rows written to `shadow_contacts`, and dropped (the writer's queue was full or the
+    /// database failed).
+    pub shadow_rows_written: AtomicU64,
+    pub shadow_rows_dropped: AtomicU64,
 }
 
 impl RoomMetrics {
@@ -73,6 +94,37 @@ impl RoomMetrics {
 
     pub fn get(c: &AtomicU64) -> u64 {
         c.load(Ordering::Relaxed)
+    }
+
+    pub fn add(c: &AtomicU64, n: u64) {
+        c.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// N10.1: one finished shadow contact (its overlapping pair-ticks are counted as they
+    /// happen).
+    pub fn observe_shadow_contact(&self, _ticks: u32, speed_mps: f64, disagreement_m: f64) {
+        self.shadow_contacts.fetch_add(1, Ordering::Relaxed);
+        let i = SHADOW_DISAGREEMENT_M
+            .iter()
+            .position(|&b| disagreement_m <= b)
+            .unwrap_or(SHADOW_DISAGREEMENT_M.len());
+        self.shadow_disagreement[i].fetch_add(1, Ordering::Relaxed);
+        let kmh = speed_mps * KMH_PER_MPS;
+        let i = SHADOW_SPEED_KMH
+            .iter()
+            .position(|&b| kmh <= b)
+            .unwrap_or(SHADOW_SPEED_KMH.len());
+        self.shadow_speed[i].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Shadow contacts per disagreement bucket (`SHADOW_DISAGREEMENT_M`, then above).
+    pub fn shadow_disagreement(&self) -> [u64; SHADOW_DISAGREEMENT_M.len() + 1] {
+        std::array::from_fn(|i| self.shadow_disagreement[i].load(Ordering::Relaxed))
+    }
+
+    /// Shadow contacts per speed bucket (`SHADOW_SPEED_KMH`, then above).
+    pub fn shadow_speed(&self) -> [u64; SHADOW_SPEED_KMH.len() + 1] {
+        std::array::from_fn(|i| self.shadow_speed[i].load(Ordering::Relaxed))
     }
 
     /// One room tick's wall time.
@@ -227,6 +279,16 @@ impl RoomMetrics {
         let _ = writeln!(out, "wb_room_tick_seconds_count {}", g(&self.ticks));
         let _ = writeln!(
             out,
+            "# HELP wb_room_tick_max_seconds The longest room tick since the start."
+        );
+        let _ = writeln!(out, "# TYPE wb_room_tick_max_seconds gauge");
+        let _ = writeln!(
+            out,
+            "wb_room_tick_max_seconds {}",
+            g(&self.tick_us_max) as f64 / 1e6
+        );
+        let _ = writeln!(
+            out,
             "# HELP wb_room_offences_total Implausible player states by kind."
         );
         let _ = writeln!(out, "# TYPE wb_room_offences_total counter");
@@ -313,6 +375,7 @@ impl RoomMetrics {
             "wb_room_scoring_seconds_total {}",
             g(&self.scoring_us_sum) as f64 / 1e6
         );
+        self.render_shadow(out);
         let _ = writeln!(
             out,
             "# HELP wb_room_dropped_total Room messages dropped, by reason."
@@ -325,6 +388,66 @@ impl RoomMetrics {
                 g(&self.drops[i])
             );
         }
+    }
+}
+
+impl RoomMetrics {
+    /// N10.1: the shadow contacts' counters and histograms.
+    fn render_shadow(&self, out: &mut String) {
+        let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let mut metric = |name: &str, kind: &str, help: &str, value: u64| {
+            let _ = writeln!(out, "# HELP {name} {help}");
+            let _ = writeln!(out, "# TYPE {name} {kind}");
+            let _ = writeln!(out, "{name} {value}");
+        };
+        metric(
+            "wb_room_shadow_player_ticks_total",
+            "counter",
+            "Player states checked for shadow contacts (player-ticks driven).",
+            g(&self.shadow_player_ticks),
+        );
+        metric(
+            "wb_room_shadow_contact_ticks_total",
+            "counter",
+            "Pair-ticks two players' boxes overlapped (ghosted).",
+            g(&self.shadow_contact_ticks),
+        );
+        metric(
+            "wb_room_shadow_rows_written_total",
+            "counter",
+            "Shadow contacts written to shadow_contacts.",
+            g(&self.shadow_rows_written),
+        );
+        metric(
+            "wb_room_shadow_rows_dropped_total",
+            "counter",
+            "Shadow contacts not written (queue full or database error).",
+            g(&self.shadow_rows_dropped),
+        );
+        let mut hist = |name: &str, help: &str, bounds: &[f64], counts: &[u64]| {
+            let _ = writeln!(out, "# HELP {name} {help}");
+            let _ = writeln!(out, "# TYPE {name} histogram");
+            let mut cum = 0;
+            for (b, n) in bounds.iter().zip(counts) {
+                cum += n;
+                let _ = writeln!(out, "{name}_bucket{{le=\"{b}\"}} {cum}");
+            }
+            cum += counts[bounds.len()];
+            let _ = writeln!(out, "{name}_bucket{{le=\"+Inf\"}} {cum}");
+            let _ = writeln!(out, "{name}_count {cum}");
+        };
+        hist(
+            "wb_room_shadow_contact_disagreement_meters",
+            "Shadow contacts by the largest disagreement of the two players' views.",
+            &SHADOW_DISAGREEMENT_M,
+            &self.shadow_disagreement(),
+        );
+        hist(
+            "wb_room_shadow_contact_speed_kmh",
+            "Shadow contacts by the pair's mean speed at the first overlap.",
+            &SHADOW_SPEED_KMH,
+            &self.shadow_speed(),
+        );
     }
 }
 
@@ -350,5 +473,23 @@ mod tests {
         assert!(out.contains("wb_room_tick_seconds_count 100"));
         assert!(out.contains("wb_room_tick_seconds_bucket{le=\"+Inf\"} 100"));
         assert!(out.contains("wb_room_offences_total{kind=\"teleport\"} 0"));
+        assert!(out.contains("wb_room_tick_max_seconds 0.003"));
+    }
+
+    #[test]
+    fn shadow_contacts_fill_their_histograms() {
+        let m = RoomMetrics::default();
+        m.observe_shadow_contact(3, 30.0, 0.05);
+        m.observe_shadow_contact(3, 60.0, 1.5);
+        m.observe_shadow_contact(3, 100.0, 40.0);
+        assert_eq!(RoomMetrics::get(&m.shadow_contacts), 3);
+        assert_eq!(m.shadow_disagreement(), [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+        // 108, 216 and 360 km/h.
+        assert_eq!(m.shadow_speed(), [0, 0, 1, 0, 1, 0, 1]);
+        let mut out = String::new();
+        m.render(&mut out);
+        assert!(out.contains("wb_room_shadow_contact_disagreement_meters_bucket{le=\"0.1\"} 1"));
+        assert!(out.contains("wb_room_shadow_contact_disagreement_meters_count 3"));
+        assert!(out.contains("wb_room_shadow_contact_speed_kmh_bucket{le=\"+Inf\"} 3"));
     }
 }

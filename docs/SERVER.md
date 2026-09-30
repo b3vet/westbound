@@ -60,6 +60,13 @@ See "Social API".
 
 N9.3 adds the room-dependent social parts: parties (create, join by code, invites to online friends, leave, kick; the leader moves the party into rooms, Quick Join fits the whole party, a party is one crew in public rooms), blocked players kept out of Quick Join, the `/r/<code>` invite page and generated deep-link files. See "Parties (N9.3)" and "Invite links and deep links".
 
+N4.4 + N10.1 add the netcode and load acceptance (see "Load test, shadow collisions and admin stats (N4.4, N10.1)" and [LOADTEST.md](LOADTEST.md)):
+
+- the `bots` crate's full delay layer (per-direction delay, jitter and loss; TCP or datagram), the client's traffic model on bots (correction sizes, late intents) and the `loadtest` binary;
+- shadow collision logging: contacts between players (with the disagreement of their views) to `shadow_contacts` and the metrics, sampled logs of those and of unreported / refused traffic contacts;
+- the admin stats view: `GET /admin/stats` on the metrics listener, and `GET /admin/v1/stats/full` behind the admin token (N10.2's admin API); the peak memory on `/metrics`;
+- 20 rooms × 8 bots in Docker at 1 vCPU: 38 % of the core, tick p99 ≤ 3 ms, 100 MB, 5.1 KB/s per player.
+
 N5.1 adds rooms and players behind the gateway (see "Rooms"):
 
 - one tokio task per room at 20 Hz with a bounded command queue, one outbound frame per tick per client;
@@ -117,8 +124,9 @@ N10.2 adds operations (see "Operations (N10.2)" and the owner's runbook [`OPERAT
 | `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
 | `POST /api/v1/runs/{run_id}/replay` | public | The replay upload (binary body): see "Replays and verification" |
 | `/api/v1/friends*`, `/api/v1/blocks*`, `/api/v1/presence`, `/api/v1/crews*`, `/api/v1/reports` | public | Friends, blocks, presence, crews, reports: see "Social API" |
-| `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info`; the rooms' metrics; N10.2's database, queue, backup, restart, admin, log and process metrics (see "Operations (N10.2) → Metrics added") |
+| `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info`; the rooms' metrics; N10.2's database, queue, backup, restart, admin, log and process metrics (see "Operations (N10.2) → Metrics added"); N10.1: `process_resident_memory_peak_bytes`, the shadow contacts (see "Rooms → Metrics") |
 | `/admin/v1/*` | **localhost only** `127.0.0.1:9091`, only with `WB_ADMIN__TOKEN` | N10.2: the admin API (bearer token): stats, live rooms, room close, notices, kicks. See "Operations (N10.2) → Admin API" |
+| `GET /admin/stats` | **localhost only** (the metrics listener) | N10.1: the admin stats view, JSON (see "Load test, shadow collisions and admin stats"); the same as `GET /admin/v1/stats/full` on the admin API |
 
 ## Local development
 
@@ -169,7 +177,7 @@ Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` 
   - `0003` (N7.1) creates `runs`, `leaderboard_entries` and `replays` (see "Leaderboards & runs API → Tables").
   - `0004` (N9.1) creates `friends`, `blocks`, `crews`, `crew_members` and `reports` (see "Social API → Tables").
   - `0005` (N8.1) turns `replays` into the verification queue (see "Replays and verification → Tables").
-  - The other data-model tables (`shadow_contacts`) come with their milestones.
+  - `0006` (N10.1) creates `shadow_contacts` (see "Load test, shadow collisions and admin stats → Shadow collisions").
 
 Queries written with `sqlx::query!` are checked at compile time against `westbound-server/.sqlx/`, and CI builds with `SQLX_OFFLINE=true`. After you add or change a `query!`, or change the schema, regenerate that data:
 
@@ -1332,6 +1340,10 @@ On `/metrics`, after the gateway's:
 | `wb_room_tick_seconds` (histogram: 25 µs … 100 ms) | Wall time of one room tick; the p99 is read off the buckets (`RoomMetrics::tick_quantile_us`) |
 | `wb_room_offences_total{kind}` | `speed`, `accel`, `lateral`, `bounds`, `teleport`, `distance`, `clock` |
 | `wb_room_dropped_total{reason}` | `queue_full`, `out_of_order`, `stale`, `future`, `in_flight`, `not_seated` |
+| `wb_room_tick_max_seconds` | N10.1: the longest room tick since the start (gauge) |
+| `wb_room_shadow_player_ticks_total`, `wb_room_shadow_contact_ticks_total` | N10.1: player states the shadow check looked at (player-ticks driven); pair-ticks two players overlapped |
+| `wb_room_shadow_contact_disagreement_meters`, `wb_room_shadow_contact_speed_kmh` (histograms) | N10.1: contacts between players by the disagreement of the two views (0.1 … 16 m) and the pair's speed (50 … 300 km/h); `_count` = contacts |
+| `wb_room_shadow_rows_written_total`, `_dropped_total` | N10.1: `shadow_contacts` rows |
 
 Logs at INFO: `room created` (id, code, settings), `room seat taken` / `taken back` / `held` / `released`, `run ended` (reason, verified, distance), `implausible player state; run unverified` (once per kind per run), `joined room` (gateway), `room closed (empty)`; N10.2: `room closed` (mode `Admin` / `Restart`), `handed-over room restored`.
 
@@ -1603,7 +1615,7 @@ Points differ from the client's only by the 20 Hz sampling (the multiplier's dec
 
 - **The client is authoritative for its lives.** A `hit_report` (any target) loses the chain at its tick in the official timeline; its `lives_left` is the run's lives; `lives_left = 0` ends the run (N5.1's crash-out).
 - **Accepted traffic hits:** a `hit_report {traffic, car_id}` is confirmed when the tracker saw that car within `hit_confirm_clearance_m` (1 m) of the player within ±300 ms of the hit's tick; then `RoomTraffic::hit_car` applies the scripted reaction (swerve, hard brake, hazards, streamed as N4.2 describes). Metrics `wb_room_hits_confirmed_total` / `_refused_total`.
-- **Server hit detection** (spec): the player's reported hull and a car's overlapping deeper than **0.3 m** (`hit_overlap_m`, the separating-axis penetration, `sim::scoring::hull::penetration`) on **2+ consecutive states** (`hit_overlap_ticks`) is a contact. One the client did not report (no hit report within `hit_match_ms`, 1.5 s, of it, nor a ghost period after one), outside spawn / rejoin protection and the ghost flag, **marks the run unverified** (`wb_room_hits_unreported_total`; logged once per run; `score_sync.flags.unverified`). The run goes on.
+- **Server hit detection** (spec): the player's reported hull and a car's overlapping deeper than **0.3 m** (`hit_overlap_m`, the separating-axis penetration, `sim::scoring::hull::penetration`) on **2+ consecutive states** (`hit_overlap_ticks`) is a contact. One the client did not report (no hit report within `hit_match_ms`, 1.5 s, of it, nor a ghost period after one), outside spawn / rejoin protection and the ghost flag, **marks the run unverified** (`wb_room_hits_unreported_total`; logged once per run; `score_sync.flags.unverified`). The run goes on. N10.1: each one, and each reported traffic hit the server saw no contact for (`hits_refused`), is also a shadow record, sampled into the `wb::shadow` log (see "Shadow collisions").
 
 ### Run results and the boards
 
@@ -1619,7 +1631,7 @@ Nothing allocates per tick: rings and queues are sized when a player joins (stat
 
 ### Bots
 
-`bots::driver`: `DriveMode::Traffic` bots drive through the traffic they are streamed (a simple IDM behind a slower car, an overtake through a clear neighbouring lane, leaving a lane that ends, wandering ±1.3 m in the lane so some passes are close), report their own hits (hull contact on their mirror, 2 lives, a 2 s ghost, the placement's 3 s protection), and with `ClaimMode::Honest` run the client's rules (`sim::scoring`, the parity-tested port) on their traffic mirror carried to each state's tick (the last correction at its speed, lane changes on their intent's curve), turning its events into claims exactly as above. `ClaimMode::Cheat` bends every claim: `InflateClearance` (plain passes claimed close at 0.3 m), `FabricateCars` (cars ahead never passed, or ids never sent), `WrongTiming` (1.5 s early). `bots::link` is a minimal delay line per direction (RTT/2 ± jitter/2; a "lost" frame arrives an RTT later, the order kept, as over TCP); the full N4.4 layer and its metrics are N4.4's.
+`bots::driver`: `DriveMode::Traffic` bots drive through the traffic they are streamed (a simple IDM behind a slower car, an overtake through a clear neighbouring lane, leaving a lane that ends, wandering ±1.3 m in the lane so some passes are close), report their own hits (hull contact on their mirror, 2 lives, a 2 s ghost, the placement's 3 s protection), and with `ClaimMode::Honest` run the client's rules (`sim::scoring`, the parity-tested port) on their traffic mirror carried to each state's tick (the last correction at its speed, lane changes on their intent's curve), turning its events into claims exactly as above. `ClaimMode::Cheat` bends every claim: `InflateClearance` (plain passes claimed close at 0.3 m), `FabricateCars` (cars ahead never passed, or ids never sent), `WrongTiming` (1.5 s early). `bots::link` is the delay layer (N4.4: per-direction delay and jitter; a lost frame retransmitted after 200 ms, in order, as over TCP; see [LOADTEST.md](LOADTEST.md)); the acceptance numbers below predate it (they used a retransmission of one RTT).
 
 **Acceptance** (`tests/scoring.rs → acceptance_run_long`, release, 8 honest bots in one private room, the mobile link: 150 ms RTT, ±30 ms jitter, 2 % of frames retransmitted an RTT late):
 
@@ -1663,6 +1675,7 @@ Cheating bots (`cheating_bots_claims_are_rejected`, 3 cheats among 5 honest bots
 | `verify_min_acceptance_pct` / `verify_min_claims` | `90.0` / `20` | Leaderboard verification (MP-D9, not in spec) |
 | `player_length_m` / `player_width_m` | `4.8` / `1.95` | The hull the server measures with (the largest car; not in spec) |
 | `track_ahead_m` / `crew_total_interval_ms` | `60.0` / `1000` | Tracking range; crew total pacing (not in spec) |
+| `shadow_view_delay_ms` / `shadow_log_every` | `100` / `10` | N10.1 shadow collisions: the views' age for the disagreement estimate (spec: remote cars shown 100 ms behind; at most 500); one in this many of a room's shadow records is logged, the first always (not in spec) |
 
 ### Deviations and open questions
 
@@ -1672,6 +1685,74 @@ Cheating bots (`cheating_bots_claims_are_rejected`, 3 cheats among 5 honest bots
 - **No car or build on the wire:** multiplayer runs are stored with `car = unknown`, `build = 0`.
 - **`hit_report` for barriers and the roadside** is taken as reported (no server check: the server has no roadside model).
 
+## Load test, shadow collisions and admin stats (N4.4, N10.1)
+
+WPs N4.4 (bots and the delay layer) and N10.1 (the load part of N10). Spec: [multiplayer handoff](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Testing → Netcode harness, Load test; Players → shadow collision logging; Resource budget; Data model (`shadow_contacts`). The runbook, the options and the full results are in [LOADTEST.md](LOADTEST.md).
+
+| Where | What |
+| --- | --- |
+| `crates/bots/src/link.rs` | The delay layer: per-direction delay, jitter and loss; TCP (a lost frame late by the 200 ms RTO, in order) or datagram (gone, reordered); statistics |
+| `crates/bots/src/predict.rs` | The client's traffic model on a bot (NET_TRAFFIC.md's, IDM at room ticks, v0 estimate and bias, drop zones): correction sizes and late intents as the client measures them |
+| `crates/bots/src/load.rs`, `src/bin/loadtest.rs` | The load test: N rooms × M bots against a running server; `/metrics`, `/admin/stats` and `/proc` read before and after the window |
+| `crates/server/src/rooms/scoring/shadow.rs` | Contacts between players |
+| `crates/server/src/rooms/shadow_log.rs` | `shadow_contacts` rows (the sink) and their aggregates |
+| `crates/server/src/metrics_admin.rs` | `GET /admin/stats` |
+| `crates/server/tests/netcode.rs`, `tests/admin_stats.rs` | The acceptance test (normal suite, and the long one ignored); the admin view and the table |
+
+### Results (2026-09-30)
+
+20 private rooms × 8 bots through normal traffic with honest claims, every bot on its own 150 ms / ±30 ms / 2 % TCP link, against the release image under `docker run --cpus=1 --memory=512m` (production mode), 600 s after a 15 s warm-up, on the shared 4-vCPU dev box (load average 6–8 from other work, so the wall-time numbers are pessimistic; the container was never throttled):
+
+| Target | Budget | Measured |
+| --- | --- | --- |
+| Server CPU | ≤ 50 % of one vCPU | **38.1 %** (room ticks 25.8 %) |
+| Room tick p99 | < 5 ms | **≤ 3 ms** (mean 0.64 ms; max 105 ms: host stalls) |
+| Memory | < 300 MB | **99.6 MB** RSS |
+| Down per player (wire, worst bot) | ≤ 10 KB/s | **5.09 KB/s** (mean 4.69) |
+| Claim acceptance | > 99 % | **99.92 %** (13,161 / 13,171) |
+| False server-detected hits | < 1 per hour | **0** in 27.5 bot-hours |
+| Traffic correction median / p99 | < 0.15 / < 0.6 m | **5 mm / 0.285 m** |
+| Late intents | < 1 per 10 min | **0.06** per 10 bot-minutes |
+| Plausibility offences (honest bots) | | 0 |
+
+At rush (300 s): 42.8 % of the core, tick p99 ≤ 2 ms, 100.9 MB, 5.61 KB/s worst player, 99.95 % of claims, correction p99 0.39 m, 0 offences, 0 false hits.
+
+### Shadow collisions
+
+"For every pair of players, the server records each moment their collision boxes would have overlapped, using both reported states at the same tick" (`rooms::scoring::shadow`). Players are ghosted in v1; nothing here changes play.
+
+- **When:** every room tick checks the tick at the official timeline's horizon (`scoring.official_lag_ms` behind the room: every state of it has arrived). Each pair of players with a run in progress, their states at that tick (interpolated across a missing one, at most 2 ticks each side; none across a placement), the scoring hull (`scoring.player_length_m` × `player_width_m`, inset), the separating-axis depth. Pairs more than two hull diagonals apart along the loop are skipped. Nothing allocates per tick (`tests/scoring_alloc.rs` covers it).
+- **A contact** runs from the first overlapping tick to the last. It records the pair, its first tick and length, the deepest overlap, the pair's mean speed at the start, the largest speed difference and the largest **disagreement**.
+- **Disagreement** ("how much the two players' views disagreed"): each player sees the other as the other's state `scoring.shadow_view_delay_ms` (100 ms) earlier carried on to the contact tick at its reported forward and lateral speeds (the soft-solid proposal resolves contact against extrapolated positions). The two views of the pair's relative position differ by `|e_a + e_b|`, `e` being each car's extrapolation error. Straight driving disagrees by centimetres; a lane change or hard braking during the contact by metres. Across a placement the old state gives no error.
+- **Where it goes:** `wb_room_shadow_*` metrics (contacts, pair-ticks, player-ticks, disagreement and speed histograms); one row per contact in **`shadow_contacts`** (room, tick, the two accounts ordered, speed, disagreement, closing speed, depth, ticks, time; written off the room task, at most 64 writes in flight, the rest dropped and counted); a sample in the log.
+- **Traffic contacts:** each server-detected contact nobody reported (`hits_unreported`, N6.1) and each reported traffic hit the server saw nothing for (`hits_refused`, "the reverse") is a shadow record too, logged with its numbers (car, tick, depth, speeds).
+- **Log sampling:** a room logs its first shadow record and then one in `scoring.shadow_log_every` (10), at INFO with target `wb::shadow` (`kind` = `player_contact`, `unreported_contact` or `refused_hit`, plus `sample`, the room's record count). `RUST_LOG=info,wb::shadow=off` silences them; the counters and the table keep everything.
+- **Retention:** rows are kept (a contact is small; the load test wrote 6,569 for 27 bot-hours). Pruning is an open item for the admin CLI.
+
+### Admin stats
+
+`GET /admin/stats` on the metrics listener (localhost only, like `/metrics`: the listener's address is the gate; the load test reads it there), and the same document at `GET /admin/v1/stats/full` on N10.2's admin API (its bearer token; `/admin/v1/stats` stays the short live counts the CLI prints). The distroless image has no curl, so read it from a process sharing the container's network (a sidecar, `docker run --network container:<name> curlimages/curl …`, or the host with `--network host`). One JSON document:
+
+| Key | What |
+| --- | --- |
+| `process` | uptime, CPU seconds, `cpu_pct_of_core` over `window_s` (the time since the previous call; the uptime on the first), RSS and peak (MB), threads |
+| `gateway` | connections, sessions, bytes out / in per second over the window, and per session |
+| `rooms` | rooms, seats, ticks, tick mean over the window, p50 / p99 (bucket bounds since the start), max, the ticks' share of a core |
+| `netcode` | claims accepted / rejected and the acceptance, offences by kind, hits confirmed / refused / unreported (and per player-hour), placements, crash-outs |
+| `shadow` | player-hours covered, contacts and contacts per player-hour, pair-ticks, the disagreement and speed histograms (`[bound, count]`, the last bound `null`), rows written / dropped, and `last_day` / `last_week` from `shadow_contacts` (contacts, pairs, mean speed km/h, mean and max disagreement, contacts over 1 m, mean length in ticks) |
+
+The load test prints it at the end of a run; `westbound-server admin stats` could print it with a `--full` flag (not added: the CLI is N10.2's).
+
+### Tests
+
+| Test | What |
+| --- | --- |
+| `rooms::scoring::tests` | A player driving through another is one contact (its length, speed, closing speed, depth, no disagreement); neighbouring lanes never touch; a lane change into the other car during a contact is a 3.6 m disagreement |
+| `rooms::metrics::tests` | The shadow histograms and their Prometheus text; the tick max |
+| `metrics_admin::tests` | `/proc` numbers; the view's counters, rates and windows |
+| `tests/admin_stats.rs` | `/admin/stats` on the metrics listener only (404 on the public one); the process metrics on `/metrics`; rows written, ordered and summarised; the sink |
+| `tests/netcode.rs`, `bots::{link, predict, load}::tests` | See [LOADTEST.md](LOADTEST.md) → Tests |
+| `tests/config.rs` | The two new `[scoring]` keys in the example file |
 ## Operations (N10.2)
 
 WP N10.2 hardens the server for running it: the admin API and the full admin CLI, the planned restart (notice, drain, room handover, close 1012), backups with verification, restore and an off-site hook, a rate-limit review, request ids, and the operational metrics. The owner's runbook (deploy, restart, backup and restore, bans, logs, metrics, alerts) is [`OPERATIONS.md`](OPERATIONS.md). Code: `shutdown.rs` (drain and restart), `handover.rs`, `admin_api.rs`, `admin_client.rs`, `admin.rs` + `main.rs` (CLI), `backup.rs`, `ops.rs` (probes), `account_limits.rs`, `ratelimit.rs`, `http.rs` (request ids, draining health), `telemetry.rs`. Tests: `tests/ops.rs`, `tests/cli.rs` (the N10.2 part: `serve` on SIGTERM with a connected player), `tests/config.rs`, unit tests in the modules. Against a built image: run the container with `WB_GATEWAY__MAP_HASHES=abab…ab` (64 hex) and `WB_SERVER__RESTART_NOTICE_SECS=3`, then `WB_CONTAINER=<name> WB_CONTAINER_ADDR=127.0.0.1:<port> cargo test -p server --test ops -- --ignored container` (joins a room, `docker kill --signal TERM`, expects the notice, `run_result{room_closed}` and close 1012; measured on the N10.2 image: notice at once, handover and exit 0 after 3.05 s; an idle `docker stop` exits in 0.3 s).

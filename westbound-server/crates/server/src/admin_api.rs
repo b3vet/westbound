@@ -8,6 +8,7 @@
 //! | Route | What |
 //! | --- | --- |
 //! | `GET /admin/v1/stats` | live counts: sessions, rooms, seats, draining, uptime |
+//! | `GET /admin/v1/stats/full` | N10.1: the admin stats view (`metrics_admin`: process, gateway, room ticks, netcode, shadow contacts) |
 //! | `GET /admin/v1/rooms` | every live room: id, code, visibility, players, density, night, accounts |
 //! | `POST /admin/v1/rooms/{code or id}/close` `{"message"}` | the room closes at its next tick: runs end (`room_closed`), the players get the message as a `server_notice{info}` and `room_left{closed}` |
 //! | `POST /admin/v1/notice` `{"kind","seconds","text"}` | a `server_notice` to every live session |
@@ -104,6 +105,7 @@ pub fn parse_kind(s: &str) -> Option<NoticeKind> {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/admin/v1/stats", get(stats))
+        .route("/admin/v1/stats/full", get(crate::metrics_admin::handler))
         .route("/admin/v1/rooms", get(rooms))
         .route("/admin/v1/rooms/{target}/close", post(close_room))
         .route("/admin/v1/notice", post(notice))

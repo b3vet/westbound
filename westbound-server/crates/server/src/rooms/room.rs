@@ -44,9 +44,9 @@ use tokio::sync::oneshot;
 use super::clock::RoomTime;
 use super::plausibility::{self, tick_diff, DropReason, Offence, Placement, Verdict};
 use super::road::{flow_speed_cms, lane_at, lane_center_d_mm, start_spawn_points, MM_PER_CM};
-use super::scoring::RoomScoring;
+use super::scoring::{RoomScoring, SHADOW_LOG};
 use super::traffic::{PlayerView, RoomTraffic, SpawnSpot};
-use super::{FinishedRun, RoomInfo, Shared};
+use super::{unix_now_ms, FinishedRun, RoomInfo, ShadowRow, Shared};
 use crate::leaderboards::RoomKind;
 use crate::sessions::SessionHandle;
 
@@ -315,7 +315,8 @@ impl Room {
             shared.params.scoring.clone(),
             &shared.map.map,
             shared.metrics.clone(),
-        );
+        )
+        .with_room_id(id);
         Self {
             scoring,
             id,
@@ -1162,6 +1163,7 @@ impl Room {
             .scoring_us_sum
             .fetch_add(us, Ordering::Relaxed);
         self.route_scoring();
+        self.shadow_contacts();
         self.send_frames(now);
         self.events.clear();
         if !self.finish_close() {
@@ -1176,6 +1178,56 @@ impl Room {
             }
         }
         true
+    }
+
+    /// N10.1: the shadow contacts between players that ended this tick: a sample to the
+    /// log (`wb::shadow`), every one to the shadow sink.
+    fn shadow_contacts(&mut self) {
+        if self.scoring.shadow.out.is_empty() {
+            return;
+        }
+        let at = unix_now_ms() / 1_000;
+        for k in 0..self.scoring.shadow.out.len() {
+            let c = self.scoring.shadow.out[k];
+            let account = |pid: u16| {
+                self.seats
+                    .iter()
+                    .find(|s| s.player_id == pid)
+                    .map_or(AccountId(0), |s| s.account)
+            };
+            let row = ShadowRow {
+                room_id: self.id,
+                tick: c.tick,
+                account_a: account(c.player_a),
+                account_b: account(c.player_b),
+                speed_mps: c.speed_mps,
+                disagreement_m: c.disagreement_m,
+                closing_mps: c.closing_mps,
+                depth_m: c.depth_m,
+                ticks: c.ticks,
+                at,
+            };
+            if self.scoring.log_sample() {
+                tracing::info!(
+                    target: SHADOW_LOG,
+                    kind = "player_contact",
+                    room = self.id,
+                    tick = c.tick,
+                    player_a = c.player_a,
+                    player_b = c.player_b,
+                    account_a = row.account_a.0,
+                    account_b = row.account_b.0,
+                    ticks = c.ticks,
+                    depth_m = c.depth_m,
+                    speed_mps = c.speed_mps,
+                    closing_mps = c.closing_mps,
+                    disagreement_m = c.disagreement_m,
+                    "shadow: two players' cars overlapped (ghosted)"
+                );
+            }
+            self.shared.record_shadow(row);
+        }
+        self.scoring.shadow.out.clear();
     }
 
     /// Scoring's messages into the seats' private replies (`ScoreSync`, `ScoreEvent`) and

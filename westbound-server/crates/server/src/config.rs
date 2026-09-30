@@ -643,6 +643,12 @@ pub struct ScoringConfig {
     pub track_ahead_m: f64,
     /// `room_event.crew` session totals go out at most this often per crew (not in spec).
     pub crew_total_interval_ms: u64,
+    /// N10.1 shadow collision logging: each player sees the other this long behind when
+    /// the two views' disagreement is estimated (spec: remote players shown 100 ms behind).
+    pub shadow_view_delay_ms: u64,
+    /// One in this many of a room's shadow records (player contacts, unreported traffic
+    /// contacts, refused hits) is logged, the first always (not in spec).
+    pub shadow_log_every: u64,
 }
 
 impl Default for ScoringConfig {
@@ -672,6 +678,8 @@ impl Default for ScoringConfig {
             player_width_m: 1.95,
             track_ahead_m: 60.0,
             crew_total_interval_ms: 1_000,
+            shadow_view_delay_ms: 100,
+            shadow_log_every: 10,
         }
     }
 }
@@ -682,6 +690,8 @@ pub const ROOM_TRAFFIC_SIM: &str = "sim";
 const ROOM_TRAFFIC: &[&str] = &[ROOM_TRAFFIC_NONE, ROOM_TRAFFIC_SIM];
 /// `scoring.official_lag_ms` bound: the scoring rings hold 64 ticks (3.2 s at 20 Hz).
 const MAX_OFFICIAL_LAG_MS: u64 = 2_500;
+/// `scoring.shadow_view_delay_ms` bound: with the official lag it stays inside the rings.
+const MAX_SHADOW_VIEW_DELAY_MS: u64 = 500;
 /// The area of interest must stay well inside the 25 km loop's half (wrapped distances).
 const MAX_AOI_SPAN_M: f64 = 10_000.0;
 
@@ -1609,6 +1619,13 @@ impl Config {
         }
         if c.train_points < 0 {
             errs.push("scoring.train_points must be >= 0".into());
+        }
+        // The shadow check reads states this far before the official horizon.
+        if c.shadow_log_every == 0 || c.shadow_view_delay_ms > MAX_SHADOW_VIEW_DELAY_MS {
+            errs.push(format!(
+                "scoring.shadow_log_every must be at least 1 and scoring.shadow_view_delay_ms \
+                 at most {MAX_SHADOW_VIEW_DELAY_MS}"
+            ));
         }
         // The scoring rings keep 64 ticks of states: the official lag must stay well inside.
         if c.official_lag_ms > MAX_OFFICIAL_LAG_MS || c.claim_max_wait_ms > c.official_lag_ms {
