@@ -1703,6 +1703,8 @@ WPs N4.4 (bots and the delay layer) and N10.1 (the load part of N10). Spec: [mul
 | Late intents | < 1 per 10 min | **0.06** per 10 bot-minutes |
 | Plausibility offences (honest bots) | | 0 |
 
+At rush (300 s): 42.8 % of the core, tick p99 ≤ 2 ms, 100.9 MB, 5.61 KB/s worst player, 99.95 % of claims, correction p99 0.39 m, 0 offences, 0 false hits.
+
 ### Shadow collisions
 
 "For every pair of players, the server records each moment their collision boxes would have overlapped, using both reported states at the same tick" (`rooms::scoring::shadow`). Players are ghosted in v1; nothing here changes play.
@@ -1717,7 +1719,7 @@ WPs N4.4 (bots and the delay layer) and N10.1 (the load part of N10). Spec: [mul
 
 ### Admin stats
 
-`GET /admin/stats` on the metrics listener (localhost only, like `/metrics`; there is no admin HTTP auth, so reaching it takes the host, `docker exec` or Coolify's terminal: `docker exec <container> …` has no curl in the distroless image, so run it from the host network or a sidecar). One JSON document:
+`GET /admin/stats` on the metrics listener (localhost only, like `/metrics`: there is no admin HTTP auth, the listener's address is the gate). The distroless image has no curl, so read it from a process sharing the container's network (a sidecar, `docker run --network container:<name> curlimages/curl …`, or the host with `--network host`). One JSON document:
 
 | Key | What |
 | --- | --- |

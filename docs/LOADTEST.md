@@ -14,18 +14,18 @@ Spec: [multiplayer handoff](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Testing →
 
 ### Load: 20 rooms × 8 bots, Docker `--cpus=1 --memory=512m` (2026-09-30)
 
-The release image built from `westbound-server/Dockerfile` (`westbound-server:n10.1`, production mode), 20 private rooms at normal density, 160 bots through traffic with honest claims, every bot on its own 150 ms / ±30 ms / 2 % TCP link, 15 s warm-up, then a 600 s window. The load generator ran on the same 4-vCPU machine outside the container, which other agents were also using (load average 6–8: a headless browser and a Godot soak), so the wall-time numbers (tick p99, max) are pessimistic. The container was never CPU-throttled (`cpu.stat`: `nr_throttled 0` over 6,202 periods).
+The release image built from `westbound-server/Dockerfile` (`westbound-server:n10.1`, production mode), 20 private rooms at normal density, 160 bots through traffic with honest claims, every bot on its own 150 ms / ±30 ms / 2 % TCP link, 15 s warm-up, then a 600 s window. The load generator ran on the same 4-vCPU machine outside the container, which other agents were also using (load average 6–8 during the normal run, 2–5 during the rush run: a headless browser and a Godot soak), so the wall-time numbers (tick p99, max) are pessimistic. The container was CPU-throttled in 0 of 6,202 CFS periods (normal) and 1 of 3,201 (rush). The rush run is 300 s after the same warm-up.
 
 | Measure | Target | Normal, 600 s | Rush, 300 s |
 | --- | --- | --- | --- |
-| Server CPU (process, over the window) | ≤ 50 % of one core | **38.1 %** (`docker stats` 35–45 %) | RUSH_CPU |
-| Room tick p99 (histogram bucket bound) | < 5 ms | **≤ 3 ms** (mean 0.64 ms, p50 ≤ 0.75 ms) | RUSH_P99 |
-| Room tick max | | 105 ms (host scheduler stalls; the tick is wall time) | RUSH_MAX |
-| Room ticks' share of the CPU | | 25.8 % of a core (the rest: gateway, sockets, SQLite) | RUSH_ROOMCPU |
-| Server memory (RSS at the end / peak) | < 300 MB | **99.6 / 99.4 MB** (`docker stats` 97 MiB with page cache) | RUSH_RSS |
-| Down per player, worst bot, on the wire | ≤ 10 KB/s | **5.09 KB/s** (mean 4.69; server payload 4.16 KB/s per session) | RUSH_DOWN |
-| Up per player (payload) | ~1 KB/s | 0.50 KB/s | RUSH_UP |
-| Largest frame | | 1,754 B (a join's area) | RUSH_FRAME |
+| Server CPU (process, over the window) | ≤ 50 % of one core | **38.1 %** (`docker stats` 35–45 %) | **42.8 %** (`docker stats` 40–49 %) |
+| Room tick p99 (histogram bucket bound) | < 5 ms | **≤ 3 ms** (mean 0.64 ms, p50 ≤ 0.75 ms) | **≤ 2 ms** (mean 0.69 ms) |
+| Room tick max | | 105 ms (host scheduler stalls; the tick is wall time) | 39 ms |
+| Room ticks' share of the CPU | | 25.8 % of a core (the rest: gateway, sockets, SQLite) | 27.5 % |
+| Server memory (RSS at the end / peak) | < 300 MB | **99.6 / 99.4 MB** (`docker stats` 97 MiB with page cache) | **100.9 / 100.7 MB** |
+| Down per player, worst bot, on the wire | ≤ 10 KB/s | **5.09 KB/s** (mean 4.69; server payload 4.16 KB/s per session) | **5.61 KB/s** (mean 4.90; server payload 4.37 KB/s) |
+| Up per player (payload) | ~1 KB/s | 0.50 KB/s | 0.50 KB/s |
+| Largest frame | | 1,754 B (a join's area) | 2,350 B |
 
 ### Netcode acceptance at 150 ms RTT, ±30 ms jitter, 2 % loss
 
@@ -33,13 +33,13 @@ The same run (160 bots × 10 min: 27.5 bot-hours), and the in-process test (`acc
 
 | Measure | Target | Load run, normal | Load run, rush | `acceptance_30s` |
 | --- | --- | --- | --- | --- |
-| Claim acceptance | > 99 % | **99.92 %** (13,161 of 13,171; 10 rejected: `no_pass` 5, `thread` 2, `clearance`, `side`, `timing` 1 each) | RUSH_ACC | 100 % (25 of 25) |
-| False server-detected hits | < 1 per hour | **0** in 27.5 bot-hours (21 hits reported, 12 confirmed, 1 refused, 8 crash-outs) | RUSH_FALSE | 0 |
-| Traffic correction median / p99 | < 0.15 m / < 0.6 m | **5 mm / 0.285 m** (max 3.7 m; 8.4 M corrections) | RUSH_CORR | 5 mm / 0.21 m |
-| Corrections of cars within 100 m: p99 / max | | 3.5 cm / 1.7 m | RUSH_NEAR | 4 cm / 0.2 m |
-| Snap-sized (≥ 5 m) correction of a car in view | (none visible) | **0** | RUSH_SNAP | 0 |
-| Late intents | < 1 per 10 min | **0.06 per 10 bot-minutes** (10 late, 9 of them after their move tick, of 144,702 lane changes) | RUSH_LATE | 0 |
-| Plausibility offences (honest bots) | 0 | **0** | RUSH_OFF | 0 |
+| Claim acceptance | > 99 % | **99.92 %** (13,161 of 13,171; 10 rejected: `no_pass` 5, `thread` 2, `clearance`, `side`, `timing` 1 each) | **99.95 %** (10,994 of 10,999; `no_pass` 3, `cut`, `side` 1 each) | 100 % (25 of 25) |
+| False server-detected hits | < 1 per hour | **0** in 27.5 bot-hours (21 hits reported, 12 confirmed, 1 refused, 8 crash-outs) | **0** in 14.2 bot-hours (27 reported, 17 confirmed) | 0 |
+| Traffic correction median / p99 | < 0.15 m / < 0.6 m | **5 mm / 0.285 m** (max 3.7 m; 8.4 M corrections) | **5 mm / 0.39 m** (max 3.65 m; 5.4 M) | 5 mm / 0.21 m |
+| Corrections of cars within 100 m: p99 / max | | 3.5 cm / 1.7 m | 4 cm / 1.25 m | 4 cm / 0.2 m |
+| Snap-sized (≥ 5 m) correction of a car in view | (none visible) | **0** | **0** | 0 |
+| Late intents | < 1 per 10 min | **0.06 per 10 bot-minutes** (10 late, 9 of them after their move tick, of 144,702 lane changes) | **0.02** (2 of 71,778) | 0 |
+| Plausibility offences (honest bots) | 0 | **0** | **0** | 0 |
 | Traffic stream violations (bots' mirrors) | 0 | 0 | 0 | 0 |
 
 For comparison, plain dead reckoning (the last correction carried on at its speed) has a p99 of 0.90 m on the same corrections: the bots' model is what makes the bound. The client's own soak (NET_TRAFFIC.md, the fake authority, 10.5 min) measured 5 mm / 0.22 m.
@@ -76,7 +76,7 @@ docker run -d --name wb-lt --cpus=1 --memory=512m --network host \
 cd westbound-server
 cargo run -p bots --release --bin loadtest -- --server ws://127.0.0.1:18080/ws --metrics 127.0.0.1:19090 \
   --rooms 20 --bots 8 --rtt 150 --jitter 30 --loss 0.02 --secs 600
-docker exec wb-lt cat /sys/fs/cgroup/cpu.stat 2>/dev/null   # cgroup v2; v1: /sys/fs/cgroup/cpu/docker/<id>/cpu.stat on the host
+cat /sys/fs/cgroup/cpu/docker/$(docker inspect -f "{{.Id}}" wb-lt)/cpu.stat   # throttling (cgroup v1; v2: /sys/fs/cgroup/system.slice/docker-<id>.scope/cpu.stat)
 ```
 
 - `--network host`: the metrics listener must be a loopback address (`metrics.bind`), and the load test reads it. Without host networking, publish the public port only and pass `--pid` (the container's process as the host sees it: `docker inspect -f '{{.State.Pid}}' wb-lt`) for `/proc` CPU and memory; the tick times then come from nowhere (`n/a`).
