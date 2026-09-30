@@ -141,6 +141,7 @@ Save="*res://src/core/save.gd"
 Game="*res://src/core/game.gd"
 Quality="*res://src/platform/quality.gd"
 Net="*res://src/net/session.gd"
+Haptics="*res://src/platform/haptics.gd"
 
 [debug]
 

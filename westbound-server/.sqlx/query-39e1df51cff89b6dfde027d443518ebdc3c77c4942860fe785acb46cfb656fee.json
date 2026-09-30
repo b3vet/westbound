@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT run_id AS \"run_id!\" FROM replays WHERE status = ? AND file_deleted_at IS NULL\n           ORDER BY run_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "run_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "run_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "39e1df51cff89b6dfde027d443518ebdc3c77c4942860fe785acb46cfb656fee"
+}

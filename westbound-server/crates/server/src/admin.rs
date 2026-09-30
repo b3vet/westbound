@@ -88,6 +88,65 @@ pub async fn rename(pool: &SqlitePool, id: i64, name: &str, now: i64) -> anyhow:
     Ok(format!("account {id} renamed to {full}"))
 }
 
+/// Replay jobs (N8.1): `replays` lists the queue by status; `replay_requeue` puts a
+/// `failed` job (or with `run_id` any job whose file is still there) back to `pending`
+/// with its attempts reset. The server's worker picks it up within
+/// `replays.poll_interval_secs`.
+pub async fn replays(pool: &SqlitePool) -> anyhow::Result<String> {
+    let rows = sqlx::query!(
+        r#"SELECT status, COUNT(*) AS "n!: i64" FROM replays GROUP BY status ORDER BY status"#
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut out: Vec<String> = rows
+        .into_iter()
+        .map(|r| format!("{} {}", r.status, r.n))
+        .collect();
+    let failed = sqlx::query!(
+        "SELECT run_id, attempts, result FROM replays WHERE status = 'failed' ORDER BY run_id LIMIT 20"
+    )
+    .fetch_all(pool)
+    .await?;
+    for f in failed {
+        out.push(format!(
+            "failed run {} after {} attempts: {}",
+            f.run_id,
+            f.attempts,
+            f.result.unwrap_or_default()
+        ));
+    }
+    if out.is_empty() {
+        return Ok("no replays".into());
+    }
+    Ok(out.join("\n"))
+}
+
+pub async fn replay_requeue(pool: &SqlitePool, run_id: Option<i64>) -> anyhow::Result<String> {
+    let done = match run_id {
+        Some(id) => {
+            sqlx::query!(
+                "UPDATE replays SET status = 'pending', attempts = 0, not_before = 0, verdict = NULL
+                 WHERE run_id = ? AND file_deleted_at IS NULL",
+                id
+            )
+            .execute(pool)
+            .await?
+        }
+        None => {
+            sqlx::query!(
+                "UPDATE replays SET status = 'pending', attempts = 0, not_before = 0
+                 WHERE status = 'failed' AND file_deleted_at IS NULL"
+            )
+            .execute(pool)
+            .await?
+        }
+    };
+    let n = done.rows_affected();
+    let target = run_id.map_or_else(|| "failed".to_string(), |id| id.to_string());
+    crate::db::admin_log(pool, ACTOR, "replay_requeue", &target, &format!("jobs={n}")).await?;
+    Ok(format!("{n} replay job(s) requeued"))
+}
+
 /// Deletes a run (and its replay) and rebuilds every leaderboard entry it held from the
 /// player's next best run. A running server's cached board tops catch up within
 /// `leaderboards.cache_ttl_secs`.

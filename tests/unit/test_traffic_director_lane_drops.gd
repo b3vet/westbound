@@ -121,7 +121,9 @@ func test_vehicles_merge_out_before_a_lane_drop() -> void:
 
 func test_no_gap_means_waiting_at_the_end_of_the_lane() -> void:
 	# Lane 1 is a solid column (scripted, 25 m apart) beside the car in lane 2: it brakes
-	# to the end of its lane and waits, then merges behind the column's tail.
+	# to the end of its lane and waits, then merges behind the column's tail. The last
+	# resort since WP6.8: scripted vehicles never yield (the zipper), so nobody opens a
+	# gap; ordinary traffic does (test_lane_drop_safety.gd).
 	var sc := _scenario()
 	var sim: TrafficSim = sc["sim"]
 	var ts := sim.state
@@ -150,7 +152,8 @@ func test_no_gap_means_waiting_at_the_end_of_the_lane() -> void:
 
 func test_no_lane_change_into_a_closing_lane() -> void:
 	# Slow cars in lane 1 want to keep right: never into lane 2 within merge_zone_m of its
-	# closure (nor into the widening's lane before its taper ends).
+	# closure (nor into the widening's lane before its taper ends). WP6.8: a road drop's
+	# zone is lane_drop_merge_zone_m, longer still.
 	var sc := _scenario()
 	var sim: TrafficSim = sc["sim"]
 	var ts := sim.state
@@ -164,9 +167,9 @@ func test_no_lane_change_into_a_closing_lane() -> void:
 			if ts.active[i] == 1 and ts.lc_state[i] == TrafficState.LaneChange.SIGNALING and ts.target_lane[i] == 2 \
 					and ts.lc_timer[i] == 0.0:
 				into_2 += 1
-				if sim.closure_ahead(2, ts.s[i] + ts.length[i] * 0.5) < tuning.traffic.merge_zone_m:
+				if sim.closure_ahead(2, ts.s[i] + ts.length[i] * 0.5) < tuning.traffic.lane_drop_merge_zone_m:
 					bad += 1
-	eq(bad, 0, "no move into lane 2 within merge_zone_m of a closure")
+	eq(bad, 0, "no move into lane 2 within lane_drop_merge_zone_m of a road drop")
 	print("      %d moves into lane 2 signaled, all clear of its closures" % into_2)
 	eq((sc["checker"] as TrafficRuleChecker).offroad_violations, 0)
 
@@ -256,7 +259,7 @@ func test_spawns_never_use_a_lane_that_is_about_to_end() -> void:
 
 func test_canyon_tunnel_lane_drop_with_traffic() -> void:
 	# The canyon biome's real road (tunnels drop 3 -> 2 lanes): the soak's director,
-	# sim, rule checker and weaving bot from 1.2 km before the first drop to 600 m past
+	# sim, rule checker and weaving bot from 1 km before the first drop to 400 m past
 	# the lanes coming back. Nobody leaves the driving lanes, no ambush, no collisions.
 	var canyon := BiomePlan.load_biome(&"canyon")
 	if not check(canyon != null, "data/biomes/canyon.tres"):
@@ -275,14 +278,14 @@ func test_canyon_tunnel_lane_drop_with_traffic() -> void:
 				back = f.s_end
 	if not check(drop > 0.0 and back > drop, "the canyon road drops lanes for a tunnel"):
 		return
-	r.bot.state.s = drop - 1200.0
+	r.bot.state.s = drop - 1000.0
 	r.bot.state.d = r.road.lane_center_d(r.bot.lane, r.bot.state.s)
 	r.bot.state.v = Units.kmh_to_mps(150.0)
 	r.bot.v_target = r.bot.state.v
 	r.bot.set_weave(2.0, 5.0)
 	r.director.reset(r.bot.state)
 	r.check_windows = false
-	while r.bot.state.s < back + 600.0 and r.time < 200.0:
+	while r.bot.state.s < back + 400.0 and r.time < 200.0:
 		r.tick()
 	var d := r.result()
 	print("      canyon drop at %.0f m, lanes back at %.0f m: %d merges, %d vehicles checked on the road" % [

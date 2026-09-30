@@ -10,7 +10,8 @@ extends RefCounted
 ##   normally"). follow = false means it never brakes, whatever is ahead.
 ## - WEAVE: follows traffic ahead with its own IDM (up to the car's 9 m/s^2 braking)
 ##   and changes lanes every weave interval into the adjacent lane with the longest
-##   free gap, as long as the target lane is not physically occupied beside it. It
+##   free gap, as long as the target lane is not occupied beside it (physically, or
+##   by a car already moving into it, WP6.8). It
 ##   does not wait for gaps that are comfortable for traffic behind: tight cut-ins
 ##   (and occasional contacts caused by the player) are part of the stress.
 
@@ -26,6 +27,23 @@ const SIDE_CLEAR_M := 1.0       ## required free length beside it in the target 
 ## Lane drops (WP6.2): a lane that ends within this far ahead is left for the next lane
 ## to the left as soon as it is clear beside the bot, and weaving never picks it.
 const DROP_LOOK_M := 350.0
+## WP6.8, road lane drops: like a player reading the LANE ENDS sign, the bot leaves a
+## lane that the road drops within DROP_EARLY_M, as soon as the lane beside it is clear
+## beside it and has at least EXIT_HEADWAY_S (and EXIT_GAP_MIN_M) of free road ahead;
+## weaving never picks such a lane. (Before, it left only DROP_LOOK_M out, into any gap
+## beside it: cut-ins a few metres behind slow traffic at 140 km/h that no player would
+## make, flagged as impossible windows.)
+const DROP_EARLY_M := 800.0
+const EXIT_HEADWAY_S := 1.5
+const EXIT_GAP_MIN_M := 30.0
+## WP6.8: the forced exit from a lane the road drops (within DROP_LOOK_M) waits for at
+## least FORCED_HEADWAY_S (and FORCED_GAP_MIN_M) of free road ahead in the lane beside it
+## while the lane still has FORCED_ANY_M to go; only then does any gap clear beside it do.
+## (Before, it took any gap clear beside it: a cut-in 1.5 m behind a car 30 km/h slower,
+## braking hard, flagged as a traffic window since it was not yet in contact.)
+const FORCED_HEADWAY_S := 0.5
+const FORCED_GAP_MIN_M := 10.0
+const FORCED_ANY_M := 150.0
 
 ## WP6.3: anything with closure_ahead(lane, s) (the TrafficSim): a lane closed within
 ## DROP_LOOK_M ahead (road works, a merge zone's acceleration lane) is left for an open
@@ -125,10 +143,29 @@ func update(dt: float, traffic: TrafficState) -> void:
 	state.accel_long = a
 	state.s += state.v * dt
 
-	if _lc_t < 0.0 and _lane_ends_ahead(lane):
-		var to := -1
+	if _lc_t < 0.0 and not _lane_ends_ahead(lane) and lane >= road.lane_count(state.s + DROP_EARLY_M):
+		var early := -1
 		for t: int in [lane - 1, lane + 1]:
-			if to < 0 and t >= 0 and t < road.lane_count(state.s) and not _lane_ends_ahead(t) and _side_clear(traffic, t):
+			if early < 0 and t >= 0 and t < road.lane_count(state.s + DROP_EARLY_M) and not _lane_ends_ahead(t) \
+					and _side_clear(traffic, t) \
+					and _free_ahead(traffic, t) >= maxf(EXIT_GAP_MIN_M, state.v * EXIT_HEADWAY_S):
+				early = t
+		if early >= 0:
+			if mode == Mode.WEAVE:
+				_lc_t = 0.0
+				_from_d = state.d
+				_to_d = road.lane_center_d(early, state.s)
+			lane = early
+			lane_changes += 1
+	elif _lc_t < 0.0 and _lane_ends_ahead(lane):
+		var to := -1
+		# WP6.8: a lane the road drops, still there FORCED_ANY_M on: wait for a real gap.
+		var need := 0.0
+		if lane >= road.lane_count(state.s + DROP_LOOK_M) and lane < road.lane_count(state.s + FORCED_ANY_M):
+			need = maxf(FORCED_GAP_MIN_M, state.v * FORCED_HEADWAY_S)
+		for t: int in [lane - 1, lane + 1]:
+			if to < 0 and t >= 0 and t < road.lane_count(state.s) and not _lane_ends_ahead(t) and _side_clear(traffic, t) \
+					and (need <= 0.0 or _free_ahead(traffic, t) >= need):
 				to = t
 		if to >= 0:
 			if mode == Mode.WEAVE:
@@ -161,7 +198,7 @@ func update(dt: float, traffic: TrafficState) -> void:
 
 
 func _pick_lane(traffic: TrafficState) -> int:
-	var lanes := mini(road.lane_count(state.s), road.lane_count(state.s + DROP_LOOK_M))
+	var lanes := mini(road.lane_count(state.s), road.lane_count(state.s + DROP_EARLY_M))
 	var best := lane
 	var best_gap := _free_ahead(traffic, lane)
 	var order := [lane - 1, lane + 1]
@@ -191,7 +228,12 @@ func _lane_ends_ahead(t: int) -> bool:
 			float(closures.call(&"speed_limit_at", t, state.s + DROP_LOOK_M, 0))) < v_target
 
 
+## Vehicle i is in lane t, or (WP6.8) already moving into it: the bot does not swerve
+## into a lane beside a car that is visibly merging into it (before, it could pick the
+## lane of an early lane-drop merger 5 m ahead: two cars converging on one lane).
 func _lane_hit(traffic: TrafficState, i: int, t: int) -> bool:
+	if traffic.lc_state[i] == TrafficState.LaneChange.MOVING and traffic.target_lane[i] == t:
+		return true
 	var c := road.lane_center_d(t, state.s)
 	var hw := traffic.width[i] * 0.5
 	return absf(traffic.d[i] - c) < hw + width_m * 0.5

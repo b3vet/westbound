@@ -120,6 +120,43 @@ extends Resource
 @export var finale_swing_look_ahead_m: float = 6.0   # not in spec
 @export var finale_swing_ease_frac: float = 0.3   # not in spec
 
+@export_group("Menu attract")
+## The title's attract drive (WP8.5, spec Cameras → Scripted cameras → Menu: "a slow
+## drive-by of the selected car on the road"; docs/RUN.md → Title and attract). The car
+## drives itself (a lane-keeping bot) at attract_speed_kmh in attract_lane with hit
+## detection off, and the camera cuts between two shots, alternating the side with the
+## most room: ORBIT, a slow arc around the car (from attract_orbit_from_deg off its nose
+## to attract_orbit_to_deg, over attract_orbit_s), and PASS, a camera standing on the
+## shoulder attract_pass_lead_m ahead that the car drives past (the shot ends
+## attract_pass_past_m after it, or after attract_shot_max_s). Both look at the car at
+## attract_look_height_m, with a long lens (attract_fov_deg), turned attract_frame_yaw_deg
+## so the car sits right of centre, clear of the title's left-anchored menu.
+@export var attract_speed_kmh: float = 96.0   # not in spec: "a slow drive-by"
+## The title's sky (held; SunTuning's sky_t scale): golden hour, the sun ahead to chase.
+@export var attract_sky_t: float = 0.42   # not in spec
+@export var attract_lane: int = 1   # not in spec
+@export var attract_fov_deg: float = 32.0   # not in spec
+@export var attract_frame_yaw_deg: float = 13.0   # not in spec
+@export var attract_look_height_m: float = 0.7   # not in spec
+@export var attract_orbit_s: float = 9.0   # not in spec
+@export var attract_orbit_from_deg: float = 22.0   # not in spec
+@export var attract_orbit_to_deg: float = 64.0   # not in spec
+@export var attract_orbit_distance_m: float = 18.0   # not in spec
+@export var attract_orbit_height_m: float = 1.4   # not in spec
+@export var attract_pass_lead_m: float = 62.0   # not in spec
+@export var attract_pass_past_m: float = 22.0   # not in spec
+@export var attract_pass_height_m: float = 1.1   # not in spec
+@export var attract_shot_max_s: float = 9.0   # not in spec
+## The camera stays this far inside the carriageway's barriers.
+@export var attract_edge_margin_m: float = 0.8   # not in spec
+## The car changes lanes now and then (the sandbox bot's WEAVE) instead of holding one.
+@export var attract_weave: bool = true   # not in spec
+## A shot that traffic blocks (a vehicle's box, grown by attract_clear_margin_m, across
+## the line from the camera to the car) cuts to the next once it has run this long; a new
+## shot takes the side with a clear line when there is one.
+@export var attract_min_shot_s: float = 1.5   # not in spec
+@export var attract_clear_margin_m: float = 0.4   # not in spec
+
 
 ## Index of `mode` in `modes`, or -1.
 func mode_index(mode: StringName) -> int:

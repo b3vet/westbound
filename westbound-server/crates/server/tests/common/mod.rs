@@ -54,6 +54,7 @@ pub fn test_config(dir: &TempDir) -> Config {
     // The test client never closes on a fatal error; don't wait the production second.
     c.gateway.fatal_close_delay_ms = 20;
     c.backup.dir = dir.path().join("backups");
+    c.replays.dir = dir.path().join("replays");
     c.auth.jwt_secret = Secret::new(JWT_SECRET);
     c.auth.device_secret_pepper = Secret::new(PEPPER);
     // Generous limits: the rate-limit tests set their own.

@@ -75,6 +75,59 @@ extends Resource
 ## Nothing spawns in a lane that closes within this distance ahead of the spawn.
 @export var merge_spawn_clear_m: float = 400.0   # not in spec
 
+@export_group("Lane drops: early merging, harmonisation, zipper (WP6.8; not in spec)")
+## A road lane drop (a tunnel's 3 -> 2) is merged out of from this far before its taper
+## (instead of merge_zone_m, which stays for set-piece closures): nobody moves into the
+## lane any more, and its vehicles seek a gap with an urgency that starts at
+## lane_drop_urgency_min_mps2 and ramps to merge_urgency_mps2 at the taper.
+@export var lane_drop_merge_zone_m: float = 1000.0   # not in spec: "start seeking a gap far earlier"
+@export var lane_drop_urgency_min_mps2: float = 0.6   # not in spec
+## Speed harmonisation: every lane is capped from the lane_ends sign (or this far before
+## the taper when the road has no sign) through the narrowed section;
+## vehicles brake into it at their profile's comfortable deceleration (TrafficSim speed
+## zones). Through lanes at lane_drop_through_kmh, the dropping lane(s) a little slower,
+## so gaps in the through lane slide past a merging car instead of riding beside it.
+@export var lane_drop_slow_zone_m: float = 400.0   # not in spec: the lane_ends sign distance
+@export var lane_drop_slow_after_m: float = 150.0   # not in spec
+## The zone holds through the narrowed section: to lane_drop_slow_after_m past the end of
+## the taper where the lanes come back, if that is within this distance of the drop's taper
+## (a tunnel section; else past the drop's taper only).
+@export var lane_drop_narrow_max_m: float = 3000.0   # not in spec: tunnels 300-800 m, up to two
+@export var lane_drop_through_kmh: float = 120.0   # not in spec: WP6.8 brief "~110-130 km/h"
+@export var lane_drop_merge_lane_kmh: float = 110.0   # not in spec: "matched" to the through lanes
+## Braking into the zone eases in: none while the constant deceleration still needed to
+## reach the zone's speed at its start is below this fraction of the profile's
+## comfortable b, all of it from b on.
+@export var lane_drop_brake_onset_frac: float = 0.5   # not in spec
+## Drivers react to a harmonisation zone this far ahead (the ease-in needs a racer at
+## 250 km/h to see it ~930 m out: (69.4^2 - 33.3^2) / (2 x 0.5 x 4)).
+@export var lane_drop_view_m: float = 1000.0   # not in spec
+## Inside a zone (and in the dropping lane within its merge zone) slower vehicles drive
+## at least lane_drop_merge_lane_kmh (speed matching); past the zone they give it back
+## gradually over this distance.
+@export var lane_drop_release_m: float = 400.0   # not in spec
+## Zipper: a vehicle in a lane beside a dropping lane treats the nearest car still in
+## the dropping lane ahead of it (within lane_drop_yield_range_m, its closure within
+## lane_drop_yield_frac of its merge zone) as its leader, braking no harder than
+## lane_drop_yield_decel_mps2 (or its profile's comfortable b, if lower), when it can
+## fall back behind it at that rate: the gap opens by easing off, and the merging car
+## takes it. When it cannot, it passes and the merging car goes behind it.
+@export var lane_drop_yield_range_m: float = 400.0   # not in spec
+@export var lane_drop_yield_frac: float = 0.6   # not in spec: the last 60 % of the merge zone
+@export var lane_drop_yield_decel_mps2: float = 1.5   # not in spec: well under b_safe and the clamp
+## The merging car lines up behind the through lane's traffic (dropping back behind a
+## car beside it that is at least as fast) only while faster than this, until it is
+## within lane_drop_merge_floor_until_m of the closure (then it must get in).
+@export var lane_drop_merge_floor_kmh: float = 90.0   # not in spec: no slow walls from merging buses
+@export var lane_drop_merge_floor_until_m: float = 250.0   # not in spec
+
+@export_group("MOBIL safety: every follower that can reach the gap (WP6.8; not in spec)")
+## Besides the nearest follower in the target lane, MOBIL's safety check covers every
+## vehicle behind it on the target path that is faster than the changing car and would
+## close the distance within this time (signal + move + margin): a lane-splitting bike
+## or a slow car can no longer hide a fast car behind it.
+@export var mobil_follower_horizon_s: float = 5.0   # not in spec: 1 s signal + 3 s move + 1 s
+
 @export_group("Readable braking")
 @export var brake_light_decel_mps2: float = 1.0
 @export var brake_light_strong_decel_mps2: float = 4.0

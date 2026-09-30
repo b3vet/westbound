@@ -13,6 +13,7 @@ Related pages: [SCREENS.md](SCREENS.md) (countdown, pause, crash hint, results),
 | `src/run/player_fx.gd`, `damage_fx.gdshader` | `PlayerFx` | ghost flicker, hood smoke, the flickering headlight (listener only) |
 | `src/run/crash_sequence.gd` | `CrashSequence` | the second-hit cinematic ([CRASH.md](CRASH.md)) |
 | `src/run/run_dev.gd` | `RunDevPanel` | the DEV rows (rule 10) |
+| `src/run/run_loop.gd`, `room_clock.gd` | `RunLoop`, `RoomClock` | N3.2: the loop test mode and the room clock (see Loop mode below) |
 | `src/ui/screens/run_screens.tscn` | `RunScreens` | in-run screens ([SCREENS.md](SCREENS.md)) |
 | `src/ui/hud/hud.tscn` | `Hud` | the gameplay HUD ([HUD.md](HUD.md)) |
 | `src/core/game.gd` | `Game` | states, `start_run`, `pause`/`resume`, per-mode HUD sections |
@@ -66,7 +67,7 @@ stateDiagram-v2
 - **First hit:** `Events.hit`, the ghost (`ghost_started` / `ghost_ended`), `slowmo_requested(feel.slowmo_first_hit_scale, feel.slowmo_first_hit_s, &"first_hit")`, PlayerFx's damage look. The car keeps driving: `Lives.apply_hit_response` deflects it, takes `lives.first_hit_speed_loss_pct` and adds the wobble.
 - **Second hit:** `scoring.notify_run_end`, every car within `lives.crash_brake_radius_m` (80 m) brakes (`TrafficSim.notify_hit`), then `CrashSequence.start(...)` hands the car (and a hit traffic car) to Jolt bodies ([CRASH.md](CRASH.md)); it emits `crash_started`, requests the crash slow motion and ends with `finished` → `_end_crash()`. Without the cinematic (`crash_cinematic = false`, tests and tools) the fallback brakes the car to a stop and ends after `feel.slowmo_crash_s` real seconds. A tap (`skip()`, also the crash screen's intent) jumps to the results.
 - **Results:** `Events.run_over(results)` with `RunStats.results` plus `personal_best`, `new_best` and `previous_best`; `Save.submit_best_score(mode, score)` when `record_best`. The results screen opens on it.
-- **Retry:** `retry()` (the results screen's RETRY, and QUIT until the title screen exists) builds a new `RunContext` and road, re-runs every world node's `setup()`, recreates `TrafficSim` / `TrafficDirector`, resets the sims, parks the crash bodies (`CrashSequence.reset()`) and keeps the car node, its model and the camera. The rebuild takes ~30 ms headless; with the 1.5 s retry countdown the player is driving again inside `hud.retry_max_s` (2 s, checked by `tests/integration/test_hits_loop.gd`).
+- **Retry:** `retry()` (the results screen's RETRY) builds a new `RunContext` and road, re-runs every world node's `setup()`, recreates `TrafficSim` / `TrafficDirector`, resets the sims, parks the crash bodies (`CrashSequence.reset()`) and keeps the car node, its model and the camera. The rebuild takes ~30 ms headless; with the 1.5 s retry countdown the player is driving again inside `hud.retry_max_s` (2 s, checked by `tests/integration/test_hits_loop.gd`).
 - **Seeds:** run k uses `run_seed` for k = 0, then `Rng.derive_seed(run_seed, "retry/k")`. `run_seed = 0` draws `Rng.random_seed()` once at boot. Daily Drive keeps the day's seed for every attempt.
 - **Pause:** `pause()` / `resume()` / `toggle_pause()` pause the tree (`Game.pause()`); the pause screen, `PlayerInput` and the screens always process. The HUD hides while PAUSED, CRASH and RESULTS.
 
@@ -102,7 +103,7 @@ Children process after the run, so the sky pushes its globals and the HUD reads 
 | --- | --- | --- |
 | Input hub | `$PlayerInput`; `camera_cycle_requested` → `rig.cycle_mode`, `pause_requested` → `toggle_pause`; the driving controller is `drive_controller` (default `PlayerController.new(hub)`) | [CONTROLS.md](CONTROLS.md) |
 | HUD | `hud.bind(feed)`; `pause_pressed` → `toggle_pause`, `camera_pressed` → `hub.request_camera_cycle`; listens to `Events` | [HUD.md](HUD.md) |
-| Screens | `screens.bind(hub, feed)`; intents `resume`, `recalibrate` (→ `hub.recalibrate_gyro`), `retry`, `quit` (→ `retry` for now), `skip`, `countdown_hold` | [SCREENS.md](SCREENS.md) |
+| Screens | `screens.bind(hub, feed)`; intents `resume`, `recalibrate` (→ `hub.recalibrate_gyro`), `retry`, `quit` (→ `enter_menu`, WP8.5), the results' `menu` (→ `enter_menu`), `skip`, `countdown_hold` | [SCREENS.md](SCREENS.md) |
 | Crash cinematic | `_start_crash_sequence()`: `CrashSequence.start(car, contact, sim.state, traffic_view, road, origin, rig)`, `finished` → `_end_crash()`; `setup(ctx, registry)` per run, `reset()` on retry | [CRASH.md](CRASH.md) |
 | Camera | listens to `Events.hit` (shake), boost and close passes; `rig.set_target(car, ...)` when the car node is (re)built | [CONTRACTS.md](CONTRACTS.md) §14 |
 | Damage look | `PlayerFx` listens to `hit`, `ghost_started`, `ghost_ended`, `run_started`; numbers in `FeelTuning` "Damage look" | this page |
@@ -119,9 +120,9 @@ Everything the run itself reads comes from `Run.tuning` (`Tuning.load_default()`
 
 ## Dev (rule 10)
 
-DEV (top-left, under the score block): row 0 DEV ±, HUD (the dev HUD), CAM; row 1 STEER, THR, MIRROR; row 2 CAR, RECAL, RESET (car back into a lane), RETRY; row 3 RING/WHEEL, SIZE, LIVES (2 / INF); row 4 LEG (AUTO or a fixed director leg 1–8), SANDBOX, DRIVE (the M3 drive scene). `src/run/run_dev.gd` is the source of truth for the rows. Web: `?scene=drive` opens `src/dev/car_drive.tscn`, `?scene=sandbox` the traffic sandbox.
+DEV (top-left, under the score block): row 0 DEV ±, HUD (the dev HUD), CAM; row 1 STEER, THR, MIRROR; row 2 CAR, RECAL, RESET (car back into a lane), RETRY; row 3 RING/WHEEL, SIZE, LIVES (2 / INF); row 4 LEG (AUTO or a fixed director leg 1–8), SANDBOX, DRIVE (the M3 drive scene), LOOP (N3.2: the loop test mode on / off, a new run). `src/run/run_dev.gd` is the source of truth for the rows. Web: `?scene=drive` opens `src/dev/car_drive.tscn`, `?scene=sandbox` the traffic sandbox.
 
-Run hooks for tools and tests: `force_hit(source, slot, away_side)` (a contact at the next tick's collision step), `dev_teleport(s, v)` (car to `s`, traffic respawned, the leg keeps counting), `dev_reset_car()`, `set_leg_override(leg)`, `infinite_lives`, `trace_hash()` (car, traffic, scoring, lives, legs, objective, sun, stats), `manual_ticks` (tests call `tick()` and `frame()`).
+Run hooks for tools and tests: `set_dev_density_scale(x)` (the DENS knob; loop mode multiplies the loop's density), `dev_toggle_loop()`, `force_hit(source, slot, away_side)` (a contact at the next tick's collision step), `dev_teleport(s, v)` (car to `s`, traffic respawned, the leg keeps counting), `dev_reset_car()`, `set_leg_override(leg)`, `infinite_lives`, `trace_hash()` (car, traffic, scoring, lives, legs, objective, sun, stats), `manual_ticks` (tests call `tick()` and `frame()`).
 
 **Snaps:** `tools/snap.sh src/run/run.tscn --state=countdown|running|paused|results --sky_t=… --s=… --speed_kmh=… --car=0..2 --cam=… --damaged --ghost --high_beam --seed=…` (default seed `Run.SNAP_SEED`), `--leg=N [--leg_s=M]` (M metres into leg N, default 600; negative: before its checkpoint), and since WP6.4c `--at=elevated` (the middle of the next elevated stretch), `--at=lane_ends [--at_m=150]` (before the next lane-ends sign) and `--hud=false` (no HUD, dev HUD, dev buttons or touch overlay: look reviews).
 
@@ -134,3 +135,41 @@ Run hooks for tools and tests: `force_hit(source, slot, away_side)` (a contact a
 
 See [FORKS.md](FORKS.md). `RunForks` (`src/run/run_forks.gd`) gives the road its route plan and forks in `_start_run` (right after the road is made), the look plan to the biome director, and the first fork's zone to the builder and the director (`start()`, after the director exists). Per tick it runs first in `_sim_tick` (`forks.tick`: candidate path, the 1 km announcement, the choice at the split, the swap when the right branch is taken; `on_fork_swapped()` restarts the hit sweep) and after the director (`forks.guard_traffic()`); `forks.forget_before` follows the road's; `dev_teleport` calls `forks.sync(s)` first (forks jumped past take their left branch). `ForkView` draws both branches (`fork_view.update_view(s)` after the builder). `RunFinale` (`src/run/run_finale.gd`) is armed by the crossing that reaches the coast (`_dispatch_crossing`, after the journey bonus) and ticks after the traffic; it swings the camera, holds the car's lane (it swaps `car.controller` for the swing) and pushes `journey_complete`; the save is written in `frame()`. Adapter kinds: `RunForks.KIND_FORK_ANNOUNCED` (value = fork index; the adapter names both branches through `adapter.forks`), `KIND_FORK_TAKEN` (tag = biome), `RunFinale.KIND_JOURNEY_COMPLETE`. Snap options: `--at=fork|finale`, `--lane`, `--bot=keep`.
 
+
+## Loop mode (N3.2)
+
+See [LOOP_MAP.md](LOOP_MAP.md) → Wrap-around and the loop test mode. `mode = Run.MODE_LOOP` (`?mode=loop` on the web, `--mode=loop` natively, the dev LOOP button, `--mode=loop` in snaps) makes `_start_run` call `_setup_loop()` instead of building a `ProceduralRoadPath` and the forks:
+
+- `RunLoop.run_tuning(tuning)` gives the run its own `Tuning` copy (the traffic tuning follows the section's flow speeds, the legs never reach the coast, the set-piece unlock order leaves out `LoopTuning.excluded_set_pieces`); the shared `Tuning.load_default()` is never written.
+- `road` is the cached `LoopRoadPath` (`Run.road` is typed `RoadPath`; fork code casts to `ProceduralRoadPath`), the biome director gets the periodic plan, the elevated feature gets the loop's zone (`RunLoop.apply_features`, before the first build), and the car starts at `RunLoop.start_s()` (s = L + 150 m, lap 1). s is never wrapped on the client.
+- The room clock starts from the wall clock (UTC), read once in `_setup_loop` unless `loop.clock_start_unix_s` is set (tests, snaps: `--clock_min`); the run prints `loop: loop_v1 map_hash=<hex>` the first time.
+- Per tick, step 6 is `_loop_clock_tick`: `RunLoop.tick` advances the clock, pushes `night_started` / `morning_reached` on a flip, writes the section's flow speeds and density on a section change, and returns sky_t, which the run writes into `sun.sky_t` / `sun.phase` so the headlights, `scoring.set_night` and the trace read it as before. `sun.advance`, sun lifts (`KIND_SUN_NUDGE`), leg objectives, forks and the finale are skipped. `legs.step` runs the sector gantries; `_dispatch_crossing` in loop mode banks, pays the bonuses and restores a life on a clean sector, nothing else. The director keeps `LoopTuning.director_leg` (the dev LEG override still applies).
+- Per frame, `RunLoop.fill_feed` fills `HudLoopFeed` (clock, flip countdown, sector distance, lap, sector), bound with `hud.bind_loop(feed)` at each run start (null in the journey).
+- `trace_hash()` mixes the clock and section instead of the forks.
+- Snaps: `tools/snap.sh src/run/run.tscn --mode=loop --at=<place> --clock_min=<m> --bot=keep` (places: `RunLoop.place_s`).
+
+
+## Title and attract (WP8.5)
+
+Spec: UI → Screens (Title); Cameras → Scripted cameras → Menu ("a slow drive-by of the selected car on the road. No scripted camera ever takes control while traffic can still hit the player"); Modes at launch. Screens: [SCREENS.md](SCREENS.md) → Title.
+
+```mermaid
+stateDiagram-v2
+    [*] --> MENU: boot (main scene)
+    [*] --> COUNTDOWN: ?title=0, ?mode=, tests
+    MENU --> COUNTDOWN: PLAY / DAILY DRIVE / LOOP PRACTICE (start_mode)
+    PAUSED --> MENU: QUIT (enter_menu)
+    RESULTS --> MENU: MENU (enter_menu)
+    RESULTS --> COUNTDOWN: RETRY (same mode)
+```
+
+- **Boot.** `wants_title()`: the run is the tree's main scene (`get_tree().current_scene == self`, i.e. the game and the web build) or `title_on_boot` (tests), and neither `?title=0` / `--title=0` nor `?mode=` (`loop`, `daily`, `journey`: straight into that run) says otherwise. Runs added under the root (tests, tools, snap previews) boot into the countdown as before. `?scene=drive|sandbox` still switches scenes first.
+- **One world.** `enter_menu()` builds the title's world through `_start_run()` itself (a MENU build): a Journey road of its own seed (`Rng.derive_seed(journey seed, "menu/k")`, no run counted), the same world nodes, traffic, sky (held at `CameraTuning.attract_sky_t`, golden hour), then `Game.enter_menu()` (forced from any state, like `start_run`), the title opens and `RunAttract.begin()` takes the car. `start_mode(mode)` (PLAY, DAILY DRIVE, LOOP PRACTICE) rebuilds for the run in the same call: 70 ms headless (`test_play_starts_the_journey_countdown_in_the_same_frame`), no scene load, and the countdown runs in full (1 s steps; a RETRY still counts 0.5 s steps, so retry stays inside `hud.retry_max_s`).
+- **Seeds.** Journey keeps its base seed (`run_seed`, or random at boot) and the run counter, so every PLAY is a new Journey and the first one has the run seed; Daily Drive uses `Run.daily_seed_today()` (`Rng.daily_seed` of today's UTC date, `RunContext.daily`'s seed) and RETRY keeps it; loop mode as N3.2. A run from the title is exactly the run a direct boot gives (trace hash, tested).
+- **MENU tick (`_attract_tick`).** The forks, `car.tick` (RunAttract's bot), `traffic_sim.step` with the car as participant, the director, the fork traffic guard, `capture_tick`, the safety net and the shot director. Never hit detection, lives, scoring, the sun clock, legs or objectives: nothing can hit the car, nothing scores, and the camera may be scripted. `force_hit` is dropped (reset by the next run).
+- **Attract driver.** The traffic sandbox's `SandboxBot` (IDM on the car ahead; WEAVE: a lane change to a freer lane every few seconds) at `attract_speed_kmh`, from `attract_lane`.
+- **Attract camera (`RunAttract` + `CameraRig.start_attract / set_attract_view / stop_attract`).** Shots in road space (s, d, height over the road), turned into render space with the floating origin: ORBIT (an arc around the car at `attract_orbit_distance_m`, from `attract_orbit_from_deg` off its nose to `attract_orbit_to_deg` over `attract_orbit_s`) and PASS (a camera on the shoulder `attract_pass_lead_m` ahead; the shot ends `attract_pass_past_m` after the car passes, or after `attract_shot_max_s`), alternating, both inside the barriers. Each shot takes the side with a clear line of sight (no traffic box across the line to the car), and a blocked shot cuts after `attract_min_shot_s`. A long lens (`attract_fov_deg`) and a frame yaw (`attract_frame_yaw_deg`) put the car right of centre, clear of the menu. Cuts reset physics interpolation; the rig's springs keep following underneath, so a run starts from a snapped chase camera. The cockpit steps aside (the body shows) and there is no shake.
+- **On the title** the HUD, the touch controls and the dev rows step aside; the dev HUD steps aside and comes back after (its ` key still toggles it). The dev rows' TITLE (row 5) goes back to the title.
+- **Snaps:** `--state=menu`, `--attract_s=`, `--shot=orbit|pass`, `--title=hub|settings|account|boards|play`, with `--sky_t`, `--s`.
+
+Tests: `tests/run/test_title_flow.gd`: the title on boot (MENU, attract camera, the car driving itself, no HUD, no run counted); a run without the title unchanged and the title never built; the attract car drives and cannot be hit (an overlapping car and a forced contact: no hit, no life, no score, still MENU; the same overlap in a run hits); the shots cut and alternate, the pass camera inside the barriers, a car across the line of sight cuts the shot; PLAY to COUNTDOWN in the same frame within the retry budget, the first Journey seed, the chase camera and HUD back, the full countdown; Daily Drive on today's UTC seed and RETRY keeping it; RETRY keeping the Journey and MENU back to the title; QUIT from the pause menu to the title (tree unpaused); LOOP PRACTICE from the hub (RETRY keeps the loop, MENU returns to the Journey world); settings and leaderboards from the title; nothing drawn by the title in gameplay; a run from the title equals a direct boot (trace hash); `Game.enter_menu()` from any state.

@@ -13,6 +13,9 @@ extends RunScreen
 ## touch_target_px tall. SETTINGS swaps the menu for the SettingsPanel; DONE comes back.
 ## N1.2: in the settings, ACCOUNT (shown when a NetSession exists) swaps the grid for the
 ## ProfilePanel (name, rename, delete account) and SETTINGS swaps it back.
+## N7.2: LEADERBOARDS (above QUIT; shown when an online session exists) opens the
+## LeaderboardsScreen over the menu.
+## WP8.5: QUIT goes back to the title (the run's enter_menu()).
 
 signal resume()
 signal recalibrate()
@@ -27,6 +30,7 @@ const TEXT_RECALIBRATED := "CALIBRATED"
 const TEXT_QUIT := "QUIT"
 const TEXT_DONE := "DONE"
 const TEXT_ACCOUNT := "ACCOUNT"
+const TEXT_LEADERBOARDS := "LEADERBOARDS"
 const TEXT_LEG := "LEG %d OF %d"
 const TEXT_BANKED := "BANKED  %s"
 const TEXT_DISTANCE := "%s %s DRIVEN"
@@ -53,6 +57,10 @@ var settings: SettingsPanel
 var account_open: bool = false
 var account_button: ScreenButton
 var profile: ProfilePanel
+var boards_button: ScreenButton
+var leaderboards: LeaderboardsScreen
+## The runs client for the leaderboards (null: the game's, NetRunsClient.ensure()).
+var runs: NetRunsClient
 
 var _note_left: float = 0.0
 
@@ -75,6 +83,7 @@ func _init() -> void:
 	add_child(summary_banked)
 	quit_button = _button(TEXT_QUIT, ScreenButton.Kind.DANGER, quit.emit)
 	settings_button = _button(TEXT_SETTINGS, ScreenButton.Kind.NORMAL, open_settings)
+	boards_button = _button(TEXT_LEADERBOARDS, ScreenButton.Kind.NORMAL, open_leaderboards)
 	recalibrate_button = _button(TEXT_RECALIBRATE, ScreenButton.Kind.NORMAL, _on_recalibrate)
 	resume_button = _button(TEXT_RESUME, ScreenButton.Kind.PRIMARY, resume.emit)
 	settings = SettingsPanel.new()
@@ -105,8 +114,11 @@ func _restyled() -> void:
 	profile.setup(style, tuning)
 	title.size_px = tuning.font_title_px
 	title.use_tilt(TILT_SHADER, tuning.speed_tilt_rad())
-	for b: ScreenButton in [quit_button, settings_button, recalibrate_button, resume_button, done_button, account_button]:
+	for b: ScreenButton in [quit_button, settings_button, recalibrate_button, resume_button, done_button, account_button,
+			boards_button]:
 		b.size_px = tuning.font_screen_button_px
+	if leaderboards != null:
+		leaderboards.setup(style, tuning)
 	summary_distance.size_px = tuning.font_screen_body_px
 	summary_banked.size_px = tuning.font_screen_body_px
 	dim.color = Color(style.ink, Units.pct_to_frac(tuning.screen_dim_pct))
@@ -132,6 +144,8 @@ func set_gyro(on: bool) -> void:
 
 
 func open() -> void:
+	if leaderboards != null:
+		leaderboards.close(false)
 	settings_open = false
 	settings_dirty = false
 	_note_left = 0.0
@@ -141,7 +155,7 @@ func open() -> void:
 	super.open()
 	var dx := -tuning.screen_slide_px if mirrored else tuning.screen_slide_px
 	var i := 0
-	for b: ScreenButton in [resume_button, recalibrate_button, settings_button, quit_button]:
+	for b: ScreenButton in [resume_button, recalibrate_button, settings_button, boards_button, quit_button]:
 		if b.visible:
 			slide_in(b, dx, tuning.screen_fade_in_s, float(i) * tuning.results_row_stagger_s)
 			i += 1
@@ -187,11 +201,30 @@ func _apply_mode() -> void:
 	for c: CanvasItem in [summary_leg, summary_distance, summary_banked, resume_button, settings_button, quit_button]:
 		c.visible = menu
 	recalibrate_button.visible = menu and gyro
+	boards_button.visible = menu and _runs() != null
 	settings.visible = settings_open and not account_open
 	profile.visible = settings_open and account_open
 	account_button.visible = settings_open and (account_open or profile.has_session())
 	account_button.text = TEXT_SETTINGS if account_open else TEXT_ACCOUNT
 	done_button.visible = settings_open
+
+
+## LEADERBOARDS: the boards over the menu (BACK comes back here).
+func open_leaderboards() -> void:
+	var c := _runs()
+	if c == null:
+		return
+	var first := leaderboards == null
+	leaderboards = LeaderboardsScreen.attach(self, leaderboards, c)
+	if first:
+		leaderboards.closed_by_player.connect(func() -> void:
+			_apply_mode()
+			_layout())
+	leaderboards.open_over(self)
+
+
+func _runs() -> NetRunsClient:
+	return runs if runs != null and is_instance_valid(runs) else NetRunsClient.ensure()
 
 
 func _on_recalibrate() -> void:
@@ -256,7 +289,7 @@ func _layout() -> void:
 	var x := a.position.x if mirrored else a.end.x - bw
 	var y := a.end.y
 	var ph := tuning.primary_button_size_px.y
-	for b: ScreenButton in [resume_button, recalibrate_button, settings_button, quit_button]:
+	for b: ScreenButton in [resume_button, recalibrate_button, settings_button, boards_button, quit_button]:
 		if not b.visible and b != recalibrate_button:
 			continue
 		if b == recalibrate_button and not gyro:

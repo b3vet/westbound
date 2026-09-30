@@ -392,3 +392,278 @@ The server logged `refresh token reuse detected; session family revoked` for the
 - The orchestrator adds the autoload `NetSession` (`res://src/net/session.gd`). Until then the pause menu hides ACCOUNT, and nothing touches the network.
 - Once it is an autoload, the game signs in silently at launch. The web smoke test serves no API, so run it with `?server=off` or accept the failed request, or point it at a local server.
 - `NetClient.start(session.ws_url(), build, map_hash, await session.fresh_access_token())`; `test_session.gd::test_access_token_plugs_into_net_client` checks that the Hello carries the session's token, and that a fatal `not_allowed` (a newer login elsewhere) shows "This account signed in on another device."
+
+## Runs and leaderboards client (N7.2)
+
+WP N7.2: single-player run submission, the offline queue, the one-time legacy upload, the leaderboard reads, and report / block from a board entry. Spec: [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Leaderboards, Client changes → Leaderboards screen, Rooms → Moderation. Server side: [`SERVER.md`](SERVER.md) → Leaderboards & runs API, Social API. The screens are in [`SCREENS.md`](SCREENS.md) → Leaderboards (N7.2).
+
+| File | Class | What it is |
+| --- | --- | --- |
+| `src/net/runs_client.gd` | `NetRunsClient` | Node under the session: listens to `Events.run_over`, queues and submits runs, the legacy upload, owns a `NetBoards` |
+| `src/net/run_payload.gd` | `NetRunPayload` | The `POST /runs` body from the `run_over` results; UUIDs, UTC dates, the Daily date |
+| `src/net/run_submission.gd` | `NetRunSubmission` | One run on its way: state (QUEUED, SENDING, DONE, REJECTED, FAILED, EXPIRED), why it waits, the receipt |
+| `src/net/boards_client.gd` | `NetBoards` | `GET /boards/{board}` with a short cache, single flight per page; `POST /reports`, `POST /blocks` |
+| `src/net/board_page.gd` | `NetBoardPage` (+ `Entry`) | A board read as typed data (entries, `me`, markers, crew rows) |
+| `src/net/fake_boards.gd` | `NetFakeBoards` | `NetFakeAccounts` plus the boards, runs, replay upload, reports and blocks routes (tests, the preview) |
+| `src/net/replay_recorder.gd` | `NetReplayRecorder` | N8.1: records Journey / Daily runs (a child of `NetRunsClient`); see Replays |
+| `src/net/replay_file.gd` | `NetReplayFile` | N8.1: the `.wbr` format ([`REPLAY_FORMAT.md`](REPLAY_FORMAT.md)) |
+
+### Wiring
+
+- **The game's client.** `NetRunsClient.ensure()` attaches one to the game's session (the `Net` autoload, `auto_start`) the first time a screen needs it (the results screen's `_ready`, the pause menu). It is a child of the session (`/root/Net/RunsClient`), lives for the whole launch and listens to `Events.run_over` from then on. No session (native dev runs without `--server=`, `?server=off`): no client, no online line, no LEADERBOARDS button.
+- **Tests and previews** configure their own: `NetRunsClient.new().configure(session, store, tuning, clock)`, then bind it (`ResultsScreen.bind_runs()`, `PauseScreen.runs`, `LeaderboardsScreen.bind()`). Hooks: `unix_clock`, `local_bests`, `car_of`.
+- **Needs from the orchestrator (optional):** an autoload would make the client exist before any screen does; today the results screen creates it when the run scene loads, which is before any `run_over`.
+
+### Submission
+
+On `run_over` a **Journey or Daily Drive** run is submitted (`NetRunPayload.eligible`): Loop practice and any other mode stay local, and so does a scoreless crash at the start (score 0 and less than `runs_min_distance_m`), which could place on no board and would spend the 30-per-hour limit.
+
+1. A `NetRunSubmission` with a fresh UUID v4 idempotency key.
+2. The body is stored in the queue (its own document next to the session's: `user://net/runs[_<server hash>].dat`, or `localStorage["westbound.net.v1.runs…"]`) **before** anything is sent, so a closed app keeps the run.
+3. While the session is online the queue is sent in order, one request at a time (`POST /runs`, bearer).
+
+| Answer | Then |
+| --- | --- |
+| 201, or 200 `duplicate: true` | The receipt goes on the submission (run id, verification, `verifying`, `replay_required`, placements); the run leaves the queue. `rejected` + `build_unsupported` is UPDATE REQUIRED |
+| network, 5xx, 429 | Stays queued **with the same key**. Next try after `runs_retry_s` (20 s), doubling to `runs_retry_max_s` (600 s), or the 429's Retry-After when longer. NetApi's own retries (3, backoff; a 429 up to 30 s) come first |
+| 401 / not signed in / `banned` | Stays queued: the run is fine, the session is not. Coming back online (the session's `status_changed`) sends at once |
+| any other 4xx (`invalid_body`, 413, 415) | Dropped: the server will never take it (FAILED) |
+
+- A queued run remembers the account that played it: another account's runs wait for that account; a run queued before the first sign-in (no account yet) goes with the first account.
+- A run past the server's date window (the end of its UTC day + `runs_date_late_s`, 6 h) is dropped without a request (EXPIRED). The queue keeps at most `runs_queue_max` (50) runs.
+- `replay_required` / `verification: pending` shows as VERIFYING; the replay goes up after the receipt (Replays, below).
+
+**Payload mapping** (`NetRunPayload.build`; docs/RUN.md → `run_over`):
+
+| Body field | From |
+| --- | --- |
+| `idempotency_key` | UUID v4 (`Crypto.generate_random_bytes`), one per run, kept through retries |
+| `mode` | `mode` (`journey` / `daily`) |
+| `seed` | `seed` as a decimal String (`String.num_int64`; 63-bit seeds lose nothing) |
+| `date` | Journey: the UTC date when `run_over` fired. Daily: the date whose `Rng.daily_seed` equals the seed (today or yesterday: a run that crosses midnight), else today |
+| `car` | `car` in the payload when run.gd adds it; until then the `PlayerCar` node's `CarDef.id` (`falcon_gt`), cleaned to `a–z 0–9 _ -` |
+| `client_build` | `NetTuning.client_build` (u32; bump per release) |
+| `score`, `legs_completed`, `best_chain`, `passes`, `close_passes`, `threads`, `cuts`, `hits` | the same keys, JSON integers (re-typed after the queue's JSON round trip) |
+| `distance_m`, `duration_s`, `best_multiplier`, `top_speed_kmh`, `night_time_s`, `journey_time_s`, `journey_distance_m` | the same keys (≥ 0; a non-finite value goes as 0) |
+| `coast_reached`, `journey_complete` | the same keys |
+| — | `personal_best`, `new_best`, `previous_best` and any other key are left out (the server refuses unknown fields) |
+
+### Legacy upload
+
+Once per account, the first time it is online: `POST /runs/legacy` with the local Journey best (`Save.best_score("journey")`). The save keeps no longest distance and Daily bests have no date (the server refuses them), so Journey is the only entry; with no best there is nothing to send. Accepted, `already_uploaded`, `over_cap` or any non-transient refusal marks it done for that account (in the queue's document); a network failure tries again at the next connection.
+
+### Replays (N8.1)
+
+Spec: multiplayer handoff → Leaderboards (single-player runs, step 3). The format and the verifier: [`REPLAY_FORMAT.md`](REPLAY_FORMAT.md); the server: [`SERVER.md`](SERVER.md) → Replays and verification.
+
+- **Recording.** `configure()` gives the client a `NetReplayRecorder` child (`/root/Net/RunsClient/ReplayRecorder`). It attaches to each Journey and Daily run on `Events.run_started` and records it (30 Hz path and inputs, exact boost edges and discontinuities, the event log, a traffic fingerprint a second). No online session, no client, no recording.
+- **Stored with the run.** At `run_over` the client finishes the recording (`finish(results, date)`: the header gets the claims and the submission's date) and stores the bytes in their own document, `replay_<key>` (base64 in the encrypted `user://net/replay_<key>.dat`, or `localStorage["westbound.net.v1.replay_<key>"]`), before anything is sent; the queued run gets `replay: true`. At most `replay_keep_max` (10) replays wait on the device (the oldest go); an expired or dropped run takes its replay with it. `NetRunSubmission.replay_state` says where it is: `stored`, `queued`, `uploading`, `uploaded`, `not_needed`, `refused`.
+- **The receipt decides.** `replay_required` on a `pending` run: an upload (key, run id, account) joins the `uploads` list in the queue document. Otherwise the replay is deleted (`not_needed`).
+- **Upload.** After the runs, in the same pass, one at a time: `POST /runs/{run_id}/replay` with the file (`NetApi.request` with a `PackedByteArray` body: `application/octet-stream`, `HTTPRequest.request_raw`, which the web export supports), the receipt's run id patched into the header (`NetReplayFile.patch_run_id`). Another account's upload waits for that account.
+
+| Answer | Then |
+| --- | --- |
+| 201, or 200 `duplicate: true` | Uploaded: the local copy is deleted (`uploaded`) |
+| network, 5xx, 429, 401 / not signed in / banned | Kept (`queued`), on the runs' retry schedule (`runs_retry_s` doubling to `runs_retry_max_s`, or Retry-After) |
+| any other 4xx (`replay_not_required`, `not_owner`, `body_too_large`, `invalid_replay`, `replay_mismatch`) | Dropped and deleted (`refused`) |
+
+### Leaderboards (`NetBoards`)
+
+- `fetch(board, period, view, force)`: `GET /boards/{board}?period=&view=&limit=` (`limit` = `boards_global_limit` 100 for `global`, `boards_around_me_limit` 10 for `around_me`, none for `friends`). `period` is `current` (the season, the week, today), `all`, or a date on Daily Drive.
+- `global` works signed out (the token, when there is one, adds `me`); `around_me` and `friends` need the session online and answer `not_signed_in` without a request.
+- Pages are cached for `boards_cache_s` (30 s; the server caches 60 s); failures are not cached. One request per page is out at a time. Pull to refresh forces a read at most every `boards_refresh_min_s`.
+- `report(account_id, reason, board, period, run_id)`: `POST /reports` with `reason` `cheating` or `offensive_name` and `context {"source": "leaderboard", board, period, run_id}`. `block(account_id)`: `POST /blocks`, then the cached friends views are dropped (the friendship goes with the block). Both answer through `action_done`.
+
+### Tuning (`data/tuning/net.tres`, N7.2 fields)
+
+| Field | Default | Spec |
+| --- | --- | --- |
+| `client_build` | 1 | the u32 build of `POST /runs` and `Hello` |
+| `runs_retry_s` / `runs_retry_max_s` | 20 / 600 | not in spec |
+| `runs_queue_max` | 50 | not in spec |
+| `runs_date_late_s` | 21600 | the server's `runs.date_late_secs` |
+| `runs_min_distance_m` | 500 | not in spec |
+| `replay_sample_ticks` | 4 | the spec's 30 Hz at the 120 Hz tick |
+| `replay_fingerprint_ticks` | 120 | not in spec (the traffic fingerprint, once a second) |
+| `replay_reserve_s` | 900 | not in spec (the recorder's first allocation) |
+| `replay_max_bytes` | 4194304 | the server's `replays.max_bytes` |
+| `replay_keep_max` | 10 | not in spec |
+| `verify_*` | see REPLAY_FORMAT.md → Verification | the verifier's thresholds: `verify_score_pct` 3 (the spec), `verify_limit_factor` 1.2 |
+| `boards_global_limit` / `boards_around_me_limit` | 100 / 10 | views: global top 100, around me |
+| `boards_cache_s` / `boards_refresh_min_s` | 30 / 3 | not in spec |
+| `boards_daily_days_back` | 14 | not in spec |
+| `boards_row_px`, `boards_tab_width_px`, `boards_back_width_px`, `boards_option_min_px`, `boards_title_px`, `boards_row_font_px`, `boards_chip_font_px`, `boards_pull_refresh_px`, `boards_tap_slop_px`, `boards_fling_decay`, `boards_reveal_s` | see the file | the screen (not in spec) |
+
+### Live check
+
+`tests/net/live_boards_check.tscn` runs three throwaway device accounts (memory stores) against a running server: renames, the legacy upload (and a second one: `already_uploaded`), a friendship and a crew, a Journey run each through `Events.run_over`, a Daily run on today's seed, a duplicate, a run queued while the network is down and sent later with its key, optionally an unsupported build, every view of the Journey board and the other boards, report and block. It is a scene (it needs the autoloads) and refuses the production host.
+
+```sh
+# the server (dev env: no secrets), from a scratch directory, on free ports; N7.2 used westbound-server at 10907bd
+CARGO_TARGET_DIR=$SCRATCH/target cargo build -p server             # in westbound-server/
+cp westbound-server/config/dev.toml $SCRATCH/run/ && cd $SCRATCH/run
+WB_SERVER__ENV=dev WB_SERVER__BIND=127.0.0.1:18480 WB_METRICS__BIND=127.0.0.1:19490 \
+    WB_RUNS__SUPPORTED_BUILDS=1 $SCRATCH/target/debug/westbound-server --config dev.toml &
+# the check, from the repo (--unsupported-build needs WB_RUNS__SUPPORTED_BUILDS without it)
+tools/godot.sh --headless --path . res://tests/net/live_boards_check.tscn -- http://127.0.0.1:18480 --unsupported-build=7
+# the screens on the same server: the game's own Net session and NetRunsClient.ensure()
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --server=http://127.0.0.1:18480 --screen=results --tag=live_results
+tools/snap.sh src/ui/screens/dev/leaderboards_preview.tscn --server=http://127.0.0.1:18480 --from=results --view=global --tag=live_global
+```
+
+**Run for N7.2** (2026-09-29, fresh database):
+
+```
+server http://127.0.0.1:18480/api/v1
+account 1          ok    Road Runner#1295
+account 2          ok    Şahin 34#0386
+account 3          ok    Night Owl#5336
+legacy upload      ok    journey 77000 as a legacy entry
+legacy once        ok    a second upload: already_uploaded
+friends            ok    Road Runner#1295 + Şahin 34#0386
+crew               ok    NR created
+run 1              ok    run 2 pending: #1 THIS WEEK  ·  #1 ALL TIME  #1 DISTANCE NEW PB
+run 2              ok    run 3 pending: #1 THIS WEEK  ·  #1 ALL TIME  #2 DISTANCE NEW PB
+run 3              ok    run 4 pending: #3 THIS WEEK  ·  #3 ALL TIME  #3 DISTANCE NEW PB
+daily run          ok    run 5 pending: #1 TODAY  #2 DISTANCE NEW PB
+duplicate          ok    200 duplicate: true, run 2
+offline queued     ok    OFFLINE — WILL SUBMIT, key 96a191b7...
+offline sent       ok    same key, run 6 pending: #3 THIS WEEK  ·  #3 ALL TIME  #3 DISTANCE NEW PB
+unsupported build  ok    UPDATE REQUIRED: build_unsupported
+journey global     ok    2026-W40: #1 Şahin 34#0386 240,600 VERIFYING, #2 Road Runner#1295 [NR] 183,200 VERIFYING, #3 Night Owl#5336 122,900 VERIFYING
+journey around_me  ok    2026-W40: #1 Şahin 34#0386 240,600 VERIFYING, #2 Road Runner#1295 [NR] 183,200 VERIFYING, #3 Night Owl#5336 122,900 VERIFYING
+journey friends    ok    2026-W40: #1 Şahin 34#0386 240,600 VERIFYING, #2 Road Runner#1295 [NR] 183,200 VERIFYING
+journey all time   ok    3 entries, legacy marker replaced by a better run
+daily              ok    2026-09-29: 1 entries
+distance           ok    all: 3 entries
+loop               ok    2026-09: 0 entries
+loop_crew          ok    2026-09: 0 entries
+report             ok    201 report 1
+block              ok    Night Owl#5336 blocked
+LIVE_BOARDS ok (0 failed)
+```
+
+Every first run is a personal best on some all-time board, so the server asks for its replay and shows it as VERIFYING (`pending`) until N8 verifies it. The preview's live snaps then added a fourth (the preview's own `Net` account): its results read `#1 THIS WEEK · #1 ALL TIME / #4 DISTANCE`, and the Journey board showed the four drivers with the player's row highlighted and Road Runner's `NR` crew tag. The snap run's account files (`user://net/session_<hash>.dat`, `runs_<hash>.dat`) are per server; delete them after.
+
+| `tests/net/test_social_client.gd` | Every call's route and JSON; request errors (unknown and blocked read the same, self, caps, duplicates) and 429 mapping; accept / decline / cancel / remove; blocks; presence by polling (interval, watch on/off, 429 back-off) and over a WebSocket (`tests/net/fake_server.gd` on the loopback link: subscribe after Welcome, snapshot and updates, no polling while live, unknown friend → list refresh, `internal` and a dead link → polling, detach unsubscribes, resubscribe after reconnect); crew create / join / member actions / disband / leave with errors; the standing; the role table; reports and their rate limit; offline and signed-out safety; an account change clearing the lists; friend-code validation |
+| `tests/ui/test_social_screens.gd`, `tests/ui/test_social_text_fit.gd` | The screens (docs/SCREENS.md → Social) |
+
+## Social client (N9.2)
+
+WP N9.2: friends, requests, blocks, presence, crews, the crew's Loop season standing and reports, and their screens. It implements [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Rooms, parties and matchmaking (Friends and presence, Crews (persistent)), Moderation → Report and Client changes (friends list, crew page). The server side is [`SERVER.md`](SERVER.md) → Social API; the screens are [`SCREENS.md`](SCREENS.md) → Social.
+
+| File | Class | What it is |
+| --- | --- | --- |
+| `src/net/social_client.gd` | `NetSocialClient` | Every Social API call over `NetApi`, the cached lists, presence (WebSocket and polling), player texts |
+| `src/net/social_player.gd` | `NetSocialPlayer` | A friend / request / blocked player / crew member, with presence |
+| `src/net/social_crew.gd` | `NetCrew` | A crew (`GET /crews/mine`) and the role table (`allowed_actions`) |
+| `src/net/fake_social.gd` | `NetFakeSocial` | `NetFakeAccounts` plus an in-memory Social API (tests, the snap preview) |
+| `tests/net/live_social_check.gd` | | Two accounts against a running server (below) |
+
+### NetSocialClient
+
+```gdscript
+var social := NetSocialClient.of(NetSession.current)   # one per session; null without one
+social.friends_changed.connect(redraw)                 # also presence_changed(id), blocks_changed, crew_changed, standing_changed
+var r: NetApiResult = await social.send_request("LoneWolf#0007")
+if not r.ok: note.text = NetSocialClient.error_text(r)
+```
+
+| Call | Route | Body |
+| --- | --- | --- |
+| `refresh_friends()` | `GET /friends` | (single flight; a call during a refresh runs it once more) |
+| `send_request(code)` | `POST /friends/requests` | `{"full_name": "name#1234"}` (trimmed; a malformed code fails locally with `invalid_full_name`) |
+| `accept(request_id)` / `decline(request_id)` / `cancel_request(request_id)` | `POST /friends/requests/{id}/accept` / `/decline` | none |
+| `remove_friend(account_id)` | `DELETE /friends/{account_id}` | |
+| `refresh_blocks()` / `block(id)` / `unblock(id)` | `GET /blocks` / `POST /blocks` / `DELETE /blocks/{id}` | `{"account_id": "42"}` |
+| `refresh_presence()` | `GET /presence` | |
+| `refresh_crew()` / `get_crew(id)` | `GET /crews/mine` (`not_in_crew` = no crew) / `GET /crews/{id}` | |
+| `create_crew(name, tag)` | `POST /crews` | `{"name", "tag"}` (trimmed, tag upper case; lengths checked locally) |
+| `join_crew(code)` | `POST /crews/join` | `{"invite_code"}` (spaces and dashes dropped, upper case) |
+| `leave_crew()`, `disband()`, `rotate_invite_code()` | `POST /crews/{id}/leave`, `DELETE /crews/{id}`, `POST /crews/{id}/invite-code` | |
+| `kick` / `promote` / `demote` / `transfer(account_id)` | `POST /crews/{id}/kick` ... | `{"account_id"}` |
+| `refresh_standing()` | `GET /boards/loop_crew?view=around_me&limit=1` | `me` → `standing_rank` / `standing_score` / `standing_period` |
+| `report(target, reason, context)` | `POST /reports` | `{"target_account_id", "reason", "context"}` (context left out when empty; reasons: `REPORT_REASONS`, the server's six) |
+
+- **Offline-safe.** Without a server every call returns `offline`, without a signed-in session `not_signed_in`, both without a request; failures are values, never errors. A different account on the session clears the cached lists.
+- **Errors.** `error_text(r)` maps every Social API code to a short line (`player_not_found` → "No player with that code.", the same when a block stands either way; the caps; the crew name / tag filter and rule codes; `not_permitted` → "Your role can't do that."), a 429 to "Too many tries. Try again in 10 min." (`error_text(r, true)`: "Report limit reached. Try again in 24 h."), and the rest to `NetSession.error_text`. `NetApi` itself retries a 429 whose Retry-After is at most 30 s.
+- **Reports.** A 429 is remembered: `report_wait_s()` counts down to the Retry-After, and the dialog keeps SEND off until then.
+- **Join seam (N5).** `NetSocialClient.join_handler: Callable` (`func(friend: NetSocialPlayer)`). The friends list shows JOIN for a friend `in_room` and `joinable`, disabled (SOON) until it is set.
+
+### Presence
+
+Both sources merge the same way: later entries replace earlier ones (`apply_presence`), the list re-sorts (in a room, online, offline; by name), and an entry for someone not on the list (a request just accepted elsewhere) refreshes the list on the next `poll()`.
+
+- **WebSocket.** `attach_lobby(client: NetClient)` sends `lobby_command.presence_subscribe {enabled: true}` whenever that client is READY (at once, and again after every Welcome, so a reconnect resubscribes), and applies every `lobby_event.presence` (the snapshot, then single updates; `room_id` 0 = none). `detach_lobby()` sends `enabled: false`. The gateway's non-fatal `internal` (it could not read the friends) and a lost socket drop back to polling at once. **N5's always-on lobby connection plugs in with one `attach_lobby` call**; the game has no connection outside rooms yet, so today presence comes from polling.
+- **Polling.** While a screen watches (`watch(true)`: the friends list while it is visible) and no subscription is live, `poll()` (every frame from the panel) calls `GET /presence` every `social_presence_poll_s` (15 s); a 429 waits its Retry-After. Hidden screen: no polls.
+
+### On-screen keyboards
+
+`SocialField` (the friend code, crew name, tag and invite code, and now the rename field): native iOS / Android open the OS keyboard from `LineEdit` (`virtual_keyboard_enabled`). The web export has `html/experimental_virtual_keyboard=false`, so `DisplayServer` has no virtual keyboard there; and even with it on, Godot focuses its hidden input a frame after the tap, outside the gesture, which iOS Safari ignores. So on a touch-screen web page (`NetTuning.web_text_prompt`) a tap on the field opens the browser's `window.prompt` (through `NetJsBridge`; always shows the keyboard, including iOS Safari) and fills the field; SEND / CREATE / JOIN then work as usual. Desktop web and native type in place. While a field has focus the run's `PlayerInput` reads no keys. COPY uses `navigator.clipboard` (with an `execCommand('copy')` fallback) inside the tap on the web, `DisplayServer.clipboard_set` natively; SHARE shows only where `navigator.share` exists (mobile browsers). Native share sheets need a plugin (not in v1).
+
+### Tuning (`data/tuning/net.tres`, N9.2 fields)
+
+| Field | Default | Spec |
+| --- | --- | --- |
+| `social_presence_poll_s` | 15 | not in spec |
+| `friend_code_max_chars` | 21 | name (16) + `#` + 4 digits |
+| `crew_name_min_chars` / `crew_name_max_chars` | 3 / 24 | SERVER.md → Crews |
+| `crew_tag_min_chars` / `crew_tag_max_chars` | 2 / 4 | Crews: a 2–4 character tag |
+| `crew_code_min_chars` / `crew_code_max_chars` | 6 / 16 | the server's `crew_invite_code_len` range |
+| `crew_board_around` | 1 | not in spec (the standing's `limit`) |
+| `social_note_s` | 3 | not in spec ("Code copied." note) |
+| `web_text_prompt` | true | not in spec |
+
+### Tests
+
+| File | Covers |
+| --- | --- |
+| `tests/net/test_runs_client.gd` | The body from the real `RunStats.results` has exactly the documented keys (integers as integers, the seed's digits, the date, car, build, UUID); the receipt; Daily's date across midnight; Loop and scoreless crashes not sent; the offline queue across a relaunch with the same key; a network failure then a duplicate answer; 429 Retry-After; `build_unsupported`; refused and expired runs dropped; another account's run kept; the legacy upload once (and `already_uploaded`, network failure, nothing to send). N8.1: the replay uploaded after a receipt that asks (binary, the run id patched in, deleted after), deleted when not needed, kept through an offline relaunch, kept and retried through 503s, dropped on a 409, the oldest dropped past `replay_keep_max` |
+| `tests/net/test_replay_recorder.gd` | N8.1: the format and the recorder on a real Run (REPLAY_FORMAT.md → Tests) |
+| `tests/net/test_boards_client.gd` | The path of every board × period × view; parsing (markers, `me`, crew rows); signed out; cache, force and single flight; report and block bodies |
+| `tests/ui/test_leaderboards_screen.gd` | The screens (SCREENS.md → Leaderboards → Tests) |
+
+### Live check
+
+`tests/net/live_social_check.gd` runs two throwaway device accounts (memory stores) against a running server; it refuses the production host.
+
+```sh
+# the server (dev env), from a scratch directory, on free ports
+WB_SERVER__ENV=dev WB_SERVER__BIND=127.0.0.1:18592 WB_METRICS__BIND=127.0.0.1:19592 \
+    <target>/debug/westbound-server --config dev.toml &
+tools/godot.sh --headless --path . --script res://tests/net/live_social_check.gd -- http://127.0.0.1:18592 [--keep]
+```
+
+**Run for N9.2** against `westbound-server` at `5ba93fe` (N9.1 social server), dev env, 2026-09-29:
+
+```
+server http://127.0.0.1:18592/api/v1
+accounts             ok    A WildMirage#2741, B DesertRover#8919
+request              ok    A -> DesertRover#8919: pending
+incoming             ok    B sees WildMirage#2741
+accept               ok    friends both ways
+unknown code         ok    No player with that code.
+ws subscribe         ok    snapshot: B offline
+ws online            ok    A saw B come online (2 presence events)
+poll presence        ok    B's GET /presence: A online
+ws offline           ok    A saw B go offline
+create crew          ok    Live Crew 6759 [L59] code QSCY4SXT
+second crew refused  ok    You're already in a crew.
+bad invite code      ok    That invite code doesn't work.
+join crew            ok    B is a member of Live Crew 6759
+member can't kick    ok    Your role can't do that.
+promote + demote     ok
+rotate code          ok    QSCY4SXT -> KW89P24S
+crew tag on a board  ok    journey/all: WildMirage#2741 [L59]
+season standing      ok    loop_crew 2026-09: not on the board yet
+report               ok    report 1
+block                ok    A's request now reads: No player with that code.
+unblock              ok
+leave crew           ok
+delete               ok    both accounts deleted
+LIVE_SOCIAL ok (0 failed)
+```
+
+- A's WebSocket subscription got the snapshot (B offline: an HTTP-only account has no gateway session), then B's `online` when B's gateway session started, then `offline` when B closed it; the server logged `session established ... account=2` and `websocket closed ... reason=ClientClosed`.
+- The crew tag reached a board through A's legacy Journey best (`POST /runs/legacy`); Loop crew entries need multiplayer runs (N6), so the standing reads "not on the board yet".
+- The server logged `crew created account_id=1 crew_id=1` and `player reported report_id=1 reason="other"`.

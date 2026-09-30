@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE replays SET status = 'pending', attempts = 0, not_before = 0\n                 WHERE status = 'failed' AND file_deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "42d02f489eb5118830b8dd2be3b28ab3a8a3a8de486cd317890a45ffd8d1b322"
+}

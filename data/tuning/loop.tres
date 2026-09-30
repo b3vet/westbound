@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="LoopTuning" format=3]
+
+[ext_resource type="Script" path="res://src/core/tuning/loop_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+room_cycle_min = 32.0
+room_day_min = 22.0
+room_clock_epoch_unix_s = 0.0
+room_nightfall_s = 45.0
+room_dawn_s = 60.0
+director_leg = 5
+density_per_km_lane = 10.0
+section_density_pct = PackedFloat64Array(90, 100, 100, 130, 90)
+excluded_set_pieces = Array[StringName]([&"merge_zone", &"road_works"])

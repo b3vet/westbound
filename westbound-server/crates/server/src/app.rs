@@ -14,6 +14,7 @@ use axum::routing::{get, post, MethodRouter};
 use axum::Router;
 use sqlx::SqlitePool;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tower_http::compression::CompressionLayer;
@@ -27,6 +28,7 @@ use crate::error::ApiError;
 use crate::gateway::GatewayPolicy;
 use crate::http::{self, DeepLinks};
 use crate::leaderboards::Leaderboards;
+use crate::map::ServerMap;
 use crate::metrics::Metrics;
 use crate::presence::PresenceHub;
 use crate::ratelimit::{RateLimiters, CLEANUP_INTERVAL};
@@ -62,6 +64,12 @@ pub struct AppState {
     /// Friends presence over the session registry (N9.1): subscriptions, pushes, and the
     /// N5 room seam (`presence.set_room`).
     pub presence: Arc<PresenceHub>,
+    /// The loop map (N3.2: `loop_v1`, compiled in, validated and hashed at startup) for
+    /// the room code (N4+). Its hash is accepted by the gateway unless
+    /// `gateway.map_hashes` overrides it.
+    pub map: Arc<ServerMap>,
+    /// Woken by each replay upload: the verification worker looks for work (N8.1).
+    pub replay_jobs: Arc<Notify>,
 }
 
 impl AppState {
@@ -96,7 +104,8 @@ impl AppState {
         let auth = Arc::new(AuthKeys::from_config(&config));
         let metrics = Arc::new(Metrics::default());
         let rate_limiters = RateLimiters::new(&config, auth.clone(), metrics.clone());
-        let gateway = crate::gateway::policy(&config);
+        let map = crate::map::builtin().context("the built-in loop map")?;
+        let gateway = crate::gateway::policy(&config, &map);
         let sessions = Arc::new(Sessions::new(metrics.clone()));
         let presence = Arc::new(PresenceHub::new(sessions.clone()));
         let boards = Arc::new(Leaderboards::new(
@@ -119,7 +128,20 @@ impl AppState {
             tick_clock,
             boards,
             presence,
+            map,
+            replay_jobs: Arc::new(Notify::new()),
         })
+    }
+
+    /// The replay verification worker over this state (N8.1).
+    pub fn replay_worker(&self) -> crate::replays::worker::Worker {
+        crate::replays::worker::Worker {
+            db: self.db.clone(),
+            boards: self.boards.clone(),
+            cfg: self.config.replays.clone(),
+            clock: self.clock.clone(),
+            wake: self.replay_jobs.clone(),
+        }
     }
 }
 
@@ -165,7 +187,14 @@ fn accounts_router(state: &AppState) -> Router<AppState> {
     );
     let run_routes = Router::new()
         .route("/api/v1/runs", post(runs::routes::submit))
-        .route("/api/v1/runs/legacy", post(runs::routes::legacy));
+        .route("/api/v1/runs/legacy", post(runs::routes::legacy))
+        // N8.1: the replay upload, with its own (larger) body limit.
+        .route(
+            "/api/v1/runs/{run_id}/replay",
+            post(crate::replays::routes::upload).layer(DefaultBodyLimit::max(
+                usize::try_from(state.config.replays.max_bytes).unwrap_or(usize::MAX),
+            )),
+        );
     let social_routes = social_router(state);
     let (device_create, auth_routes, account_routes, board_routes, run_routes) = if rl.enabled {
         (
@@ -434,6 +463,27 @@ impl Server {
 
         let maintenance_task = tokio::spawn(maintenance(state.clone()));
         let ban_sweep_task = tokio::spawn(crate::gateway::ban_sweep(state.clone()));
+        // N8.1: replay verification (one job at a time) and retention.
+        let replays = &state.config.replays;
+        let worker = state.replay_worker();
+        let worker_task = if replays.worker_enabled && worker.configured() {
+            Some(tokio::spawn(worker.run(cancel.clone())))
+        } else {
+            if replays.verifier_command.is_empty() {
+                tracing::info!(
+                    "no replay verifier configured (replays.verifier_command): replays wait in pending, runs stay verifying"
+                );
+            } else {
+                tracing::info!("replay worker disabled here (replays.worker_enabled = false): a verify-worker runs the queue");
+            }
+            None
+        };
+        let retention_task = tokio::spawn(crate::replays::retention::periodic(
+            state.db.clone(),
+            replays.clone(),
+            state.clock.clone(),
+            cancel.clone(),
+        ));
         let metrics_task = metrics_listener.map(|l| {
             let app = metrics_router(state.clone());
             let cancel = cancel.clone();
@@ -475,6 +525,10 @@ impl Server {
         }
         maintenance_task.abort();
         ban_sweep_task.abort();
+        retention_task.abort();
+        if let Some(t) = worker_task {
+            t.abort();
+        }
         tracing::info!("server stopped");
         Ok(())
     }

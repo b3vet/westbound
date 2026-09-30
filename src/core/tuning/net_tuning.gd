@@ -1,10 +1,11 @@
 class_name NetTuning
 extends Resource
 ## Client networking numbers: server URL, accounts API (N1.2), session, keepalive,
-## clock sync, WebSocket buffers. Spec: multiplayer handoff → Networking protocol
+## clock sync, WebSocket buffers, runs and boards (N7.2), the social client (N9.2), replays
+## and the replay verifier (N8.1). Spec: multiplayer handoff → Networking protocol
 ## (Connection, Clock sync), Accounts and authentication, Tuning reference;
 ## docs/PROTOCOL.md §1; docs/SERVER.md → Accounts API. Saved as data/tuning/net.tres.
-## WP N2.2, N1.2.
+## WP N2.2, N1.2, N7.2 (runs and leaderboards), N9.2 (social), N8.1 (replays).
 ## Until the orchestrator adds `Tuning.net`, load it with NetTuning.load_default().
 ##
 ## Protocol constants (frame cap, message cap, protocol version) are not tuning: they live
@@ -46,6 +47,77 @@ const PATH := "res://data/tuning/net.tres"
 @export var display_name_min_chars: int = 3
 @export var display_name_max_chars: int = 16
 
+@export_group("Runs and leaderboards")
+## This build's number (u32), sent as `client_build` with every run submission and in the
+## WebSocket Hello. Bump it with every release: the server refuses builds it no longer
+## verifies (`build_unsupported`; docs/SERVER.md → POST /runs).
+@export var client_build: int = 1
+## A run that could not be sent (offline, server down, 429) is tried again after this
+## long, doubling up to the max; a 429's Retry-After wins when longer.
+@export var runs_retry_s: float = 20.0   # not in spec
+@export var runs_retry_max_s: float = 600.0   # not in spec
+## Most runs kept waiting on the device; the oldest is dropped past it.
+@export var runs_queue_max: int = 50   # not in spec
+## A queued run is dropped once the server would refuse its date: this long after the
+## end of the UTC day it was played (mirrors the server's `runs.date_late_secs`).
+@export var runs_date_late_s: float = 21600.0
+## A run that scored nothing and drove less than this is not submitted (a crash at the
+## start: it can place on no board, and it would spend the 30-per-hour submission limit).
+@export var runs_min_distance_m: float = 500.0   # not in spec
+## Board reads: the global top (the server's max) and "around me" ranks on each side.
+@export var boards_global_limit: int = 100
+@export var boards_around_me_limit: int = 10
+## A board page younger than this is shown from memory without asking the server again
+## (the server caches its tops for 60 s anyway).
+@export var boards_cache_s: float = 30.0   # not in spec
+## Pull to refresh asks the server again at most this often.
+@export var boards_refresh_min_s: float = 3.0   # not in spec
+## Daily Drive: how many previous days the date stepper reaches back.
+@export var boards_daily_days_back: int = 14   # not in spec
+
+@export_group("Leaderboards screen")
+## List row height and the tab column width, canvas px at 100% text size (touch targets
+## never shrink below hud.touch_target_px).
+@export var boards_row_px: float = 52.0   # not in spec
+@export var boards_tab_width_px: float = 250.0   # not in spec
+@export var boards_back_width_px: float = 190.0   # not in spec
+## Segmented choices (period, view): the narrowest option.
+@export var boards_option_min_px: float = 132.0   # not in spec
+## Type: the title (display face), row text and the small chips, canvas px at 100%.
+@export var boards_title_px: int = 40
+@export var boards_row_font_px: int = 20
+@export var boards_chip_font_px: int = 12
+## Pull to refresh: drag this far down at the top of the list, then let go.
+@export var boards_pull_refresh_px: float = 84.0   # not in spec
+## A press that moves less than this is a tap (selects a row), more is a scroll.
+@export var boards_tap_slop_px: float = 14.0   # not in spec
+## Fling: the list keeps its release speed and loses it at this rate (1/s).
+@export var boards_fling_decay: float = 5.0   # not in spec
+## The results screen's online line: slides and fades in over this long when the
+## server's placements arrive.
+@export var boards_reveal_s: float = 0.3   # not in spec
+
+@export_group("Social")
+## Friends screen open without a live lobby WebSocket: GET /presence this often (WP N9.2).
+@export var social_presence_poll_s: float = 15.0   # not in spec
+## The friend code field: a name (16) + "#" + four digits.
+@export var friend_code_max_chars: int = 21
+## Crew names and tags (docs/SERVER.md → Social API → Crews: 3–24 and 2–4 characters).
+@export var crew_name_min_chars: int = 3
+@export var crew_name_max_chars: int = 24
+@export var crew_tag_min_chars: int = 2
+@export var crew_tag_max_chars: int = 4
+## Invite codes: the server's `social.crew_invite_code_len` range (6–16; default 8).
+@export var crew_code_min_chars: int = 6
+@export var crew_code_max_chars: int = 16
+## The Loop crew board's "around me" window for the crew screen's season standing.
+@export var crew_board_around: int = 1   # not in spec
+## How long a "Copied." note stays on the crew screen.
+@export var social_note_s: float = 3.0   # not in spec
+## Web on a touch screen: a tap on a text field opens the browser's text prompt (iOS
+## Safari does not open its keyboard for Godot's field). Off: the field as on desktop.
+@export var web_text_prompt: bool = true   # not in spec
+
 @export_group("Keepalive")
 ## Ping cadence until `Welcome` arrives; afterwards `Welcome.ping_interval_ms` wins when set.
 @export var ping_interval_s: float = 2.0
@@ -83,6 +155,49 @@ const PATH := "res://data/tuning/net.tres"
 @export var ws_outbound_buffer_kb: int = 64   # not in spec
 ## Queued packets per direction in WebSocketPeer.
 @export var ws_max_queued_packets: int = 256   # not in spec
+
+@export_group("Replays")
+## N8.1 (docs/REPLAY_FORMAT.md). The recorder samples the path and inputs every this many
+## 120 Hz physics ticks: 4 = the spec's 30 Hz. Discontinuities (a fork swap, the safety
+## net) and the run's last tick are always sampled.
+@export var replay_sample_ticks: int = 4
+## The traffic fingerprint goes into the replay every this many ticks (120 = once a
+## second): the verifier finds where its traffic diverged from the client's.
+@export var replay_fingerprint_ticks: int = 120   # not in spec
+## Room reserved up front for this much driving (grows by doubling after it).
+@export var replay_reserve_s: float = 900.0   # not in spec
+## Largest replay the client uploads (the server's `replays.max_bytes`, 4 MiB: a 6 h run).
+@export var replay_max_bytes: int = 4194304
+## Replays kept on the device waiting for their receipt or upload; the oldest is dropped.
+@export var replay_keep_max: int = 10   # not in spec
+
+@export_group("Replay verifier")
+## Accept when the recomputed score is within this of the claimed one (spec: 3 %).
+@export var verify_score_pct: float = 3.0
+## Physics limits: the path may use up to this multiple of the car's measured lateral
+## speed, lateral acceleration, yaw rate and longitudinal acceleration (task: x1.2).
+@export var verify_limit_factor: float = 1.2
+## Speed may exceed the boosted top speed by this much (quantization, overshoot).
+@export var verify_speed_margin_pct: float = 2.0   # not in spec
+## s and d between two samples must match the recorded velocities within this (a
+## teleport, or an edited path that keeps its speeds).
+@export var verify_path_tolerance_m: float = 0.25   # not in spec
+## A recomputed hit matches a logged one within this long; a recomputed hit the log
+## lacks is unreported.
+@export var verify_hit_match_s: float = 0.35   # not in spec
+## The client's scoring log must be reproduced this well (percent of scored events
+## matched one to one by kind within verify_hit_match_s) once either side has at least
+## verify_log_min_events: a replay from another world or a made-up log fails it.
+@export var verify_log_match_pct: float = 80.0   # not in spec
+@export var verify_log_min_events: int = 5   # not in spec
+## Boost without meter: the verifier's own meter may run this far below empty.
+@export var verify_boost_meter_slack: float = 0.1   # not in spec
+## Lateral speed / acceleration after a hit's deflection are not judged for this long.
+@export var verify_hit_grace_s: float = 0.5   # not in spec
+## The capability table: the car is driven through full-lock maneuvers at speeds this
+## far apart, for this long each (VerifierLimits).
+@export var verify_calibration_step_mps: float = 5.0   # not in spec
+@export var verify_calibration_s: float = 2.5   # not in spec
 
 
 func ping_interval_usec() -> int:

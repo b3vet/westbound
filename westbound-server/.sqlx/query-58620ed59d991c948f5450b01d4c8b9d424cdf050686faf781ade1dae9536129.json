@@ -1,0 +1,93 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account_id, mode, map_or_seed, date, build, verification,\n                  COALESCE(json_extract(response, '$.replay_required'), 0) AS \"replay_required!: i64\"\n           FROM runs WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "account_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "mode",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "mode"
+          }
+        }
+      },
+      {
+        "name": "map_or_seed",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "map_or_seed"
+          }
+        }
+      },
+      {
+        "name": "date",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "date"
+          }
+        }
+      },
+      {
+        "name": "build",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "build"
+          }
+        }
+      },
+      {
+        "name": "verification",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "verification"
+          }
+        }
+      },
+      {
+        "name": "replay_required!: i64",
+        "ordinal": 6,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "58620ed59d991c948f5450b01d4c8b9d424cdf050686faf781ade1dae9536129"
+}

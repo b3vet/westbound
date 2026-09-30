@@ -94,6 +94,9 @@ var window_s_hi: float = 0.0
 static var _template_cache: Dictionary = {}
 
 var _road: RoadPath
+## N3.2: sector gantries per lap on a loop road (0: an open road's checkpoints). The
+## legends then name sectors (LandmarkText.loop_landmark).
+var _loop_sectors: int = 0
 var _origin: FloatingOrigin
 var _quality: QualityTuning
 var _leg_length_m: float = 0.0
@@ -108,6 +111,7 @@ var _sample := RoadSample.new()
 func setup(ctx: RunContext, road: RoadPath, origin: FloatingOrigin) -> void:
 	_road = road
 	_origin = origin
+	_loop_sectors = (road as LoopRoadPath).layout.sector_s.size() if road is LoopRoadPath else 0
 	_quality = ctx.tuning.quality
 	_leg_length_m = ctx.tuning.legs.leg_length_m()
 	if tuning == null:
@@ -343,6 +347,9 @@ func _place_landmark(slot: Slot, f: RoadFeature) -> void:
 	var fork := _fork_feature(cp)
 	if fork != null:
 		_set_lines(slot, LandmarkText.fork_landmark(slot.kind, slot.leg, _biome_name(fork.tag), _biome_name(fork.tag2)))
+	elif _loop_sectors > 0:
+		_set_lines(slot, LandmarkText.loop_landmark(slot.kind, slot.leg, _loop_sectors,
+			_biome_name_at(cp + SAME_S_M), _next_checkpoint_distance(cp)))
 	else:
 		var next_name := _biome_name_at(cp + SAME_S_M)
 		_set_lines(slot, LandmarkText.landmark(slot.kind, slot.leg, next_name, _next_checkpoint_distance(cp)))
@@ -369,6 +376,8 @@ func _place_sign(slot: Slot, f: RoadFeature) -> void:
 		_set_lines(slot, LandmarkText.lane_ends_sign())
 	elif fork != null:
 		_set_lines(slot, LandmarkText.fork_sign(f.value, _biome_name(fork.tag), _biome_name(fork.tag2)))
+	elif _loop_sectors > 0:
+		_set_lines(slot, LandmarkText.loop_warning_sign(f.value, slot.leg, _loop_sectors, _biome_name_at(cp + SAME_S_M)))
 	else:
 		_set_lines(slot, LandmarkText.warning_sign(f.value, slot.leg + 1, _biome_name_at(cp + SAME_S_M)))
 	_show(slot)
@@ -391,6 +400,12 @@ func _leg_at_checkpoint(cp: float) -> int:
 	for f in _features:
 		if f.kind == RoadFeature.Kind.CHECKPOINT and absf(f.s_start - cp) < SAME_S_M:
 			return int(f.value)
+	if _loop_sectors > 0:
+		var found: Array[RoadFeature] = []
+		_road.features_in(cp - SAME_S_M, cp + SAME_S_M, found)
+		for f in found:
+			if f.kind == RoadFeature.Kind.CHECKPOINT:
+				return int(f.value)
 	return maxi(1, roundi(cp / _leg_length_m)) if _leg_length_m > 0.0 else 1
 
 

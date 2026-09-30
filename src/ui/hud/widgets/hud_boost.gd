@@ -30,6 +30,16 @@ func pulsing() -> bool:
 	return _boosting
 
 
+## Boost started or ended (Events.boost_started / boost_ended): the gold BOOSTING state
+## shows in the frame of the event, before the HUD next reads the feed (WP7.5).
+func set_boosting(on: bool) -> void:
+	if on == _boosting or _lit < 0:
+		return
+	_boosting = on
+	_clock = 0.0
+	_value_changed()
+
+
 func set_fill(fill: float, boosting: bool) -> void:
 	var f := clampf(fill, 0.0, 1.0)
 	var n := maxi(1, style.tuning.boost_bar_segments)

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO replays (run_id, file_path, status, created_at, size_bytes, not_before)\n         VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "6016f2d743556e315b75b802ef951823d1f14d934f722583c9c1811a849c7f8f"
+}

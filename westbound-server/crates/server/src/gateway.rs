@@ -45,6 +45,7 @@ use tokio::sync::watch;
 use crate::app::AppState;
 use crate::auth::{self, AuthFailure};
 use crate::config::{parse_map_hash, Config};
+use crate::map::ServerMap;
 use crate::metrics::{HandshakeResult, Metrics};
 use crate::msg_limits::{client_type_index, MessageLimits, Verdict};
 use crate::sessions::{Kick, SessionHandle};
@@ -67,20 +68,37 @@ pub const DETAIL_NOT_IN_ROOM: &str = "You are not in a room.";
 pub struct GatewayPolicy {
     /// Version range, build minimum, timing. Its `map_hash` is set per `Hello`.
     pub handshake: HandshakePolicy,
-    /// `gateway.map_hashes`, parsed.
+    /// The accepted map hashes: `gateway.map_hashes` parsed, or (empty list) the built-in
+    /// map's hash (N3.2).
     pub map_hashes: Vec<MapHash>,
-    /// Empty list in dev: any map hash is accepted.
+    /// `gateway.map_hashes` is empty in dev: any map hash is accepted (edited maps in
+    /// local runs), the built-in one included.
     pub accept_any_map: bool,
+    /// True when the accepted hashes came from `gateway.map_hashes` (an explicit override).
+    pub hashes_from_config: bool,
 }
 
 impl GatewayPolicy {
+    /// With the built-in loop map's hash as the default (`crate::map::builtin`).
     pub fn from_config(cfg: &Config) -> Self {
-        let map_hashes: Vec<MapHash> = cfg
+        let builtin = crate::map::builtin().map(|m| m.hash).ok();
+        Self::with_builtin_map(cfg, builtin)
+    }
+
+    /// `builtin`: the hash accepted when `gateway.map_hashes` is empty (None: nothing).
+    pub fn with_builtin_map(cfg: &Config, builtin: Option<MapHash>) -> Self {
+        let configured: Vec<MapHash> = cfg
             .gateway
             .map_hashes
             .iter()
             .filter_map(|h| parse_map_hash(h))
             .collect();
+        let hashes_from_config = !configured.is_empty();
+        let map_hashes: Vec<MapHash> = if hashes_from_config {
+            configured
+        } else {
+            builtin.into_iter().collect()
+        };
         let mut handshake = HandshakePolicy::new(
             map_hashes.first().copied().unwrap_or_default(),
             server_build(),
@@ -91,8 +109,9 @@ impl GatewayPolicy {
         handshake.ping_interval_ms = u16::try_from(cfg.limits.ping_interval_ms).unwrap_or(u16::MAX);
         handshake.timeout_ms = u16::try_from(cfg.limits.dead_after_ms).unwrap_or(u16::MAX);
         Self {
-            accept_any_map: map_hashes.is_empty() && cfg.is_dev(),
+            accept_any_map: !hashes_from_config && cfg.is_dev(),
             map_hashes,
+            hashes_from_config,
             handshake,
         }
     }
@@ -660,17 +679,32 @@ pub async fn sweep_once(state: &AppState) -> usize {
     kicked
 }
 
-/// Shared gateway state for `AppState`.
-pub fn policy(cfg: &Config) -> Arc<GatewayPolicy> {
-    let p = GatewayPolicy::from_config(cfg);
-    if p.map_hashes.is_empty() {
-        if p.accept_any_map {
-            tracing::warn!("gateway.map_hashes is empty in dev: every map hash is accepted");
-        } else {
+/// Shared gateway state for `AppState`: the built-in map's hash is accepted unless
+/// `gateway.map_hashes` lists others. Logs the map and the accepted hashes.
+pub fn policy(cfg: &Config, map: &ServerMap) -> Arc<GatewayPolicy> {
+    let p = GatewayPolicy::with_builtin_map(cfg, Some(map.hash));
+    tracing::info!(
+        map_id = %map.map.map_id,
+        length_mm = map.map.length_mm(),
+        sections = map.map.sections.len(),
+        sectors = map.map.sector_count(),
+        sha256 = %map.hash_hex,
+        "loop map loaded"
+    );
+    let accepted: Vec<String> = p.map_hashes.iter().map(crate::map::hash_hex).collect();
+    if p.hashes_from_config {
+        tracing::info!(accepted = ?accepted, "gateway map hashes from gateway.map_hashes");
+        if !p.map_hashes.contains(&map.hash) {
             tracing::warn!(
-                "gateway.map_hashes is empty: every Hello gets map_mismatch until a map hash is configured"
+                builtin = %map.hash_hex,
+                "gateway.map_hashes does not list the built-in map's hash: clients of this map get map_mismatch"
             );
         }
+    } else {
+        tracing::info!(accepted = ?accepted, "gateway map hashes: the built-in map");
+    }
+    if p.accept_any_map {
+        tracing::warn!("gateway.map_hashes is empty in dev: every map hash is accepted");
     }
     Arc::new(p)
 }
@@ -683,20 +717,38 @@ mod tests {
     fn map_policy() {
         let mut cfg = Config::default();
         let any = MapHash([9; 32]);
-        // Production with no hashes: nothing is accepted.
+        let builtin = crate::map::builtin().expect("loop_v1").hash;
+        // Production with no hashes: the built-in map only (N3.2).
         let p = GatewayPolicy::from_config(&cfg);
         assert!(!p.accepts_map(&any));
         assert_ne!(p.for_hello(&any).map_hash, any);
-        // Dev with no hashes: anything.
+        assert!(p.accepts_map(&builtin));
+        assert_eq!(p.for_hello(&builtin).map_hash, builtin);
+        assert_eq!(p.map_hashes, vec![builtin]);
+        assert_eq!(
+            p.handshake.map_hash, builtin,
+            "Welcome's default is the built-in map"
+        );
+        assert!(!p.hashes_from_config);
+        // Without a built-in map, nothing.
+        let p = GatewayPolicy::with_builtin_map(&cfg, None);
+        assert!(!p.accepts_map(&builtin));
+        // Dev with no hashes: anything, the built-in map included.
         cfg.server.env = "dev".into();
         let p = GatewayPolicy::from_config(&cfg);
         assert!(p.accepts_map(&any));
+        assert!(p.accepts_map(&builtin));
         assert_eq!(p.for_hello(&any).map_hash, any);
-        // A configured list wins, also in dev.
+        // A configured list wins (an explicit override), also in dev.
         cfg.gateway.map_hashes = vec!["ab".repeat(32)];
         let p = GatewayPolicy::from_config(&cfg);
         assert!(p.accepts_map(&MapHash([0xAB; 32])));
         assert!(!p.accepts_map(&any));
+        assert!(
+            !p.accepts_map(&builtin),
+            "the override replaces the built-in hash"
+        );
+        assert!(p.hashes_from_config);
         assert_eq!(p.handshake.map_hash, MapHash([0xAB; 32]));
     }
 

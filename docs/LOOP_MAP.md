@@ -11,7 +11,7 @@ Spec: [WESTBOUND_MULTIPLAYER_HANDOFF.md](../WESTBOUND_MULTIPLAYER_HANDOFF.md) �
 | `westbound-server/data/maps/loop_v1.json` | The same bytes, for the server (its Docker build context is `westbound-server/`) | server (N3.2) |
 | `*/loop_v1.sha256` | Sidecar: `<sha256>  loop_v1.json` (`sha256sum -c` format) | CI, the owner (Coolify) |
 
-**Map hash (`loop_v1`):** `26a4e08b8e456ec56471c7d0626ab4ed760ba7579add6e4c279e9b3faa0dd296`. Set it as `WB_GATEWAY__MAP_HASHES` ([SERVER.md](SERVER.md) → Map hashes). It is the SHA-256 of every byte of `loop_v1.json`. It changes with any edit, seed or generator change: re-export, commit both copies and update the setting (list the old hash too while old clients are out).
+**Map hash (`loop_v1`):** `26a4e08b8e456ec56471c7d0626ab4ed760ba7579add6e4c279e9b3faa0dd296`. It is the SHA-256 of every byte of `loop_v1.json`. Since N3.2 the server compiles its copy in and accepts that hash on its own (see [Server map loading](#server-map-loading)); `WB_GATEWAY__MAP_HASHES` ([SERVER.md](SERVER.md) → Map hashes) is only an explicit override. The hash changes with any edit, seed or generator change: re-export, commit both copies and rebuild the server (and, with an override set, update it; list the old hash too while old clients are out).
 
 ## Code
 
@@ -28,6 +28,12 @@ Spec: [WESTBOUND_MULTIPLAYER_HANDOFF.md](../WESTBOUND_MULTIPLAYER_HANDOFF.md) �
 | `src/road/loop/dev/loop_traffic_preview.tscn` | | The traffic sandbox on the loop (snaps; the editor's PREVIEW TRAFFIC) |
 | `src/road/road_gen/road_plan_gen.gd`, `road_profile_gen.gd` | | Additive hooks: `begin_alignment`, `add_straight`, `add_bend`, `bend_length`; `begin_profile`, `add_element`. The procedural output is unchanged. |
 | `src/traffic/dev/traffic_sandbox.gd` | | Road injection hook: `road_override`, `biome_plan_override`, `start_s` (set before `_ready`) |
+| `src/run/run_loop.gd` | `RunLoop` | N3.2: the loop test mode (road, periodic plan, elevated zone, sections' traffic, room clock, HUD feed) |
+| `src/run/room_clock.gd` | `RoomClock` | N3.2: the room clock (pure, `# lint: sim`) |
+| `src/core/tuning/loop_tuning.gd`, `data/tuning/loop.tres` | `LoopTuning` | N3.2: clock, density, director leg, excluded set pieces |
+| `src/net/map_info.gd` | `MapInfo` | N3.2: the client's map hash for `Hello` |
+| `src/ui/hud/hud_loop_feed.gd` | `HudLoopFeed` | N3.2: the HUD's clock and sector values |
+| `westbound-server/crates/sim/src/map.rs`, `crates/server/src/map.rs` | `LoopMap`, `ServerMap` | N3.2: the server's map (parse, validate, wrap math; compile-in and hash) |
 
 ## The design
 
@@ -158,17 +164,61 @@ tools/snap.sh src/road/loop/dev/loop_traffic_preview.tscn --at=city --warm_s=15 
 
 `loop_preview` options: `--at=<place>` or `--s=<m>`, `--lap=<n>`, `--cam=chase|high|top|side|sea`, `--sky_t`, `--tier`, `--label=false`.
 
-## For N3.2 (streaming, loop test mode, server)
+## Wrap-around and the loop test mode (N3.2)
 
-- **Client streaming:** the world stack already builds on unwrapped s ≥ 0 (the snaps cross the seam). What remains:
-    - The `RoadBuilder` builds no chunk at s < 0. Start a session at s = L (lap 1) or wrap the focus before it goes negative.
-    - `BiomePlan` is finite: `road.biome_plan(laps)` covers `laps` laps, then falls back to the first section's biome. A periodic plan (leg k → section (k − 1) mod 5) avoids the limit.
-    - Consumers that downcast to `ProceduralRoadPath` (fog cards, water ribbon, landmarks' `first_retained_s`, the mesher's rail gaps) fall back to their defaults.
-    - `forget_before` is a no-op: the whole table is 12,501 samples.
-- **Floating origin:** positions repeat every lap and the loop spans about 8 × 8 km, so the origin shifts as usual. Wrapping s does not move the world.
-- **Elevated city:** `ElevatedSections` still places its stretches with `ElevatedPlan`'s own seeded cells in the city biome. `road.layout.elevated_s0/s1` holds the loop's intended zone for N3.2 to feed in.
-- **Ramps and road works are road-space data only:** no ramp geometry or rail gap is drawn yet, and the zones are off by default. The server toggles them; the traffic and the view follow from lane closures (N4/N6).
-- **Landmarks** name each gantry's next "leg" from the plan. With the loop plan that is the next section's biome.
-- **Client hash for `Hello`:** `FileAccess.get_sha256("res://data/maps/loop_v1.json")` (the tests check that it equals the sidecar and a fresh export). Confirm that exported builds ship the `.json` byte for byte: Godot's JSON loader recognises it, and `export_presets.cfg` excludes only tests, tools and docs. Alternatively, bake the hex into a constant at export time.
-- **Server:** load `westbound-server/data/maps/loop_v1.json` (e.g. `include_str!`, like `profanity.txt`), compare the SHA-256 of those bytes with the configured hash, and use `length_mm` as the wrap. Every position is already in mm.
-- **Loop test mode:** `LoopRoadPath.load_default()` plus the loop's `biome_plan`, with the run's `ProceduralRoadPath`-only paths (forks, finale, `schedule_lane_count` set pieces) switched off. The traffic sandbox hook shows the minimal wiring.
+### The wrap design
+
+**s stays unwrapped and monotonic on the client.** The car, traffic (`TrafficSim`, the director, the view, opposite traffic), scoring, hit detection, the leg tracker, the camera and every world node keep counting s past L lap after lap; only road queries wrap. `LoopRoadPath` answers any s modulo L (positions, elevation, lanes, the cross-section, features at their unwrapped s, a continuous heading), so:
+
+- every distance between two things the client simulates (car to traffic, car to gantry, chunk to focus) is a plain difference, which equals the wrapped signed difference while they are less than L/2 apart (always: traffic lives within about 1 km of the car);
+- nothing in the traffic sim, the director, scoring or hits needed a change: there is no seam in their numbers;
+- float64 s keeps full precision for hours (70 m/s for 10 h is 2.5·10⁶ m, a step of 5·10⁻¹⁰ m);
+- the floating origin works as before: positions repeat every lap, and wrapping s never moves the world.
+
+The run starts at **s = L + the first spawn point** (lap 1, 150 m past the start / finish gantry), so nothing ever builds at s < 0. Wrapped s comes in only from the server (N4): `LoopRoadPath.unwrap_near(ref_s, wrapped_s)` places it next to the car, `signed_delta` / `wrap_s` / `lap_of` are the other forms, and `RoadPath.period_m()` (L on the loop, 0 on the open road) lets world code tell the two apart.
+
+What changed for the world stack:
+
+- **Look plan:** `road.biome_plan(0)` is periodic (`BiomePlan.repeating`, `period_legs` = 5: leg k is section (k − 1) mod 5), valid at any lap.
+- **Elevated city:** `ElevatedPlan.set_zones(layout.elevated_s0, layout.elevated_s1, L)` replaces the seeded cells with the loop's zone (15,700–19,300 m) every lap. Sector 4's sign gantry stands on the viaduct.
+- **Landmarks:** on a loop road the gantries name sectors (`LandmarkText.loop_landmark`): START / FINISH on the toll gantry, SECTOR n — BIOME and NEXT GANTRY x KM, and the warning signs read GANTRY 1 KM (FINISH 1 KM before the line).
+- **Roadside props** are seeded by unwrapped cell index, so the scatter differs from lap to lap (continuous across the seam, never popping). The road, lanes, landmarks, tunnels, the bridge, the sea and the elevated zone repeat exactly. Making props repeat would need every cell length to divide L (open question).
+- Ramps and road works stay road-space data only (no ramp geometry or rail gaps yet; the zones are off).
+
+### Loop test mode
+
+A single-player practice run on `loop_v1` (`Run.MODE_LOOP`, `RunLoop`, docs/RUN.md → Loop mode):
+
+- **Open it:** web `?mode=loop` (add `&server=off` offline); native `--mode=loop` (user or engine argument) or the dev **LOOP** button (row 4; it toggles back to JOURNEY). Dev URL extras: `&at=desert|canyon|tunnel|crest|coast|bridge|city|ramp|farmland|seam|<metres>`, `&clock_min=<minutes into the room cycle>`, `&bot=keep`, `&lane=`, `&speed_kmh=`, `&cam=`, `&hud=false`.
+- **Off:** forks, the finale and the journey bonus, Chase the Sun (the sun clock, lifts, hesitation's sink), leg objectives, and the lane-reshaping or lane-closing set pieces (`LoopTuning.excluded_set_pieces`: merge zone, road works).
+- **Sectors:** the loop's CHECKPOINT features are the sector gantries, so `LegTracker` runs them as legs (a copy of `LegsTuning` whose `legs_to_coast` is never reached): a crossing banks the chain, pays Clean / Pace / Threads / Heat (×2 at night) and a clean sector restores a life. The HUD toast reads SECTOR n COMPLETE, LAP n COMPLETE at the start / finish line, and SECTOR n — BIOME for the next one. The full N6 sector rules come later.
+- **Room clock:** `RoomClock` (`LoopTuning`: 32 min, 22 day / 10 night, epoch 0 = UTC-derived, so every public room shares it). The run reads the wall clock once at its start and then advances the clock by the sim's dt (replayable; tests pass a fixed start). The day runs sky_t morning → sunset; the night runs sunset → the night keyframe (45 s), holds, and dawns over the last 60 s. Night ×2 covers all 10 minutes. The HUD's top plate becomes the clock: DAY / NIGHT ×2, the cycle with the night's share, NIGHT IN mm:ss (DAWN IN at night) and SECTOR x.x KM to the next gantry.
+- **Traffic:** the director at `LoopTuning.director_leg` (5: mix, headway, set-piece unlocks), at **10 vehicles per km per lane** (the spec's normal room density) × the section's share (desert 90 %, canyon and coast 100 %, city 130 %, farmland 90 %), with the section's lane flow speeds (written into the run's own `TrafficTuning` copy when the car enters a section; batches planned ahead near a section line use the section the car is in).
+
+### Performance
+
+Draw calls, `tools/drawcalls.sh src/run/run.tscn --mode=loop --at=<place> --clock_min=<m> --bot=keep --hud=false` (1361x720, Medium, frozen frame; 100 is the budget):
+
+| Where | Clock | 3D draws | Triangles | Vehicles (+ opposite) |
+| --- | --- | --- | --- | --- |
+| Desert | 8 min (afternoon) | 39 | 78k | 31 + 14 |
+| Canyon tunnel | 8 min | 37 | 52k | 10 + 8 |
+| Coast | 21 min (sunset) | 40 | 56k | 16 + 12 |
+| City, elevated | 9 min | 44 | 88k | 38 + 20 |
+| City, elevated | 26 min (night) | 48 | 89k | 38 + 20 |
+| Farmland | 12 min | 42 | 59k | 17 + 11 |
+| Seam (start / finish) | 15 min | 48 | 70k | 18 + 11 |
+
+With the HUD, the dev HUD and the dev buttons the city is 70 draws in all (44 3D). CPU (`test_city_frame_cost`, headless, this loaded machine): see the bench lines in the test log.
+
+### Server map loading
+
+`westbound-server` compiles `westbound-server/data/maps/loop_v1.json` in (`include_str!`, like the profanity list: the Docker context is `westbound-server/`, and the binary can never run with another map than the one it was built with). At startup `map::builtin()` parses and validates it (`sim::map::LoopMap::from_json`: format version, units, sections and lane ranges tiling [0, L), tunnels, the bridge, ramps, road works, sectors in order with sector 0 the start / finish, spawn points on a lane) and hashes the bytes (SHA-256). `AppState.map` holds it for the room code. The gateway accepts that hash when `gateway.map_hashes` is empty (dev keeps accepting any hash too); a configured list is an explicit override and replaces it (a warning is logged when it leaves the built-in hash out). The log says `loop map loaded … sha256=…` and the accepted hashes.
+
+`sim::map::LoopMap` (pure) has the wrap math in millimetres (`wrap_mm`, `signed_delta_mm` in [−L/2, L/2), `unwrap_near`, `lap_of`, `in_span`) and metres (`signed_delta_m`, `wrap_m`), `lane_count_at`, `section_at`, `lane_flow_speed_kmh`, `sector_at`, `next_sector`, `sector_crossed`, `tunnel_at` and `closure_zone_at`. Rust tests: `sim` (`map::tests`: wrapped signed difference, lane counts by s, sectors, refusals) and `server` (`map::tests`: the hash equals the committed `.sha256`).
+
+**Client hash:** `MapInfo.loop_hash()` (`src/net/map_info.gd`) is `FileAccess.get_sha256("res://data/maps/loop_v1.json")` as raw bytes for `NetClient.start(url, build, map_hash, …)`. The export presets export all resources, and Godot packs the JSON byte for byte (checked in a real web export: the 4,581 bytes sit unchanged in `index.pck`). In loop mode the run prints `loop: loop_v1 map_hash=<hex>` once, and the web smoke checks it: `node tools/web_smoke/smoke.mjs --query "mode=loop&server=off" --expect "loop: loop_v1 map_hash=$(cut -d' ' -f1 data/maps/loop_v1.sha256)"`.
+
+Tests: `tests/run/test_run_loop.gd` (the mode, the seam with traffic, lap after lap, the floating origin, determinism, sectors, the clock, per-section traffic, allocation, the city's frame cost; the soak drives three whole laps twice), `tests/run/test_room_clock.gd`, `tests/road/test_loop_wrap.gd`, `tests/ui/test_hud_loop.gd`, `tests/net/test_map_info.gd`.
+
+**Snaps:** `tools/snap.sh src/run/run.tscn --mode=loop --sweep=at:desert,tunnel,coast,city,farmland,seam --clock_min=8 --bot=keep --seconds=2`; the web export: `node tools/web_smoke/smoke.mjs --query "mode=loop&at=coast&clock_min=21.3&bot=keep" --settle 12000 --screenshot tests/out/snaps/web_loop_coast.png`.

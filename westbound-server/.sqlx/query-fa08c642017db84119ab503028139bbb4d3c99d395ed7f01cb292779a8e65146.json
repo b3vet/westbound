@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE replays SET status = ?, verdict = ?, result = ?, finished_at = ?\n                     WHERE run_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "fa08c642017db84119ab503028139bbb4d3c99d395ed7f01cb292779a8e65146"
+}

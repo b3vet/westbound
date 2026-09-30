@@ -39,6 +39,8 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | D16 | Damage: "smoke from the hood" after the first hit | **Owner request:** the hood smoke hid the road in the hood camera. It no longer shows in the hood and cockpit cameras (`feel.smoke_hidden_camera_modes`); the flickering headlight and the smoke in outside cameras remain | Owner, 2026-09-29 |
 | D17 | Intensity waves (spec) vs D11 leg-8 density | WP6.2's waves (50 % breathers) and set-piece zone clearing brought leg-8 delivered density to 73–74 % of target (D11 had 91 %). The soak metrics baseline was rewritten (density −18 %). WP6.6 rebalanced: breathers 70 %, late-leg headway ×0.55, gain cap 1.8 → leg 8 meets 83 % (3 lanes) / 89 % (4 lanes). Faster lanes trade against density. **Owner decision:** keep late legs crowded for now (may pivot later); racers should also arrive from behind and pass the player at speed (WP6.7). WP6.7 found legal racers rarely get past a 170–230 km/h player in dense traffic (0.07 passes/km at leg 8); **owner: racers weave harder** (WP6.9: tighter racer gaps and more willing lane changes, still signalled, no ambush, rear-end safe) | Orchestrator, WP6.2 / WP6.6 |
 | D18 | Forks: "traffic heading to either branch picks its branch by lane" | No car is ever on a branch before the player picks: a breather and a spawn guard keep the approach to a split quiet, and traffic resumes on the chosen branch. Also: forks choose between staying in the current biome (left) or advancing (right), always 8 legs to the coast; the branch not taken narrows away in the fog; the opposite carriageway is out of view ~3 km around a fork (WP6.5, docs/FORKS.md §8) | Orchestrator, WP6.5 |
+| D19 | Haptics table has no entry for a cut | A cut plays the pass light tick, so every scoring event has a haptic (the one-frame rule, WP7.5) | Orchestrator, WP7B |
+| D20 | Driver table: trucks, buses and cruisers at 80–95 km/h everywhere | Inside a lane-drop zone (LANE ENDS sign through the narrowing + 150 m) all lanes are harmonised to 120 km/h (dropping lane 110) and slow vehicles are sped up toward 110 km/h, so nobody merges at a standstill beside 130–190 km/h lanes (canyon soak: 53 collision pairs per 504 km → 0 per 1,008 km) | Orchestrator, WP6.8 |
 
 New deviations get a row here before they are built.
 
@@ -305,7 +307,7 @@ Updated by the orchestrator at every merge.
 | 4 | M4 Scoring & lives | ✅ WP4.1–4.7 merged: run loop, crash cinematic, HUD & theme, screens, integration suite (858 tests), draw calls 85 → 70 with dev overlays, cockpit camera (D11). WP4.8 density merged (D11) | continue |
 | 5 | M5 Sun loop & legs | ✅ sun drives the run and sky, night ×2, dawn, legs + objectives + toast, landmarks + warning signs, night lighting + manual high beams (D8); M5 gate test green; WP5.5/5.6 follow-ups and HUD polish merged | continue |
 | 6 | M6 Director, biomes, journey | ⬜ | continue |
-| 7 | M7 Audio & feel | ⬜ | continue |
+| 7 | M7 Audio & feel | 🟨 WP7A audio (engine, wind, pass/traffic, music, stingers, buses) + WP7B haptics/juice merged; WP7.5 one-frame check green (every scoring event sounds, pulses and shows in its frame; slipstream has none per spec). WP7.6 running: one-shot SFX from OGG to WAV (each OGG voice costs ~0.6 ms decoder setup). Owner feel check on native pending | continue |
 | 8 | M8 Meta | ⬜ | continue |
 | 9 | M9 Hardening & release | ⬜ | final |
 

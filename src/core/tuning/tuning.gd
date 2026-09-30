@@ -40,6 +40,10 @@ const DEFAULT_PATH := "res://data/tuning.tres"
 @export var night: NightTuning
 ## Multiplayer client: keepalive, clock sync, server URL (N2.2).
 @export var net: NetTuning
+## Loop practice mode on loop_v1: room clock, sectors, per-section traffic (N3.2).
+@export var loop: LoopTuning
+## Audio: bus levels, engine crossfade, pass sounds, voices (WP7A).
+@export var audio: AudioTuning
 
 static var _default: Tuning
 
@@ -65,5 +69,5 @@ func missing_sections() -> PackedStringArray:
 static func section_names() -> PackedStringArray:
 	return PackedStringArray([
 		"quality", "road", "vehicle", "controls", "camera", "traffic", "director",
-		"passability", "scoring", "lives", "sun", "legs", "feel", "hud", "progression", "traffic_view", "crash", "landmarks", "night", "net",
+		"passability", "scoring", "lives", "sun", "legs", "feel", "hud", "progression", "traffic_view", "crash", "landmarks", "night", "net", "loop", "audio",
 	])

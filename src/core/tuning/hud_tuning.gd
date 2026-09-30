@@ -97,6 +97,9 @@ extends Resource
 @export var panel_padding_px: float = 12.0
 @export var sun_track_px: float = 6.0
 @export var sun_marker_px: float = 7.0
+## N3.2 clock mode (the room clock): the day's share of the track, gold at this opacity
+## (the night's share is the accent).
+@export var sun_clock_day_alpha: float = 0.35   # not in spec
 @export var speed_bar_height_px: float = 14.0
 @export var boost_bar_height_px: float = 20.0
 @export var segment_gap_px: float = 3.0
@@ -216,6 +219,15 @@ extends Resource
 ## In-run settings choices (multipliers of the tuned control values).
 @export var settings_controls_scales: PackedFloat64Array = [0.8, 1.0, 1.2]   # not in spec
 @export var settings_sensitivities: PackedFloat64Array = [0.75, 1.0, 1.35]   # not in spec
+
+@export_group("Title")
+## The title screen (WP8.5, docs/SCREENS.md → Title): the WESTBOUND logo (Chakra Petch,
+## speed-tilted), the slanted ink band behind the left-anchored menu (ink at this
+## opacity; the attract drive shows through), and the profile chip's name width cap.
+@export var font_logo_px: int = 96   # not in spec
+@export var title_band_pct: float = 58.0   # not in spec
+@export var title_band_width_px: float = 560.0   # not in spec
+@export var title_chip_max_width_px: float = 440.0   # not in spec
 
 @export_group("High beams")
 ## The high-beam button (plan D8) fades in and out over this while the headlights come
