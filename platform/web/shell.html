@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, viewport-fit=cover">
+<title>$GODOT_PROJECT_NAME</title>
+<!--
+	Westbound web shell (WP9.2, docs/WEB.md). Godot fills the $GODOT_* placeholders at
+	export; tools/export_web.sh then fills __WB_BUILD__ (a hash of index.wasm and
+	index.pck) and __WB_FONT__ (platform/web/wordmark.woff as base64). Built from the
+	Godot 4.7 default shell, plus:
+	- a loading screen in the title's look: ink background, the WESTBOUND wordmark and
+	  CHASE THE SUN where the title draws them, an accent progress bar. After the
+	  download the bar keeps moving (a stepped compositor-only CSS animation) while the engine
+	  compiles and builds the world, which blocks the page's main thread;
+	- cache busting: index.js, index.wasm and index.pck are fetched with ?v=<build>, so
+	  a new deploy is never mixed with cached files, and version.json (never cached)
+	  reloads a stale index.html once;
+	- window.wbAudioCtx: the engine's AudioContext, for the audio unlock
+	  (src/platform/web_audio_bridge.gd).
+	Keep the ids status, status-progress and status-notice: tools/web_smoke/smoke.mjs
+	watches #status and #status-notice.
+-->
+<style>
+@font-face {
+	font-family: 'WB Chakra';
+	src: url(data:font/woff;base64,__WB_FONT__) format('woff');
+	font-weight: 700;
+	font-display: block;
+}
+html, body, #canvas {
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+body {
+	color: #f4f7ff;
+	background-color: #0b1020;
+	overflow: hidden;
+	touch-action: none;
+}
+#canvas {
+	display: block;
+}
+#canvas:focus {
+	outline: none;
+}
+#status {
+	position: absolute;
+	inset: 0;
+	background-color: #0b1020;
+	font-family: 'WB Chakra', 'Arial Narrow', Arial, sans-serif;
+	font-weight: 700;
+	opacity: 1;
+	transition: opacity 0.25s ease-out;
+	z-index: 1;
+}
+#status.gone {
+	opacity: 0;
+	pointer-events: none;
+}
+/* Left-anchored like the title (docs/SCREENS.md → Title): the logo top-left, the
+   status bottom-left. Sizes follow the canvas height (the game's 720 px canvas). */
+#wb-brand {
+	position: absolute;
+	left: max(4.2vw, env(safe-area-inset-left));
+	top: 8.5vh;
+	transform: skewX(-7deg);
+	transform-origin: left bottom;
+}
+#wb-logo {
+	font-size: 13.3vh;
+	line-height: 1;
+	letter-spacing: 0.01em;
+	text-shadow: 0.06em 0.06em 0 #1b2440;
+}
+#wb-tag {
+	margin-top: 1.4vh;
+	margin-left: 0.3vh;
+	font-size: max(2.5vh, 11px);
+	letter-spacing: 0.08em;
+	color: #31e5c0;
+}
+#wb-load {
+	position: absolute;
+	left: max(4.2vw, env(safe-area-inset-left));
+	bottom: max(9vh, env(safe-area-inset-bottom));
+	width: min(38vw, 60vh);
+}
+#wb-phase {
+	font-size: max(2.2vh, 11px);
+	letter-spacing: 0.1em;
+	color: #8a93ad;
+	margin-bottom: 1.2vh;
+	white-space: nowrap;
+}
+#status-progress {
+	position: relative;
+	height: 0.55vh;
+	min-height: 3px;
+	background: #111a30;
+	overflow: hidden;
+	transform: skewX(-7deg);
+}
+#wb-fill {
+	position: absolute;
+	inset: 0;
+	background: #31e5c0;
+	transform-origin: left center;
+	transform: scaleX(0);
+	transition: transform 0.2s linear;
+}
+/* The engine compiles and builds the world with the main thread blocked: a
+   transform-only animation runs on the compositor and keeps moving. Stepped (5 per
+   second), not smooth: a 60 fps sweep made the browser composite every frame and
+   slowed the boot by ~2 s under software rendering (docs/WEB.md). */
+#wb-sweep {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 30%;
+	background: linear-gradient(90deg, rgba(244, 247, 255, 0), rgba(244, 247, 255, 0.85), rgba(244, 247, 255, 0));
+	transform: translateX(-100%);
+	visibility: hidden;
+	will-change: transform;
+}
+#status.starting #wb-sweep {
+	visibility: visible;
+	animation: wb-sweep 1.2s steps(6, jump-none) infinite;
+}
+@keyframes wb-sweep {
+	from { transform: translateX(-100%); }
+	to { transform: translateX(340%); }
+}
+#status-notice {
+	display: none;
+	position: absolute;
+	left: max(4.2vw, env(safe-area-inset-left));
+	right: 4.2vw;
+	bottom: max(20vh, env(safe-area-inset-bottom));
+	padding: 1rem;
+	background-color: #111a30;
+	border-left: 3px solid #ff5a4d;
+	color: #f4f7ff;
+	font-family: Arial, sans-serif;
+	font-weight: 400;
+	line-height: 1.3;
+}
+</style>
+$GODOT_HEAD_INCLUDE
+</head>
+<body>
+<canvas id="canvas">Your browser does not support the canvas tag.</canvas>
+<noscript>Westbound needs JavaScript.</noscript>
+<div id="status">
+	<div id="wb-brand"><div id="wb-logo">WESTBOUND</div><div id="wb-tag">CHASE THE SUN</div></div>
+	<div id="wb-load">
+		<div id="wb-phase">LOADING</div>
+		<div id="status-progress"><div id="wb-fill"></div><div id="wb-sweep"></div></div>
+	</div>
+	<div id="status-notice"></div>
+</div>
+<script>
+// Before the engine: the build id, versioned fetches, the AudioContext hook and the
+// stale-page check.
+(function () {
+	'use strict';
+	const build = '__WB_BUILD__';
+	const known = /^[0-9a-f]{8,}$/.test(build);
+	window.wbBuild = known ? build : '';
+	// ?v=<build> on the engine's own downloads (index.wasm, index.pck): a new deploy
+	// gets new URLs, so the browser never runs a cached wasm with a new pck or the
+	// other way round, and never waits out Pages' 10-minute max-age.
+	if (known && window.fetch) {
+		const plain = window.fetch;
+		window.fetch = function (input, init) {
+			if (typeof input === 'string' && /^[\w.-]+\.(wasm|pck)$/.test(input)) {
+				input = input + '?v=' + build;
+			}
+			return plain.call(this, input, init);
+		};
+	}
+	// The engine makes one AudioContext; keep it for the audio unlock.
+	const AC = window.AudioContext || window.webkitAudioContext;
+	if (AC) {
+		const Hooked = function (opts) {
+			const ctx = new AC(opts);
+			window.wbAudioCtx = ctx;
+			return ctx;
+		};
+		Hooked.prototype = AC.prototype;
+		if (window.AudioContext) {
+			window.AudioContext = Hooked;
+		} else {
+			window.webkitAudioContext = Hooked;
+		}
+	}
+	// A cached index.html from an older deploy: reload once to get the new one.
+	if (known && window.fetch) {
+		window.fetch('version.json', { cache: 'no-store' }).then(function (r) {
+			return r.ok ? r.json() : null;
+		}).then(function (v) {
+			if (!v || !v.build || v.build === build) {
+				return;
+			}
+			let tried = '';
+			try {
+				tried = sessionStorage.getItem('wb-reload') || '';
+				sessionStorage.setItem('wb-reload', v.build);
+			} catch (e) {
+				tried = v.build;   // no storage: never risk a reload loop
+			}
+			if (tried !== v.build) {
+				console.log('Westbound: build ' + v.build + ' is out (this page is ' + build + '); reloading');
+				window.location.reload();
+			}
+		}).catch(function () { });
+	}
+}());
+</script>
+<script src="$GODOT_URL?v=__WB_BUILD__"></script>
+<script>
+const GODOT_CONFIG = $GODOT_CONFIG;
+const GODOT_THREADS_ENABLED = $GODOT_THREADS_ENABLED;
+
+(function () {
+	'use strict';
+	const status = document.getElementById('status');
+	const phase = document.getElementById('wb-phase');
+	const fill = document.getElementById('wb-fill');
+	const notice = document.getElementById('status-notice');
+	let done = false;
+
+	function setPhase(text, starting) {
+		phase.textContent = text;
+		status.classList.toggle('starting', !!starting);
+	}
+
+	function hide() {
+		if (done) {
+			return;
+		}
+		done = true;
+		status.classList.add('gone');
+		setTimeout(function () { status.remove(); }, 300);
+	}
+
+	window.wbFail = function (err) {
+		console.error(err);
+		const text = err instanceof Error ? err.message : (typeof err === 'string' ? err : 'An unknown error occurred.');
+		while (notice.lastChild) {
+			notice.removeChild(notice.lastChild);
+		}
+		text.split('\n').forEach(function (line) {
+			notice.appendChild(document.createTextNode(line));
+			notice.appendChild(document.createElement('br'));
+		});
+		notice.style.display = 'block';
+		setPhase('COULD NOT START', false);
+		done = true;
+	};
+
+	function start() {
+		const missing = Engine.getMissingFeatures({ threads: GODOT_THREADS_ENABLED });
+		if (missing.length !== 0) {
+			window.wbFail('Westbound needs a browser with:\n' + missing.join('\n'));
+			return;
+		}
+		const engine = new Engine(GODOT_CONFIG);
+		let started = false;
+		engine.startGame({
+			'onProgress': function (current, total) {
+				if (total > 0) {
+					const f = Math.min(current / total, 1);
+					fill.style.transform = 'scaleX(' + f.toFixed(4) + ')';
+					if (f >= 1 && !started) {
+						started = true;
+						setPhase('STARTING', true);
+					} else if (!started) {
+						setPhase('LOADING ' + Math.floor(f * 100) + '%', false);
+					}
+				} else if (!started) {
+					setPhase('LOADING', true);
+				}
+			},
+		}).then(hide, window.wbFail);
+	}
+
+	// The game marks its first title (or run) frame (src/platform/web_boot.gd): the
+	// loading screen can go then, even before startGame() resolves.
+	window.addEventListener('wb-boot', function (e) {
+		if (e.detail === 'title' || e.detail === 'run') {
+			hide();
+		}
+	});
+
+	if (typeof Engine === 'undefined') {
+		window.wbFail('Could not load the game engine ($GODOT_URL).');
+	} else {
+		start();
+	}
+}());
+</script>
+</body>
+</html>

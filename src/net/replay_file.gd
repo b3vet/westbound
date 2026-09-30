@@ -425,6 +425,45 @@ static func unzigzag(z: int) -> int:
 	return (z >> 1) ^ -(z & 1)
 
 
+# ---------------------------------------------------------------- Column coding (WP8.4)
+
+## Additive helper for the other small files of this family (the Daily Drive ghost,
+## DailyGhost): `n` rows of `cols` coded as this body codes its samples, the row count
+## first, then the first `delta2_cols` columns delta-of-delta, the next `delta_cols`
+## delta, the rest raw zigzag varints. Uncompressed. Load / save time (allocates).
+static func encode_columns(cols: Array[PackedInt64Array], n: int, delta2_cols: int, delta_cols: int) -> PackedByteArray:
+	var w := _Writer.new(n * cols.size() * U16 + U64)
+	w.varint(n)
+	for c in cols.size():
+		if c < delta2_cols:
+			w.delta2(cols[c], n)
+		elif c < delta2_cols + delta_cols:
+			w.delta(cols[c], n)
+		else:
+			w.zigzag_raw(cols[c], n)
+	return w.finish()
+
+
+## The reverse of encode_columns: resizes each of `cols` to the row count and fills it.
+## Returns the row count, or -1 when `body` is not exactly such a block.
+static func decode_columns(body: PackedByteArray, cols: Array[PackedInt64Array], delta2_cols: int, delta_cols: int) -> int:
+	var rd := _Reader.new(body)
+	var n := rd.varint()
+	if rd.bad or n < 0 or n > body.size():
+		return -1
+	for c in cols.size():
+		cols[c].resize(n)
+		if c < delta2_cols:
+			rd.delta2(cols[c], n)
+		elif c < delta2_cols + delta_cols:
+			rd.delta(cols[c], n)
+		else:
+			rd.zigzag_raw(cols[c], n)
+	if rd.bad or rd.pos != body.size():
+		return -1
+	return n
+
+
 ## Writes into a pre-sized buffer (grows by doubling).
 class _Writer:
 	var buf := PackedByteArray()

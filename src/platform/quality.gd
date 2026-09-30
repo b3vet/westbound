@@ -12,9 +12,21 @@ extends Node
 ##     `particle_scale`, and re-read them on `Events.quality_changed` /
 ##     `Events.governor_changed`.
 ##
-## The governor (WP9.1) only calls `set_governor_rung()`. The rung is a separate
-## offset: it never writes the user's `quality_tier` setting, and no rung raises
-## any value above what the user's tier gives.
+## The governor (WP9.1, src/platform/governor.gd) runs here: every frame (not headless,
+## unless a thermal override is given) the real frame time, the frame cap and the
+## thermal level (src/platform/thermal.gd) go into `governor`, and a new rung goes
+## through `set_governor_rung()`. The rung is a separate offset: it never writes the
+## user's `quality_tier` setting, and no rung raises any value above what the user's tier
+## gives. docs/QUALITY.md.
+##
+## Simulation safety (WP9.1): the rungs change rendering only (render scale, particles,
+## the frame cap), except that the view distance still feeds the simulation (the
+## director's spawn distance at run start, how far ahead the road and the leg planner
+## generate: docs/QUALITY.md → Simulation safety; N8.2). So the view-distance rung is
+## held from a run's start (Game COUNTDOWN) to its end (RESULTS / MENU) and applied between
+## runs (`QualityTuning.governor_view_distance_between_runs`): a governor step mid-run never
+## changes the run. `run_view_distance_m` is the user tier's view distance, never the
+## governor's, for simulation uses once N8.2 moves them off `view_distance_m`.
 ##
 ## All numbers come from a `QualityTuning` resource (read duck-typed, so tests
 ## can pass a double).
@@ -45,6 +57,20 @@ const DEFAULT_DEV_RENDER_SCALES: Array[float] = [0.6, 0.75, 0.85, 1.0]
 const DEFAULT_DEV_MSAA: Array[int] = [0, 2, 4]
 ## Scale steps closer than this count as the same step.
 const STEP_EPS := 1e-3  # lint: allow-number comparison tolerance, not a tuning value
+const USEC_PER_S := 1_000_000.0   # lint: allow-number unit conversion
+## How often the governor's dev HUD numbers are reported (the dev HUD reads at 4 Hz).
+const REPORT_INTERVAL_S := 0.25   # lint: allow-number dev report cadence
+## DevStats keys (WP9.1): the governor's pressure ("calm", "hold", "frames", "thermal",
+## "idle"), the last step's reason, the window's frame p95 (ms) and miss share, the
+## thermal source ("native", "forced", "none") and whether the cooling icon shows.
+const DEV_GOVERNOR_PRESSURE := &"governor_pressure"
+const DEV_GOVERNOR_REASON := &"governor_reason"
+const DEV_GOVERNOR_P95_MS := &"governor_p95_ms"
+const DEV_GOVERNOR_MISS := &"governor_miss"
+const DEV_THERMAL_SOURCE := &"thermal_source"
+const DEV_COOLING := &"cooling"
+## Rung names (dev HUD), index = rung.
+const RUNG_NAMES: PackedStringArray = ["none", "scale", "particles", "view", "30fps"]
 
 
 ## Effective settings after tier, platform, frame pacing and governor.
@@ -62,6 +88,10 @@ class Effective extends RefCounted:
 	var max_fps: int = 0
 	## True when a dev override set the render scale or MSAA.
 	var dev_override: bool = false
+	## The rung the view distance and far plane were computed with (held during a run).
+	var view_rung: int = RUNG_NONE
+	## The governor's view-distance rung is waiting for the run to end.
+	var view_pending: bool = false
 
 
 ## A `QualityTuning` (or a double with the same fields). Inject before adding
@@ -73,8 +103,13 @@ var load_tuning_on_ready: bool = true
 var is_web: bool = OS.has_feature("web")
 ## Frame caps are skipped headless (no display to pace; keeps tests fast).
 var pace_frames: bool = DisplayServer.get_name() != "headless"
-## Thermal state source (stub until WP9.1).
+## Thermal state source (native plugin, dev override or none).
 var thermal: Thermal = Thermal.new()
+## The adaptive governor (configured from the tuning on ready).
+var governor: Governor = Governor.new()
+## Run the governor every frame. Off headless (tests drive `step_governor()` themselves)
+## unless a thermal override was given at boot.
+var governor_enabled: bool = DisplayServer.get_name() != "headless"
 
 ## The last applied settings (null until tuning is available).
 var effective: Effective
@@ -101,6 +136,13 @@ var far_plane_m: float:
 	get:
 		return effective.far_plane_m if effective != null else 0.0
 
+## The user tier's view distance, never the governor's: for simulation uses (N8.2).
+var run_view_distance_m: float:
+	get:
+		if tuning == null or effective == null:
+			return 0.0
+		return float(tuning.view_distance_m[effective.tier_index])
+
 var particle_scale: float:
 	get:
 		return effective.particle_scale if effective != null else 1.0
@@ -124,7 +166,11 @@ var dev_msaa_samples: int:
 		return _dev_msaa
 
 var _governor_rung: int = RUNG_NONE
+var _view_rung: int = RUNG_NONE
 var _in_gameplay: bool = false
+var _in_run: bool = false
+var _last_frame_usec: int = 0
+var _report_t: float = 0.0
 var _dev_scale: float = float(NO_OVERRIDE)
 var _dev_msaa: int = NO_OVERRIDE
 
@@ -135,15 +181,20 @@ var _dev_msaa: int = NO_OVERRIDE
 ## default tier) with `governor_rung` rungs applied on top.
 ## `dev_scale` / `dev_msaa` >= 0 replace the final render scale / MSAA (dev override;
 ## MSAA then ignores the web rule).
+## `view_rung` >= 0 computes the view distance and far plane at that rung instead (the
+## run-held rung, see Simulation safety above).
 static func compute(t: Resource, tier_name: StringName, rung: int, web: bool,
 		battery_saver: bool, in_gameplay: bool, dev_scale: float = NO_OVERRIDE,
-		dev_msaa: int = NO_OVERRIDE) -> Effective:
+		dev_msaa: int = NO_OVERRIDE, view_rung: int = -1) -> Effective:
 	var e := Effective.new()
 	var i := tier_index(t, tier_name)
 	var r := clampi(rung, RUNG_NONE, RUNG_MAX)
+	var vr := r if view_rung < 0 else clampi(view_rung, RUNG_NONE, RUNG_MAX)
 	e.tier_index = i
 	e.tier = StringName(t.tier_names[i])
 	e.governor_rung = r
+	e.view_rung = vr
+	e.view_pending = (r >= RUNG_VIEW_DISTANCE) != (vr >= RUNG_VIEW_DISTANCE)
 
 	var base_scale: float = t.render_scale[i]
 	var base_msaa: int = t.msaa_samples[i]
@@ -168,7 +219,7 @@ static func compute(t: Resource, tier_name: StringName, rung: int, web: bool,
 	if r >= RUNG_PARTICLES:
 		var frac: float = t.governor_particle_step_frac
 		particles = base_particles * clampf(1.0 - frac, 0.0, 1.0)
-	if r >= RUNG_VIEW_DISTANCE:
+	if vr >= RUNG_VIEW_DISTANCE:
 		var step_m: float = t.governor_view_distance_step_m
 		view = maxf(0.0, base_view - step_m)
 	if r >= RUNG_FPS:
@@ -243,13 +294,56 @@ static func is_gameplay_state(state: StringName) -> bool:
 # ---------------------------------------------------------------- Applier
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS   # thermal and the frame clock run in pause too
 	if tuning == null and load_tuning_on_ready:
 		tuning = _load_tuning()
 	_in_gameplay = is_gameplay_state(Game.state)
+	_in_run = is_run_state(Game.state)
 	Events.settings_changed.connect(_on_settings_changed)
 	Events.game_state_changed.connect(_on_game_state_changed)
-	DevStats.report(DevStats.THERMAL, thermal.get_state())
+	if tuning != null:
+		governor.configure(tuning)
+		thermal.configure(tuning)
+	thermal.changed.connect(_on_thermal_changed)
+	thermal.detect()
+	var over := boot_param(Thermal.BOOT_PARAM)
+	if not over.is_empty() and thermal.apply_override(over):
+		governor_enabled = true
+	_report_thermal()
 	apply()
+
+
+func _process(_delta: float) -> void:
+	if not governor_enabled:
+		return
+	var now := Time.get_ticks_usec()
+	if _last_frame_usec > 0:
+		step_governor(float(now - _last_frame_usec) / USEC_PER_S)
+	_last_frame_usec = now
+
+
+## One frame of `frame_s` real seconds: thermal, then the governor; applies a new rung.
+## The autoload calls it every frame; tests call it with synthetic frame times.
+func step_governor(frame_s: float) -> void:
+	thermal.advance(frame_s)
+	if tuning == null:
+		return
+	var target := 1.0 / float(maxi(max_fps, 1))
+	if governor.tick(frame_s, target, thermal.level(), _in_gameplay):
+		set_governor_rung(governor.rung)
+	_report_t += frame_s
+	if _report_t >= REPORT_INTERVAL_S:
+		_report_t = 0.0
+		report_governor()
+
+
+## The governor's dev HUD numbers (DevStats): pressure, last reason, frame p95, miss share.
+func report_governor() -> void:
+	DevStats.report(DEV_GOVERNOR_PRESSURE, governor.pressure_name())
+	DevStats.report(DEV_GOVERNOR_REASON, governor.reason_name())
+	DevStats.report(DEV_GOVERNOR_P95_MS, governor.frame_report_s() * Governor.MS_PER_S)
+	DevStats.report(DEV_GOVERNOR_MISS, governor.miss_fraction())
+	DevStats.report(DEV_COOLING, is_cooling())
 
 
 ## Recompute from the current settings, game state and rung, and apply.
@@ -261,8 +355,11 @@ func apply() -> void:
 	if not tuning.tier_names.has(String(user_tier)):
 		push_warning("Quality: unknown tier %s, using %s" % [user_tier, tuning.default_tier])
 	var saver: bool = Settings.get_value(&"battery_saver")
+	if not (_in_run and _hold_view_in_run()):
+		_view_rung = _governor_rung
 	effective = compute(tuning, user_tier, _governor_rung, is_web, saver, _in_gameplay,
-		_dev_scale, _dev_msaa)
+		_dev_scale, _dev_msaa, _view_rung)
+	_update_useful_rungs(user_tier, saver)
 
 	var vp := get_viewport()
 	vp.scaling_3d_scale = effective.render_scale
@@ -283,14 +380,85 @@ func apply() -> void:
 		Events.quality_changed.emit(effective.tier)
 
 
-## Governor offset (WP9.1). 0 = none, 1..4 = the spec's rungs, cumulative.
+## Governor offset (WP9.1). 0 = none, 1..4 = the spec's rungs, cumulative. The governor
+## calls it; a call from elsewhere (dev, tests) also moves the governor to that rung.
 func set_governor_rung(rung: int) -> void:
 	var r := clampi(rung, RUNG_NONE, RUNG_MAX)
+	governor.set_rung(r)
 	if r == _governor_rung:
 		return
 	_governor_rung = r
 	apply()
 	Events.governor_changed.emit(r)
+	DevStats.report(DEV_COOLING, is_cooling())
+
+
+## The HUD's cooling icon: the governor is active for thermal reasons (or for any reason
+## with QualityTuning.cooling_icon_any_reason).
+func is_cooling() -> bool:
+	var any := tuning != null and &"cooling_icon_any_reason" in tuning \
+		and bool(tuning.get(&"cooling_icon_any_reason"))
+	return governor.cooling(any)
+
+
+## Dev HUD THERMAL button: auto → nominal → fair → serious → critical → auto.
+func cycle_dev_thermal() -> void:
+	thermal.cycle_force()
+	if thermal.is_forced():
+		governor_enabled = true
+	_report_thermal()
+
+
+## Game states from a run's start to its end (the view-distance rung is held there).
+static func is_run_state(state: StringName) -> bool:
+	return state == Game.COUNTDOWN or state == Game.RUNNING or state == Game.PAUSED \
+		or state == Game.CRASH
+
+
+## A boot parameter: `?key=value` on the web, `--key=value` on the command line.
+static func boot_param(key: String) -> String:
+	var prefix := "%s=" % key
+	if OS.has_feature("web"):
+		var query: Variant = JavaScriptBridge.eval("window.location.search", true)
+		if query is String:
+			for part: String in (query as String).trim_prefix("?").split("&"):
+				if part.begins_with(prefix):
+					return part.trim_prefix(prefix).uri_decode()
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--" + prefix):
+			return a.trim_prefix("--" + prefix)
+	for a in OS.get_cmdline_args():
+		if a.begins_with("--" + prefix):
+			return a.trim_prefix("--" + prefix)
+	return ""
+
+
+func _hold_view_in_run() -> bool:
+	if tuning != null and &"governor_view_distance_between_runs" in tuning:
+		return bool(tuning.get(&"governor_view_distance_between_runs"))
+	return true
+
+
+## Tells the governor which rungs change anything for this tier (it skips the rest).
+func _update_useful_rungs(user_tier: StringName, saver: bool) -> void:
+	var prev := compute(tuning, user_tier, RUNG_NONE, is_web, saver, true, _dev_scale, _dev_msaa)
+	for r in range(RUNG_NONE + 1, RUNG_MAX + 1):
+		var e := compute(tuning, user_tier, r, is_web, saver, true, _dev_scale, _dev_msaa)
+		governor.set_useful(r, not is_equal_approx(e.render_scale, prev.render_scale)
+			or not is_equal_approx(e.particle_scale, prev.particle_scale)
+			or not is_equal_approx(e.view_distance_m, prev.view_distance_m)
+			or e.max_fps != prev.max_fps)
+		prev = e
+
+
+func _on_thermal_changed(state: StringName) -> void:
+	_report_thermal()
+	Events.thermal_state_changed.emit(state)
+
+
+func _report_thermal() -> void:
+	DevStats.report(DevStats.THERMAL, thermal.get_state())
+	DevStats.report(DEV_THERMAL_SOURCE, thermal.source())
 
 
 ## Dev override for this session: `render_scale_value` / `msaa` >= 0 pin that value
@@ -352,10 +520,16 @@ func _on_settings_changed(key: StringName) -> void:
 
 func _on_game_state_changed(_from: StringName, to: StringName) -> void:
 	var gameplay := is_gameplay_state(to)
-	if gameplay == _in_gameplay:
+	var in_run := is_run_state(to)
+	if gameplay == _in_gameplay and in_run == _in_run:
 		return
 	_in_gameplay = gameplay
+	_in_run = in_run
+	var held := _view_rung
 	apply()
+	if _view_rung != held:
+		# The run ended: the held view-distance rung applies now; view readers re-read.
+		Events.governor_changed.emit(_governor_rung)
 
 
 func _load_tuning() -> Resource:

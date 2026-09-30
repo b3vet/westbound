@@ -72,6 +72,18 @@ pub struct MirrorCar {
     pub near: bool,
 }
 
+/// A mirrored car carried to a tick (`TrafficMirror::car_at`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CarNow {
+    /// Wrapped s (m).
+    pub s_m: f64,
+    pub d: f64,
+    pub v: f64,
+    pub v_lat: f64,
+    /// The driving lane at d (0 = next to the median).
+    pub lane: i32,
+}
+
 /// Counts per message type.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct TrafficCounts {
@@ -330,6 +342,54 @@ impl TrafficMirror {
         c.s_mm = e.s_mm;
         c.d_cm = e.d_cm;
         c.speed_cms = e.speed_cms;
+    }
+
+    /// Car `id` at room tick `tick` (fractional), as a client without its own traffic model
+    /// would place it (N6.1: the bots' honest claims): its last correction carried on at its
+    /// speed, and a lane change on its intent's curve (docs/SERVER.md → Intents: d(t) = d0 +
+    /// (d_target − d0) × smoothstep(u) from the move-start tick).
+    pub fn car_at(&self, id: u16, tick: f64, map: &LoopMap, tick_dt: f64) -> Option<CarNow> {
+        let c = self.cars.get(&id)?;
+        let v = f64::from(c.speed_cms) / 100.0;
+        let since = tick - f64::from(c.corrected_tick);
+        let s_m = map.wrap_m(f64::from(c.s_mm) / 1_000.0 + v * since * tick_dt);
+        let d_c = f64::from(c.d_cm) / 100.0;
+        let mut now = CarNow {
+            s_m,
+            d: d_c,
+            v,
+            v_lat: 0.0,
+            lane: 0,
+        };
+        let road = sim::scoring::LoopRoad::new(map);
+        let n = road.lane_count(s_m);
+        if c.lc_phase != LaneChangePhase::None && c.lc_duration_ms > 0 {
+            let target_lane = if c.lc_target_lane >= 7 {
+                n
+            } else {
+                n - 1 - i32::from(c.lc_target_lane)
+            };
+            let target =
+                road.lanes_left_edge_d() + (f64::from(target_lane) + 0.5) * road.lane_width(s_m);
+            let dur_ticks = f64::from(c.lc_duration_ms) / 1_000.0 / tick_dt;
+            let m = f64::from(c.lc_move_start_tick);
+            let u_at = |t: f64| ((t - m) / dur_ticks).clamp(0.0, 1.0);
+            let smooth = |u: f64| u * u * (3.0 - 2.0 * u);
+            let (u, u_c) = (u_at(tick), u_at(f64::from(c.corrected_tick)));
+            if u > 0.0 {
+                if u_c >= 1.0 {
+                    now.d = d_c;
+                } else {
+                    let d0 = (d_c - target * smooth(u_c)) / (1.0 - smooth(u_c));
+                    now.d = d0 + (target - d0) * smooth(u);
+                    if u < 1.0 {
+                        now.v_lat = (target - d0) * 6.0 * u * (1.0 - u) / (dur_ticks * tick_dt);
+                    }
+                }
+            }
+        }
+        now.lane = sim::scoring::ScoringRoad::lane_index_at(&road, now.d, s_m).max(0);
+        Some(now)
     }
 
     /// The car ids the bot has, sorted.

@@ -2,11 +2,15 @@
 // Smoke test for the web export: serve build/web/, open it in headless
 // Chromium (WebGL 2 via SwiftShader), wait for the Godot engine to boot and
 // render, then fail on any console error, page error or failed request.
-// Saves a screenshot to build/web_smoke.png.
+// Saves a screenshot to build/web_smoke.png. Prints the load timings, the
+// bytes transferred and the memory (docs/WEB.md → Measuring).
 //
 //   node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000]
 //        [--settle 3000] [--screenshot build/web_smoke.png] [--headed]
 //        [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...]
+//        [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE]
+//        [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt ms>] [--json out.json]
+//        [--audio-unlock [click|tap|key]] [--stale]
 //
 // --query: the page's query string (default server=off; e.g. the loop test mode:
 // "mode=loop&server=off&at=city&bot=keep"). --expect: a console line must match
@@ -14,17 +18,49 @@
 // first boot, reload the page in the same browser profile (same IndexedDB) and boot
 // again; --expect-reload: a console line of the second boot must match REGEX (the
 // save's persistence check: --query "server=off&save_probe=1" --reload
-// --expect-reload "Save probe: loaded 1 boot").
+// --expect-reload "Save probe: loaded 1 boot"). --wait-for: after the boot, wait (up to
+// --wait-timeout, default 600000 ms) until a console line matches REGEX, then settle as
+// usual (the determinism check: --query "determinism=daily&date=2026-09-30&seconds=60"
+// --wait-for "^DT done"). --console-out: write every console line to FILE (one per line).
+//
+// WP9.2 (load time, docs/WEB.md):
+// --gzip: serve every file gzip-encoded, as GitHub Pages does, so the transfer
+// sizes are the real ones. --network: throttle the page (Chrome DevTools
+// conditions: wifi 30 Mbps / 20 ms, 4g 9 Mbps / 60 ms, slow4g 1.6 Mbps / 150 ms,
+// or "<Mbps>,<rtt ms>"). --json: write the metrics to a file. The timings are page
+// times from navigation start: first paint, downloads done, wasm compiled, the
+// engine's main(), first WebGL frame, title shown (the game's "web boot: title"
+// mark), loading overlay gone; plus the wasm heap and JS heap after the settle.
+// When the game fetches its music pack ("web music: downloading"), it must load.
+// --audio-unlock: launch with the browser's default autoplay policy (the rest of
+// the smoke allows autoplay) and check the unlock: the page's AudioContext is
+// suspended at boot and the game holds its music ("web audio: locked"); one
+// gesture (a click by default, or a touch tap, or a key) on an empty part of the
+// title must resume the context and start the music ("web audio: unlocked ...
+// music playing"). Nothing runs page.evaluate() before that gesture: Playwright's
+// evaluate counts as a user gesture and would unlock the page itself.
+// Caching (custom shell only): index.js, index.wasm and index.pck must be requested
+// with ?v=<build id>. --stale serves a version.json naming a newer build first (a
+// cached index.html after a deploy): the page must reload itself exactly once.
 //
 // Needs `npm ci` in tools/web_smoke once. Browser: Playwright's Chromium
 // (`npx playwright install chromium`), or CHROMIUM_PATH=/path/to/chrome.
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+// Chrome DevTools' throttling presets (download Mbps, round trip ms).
+const NETWORKS = {
+  wifi: [30, 20],
+  '4g': [9, 60],
+  slow4g: [1.6, 150],
+};
+const GESTURES = ['click', 'tap', 'key'];
 
 function parseArgs(argv) {
   const opts = {
@@ -37,6 +73,14 @@ function parseArgs(argv) {
     expect: [],
     reload: false,
     expectReload: [],
+    waitFor: null,
+    waitTimeout: 600000,
+    consoleOut: null,
+    gzip: false,
+    network: null,
+    json: null,
+    audioUnlock: null,
+    stale: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s, 2);
@@ -51,16 +95,43 @@ function parseArgs(argv) {
       case '--expect': opts.expect.push(new RegExp(value())); break;
       case '--reload': opts.reload = true; break;
       case '--expect-reload': opts.expectReload.push(new RegExp(value())); opts.reload = true; break;
+      case '--wait-for': opts.waitFor = new RegExp(value()); break;
+      case '--wait-timeout': opts.waitTimeout = Number(value()); break;
+      case '--console-out': opts.consoleOut = path.resolve(value()); break;
+      case '--gzip': opts.gzip = true; break;
+      case '--network': {
+        const v = value();
+        const pair = NETWORKS[v] || v.split(',').map(Number);
+        if (pair.length !== 2 || !pair.every((n) => Number.isFinite(n) && n > 0)) {
+          console.error(`smoke: --network takes ${Object.keys(NETWORKS).join('|')} or "<Mbps>,<rtt ms>"`);
+          process.exit(2);
+        }
+        opts.network = { name: v, mbps: pair[0], rtt: pair[1] };
+        break;
+      }
+      case '--json': opts.json = path.resolve(value()); break;
+      case '--stale': opts.stale = true; break;
+      case '--audio-unlock': {
+        // Optional value: the next argument when it names a gesture.
+        let g = inline;
+        if (g === undefined && GESTURES.includes(argv[i + 1])) g = argv[++i];
+        opts.audioUnlock = g || 'click';
+        if (!GESTURES.includes(opts.audioUnlock)) {
+          console.error(`smoke: --audio-unlock takes ${GESTURES.join('|')}`);
+          process.exit(2);
+        }
+        break;
+      }
       case '-h': case '--help':
-        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]...');
+        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...] [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt>] [--json out.json] [--audio-unlock [click|tap|key]] [--stale] [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE]');
         process.exit(0);
       default:
         console.error(`smoke: unknown argument ${argv[i]}`);
         process.exit(2);
     }
   }
-  if (!Number.isFinite(opts.timeout) || !Number.isFinite(opts.settle)) {
-    console.error('smoke: --timeout and --settle take milliseconds');
+  if (!Number.isFinite(opts.timeout) || !Number.isFinite(opts.settle) || !Number.isFinite(opts.waitTimeout)) {
+    console.error('smoke: --timeout, --settle and --wait-timeout take milliseconds');
     process.exit(2);
   }
   return opts;
@@ -68,7 +139,7 @@ function parseArgs(argv) {
 
 // Static server with the MIME types the Godot web export needs. No
 // COOP/COEP headers, on purpose: GitHub Pages cannot send them, and the
-// single-threaded build must run without them.
+// single-threaded build must run without them. --gzip encodes like Pages.
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -80,40 +151,170 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.json': 'application/json',
   '.css': 'text/css; charset=utf-8',
+  '.woff2': 'font/woff2',
 };
 
-function serve(root) {
+// --stale: the first version.json names a newer build (as if index.html came from
+// the browser cache after a deploy); the custom shell must reload once.
+const STALE_BUILD = 'ffffffffffff';
+
+function serve(root, gzip, stale) {
+  const gzCache = new Map();
+  const sent = new Map();   // path -> bytes on the wire
+  const urls = [];          // every GET, with its query
+  let staleLeft = stale ? 1 : 0;
   const server = http.createServer((req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405).end();
       return;
     }
+    urls.push(req.url);
     let rel = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
     if (rel.endsWith('/')) rel += 'index.html';
+    if (rel === '/version.json' && staleLeft > 0) {
+      staleLeft--;
+      res.writeHead(200, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ build: STALE_BUILD }));
+      return;
+    }
     const file = path.resolve(root, '.' + rel);
     if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
       res.writeHead(404, { 'Content-Type': 'text/plain' }).end('not found');
       return;
     }
     const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
-    res.writeHead(200, {
-      'Content-Type': type,
-      'Content-Length': fs.statSync(file).size,
-      'Cache-Control': 'no-store',
-    });
-    if (req.method === 'HEAD') res.end();
+    const headers = { 'Content-Type': type, 'Cache-Control': 'no-store' };
+    let body = null;
+    if (gzip && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+      if (!gzCache.has(file)) gzCache.set(file, zlib.gzipSync(fs.readFileSync(file), { level: 6 }));
+      body = gzCache.get(file);
+      headers['Content-Encoding'] = 'gzip';
+      headers['Vary'] = 'Accept-Encoding';
+      headers['Content-Length'] = body.length;
+    } else {
+      headers['Content-Length'] = fs.statSync(file).size;
+    }
+    res.writeHead(200, headers);
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
+    sent.set(rel, (sent.get(rel) || 0) + headers['Content-Length']);
+    if (body) res.end(body);
     else fs.createReadStream(file).pipe(res);
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, sent, urls })));
 }
 
 // SwiftShader gives headless Chromium a software WebGL 2 on machines with no GPU.
-const CHROME_ARGS = [
+const GL_ARGS = [
   '--use-angle=swiftshader',
   '--enable-unsafe-swiftshader',
   '--ignore-gpu-blocklist',
-  '--autoplay-policy=no-user-gesture-required',
 ];
+const AUTOPLAY_ARG = '--autoplay-policy=no-user-gesture-required';
+
+// Runs in the page before any of its scripts. Reports through console lines
+// ("wbsmoke: <what> <page ms> ...") so the harness never needs page.evaluate()
+// before a gesture test. Records: the WebGL 2 renderer, the loading overlay's
+// removal and any notice, the first WebGL draw (first frame), AudioContext
+// states and the first activating gesture, and the wasm memory (for the report).
+function pageProbe() {
+  const now = () => Math.round(performance.now());
+  const log = console.log;
+  const say = (s) => log.call(console, `wbsmoke: ${s}`);
+  window.__wbsmoke = { memory: null };
+  // Engine main() starts: the time of Godot's banner line.
+  let banner = false;
+  console.log = function (...a) {
+    if (!banner && typeof a[0] === 'string' && a[0].startsWith('Godot Engine v')) {
+      banner = true;
+      say(`main-start ${now()}`);
+    }
+    return log.apply(console, a);
+  };
+  // First frame: the first draw call on any WebGL 2 context.
+  const P = window.WebGL2RenderingContext && WebGL2RenderingContext.prototype;
+  if (P) {
+    const names = ['drawArrays', 'drawElements', 'drawArraysInstanced', 'drawElementsInstanced', 'drawRangeElements'];
+    const orig = {};
+    let seen = false;
+    for (const n of names) {
+      orig[n] = P[n];
+      P[n] = function (...args) {
+        if (!seen) {
+          seen = true;
+          for (const m of names) P[m] = orig[m];
+          say(`first-frame ${now()}`);
+        }
+        return orig[n].apply(this, args);
+      };
+    }
+  }
+  // Wasm memory (for the memory report).
+  let compiled = false;
+  const keepMemory = (result) => {
+    if (!compiled) {
+      compiled = true;
+      say(`wasm-ready ${now()}`);
+    }
+    const inst = result && (result.instance || result);
+    const exp = inst && inst.exports;
+    if (exp) for (const k of Object.keys(exp)) if (exp[k] instanceof WebAssembly.Memory) window.__wbsmoke.memory = exp[k];
+    return result;
+  };
+  for (const n of ['instantiate', 'instantiateStreaming']) {
+    const o = WebAssembly[n];
+    if (o) WebAssembly[n] = function (...a) { return o.apply(this, a).then(keepMemory); };
+  }
+  // Audio contexts and their states.
+  const AC = window.AudioContext;
+  if (AC) {
+    const Wrapped = function (...a) {
+      const c = new AC(...a);
+      say(`audio-ctx ${c.state} ${now()}`);
+      c.addEventListener('statechange', () => say(`audio-ctx ${c.state} ${now()}`));
+      return c;
+    };
+    Wrapped.prototype = AC.prototype;
+    window.AudioContext = Wrapped;
+  }
+  // The first gesture the browser counts as user activation.
+  const ua = navigator.userActivation;
+  let gestured = false;
+  const onGesture = (e) => {
+    if (gestured || (ua && !ua.isActive)) return;
+    gestured = true;
+    say(`gesture ${e.type} ${now()}`);
+  };
+  for (const t of ['pointerup', 'touchend', 'mousedown', 'keydown', 'click']) window.addEventListener(t, onGesture, true);
+  // WebGL 2, the loading overlay and the shell's error notice.
+  document.addEventListener('DOMContentLoaded', () => {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    let r = 'none';
+    if (gl) {
+      const info = gl.getExtension('WEBGL_debug_renderer_info');
+      r = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (lose) lose.loseContext();
+    }
+    say(`webgl ${r}`);
+    let overlay = !!document.getElementById('status');
+    let noticed = false;
+    const timer = setInterval(() => {
+      const notice = document.getElementById('status-notice');
+      if (!noticed && notice && notice.style.display === 'block' && notice.innerText.trim()) {
+        noticed = true;
+        say(`notice ${notice.innerText.trim().replace(/\s+/g, ' ')}`);
+      }
+      if (overlay && !document.getElementById('status')) {
+        overlay = false;
+        say(`overlay-gone ${now()}`);
+        clearInterval(timer);
+      }
+    }, 50);
+  });
+}
 
 // Find an already-installed Playwright Chromium when the pinned package
 // version's own build is missing (e.g. a preinstalled browser cache).
@@ -133,8 +334,8 @@ function findInstalledChromium(headed) {
   return candidates.find((p) => fs.existsSync(p));
 }
 
-async function launch(headed) {
-  const base = { headless: !headed, args: CHROME_ARGS };
+async function launch(headed, autoplay) {
+  const base = { headless: !headed, args: autoplay ? [...GL_ARGS, AUTOPLAY_ARG] : GL_ARGS };
   if (process.env.CHROMIUM_PATH) return chromium.launch({ ...base, executablePath: process.env.CHROMIUM_PATH });
   try {
     return await chromium.launch(base);
@@ -189,6 +390,92 @@ async function analyzePng(browser, png) {
   }
 }
 
+const MIB = 1048576;
+const mib = (n) => (n == null ? '-' : `${(n / MIB).toFixed(2)} MiB`);
+const sec = (ms) => (ms == null ? '-' : `${(ms / 1000).toFixed(2)} s`);
+
+// The last "<prefix> <ms>" console line value (page ms), or null.
+function consoleMs(lines, re) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = re.exec(lines[i]);
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+async function collectMetrics(page, consoleLines, sent) {
+  const perf = await page.evaluate(() => {
+    const nav = performance.getEntriesByType('navigation')[0];
+    const res = performance.getEntriesByType('resource').map((r) => ({
+      name: new URL(r.name).pathname.split('/').pop(),
+      end: r.responseEnd,
+      transfer: r.transferSize,
+      encoded: r.encodedBodySize,
+      decoded: r.decodedBodySize,
+    }));
+    const mem = window.__wbsmoke && window.__wbsmoke.memory;
+    const heap = performance.memory || null;
+    const fcp = performance.getEntriesByType('paint').find((e) => e.name === 'first-contentful-paint');
+    return {
+      fcp: fcp ? fcp.startTime : null,
+      html: nav ? nav.responseEnd : null,
+      dcl: nav ? nav.domContentLoadedEventEnd : null,
+      res,
+      wasmHeap: mem ? mem.buffer.byteLength : null,
+      jsHeapUsed: heap ? heap.usedJSHeapSize : null,
+      jsHeapTotal: heap ? heap.totalJSHeapSize : null,
+    };
+  });
+  const byName = (re) => perf.res.filter((r) => re.test(r.name));
+  const big = byName(/\.(wasm|pck)$/).filter((r) => r.name !== 'music.pck');   // the boot's downloads
+  const downloaded = big.length ? Math.max(...big.map((r) => r.end)) : null;
+  const files = {};
+  for (const r of perf.res) files[r.name] = { end_ms: Math.round(r.end), decoded: r.decoded, encoded: r.encoded };
+  let wire = 0;
+  for (const [rel, n] of sent) {
+    wire += n;
+    const name = rel.split('/').pop();
+    if (files[name]) files[name].wire = n;
+    else files[name] = { wire: n };
+  }
+  return {
+    html_ms: perf.html,
+    first_paint_ms: perf.fcp,
+    dom_ms: perf.dcl,
+    downloaded_ms: downloaded,
+    wasm_ready_ms: consoleMs(consoleLines, /^wbsmoke: wasm-ready (\d+)/),
+    main_start_ms: consoleMs(consoleLines, /^wbsmoke: main-start (\d+)/),
+    engine_started_ms: consoleMs(consoleLines, /^wbsmoke: overlay-gone (\d+)/),
+    first_frame_ms: consoleMs(consoleLines, /^wbsmoke: first-frame (\d+)/),
+    title_ms: consoleMs(consoleLines, /^web boot: title (\d+) ms/),
+    run_ms: consoleMs(consoleLines, /^web boot: run (\d+) ms/),
+    wire_bytes: wire,
+    wasm_heap_bytes: perf.wasmHeap,
+    js_heap_used_bytes: perf.jsHeapUsed,
+    js_heap_total_bytes: perf.jsHeapTotal,
+    files,
+  };
+}
+
+function printMetrics(m, opts) {
+  const net = opts.network ? `${opts.network.mbps} Mbps / ${opts.network.rtt} ms RTT (${opts.network.name})` : 'unthrottled';
+  console.log(`smoke: timing (page time from navigation start; ${opts.gzip ? 'gzip like Pages' : 'no compression'}, ${net}):`);
+  console.log(`smoke:   html loaded        ${sec(m.html_ms)}`);
+  console.log(`smoke:   first paint        ${sec(m.first_paint_ms)}   (first contentful paint: the loading screen)`);
+  console.log(`smoke:   wasm + pck loaded  ${sec(m.downloaded_ms)}`);
+  console.log(`smoke:   wasm compiled      ${sec(m.wasm_ready_ms)}`);
+  console.log(`smoke:   engine main()      ${sec(m.main_start_ms)}   (Godot banner)`);
+  console.log(`smoke:   first frame        ${sec(m.first_frame_ms)}   (first WebGL draw)`);
+  if (m.title_ms != null) console.log(`smoke:   title shown        ${sec(m.title_ms)}   (web boot: title)`);
+  if (m.run_ms != null) console.log(`smoke:   run shown          ${sec(m.run_ms)}   (web boot: run)`);
+  console.log(`smoke:   overlay gone       ${sec(m.engine_started_ms)}   (loading screen removed)`);
+  console.log(`smoke:   transferred        ${mib(m.wire_bytes)}`);
+  for (const [name, f] of Object.entries(m.files).sort((a, b) => (b[1].wire || 0) - (a[1].wire || 0)).slice(0, 5)) {
+    console.log(`smoke:     ${name.padEnd(28)} ${mib(f.wire).padStart(10)} on the wire, ${mib(f.decoded).padStart(10)} decoded, done ${sec(f.end_ms)}`);
+  }
+  console.log(`smoke:   memory             wasm heap ${mib(m.wasm_heap_bytes)}, JS heap ${mib(m.js_heap_used_bytes)} used / ${mib(m.js_heap_total_bytes)}`);
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const root = path.resolve(opts.dir);
@@ -197,19 +484,37 @@ async function main() {
     process.exit(2);
   }
 
-  const server = await serve(root);
+  const { server, sent, urls } = await serve(root, opts.gzip, opts.stale);
+  // The custom shell's build id (tools/export_web.sh fills it; '' with Godot's shell).
+  const shellBuild = (/const build = '([0-9a-f]{8,})'/.exec(fs.readFileSync(path.join(root, 'index.html'), 'utf8')) || [])[1] || '';
   // ?server=off: the smoke test never creates accounts on the production server (N1.2).
   if (!/(^|&)server=off(&|$)/.test(opts.query)) opts.query = `${opts.query}&server=off`.replace(/^&/, '');
   const url = `http://127.0.0.1:${server.address().port}/index.html?${opts.query}`;
   const failures = [];
   const consoleLines = [];
   let browser;
+  let metrics = null;
   const t0 = Date.now();
   const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
 
   try {
-    browser = await launch(opts.headed);
-    const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+    browser = await launch(opts.headed, !opts.audioUnlock);
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      hasTouch: opts.audioUnlock === 'tap',
+    });
+    const page = await context.newPage();
+    await page.addInitScript(pageProbe);
+    if (opts.network) {
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Network.enable');
+      await cdp.send('Network.emulateNetworkConditions', {
+        offline: false,
+        latency: opts.network.rtt,
+        downloadThroughput: (opts.network.mbps * 1e6) / 8,
+        uploadThroughput: (opts.network.mbps * 1e6) / 8,
+      });
+    }
 
     page.on('console', (msg) => {
       const text = msg.text();
@@ -236,45 +541,56 @@ async function main() {
       }
     });
 
-    console.log(`smoke: serving ${root} at ${url}`);
+    console.log(`smoke: serving ${root} at ${url}${opts.gzip ? ' (gzip)' : ''}`);
     await page.goto(url, { waitUntil: 'load', timeout: opts.timeout });
 
-    const gl = await page.evaluate(() => {
-      const ctx = document.createElement('canvas').getContext('webgl2');
-      if (!ctx) return null;
-      const info = ctx.getExtension('WEBGL_debug_renderer_info');
-      return info ? ctx.getParameter(info.UNMASKED_RENDERER_WEBGL) : ctx.getParameter(ctx.RENDERER);
-    });
-    if (!gl) throw new Error('WebGL 2 is not available in this Chromium (tried SwiftShader flags)');
-    console.log(`smoke: WebGL 2 renderer: ${gl}`);
-
     // Booted = Godot printed its banner (since console line `from`) and the loading
-    // overlay is gone (the shell removes #status once engine.startGame() resolves).
+    // overlay is gone (the shell removes #status once the game is up). Read from the
+    // page probe's console lines only (no page.evaluate: see --audio-unlock).
     const waitBoot = async (from) => {
       const deadline = Date.now() + opts.timeout;
       for (;;) {
         if (failures.length) break;
-        const state = await page.evaluate(() => {
-          const notice = document.getElementById('status-notice');
-          return {
-            overlay: !!document.getElementById('status'),
-            notice: notice && notice.style.display === 'block' ? notice.innerText : '',
-          };
-        });
-        if (state.notice) {
-          failures.push(`Godot shell error notice: ${state.notice.trim()}`);
+        const lines = consoleLines.slice(from);
+        const notice = lines.find((l) => l.startsWith('wbsmoke: notice '));
+        if (notice) {
+          failures.push(`Godot shell error notice: ${notice.slice('wbsmoke: notice '.length)}`);
           break;
         }
-        const banner = consoleLines.slice(from).some((l) => /^Godot Engine v\d/.test(l));
-        if (banner && !state.overlay) break;
+        const webgl = lines.find((l) => l.startsWith('wbsmoke: webgl '));
+        if (webgl && webgl === 'wbsmoke: webgl none') {
+          failures.push('smoke: WebGL 2 is not available in this Chromium (tried SwiftShader flags)');
+          break;
+        }
+        const banner = lines.some((l) => /^Godot Engine v\d/.test(l));
+        const overlayGone = lines.some((l) => l.startsWith('wbsmoke: overlay-gone '));
+        if (banner && overlayGone) break;
         if (Date.now() > deadline) {
-          failures.push(`engine did not start within ${opts.timeout} ms (banner seen: ${banner}, loading overlay present: ${state.overlay})`);
+          failures.push(`engine did not start within ${opts.timeout} ms (banner seen: ${banner}, loading overlay present: ${!overlayGone})`);
           break;
         }
         await page.waitForTimeout(250);
       }
     };
     await waitBoot(0);
+    const webgl = consoleLines.find((l) => l.startsWith('wbsmoke: webgl '));
+    if (webgl) console.log(`smoke: WebGL 2 renderer: ${webgl.slice('wbsmoke: webgl '.length)}`);
+
+    if (!failures.length && opts.audioUnlock) await audioUnlock(page, opts, consoleLines, failures);
+    if (!failures.length) checkCaching(opts, urls, consoleLines, shellBuild, failures);
+
+    if (!failures.length && opts.waitFor) {
+      const deadline = Date.now() + opts.waitTimeout;
+      console.log(`smoke: waiting up to ${opts.waitTimeout} ms for a console line matching ${opts.waitFor}`);
+      while (!failures.length && !consoleLines.some((l) => opts.waitFor.test(l))) {
+        if (Date.now() > deadline) {
+          failures.push(`no console line matched ${opts.waitFor} within ${opts.waitTimeout} ms`);
+          break;
+        }
+        await page.waitForTimeout(250);
+      }
+      if (!failures.length) console.log(`smoke: ${opts.waitFor} seen after ${elapsed()}`);
+    }
 
     if (!failures.length) {
       console.log(`smoke: engine started after ${elapsed()}; letting it run ${opts.settle} ms`);
@@ -287,8 +603,20 @@ async function main() {
       console.log(`smoke: ${frames} animation frames in ${opts.settle} ms`);
       if (frames < 10) failures.push(`page barely animates (${frames} frames in ${opts.settle} ms)`);
 
-      const renderer = consoleLines.find((l) => /OpenGL API|WebGL/.test(l));
+      const renderer = consoleLines.find((l) => /OpenGL API|WebGL/.test(l) && !l.startsWith('wbsmoke:'));
       if (renderer) console.log(`smoke: Godot renderer: ${renderer}`);
+
+      // The music pack (music.pck, when the main pack leaves the music out) must load.
+      if (consoleLines.some((l) => l.startsWith('web music: downloading'))) {
+        const deadline = Date.now() + opts.timeout;
+        while (!consoleLines.some((l) => /^web music: (loaded|no music)/.test(l)) && Date.now() < deadline) await page.waitForTimeout(250);
+        const line = consoleLines.find((l) => /^web music: (loaded|no music)/.test(l));
+        if (!line || !line.startsWith('web music: loaded')) failures.push(`music pack: ${line || 'never loaded'}`);
+        else console.log(`smoke: music pack: ${line.slice('web music: '.length)}`);
+      }
+
+      metrics = await collectMetrics(page, consoleLines, sent);
+      printMetrics(metrics, opts);
 
       fs.mkdirSync(path.dirname(opts.screenshot), { recursive: true });
       const png = await page.screenshot({ path: opts.screenshot });
@@ -329,14 +657,111 @@ async function main() {
   } finally {
     if (browser) await browser.close();
     server.close();
+    if (opts.consoleOut) {
+      fs.mkdirSync(path.dirname(opts.consoleOut), { recursive: true });
+      fs.writeFileSync(opts.consoleOut, consoleLines.join('\n') + '\n');
+      console.log(`smoke: ${consoleLines.length} console lines written to ${opts.consoleOut}`);
+    }
   }
 
+  if (opts.json) {
+    fs.mkdirSync(path.dirname(opts.json), { recursive: true });
+    fs.writeFileSync(opts.json, JSON.stringify({ gzip: opts.gzip, network: opts.network, audio_unlock: opts.audioUnlock, failures, metrics }, null, 1));
+    console.log(`smoke: metrics written to ${opts.json}`);
+  }
   if (failures.length) {
     console.error(`\nsmoke: FAIL after ${elapsed()} (${failures.length} problem(s)):`);
     for (const f of failures) console.error(`  - ${f}`);
     process.exit(1);
   }
   console.log(`smoke: PASS in ${elapsed()}`);
+}
+
+// The custom shell asks for index.js, index.wasm and index.pck with ?v=<build> (a new
+// deploy never mixes with cached files), and --stale makes it reload exactly once.
+function checkCaching(opts, urls, consoleLines, build, failures) {
+  if (!build) {
+    console.log('smoke: caching: Godot\'s default shell (no build id): files are not versioned');
+    if (opts.stale) failures.push('--stale needs the custom shell (platform/web/shell.html)');
+    return;
+  }
+  for (const f of ['index.js', 'index.wasm', 'index.pck']) {
+    const got = urls.filter((u) => u.split('?')[0].endsWith('/' + f));
+    if (!got.length) failures.push(`caching: ${f} was never requested`);
+    else if (!got.every((u) => u.endsWith(`?v=${build}`))) failures.push(`caching: ${f} requested as ${got.join(', ')}, not ?v=${build}`);
+  }
+  const music = urls.filter((u) => u.split('?')[0].endsWith('/music.pck'));   // only when the game fetched it
+  if (!music.every((u) => u.endsWith(`?v=${build}`))) failures.push(`caching: music.pck requested as ${music.join(', ')}, not ?v=${build}`);
+  const pages = urls.filter((u) => u.split('?')[0].endsWith('/index.html')).length;
+  const reloads = consoleLines.filter((l) => /^Westbound: build \w+ is out/.test(l)).length;
+  if (opts.stale) {
+    if (reloads !== 1 || pages !== 2) failures.push(`caching: a stale page must reload exactly once (reload notes ${reloads}, index.html loads ${pages})`);
+    else console.log('smoke: caching: the stale page reloaded once and booted the current build');
+  } else if (reloads) {
+    failures.push(`caching: the page reloaded itself ${reloads} time(s) (version.json disagrees with index.html)`);
+  }
+  if (!failures.length) console.log(`smoke: caching: index.js, index.wasm and index.pck fetched with ?v=${build}`);
+}
+
+// --audio-unlock: the page must boot with its audio locked and the game holding the
+// music; one gesture on an empty part of the title must unlock both.
+async function audioUnlock(page, opts, consoleLines, failures) {
+  const has = (re, from = 0) => consoleLines.slice(from).some((l) => re.test(l));
+  const waitFor = async (re, ms, from = 0) => {
+    const deadline = Date.now() + ms;
+    while (!has(re, from) && Date.now() < deadline && !failures.length) await page.waitForTimeout(100);
+    return has(re, from);
+  };
+  // The title first (the world builds after the engine starts), so the gesture lands
+  // on it; a direct boot (?title=0, ?mode=) marks "run" instead.
+  if (!(await waitFor(/^web boot: (title|run) /, opts.timeout))) {
+    failures.push('audio unlock: the game never marked the title or a run (web boot: title|run)');
+    return;
+  }
+  const ctxStates = () => consoleLines.filter((l) => l.startsWith('wbsmoke: audio-ctx ')).map((l) => l.split(' ')[2]);
+  const before = ctxStates();
+  console.log(`smoke: audio before the gesture: context ${before.join(' -> ') || '(none)'}`);
+  if (!before.length) {
+    failures.push('audio unlock: the page made no AudioContext');
+    return;
+  }
+  if (before[before.length - 1] !== 'suspended') {
+    failures.push(`audio unlock: the context is "${before[before.length - 1]}" before any gesture; this Chromium does not enforce the autoplay policy, so the test proves nothing`);
+    return;
+  }
+  if (!has(/^web audio: locked /)) {
+    failures.push('audio unlock: the game did not report the lock ("web audio: locked ..."); its music would start silently');
+    return;
+  }
+  if (has(/^web audio: unlocked /)) {
+    failures.push('audio unlock: the game reported an unlock before any gesture');
+    return;
+  }
+  const from = consoleLines.length;
+  // An empty part of the title: right of the menu, below the profile chip, above the
+  // road (the attract drive ignores taps).
+  const vp = page.viewportSize();
+  const x = Math.round(vp.width * 0.78);
+  const y = Math.round(vp.height * 0.3);
+  if (opts.audioUnlock === 'tap') await page.touchscreen.tap(x, y);
+  else if (opts.audioUnlock === 'key') await page.keyboard.press('ArrowRight');
+  else await page.mouse.click(x, y);
+  console.log(`smoke: audio gesture: ${opts.audioUnlock} at (${x}, ${y})`);
+  // Generous: SwiftShader frames take hundreds of ms on a loaded machine, and the
+  // game polls the context every 0.1 s of its own frames.
+  const unlockWait = Math.min(opts.timeout, 15000);
+  const running = await waitFor(/^wbsmoke: audio-ctx running /, unlockWait, from);
+  const unlocked = await waitFor(/^web audio: unlocked /, unlockWait, from);
+  const gesture = consoleMs(consoleLines, /^wbsmoke: gesture \w+ (\d+)/);
+  const resumed = consoleMs(consoleLines, /^wbsmoke: audio-ctx running (\d+)/);
+  // The music starts on the unlock, or when its pack (music.pck) arrives after it.
+  const playing = unlocked && await waitFor(/^web audio: .*music playing/, unlockWait, from);
+  if (!running) failures.push(`audio unlock: the context did not resume after a ${opts.audioUnlock}`);
+  if (!unlocked) failures.push('audio unlock: the game did not report the unlock ("web audio: unlocked ...")');
+  else if (!playing) failures.push('audio unlock: unlocked, but the music did not start');
+  if (running && unlocked) {
+    console.log(`smoke: audio unlocked by the ${opts.audioUnlock}: context running ${resumed != null && gesture != null ? `${resumed - gesture} ms after the gesture` : ''}, music playing`);
+  }
 }
 
 main();

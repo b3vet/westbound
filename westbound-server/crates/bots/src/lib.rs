@@ -9,14 +9,21 @@
 //! - `traffic` (N4.2): [`traffic::TrafficMirror`], the traffic a bot has been streamed,
 //!   with the checks a client relies on (ids, same-frame corrections, intent leads, gaps).
 //!
-//! N4.4 adds scripted paths through traffic, honest claims and the delay / jitter / loss
-//! layer on top.
+//! - `driver` (N6.1): [`driver::TrafficDriver`] (drives through the streamed traffic)
+//!   and [`driver::Scorer`] (the client's rules on the mirror, turned into honest or
+//!   cheating `score_claim`s).
+//! - `link` (N6.1): a minimal delay / jitter / loss line per direction (N4.4 owns the
+//!   full layer and its metrics).
 
 pub mod bot;
 pub mod client;
+pub mod driver;
 pub mod http;
+pub mod link;
 pub mod traffic;
 
 pub use bot::{BotConfig, RoomBot};
 pub use client::BotClient;
+pub use driver::{Cheat, ClaimMode, DriveMode};
+pub use link::LinkSim;
 pub use traffic::{MirrorRules, TrafficMirror};

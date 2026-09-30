@@ -595,8 +595,13 @@ impl Conn<'_> {
                 }
                 None
             }
-            // N6: claims are verified by the room.
-            ClientMsg::ScoreClaim(_) => None,
+            // N6.1: claims are verified by the room.
+            ClientMsg::ScoreClaim(c) => {
+                if let Some(link) = self.seat() {
+                    link.claim(c.clone());
+                }
+                None
+            }
             ClientMsg::Hello(_) => return Step::Close(CloseReason::Error),
         };
         match reply.map(|r| self.reply(&r)) {

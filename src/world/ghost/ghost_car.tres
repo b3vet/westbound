@@ -1,0 +1,21 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://src/world/ghost/ghost_car.gdshader" id="1"]
+
+[resource]
+render_priority = 1
+shader = ExtResource("1")
+shader_parameter/tint = Vector3(0.62, 0.86, 1)
+shader_parameter/self_lit = 0.55
+shader_parameter/body_alpha = 0.22
+shader_parameter/rim_alpha = 0.5
+shader_parameter/rim_power = 2.5
+shader_parameter/rim_gain = 0.6
+shader_parameter/lamp_alpha = 0.85
+shader_parameter/lamp_gain = 2.0
+shader_parameter/lamps_on = 0.0
+shader_parameter/brake_on = 0.0
+shader_parameter/near_start_m = 5.0
+shader_parameter/near_end_m = 14.0
+shader_parameter/near_factor = 0.35
+shader_parameter/compat_lift = 0.6

@@ -18,6 +18,7 @@ use sim::traffic::{
     Density as SimDensity, MpTrafficRules, PlayerInput, TrafficParams, TrafficWorld,
 };
 
+use super::car_history::CarHistory;
 use super::plausibility::tick_diff;
 use super::road::{lane_center_d_mm, lane_width_mm};
 use super::traffic::{PlayerView, RoomTraffic, SpawnSpot};
@@ -25,6 +26,8 @@ use super::traffic_stream::{ReactionTimes, StreamRules, TrafficStream};
 
 /// Most world steps one room tick may run to catch up.
 pub const MAX_CATCH_UP: u32 = 20;
+/// Default traffic history (ticks) for scoring (N6.1); rooms set theirs from the config.
+pub const HISTORY_TICKS: usize = 48;
 const MM_PER_M: f64 = 1_000.0;
 const CM_PER_M: f64 = 100.0;
 const HEADING_PER_RAD: f64 = 10_000.0;
@@ -65,6 +68,8 @@ pub struct SimTraffic {
     width_m: f64,
     gap: GapRules,
     stream: TrafficStream,
+    /// N6.1: every car after each step, for the last ticks.
+    history: CarHistory,
 }
 
 pub fn density(d: Density) -> SimDensity {
@@ -96,7 +101,9 @@ impl SimTraffic {
             tick_dt: world.dt(),
         };
         let stream = TrafficStream::new(rules, react, map, &world.sim, origin);
+        let history = CarHistory::new(HISTORY_TICKS, world.sim.state.capacity);
         Self {
+            history,
             slots: vec![0; data.mp.max_players],
             world,
             origin,
@@ -105,6 +112,12 @@ impl SimTraffic {
             gap,
             stream,
         }
+    }
+
+    /// The traffic history's depth in room ticks (N6.1).
+    pub fn with_history(mut self, ticks: usize) -> Self {
+        self.history = CarHistory::new(ticks, self.world.sim.state.capacity);
+        self
     }
 
     pub fn world(&self) -> &TrafficWorld {
@@ -142,6 +155,13 @@ impl SimTraffic {
         let p = self.slots.iter().position(|&id| id == 0)?;
         self.slots[p] = player_id;
         Some(p)
+    }
+
+    /// Records the traffic after a step at its room tick (N6.1).
+    fn record(&mut self) {
+        let tick = self.room_tick();
+        let (history, stream) = (&mut self.history, &self.stream);
+        history.record(tick, &self.world.sim.state, |slot| stream.car_id(slot));
     }
 
     fn world_tick_of(&self, room_tick: u32) -> u32 {
@@ -192,10 +212,12 @@ impl RoomTraffic for SimTraffic {
             self.world.tick();
             self.origin = tick.wrapping_sub(self.world.tick_index());
             self.stream.after_step(&self.world.sim, self.origin);
+            self.record();
         } else {
             for _ in 0..behind.max(0) {
                 self.world.tick();
                 self.stream.after_step(&self.world.sim, self.origin);
+                self.record();
             }
         }
         self.stream.end_tick(&self.world.sim);
@@ -235,6 +257,14 @@ impl RoomTraffic for SimTraffic {
 
     fn hit_car(&mut self, player_id: u16, car_id: u16) -> bool {
         self.notify_hit(player_id, car_id)
+    }
+
+    fn car_history(&self) -> Option<&CarHistory> {
+        Some(&self.history)
+    }
+
+    fn client_has(&self, player_id: u16, car_id: u16) -> bool {
+        car_id != 0 && self.stream.known(player_id).any(|id| id == car_id)
     }
 
     fn free_gap(&self, map: &LoopMap, want: SpawnSpot) -> SpawnSpot {

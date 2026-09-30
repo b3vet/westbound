@@ -65,6 +65,7 @@ pub struct Config {
     pub social: SocialConfig,
     pub replays: ReplaysConfig,
     pub rooms: RoomsConfig,
+    pub scoring: ScoringConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -498,10 +499,103 @@ pub struct RoomsConfig {
     pub placement_radius_m: f64,
 }
 
+/// Multiplayer scoring (N6.1; docs/SERVER.md → "Scoring (N6.1)"). Spec: "Scoring in
+/// multiplayer" (claims, verification, the official score, `ScoreSync`, hits, crew
+/// proximity, trains), "Tuning reference". The scoring rules themselves are the game's
+/// (`sim::scoring`, exported from `data/tuning/scoring.tres`); these are the server's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ScoringConfig {
+    /// A claim's tick must be within this of the server's own view of the event (spec:
+    /// ±300 ms).
+    pub claim_timing_ms: u64,
+    /// A claimed clearance may be this much under the server's measurement, and a close
+    /// pass or thread needs the server's under its threshold plus this (spec: +0.35 m).
+    pub claim_clearance_tolerance_m: f64,
+    /// Cuts: the named car's hull gap may pass the cut window by this much, the speed may
+    /// be this much under the cut minimum (not in spec: 20 Hz states vs 120 Hz physics).
+    pub cut_gap_tolerance_m: f64,
+    pub cut_speed_tolerance_kmh: f64,
+    /// A claim waits at most this long for the states that decide it (not in spec).
+    pub claim_max_wait_ms: u64,
+    /// Undecided claims held per player; more are rejected (not in spec).
+    pub claim_queue: usize,
+    /// The official score runs this far behind the room clock, so every claim, hit and
+    /// crewmate pass of a tick is decided before the tick is paid (not in spec).
+    pub official_lag_ms: u64,
+    /// `ScoreSync` at least this often, and at every banking moment (spec: once a second).
+    pub sync_interval_ms: u64,
+    /// Crew proximity (spec): +0.25× per crewmate within 30 m on the loop, capped at ×2.0.
+    pub crew_range_m: f64,
+    pub crew_bonus_per_mate: f64,
+    pub crew_factor_cap: f64,
+    /// Trains (spec): the same car on the same side, or the same gap, within 1.0 s after a
+    /// crewmate; 25 base points and +2 multiplier.
+    pub train_window_ms: u64,
+    pub train_points: i64,
+    pub train_multiplier_gain: f64,
+    /// Server hit detection (spec): hulls overlapping deeper than 0.3 m for 2+ ticks.
+    pub hit_overlap_m: f64,
+    pub hit_overlap_ticks: u32,
+    /// A reported hit accounts for a server-detected contact this close in time (not in
+    /// spec).
+    pub hit_match_ms: u64,
+    /// A reported traffic hit is accepted (the car reacts for everyone) when the server saw
+    /// the hulls within this clearance of each other near its tick (not in spec).
+    pub hit_confirm_clearance_m: f64,
+    /// Leaderboard verification (deviation MP-D9): besides no plausibility offence and no
+    /// unreported hit, a run needs at least this share of its decided claims accepted,
+    /// once it has `verify_min_claims` of them.
+    pub verify_min_acceptance_pct: f64,
+    pub verify_min_claims: u32,
+    /// The player hull the server measures with: the game's largest car (brute_v8 4.8 ×
+    /// 1.95 m), so the server never measures a clearance larger than the client's for its
+    /// body (not in spec: `PlayerState` has no car).
+    pub player_length_m: f64,
+    pub player_width_m: f64,
+    /// Cars are tracked for passes from this far ahead of the player (not in spec).
+    pub track_ahead_m: f64,
+    /// `room_event.crew` session totals go out at most this often per crew (not in spec).
+    pub crew_total_interval_ms: u64,
+}
+
+impl Default for ScoringConfig {
+    fn default() -> Self {
+        Self {
+            claim_timing_ms: 300,
+            claim_clearance_tolerance_m: 0.35,
+            cut_gap_tolerance_m: 2.0,
+            cut_speed_tolerance_kmh: 5.0,
+            claim_max_wait_ms: 1_000,
+            claim_queue: 32,
+            official_lag_ms: 1_500,
+            sync_interval_ms: 1_000,
+            crew_range_m: 30.0,
+            crew_bonus_per_mate: 0.25,
+            crew_factor_cap: 2.0,
+            train_window_ms: 1_000,
+            train_points: 25,
+            train_multiplier_gain: 2.0,
+            hit_overlap_m: 0.3,
+            hit_overlap_ticks: 2,
+            hit_match_ms: 1_500,
+            hit_confirm_clearance_m: 1.0,
+            verify_min_acceptance_pct: 90.0,
+            verify_min_claims: 20,
+            player_length_m: 4.8,
+            player_width_m: 1.95,
+            track_ahead_m: 60.0,
+            crew_total_interval_ms: 1_000,
+        }
+    }
+}
+
 /// `rooms.traffic` values.
 pub const ROOM_TRAFFIC_NONE: &str = "none";
 pub const ROOM_TRAFFIC_SIM: &str = "sim";
 const ROOM_TRAFFIC: &[&str] = &[ROOM_TRAFFIC_NONE, ROOM_TRAFFIC_SIM];
+/// `scoring.official_lag_ms` bound: the scoring rings hold 64 ticks (3.2 s at 20 Hz).
+const MAX_OFFICIAL_LAG_MS: u64 = 2_500;
 /// The area of interest must stay well inside the 25 km loop's half (wrapped distances).
 const MAX_AOI_SPAN_M: f64 = 10_000.0;
 
@@ -1145,6 +1239,7 @@ impl Config {
         self.validate_social(&mut errs);
         self.validate_replays(&mut errs);
         self.validate_rooms(&mut errs);
+        self.validate_scoring(&mut errs);
         if errs.is_empty() {
             Ok(())
         } else {
@@ -1289,6 +1384,53 @@ impl Config {
         {
             errs.push(format!(
                 "rooms.traffic_aoi_* must span less than {MAX_AOI_SPAN_M} m (half the loop)"
+            ));
+        }
+    }
+
+    fn validate_scoring(&self, errs: &mut Vec<String>) {
+        let c = &self.scoring;
+        for (name, v) in [
+            ("claim_clearance_tolerance_m", c.claim_clearance_tolerance_m),
+            ("cut_gap_tolerance_m", c.cut_gap_tolerance_m),
+            ("cut_speed_tolerance_kmh", c.cut_speed_tolerance_kmh),
+            ("crew_range_m", c.crew_range_m),
+            ("crew_bonus_per_mate", c.crew_bonus_per_mate),
+            ("train_multiplier_gain", c.train_multiplier_gain),
+            ("hit_overlap_m", c.hit_overlap_m),
+            ("hit_confirm_clearance_m", c.hit_confirm_clearance_m),
+            ("track_ahead_m", c.track_ahead_m),
+        ] {
+            if !(v.is_finite() && v >= 0.0) {
+                errs.push(format!("scoring.{name} must be a number >= 0"));
+            }
+        }
+        for (name, v) in [
+            ("crew_factor_cap", c.crew_factor_cap),
+            ("player_length_m", c.player_length_m),
+            ("player_width_m", c.player_width_m),
+        ] {
+            if !(v.is_finite() && v > 0.0) {
+                errs.push(format!("scoring.{name} must be a number above 0"));
+            }
+        }
+        if !(0.0..=100.0).contains(&c.verify_min_acceptance_pct) {
+            errs.push("scoring.verify_min_acceptance_pct must be 0..=100".into());
+        }
+        if c.claim_queue == 0 || c.hit_overlap_ticks == 0 || c.sync_interval_ms == 0 {
+            errs.push(
+                "scoring.claim_queue, hit_overlap_ticks and sync_interval_ms must be at least 1"
+                    .into(),
+            );
+        }
+        if c.train_points < 0 {
+            errs.push("scoring.train_points must be >= 0".into());
+        }
+        // The scoring rings keep 64 ticks of states: the official lag must stay well inside.
+        if c.official_lag_ms > MAX_OFFICIAL_LAG_MS || c.claim_max_wait_ms > c.official_lag_ms {
+            errs.push(format!(
+                "scoring.official_lag_ms must be at most {MAX_OFFICIAL_LAG_MS} and \
+                 scoring.claim_max_wait_ms at most scoring.official_lag_ms"
             ));
         }
     }

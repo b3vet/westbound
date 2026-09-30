@@ -324,13 +324,14 @@ The game boots into the title: the run's MENU state over the attract drive (docs
 | --- | --- | --- |
 | `title_screens.gd` | `TitleScreens` | CanvasLayer (layer 60, like RunScreens; they never show together): built on first use, opened by the run in MENU, emits `start(mode)` |
 | `title_screen.gd` | `TitleScreen` | the title: logo, menu, profile chip, settings / account view, leaderboards |
-| `online_hub_screen.gd` | `OnlineHubScreen` | the online hub stub |
+| `online_hub_screen.gd` | `OnlineHubScreen` | the online hub: rooms (N5.2), loop practice, friends, crew, leaderboards |
+| `room_lobby_panel.gd` | `RoomLobbyPanel` | N5.2: the hub's room flows (PRIVATE ROOM, JOIN BY CODE, ROOM BROWSER, joining) |
 | `title_profile_chip.gd` | `TitleProfileChip` | `name#tag` and the online status (a ScreenButton) |
 | `title_band.gd` | `TitleBand` | the slanted ink band behind the left-anchored menus (one draw call) |
 
 ### Layout
 
-- **Left-anchored, up from the bottom-left thumb:** a row of LEADERBOARDS, SETTINGS and GARAGE (WP8.2: the garage); above it PLAY (primary, `primary_button_size_px` tall, `menu_button_width_px` wide: Journey), DAILY DRIVE (today's UTC date under the label: "WED SEP 30") and ONLINE ("LOOP PRACTICE · ROOMS SOON"). Every button is at least `touch_target_px` tall.
+- **Left-anchored, up from the bottom-left thumb:** a row of LEADERBOARDS, SETTINGS, GARAGE (WP8.2: the garage) and ACHIEVEMENTS (WP8.3); above it PLAY (primary, `primary_button_size_px` tall, `menu_button_width_px` wide: Journey), DAILY DRIVE (today's UTC date under the label: "WED SEP 30") and ONLINE ("LOOP PRACTICE · ROOMS SOON"). Every button is at least `touch_target_px` tall.
 - **Logo:** WESTBOUND in Chakra Petch (the display face) at `font_logo_px`, outlined and speed-tilted (speed_tilt.gdshader), CHASE THE SUN under it in the accent.
 - **Band:** ink at `title_band_pct` from the left edge to `title_band_width_px`, its right edge leaning with the speed tilt and lined with the accent. The attract drive shows through it; the car sits right of centre (the camera's frame yaw).
 - **Profile chip (top-right):** the session's `name#tag` (PLAYER before a sign-in) and its status word (ONLINE, CONNECTING, OFFLINE, ...; ONLINE OFF without a session) after a status diamond (accent online, gold connecting, hot suspended / refused, muted otherwise). It follows `status_changed` / `profile_changed`. It never reaches the logo: the name is shortened with "..." to the room right of it (and `title_chip_max_width_px`). A tap opens ACCOUNT (or the settings without a session).
@@ -341,7 +342,20 @@ The game boots into the title: the run's MENU state over the attract drive (docs
 
 ### Online hub
 
-ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS OFF IN THIS BUILD · LOOP PRACTICE STILL WORKS") top-left, BACK top-right (Esc too). A ROOMS panel (COMING SOON in gold): QUICK JOIN, ROOM BROWSER, PRIVATE ROOM, JOIN BY CODE, disabled with SOON until N5. LOOP PRACTICE (primary, bottom-left, "SOLO ON THE LOOP · WORKS OFFLINE" over it) starts the run in loop mode, the same as `?mode=loop`. FRIENDS, CREW and LEADERBOARDS go up from the right thumb: FRIENDS / CREW open the title's account view on that tab and DONE comes back to the hub (disabled, ONLINE OFF, without a session); LEADERBOARDS opens on the Loop board.
+ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS OFF IN THIS BUILD · LOOP PRACTICE STILL WORKS") top-left, BACK top-right (Esc too). A ROOMS panel (UP TO 8 PLAYERS in gold): QUICK JOIN, ROOM BROWSER, PRIVATE ROOM, JOIN BY CODE (N5.2, below); without the server (`?server=off`) they are disabled with ONLINE OFF and the panel says "Rooms need the online server. Loop practice still works." (OFFLINE and the reason while signing in or offline). LOOP PRACTICE (primary, bottom-left, "SOLO ON THE LOOP · WORKS OFFLINE" over it) starts the run in loop mode, the same as `?mode=loop`. FRIENDS, CREW and LEADERBOARDS go up from the right thumb: FRIENDS / CREW open the title's account view on that tab and DONE comes back to the hub (disabled, ONLINE OFF, without a session); LEADERBOARDS opens on the Loop board.
+
+### Rooms (N5.2)
+
+Docs: [ROOMS_CLIENT.md](ROOMS_CLIENT.md). The room buttons open `RoomLobbyPanel` over the dimmed hub, one view at a time; every button is a ScreenButton at least `touch_target_px` tall; Esc / BACK closes it.
+
+| Button | View | Then |
+| --- | --- | --- |
+| QUICK JOIN | joining status: "CONNECTING...", "FINDING A ROOM...", CANCEL | the room |
+| PRIVATE ROOM | TRAFFIC: LIGHT / NORMAL / RUSH HOUR; TIME OF DAY: CYCLE / MORNING / GOLDEN (fixed) / NIGHT; CREATE ROOM, BACK | "CREATING YOUR ROOM...", the room |
+| JOIN BY CODE | the code field (6 characters; lower case, spaces and dashes are forgiven; a wrong code says "A code is 6 letters and digits."), JOIN, BACK | "JOINING ABC234...", the room |
+| ROOM BROWSER | up to 4 public rooms, fullest first: `7/8 · NORMAL · NIGHT ×2 · 42 MS` (a full room disabled), REFRESH (also every `room_browse_refresh_s`), BACK; none: "NO PUBLIC ROOMS YET · QUICK JOIN STARTS ONE" | "JOINING ROOM 12...", the room |
+
+A refusal shows the server's reason in hot text ("No room with that code.", "That room is full.", ...) with TRY AGAIN and BACK. When the room's snapshot arrives the panel closes and the hub emits `room_ready(session)`; the run drives in the room (in-room HUD: ROOMS_CLIENT.md → Room HUD). Leaving the room (LEAVE ROOM, the pause menu's QUIT), a kick, the room closing or the seat lost come back to the hub with the reason on the ROOMS panel in hot text.
 
 ### Flow
 
@@ -350,11 +364,14 @@ ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS O
 | Title PLAY / Enter | `start(&"journey")` (WP8.1: after the first-run chooser on a fresh save) | `start_mode`: the Journey run, full 1 s countdown, same frame (the first one on a fresh save warms up) |
 | Title DAILY DRIVE | `start(&"daily")` | the day's seed (`Rng.daily_seed` of today's UTC date) |
 | Hub LOOP PRACTICE | `start(&"loop")` | loop mode (N3.2) |
+| Hub room joined (N5.2) | `room_ready(session)` | `start_room(session)`: loop mode in the room (RunRoom) |
+| Pause RETRY in a room | `retry` | REJOIN CREW (`run_event.rejoin`) |
 | Pause QUIT | `quit` | `enter_menu()` |
 | Results MENU | `menu` | `enter_menu()` |
 | Results RETRY | `retry` | `retry()`: the same mode (Daily keeps the day's seed) |
 | Title GARAGE | `TitleScreens.open_garage` | none while open; DONE → `garage_closed` → `refresh_menu_car()` (the attract drive takes the selected car and look) |
 | Results GARAGE | `garage` | `open_garage()`: `enter_menu()`, then the garage over the title |
+| Title ACHIEVEMENTS | `TitleScreens.open_achievements` (WP8.3) | none; DONE comes back to the title |
 
 ### Cost
 
@@ -367,11 +384,12 @@ tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=sky_t:0.2,0.
 tools/snap.sh src/run/run.tscn --state=menu --attract_s=24                               # later in the attract drive
 tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=title:hub,settings,play   # the hub, the settings view, PLAY -> countdown
 tools/snap.sh src/run/run.tscn --state=menu --shot=pass --attract_s=1.5
+tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=title:rooms,rooms_off,rooms_create,rooms_code,rooms_browser,rooms_joining,rooms_failed   # N5.2
 ```
 
 ### Tests
 
-`tests/ui/test_title_screen.gd` (every button's intent through iOS-id taps, Enter / Esc, the left-anchored layout and touch targets, the settings and account views, the profile chip following a fake session, FRIENDS / CREW from the hub into the account tabs and back, the Loop board, the text size, nothing drawn when hidden), `tests/ui/test_title_text_fit.gd` (menu with the widest name#tag, settings GAME / AUDIO, account, hub with and without a session; both text sizes, 1280x720 and a notched 1560x720), `tests/run/test_title_flow.gd` (see docs/RUN.md).
+`tests/ui/test_room_hub.gd` (N5.2: rooms off without a server, every room flow through iOS-id taps, refusals, touch targets), `tests/ui/test_title_screen.gd` (every button's intent through iOS-id taps, Enter / Esc, the left-anchored layout and touch targets, the settings and account views, the profile chip following a fake session, FRIENDS / CREW from the hub into the account tabs and back, the Loop board, the text size, nothing drawn when hidden), `tests/ui/test_title_text_fit.gd` (menu with the widest name#tag, settings GAME / AUDIO, account, hub with and without a session; both text sizes, 1280x720 and a notched 1560x720), `tests/run/test_title_flow.gd` (see docs/RUN.md).
 
 
 ## Garage (WP8.2)
@@ -411,3 +429,38 @@ tools/snap.sh src/ui/screens/dev/screens_preview.tscn --screen=results --xp=3000
 ### Tests
 
 `tests/ui/test_garage.gd`, `tests/ui/test_garage_text_fit.gd`, `tests/meta/test_garage_run.gd` (see GARAGE.md → Tests).
+
+## Achievements (WP8.3)
+
+The achievements, their progress and what is hidden. Spec: Garage and progression ("About 25 achievements"); UI → Screens; Accessibility. The achievements themselves, the tracking, the save, the unlock toast and the platform mirror: [ACHIEVEMENTS.md](ACHIEVEMENTS.md).
+
+| File | Class | Role |
+| --- | --- | --- |
+| `achievements_screen.gd` | `AchievementsScreen` | the screen (a RunScreen under TitleScreens, built on the first ACHIEVEMENTS; modal) |
+| `achievements_card.gd` | `AchievementsCard` | one achievement: a ScreenPanel with its title, state line, line and bar |
+
+### Layout
+
+- **Top row:** ACHIEVEMENTS (display face, `font_title_px`, speed-tilted) top-left; DONE (primary) top-right; left of it, right-aligned, "8 / 25 UNLOCKED" (tabular).
+- **Tabs:** DRIVING / THE ROAD / CAREER (`AchievementCatalog.groups`; OPTION buttons, `touch_target_px` tall, as wide as the widest label).
+- **Grid:** the tab's achievements in `achievements.screen_columns` × `screen_rows` (3 × 3) cards across the safe width, as tall as their text needs (never past the safe area). A card: the title (display face, `card_title_px`) and, right-aligned on its line, the state (label face, tabular): UNLOCKED (gold), "17 / 25" / "287 / 300 KM/H" / "32× / 50×" (the best run or the total), LOCKED (a one-off), ??? (hidden); under it the line (body face, muted) with its numbers in the player's units; at the bottom the bar (accent; full and gold once unlocked; none for a hidden or one-off lock). Unlocked cards have a gold edge and tab. A locked hidden one reads HIDDEN / KEEP DRIVING TO REVEAL IT.
+- Colour is never the only cue: every state has its word. Not mirrored for left-handed play (like the garage).
+
+### Behaviour
+
+- Reads the save's unlocked ids and the service's progress (a snapshot of the save and the garage when no service runs); never writes.
+- **Keys:** Esc and Enter = DONE; Left / Right change the tab (wrapping). **Touch:** ScreenButtons (emulated mouse events, never a raw touch index); the cards take no touches.
+- **Cost:** nothing exists before the first ACHIEVEMENTS; closed = `visible = false` under the title's layer, so nothing draws in gameplay (`TitleScreens.visible_item_count() == 0`).
+- **Text size:** 100% / 125%; every title and line shows whole at both sizes on 1280×720 and a notched 1560×720 (tested).
+
+### Preview
+
+```
+tools/snap.sh src/ui/screens/dev/achievements_preview.tscn --renderer=both --view=screen
+tools/snap.sh src/ui/screens/dev/achievements_preview.tscn --view=screen --tab=2 --text_scale=1.25 --size=1560x720
+tools/snap.sh src/ui/screens/dev/achievements_preview.tscn --renderer=both --view=toast   # the unlock toast in a run
+```
+
+### Tests
+
+`tests/ui/test_achievements_screen.gd`, `tests/ui/test_achievements_text_fit.gd`, `tests/ui/test_achievements_toast.gd` (see ACHIEVEMENTS.md → Tests).

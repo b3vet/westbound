@@ -15,6 +15,7 @@
 //! → Loop (its season and all-time) and, with a crew, Loop crew; a legacy upload → the
 //! all-time period of its board. Periods come from the run's UTC date.
 
+pub mod mp_runs;
 pub mod period;
 pub mod routes;
 pub mod store;

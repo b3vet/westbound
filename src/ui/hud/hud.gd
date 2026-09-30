@@ -23,6 +23,10 @@ extends CanvasLayer
 ## out (modulate only), hidden (no draw call) by day. Its slot is always reserved, so
 ## the cluster never moves.
 ##
+## Cooling (WP9.1): a small snowflake icon under [II] while the adaptive governor holds a
+## thermal step (Quality.is_cooling(), re-read on Events.governor_changed and
+## thermal_state_changed). Its slot is always reserved; hidden, it draws nothing.
+##
 ## Layout: HudLayout, from the canvas, the display safe area and the touch controls'
 ## rects (the PlayerInput hub's ControlsLayout when there is one, else one built from
 ## Settings), rebuilt when the controls layout, the viewport or a setting changes.
@@ -140,6 +144,10 @@ var _count_delay: float = 0.0
 @onready var _toast: HudLegToast = $Root/LegToast
 ## WP6.5: made in _ready (no scene change needed).
 var _journey := HudJourneyToast.new()
+## WP9.1: the governor's cooling icon (made in _ready too).
+var _cooling := HudCooling.new()
+var _cooling_pinned: bool = false
+var _cooling_pin: bool = false
 var _journey_bonus: int = 0
 var _widgets: Array[HudWidget] = []
 
@@ -157,8 +165,11 @@ func _ready() -> void:
 	_journey.name = "JourneyToast"
 	_journey.visible = false
 	_root.add_child(_journey)
+	_cooling.name = "Cooling"
+	_cooling.visible = false
+	_root.add_child(_cooling)
 	_widgets = [_score, _sun, _chain, _mult, _stack, _lives, _min_speed, _speedo, _boost, _flyer, _glitter,
-			_objective, _toast, _journey]
+			_objective, _toast, _journey, _cooling]
 	for w: HudWidget in [_chain, _mult, _stack, _flyer]:
 		w.use_tilt(TILT_SHADER, tuning.speed_tilt_rad())
 	_pause.glyph = HudButton.Glyph.PAUSE
@@ -181,6 +192,7 @@ func _ready() -> void:
 	_set_chain_row_visible(false)
 	_relayout()
 	_poll_accent()
+	_refresh_cooling()
 	if feed != null:
 		_read_feed()
 
@@ -245,6 +257,28 @@ func advance(dt: float) -> void:
 		_read_feed()
 	_animate(dt)
 	_animate_high_beam(dt)
+
+
+## Pins the cooling icon on or off (previews, tests); otherwise it follows
+## Quality.is_cooling(). unpin_cooling() goes back to that.
+func set_cooling(on: bool) -> void:
+	_cooling_pinned = true
+	_cooling_pin = on
+	_refresh_cooling()
+
+
+func unpin_cooling() -> void:
+	_cooling_pinned = false
+	_refresh_cooling()
+
+
+func cooling_visible() -> bool:
+	return _cooling.visible
+
+
+## The icon's rect now (canvas).
+func cooling_rect() -> Rect2:
+	return Rect2(_cooling.position, _cooling.size)
 
 
 ## Pins the headlight ramp the high-beam button follows (previews, tests); otherwise it
@@ -603,6 +637,8 @@ func _connect_events(on: bool) -> void:
 		[Events.journey_complete, _on_journey_complete],
 		[Events.boost_started, _on_boost_started],
 		[Events.boost_ended, _on_boost_ended],
+		[Events.governor_changed, _on_governor_changed],
+		[Events.thermal_state_changed, _on_thermal_state_changed],
 	]
 	for p in pairs:
 		var sig: Signal = p[0]
@@ -796,6 +832,24 @@ func _on_boost_ended() -> void:
 	_boost.set_boosting(false)
 
 
+func _on_governor_changed(_rung: int) -> void:
+	_refresh_cooling()
+
+
+func _on_thermal_state_changed(_state: StringName) -> void:
+	_refresh_cooling()
+
+
+## Shows or hides the cooling icon (a visibility change only; it never redraws while shown).
+func _refresh_cooling() -> void:
+	var on := _cooling_pin
+	if not _cooling_pinned:
+		var q := get_node_or_null(^"/root/Quality")
+		on = q != null and q.has_method(&"is_cooling") and bool(q.call(&"is_cooling"))
+	if on != _cooling.visible:
+		_cooling.visible = on
+
+
 func _on_gear(gear: int) -> void:
 	_speedo.set_gear(gear)
 
@@ -890,6 +944,7 @@ func _relayout() -> void:
 	_place(_pause, layout.pause)
 	_place(_camera, layout.camera)
 	_place(_high_beam, layout.high_beam)
+	_place(_cooling, layout.cooling)
 	_place(_min_speed, layout.min_speed)
 	_place(_speedo, layout.speedo)
 	_place(_boost, layout.boost)

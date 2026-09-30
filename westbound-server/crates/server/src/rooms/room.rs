@@ -20,25 +20,34 @@
 //! proposed for PROTOCOL.md). Placements happen on join (spawn), after a crash-out
 //! (respawn), on `run_event.rejoin`, on `run_event.start` after a run ended, and on
 //! reconnect (at the last position, run intact).
+//!
+//! **Scoring (N6.1).** The room owns a [`RoomScoring`]: accepted states, claims, hits and
+//! rejoins go to it; it runs after the traffic every tick; its `ScoreSync` / `ScoreEvent`
+//! messages go out with each player's private replies, crew totals as `room_event.crew`;
+//! a run's end asks it for the official score (`run_result`), and a verified run goes to
+//! the boards through the rooms' run sink.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use protocol::{
     AccountId, ChatItem, Code, CrewTag, Density, EncodeError, ErrorCode, ErrorMsg, FrameBuilder,
     HitReport, Identity, LeaveReason, LobbyEvent, Member as WireMember, MemberConnection,
     MemberFlags, MemberLeft, PlayerRef, PlayerState, PlayerStateEntry, QuickChatRelay, RoomCrew,
     RoomEvent, RoomHostCommand, RoomLeft, RoomLeftReason, RoomSettings, RoomSnapshot, RunEndReason,
-    RunEvent, RunEventKind, RunResult, RunResultFlags, RunState, ServerMsg, SettingsChanged, Text,
-    TimeMode, Visibility,
+    RunEvent, RunEventKind, RunResult, RunResultFlags, RunState, ScoreClaim, ServerMsg,
+    SettingsChanged, Text, TimeMode, Visibility,
 };
 use tokio::sync::oneshot;
 
 use super::clock::RoomTime;
 use super::plausibility::{self, tick_diff, DropReason, Offence, Placement, Verdict};
 use super::road::{flow_speed_cms, lane_at, lane_center_d_mm, start_spawn_points, MM_PER_CM};
+use super::scoring::RoomScoring;
 use super::traffic::{PlayerView, RoomTraffic, SpawnSpot};
-use super::{RoomInfo, Shared};
+use super::{FinishedRun, RoomInfo, Shared};
+use crate::leaderboards::RoomKind;
 use crate::sessions::SessionHandle;
 
 /// `Error.detail` texts rooms send (English; clients localize by code).
@@ -79,6 +88,12 @@ pub enum Cmd {
         player_id: u16,
         session_id: u64,
         hit: HitReport,
+    },
+    /// `score_claim` (N6.1).
+    Claim {
+        player_id: u16,
+        session_id: u64,
+        claim: ScoreClaim,
     },
     Host {
         player_id: u16,
@@ -242,6 +257,8 @@ pub struct Room {
     relay: Vec<PlayerStateEntry>,
     /// Players for traffic (reused).
     views: Vec<PlayerView>,
+    /// N6.1: claims, the official score, trains, crew totals.
+    scoring: RoomScoring,
     closed: bool,
 }
 
@@ -257,7 +274,13 @@ impl Room {
     ) -> Self {
         traffic.set_density(settings.density);
         let cap = usize::from(protocol::messages::MAX_ROOM_PLAYERS);
+        let scoring = RoomScoring::new(
+            shared.params.scoring.clone(),
+            &shared.map.map,
+            shared.metrics.clone(),
+        );
         Self {
+            scoring,
             id,
             code,
             settings,
@@ -369,12 +392,24 @@ impl Room {
                 hit,
             } => {
                 if let Some(i) = self.seat_index(player_id, session_id) {
-                    // The client is authoritative for its lives (N6 cross-checks the hit).
-                    // A hit stamped before the run started belongs to the run before.
+                    // The client is authoritative for its lives; scoring loses the chain
+                    // at the hit's tick and cross-checks a traffic hit before the car
+                    // reacts. A hit stamped before the run started belongs to the run
+                    // before.
+                    self.scoring.on_hit(player_id, &hit, now);
                     let run_start = self.seats[i].run.start_tick;
                     if hit.lives_left == 0 && tick_diff(run_start, hit.tick) >= 0 {
                         self.crash_out(i, now);
                     }
+                }
+            }
+            Cmd::Claim {
+                player_id,
+                session_id,
+                claim,
+            } => {
+                if self.seat_index(player_id, session_id).is_some() {
+                    self.scoring.on_claim(player_id, &claim, now);
                 }
             }
             Cmd::Host {
@@ -471,6 +506,7 @@ impl Room {
             player_id,
         ));
         self.seats.push(seat);
+        self.scoring.add_player(player_id, crew_slot);
         let i = self.seats.len() - 1;
         self.start_run(i, Purpose::Spawn, now);
         self.empty_since = None;
@@ -573,6 +609,7 @@ impl Room {
         let seat = self.seats.remove(i);
         seat.active.store(false, Ordering::Release);
         self.traffic.player_left(seat.player_id);
+        self.scoring.remove_player(seat.player_id);
         let reason = match how {
             Removal::Left => Some(RoomLeftReason::Left),
             Removal::Kicked => Some(RoomLeftReason::Kicked),
@@ -670,6 +707,10 @@ impl Room {
                 offences,
                 placed,
             } => {
+                let reset = placed || offences & Offence::Teleport.bit() != 0;
+                let seat = &self.seats[i];
+                self.scoring
+                    .on_state(seat.player_id, &state, reset, seat.run.protected_until);
                 let seat = &mut self.seats[i];
                 if placed {
                     seat.placement = None;
@@ -699,6 +740,7 @@ impl Room {
 
     /// Counts offences, marks the run unverified, logs each kind once per run.
     fn offend(&mut self, i: usize, offences: u8) {
+        self.scoring.mark_unverified(self.seats[i].player_id);
         let seat = &mut self.seats[i];
         seat.run.unverified = true;
         for o in Offence::ALL {
@@ -730,9 +772,10 @@ impl Room {
                 }
             }
             RunEventKind::End => self.end_run(i, RunEndReason::Quit, now),
-            // Rejoin crew: to the crew with protection; the chain is forfeited (N6).
+            // Rejoin crew: to the crew with protection; the chain is forfeited.
             RunEventKind::Rejoin => {
                 if run.active {
+                    self.scoring.rejoin(self.seats[i].player_id, now);
                     self.place(i, Purpose::Crew, now);
                 }
             }
@@ -762,20 +805,41 @@ impl Room {
             ..Run::default()
         };
         self.place(i, purpose, now);
+        let seat = &self.seats[i];
+        let s_mm = seat.state.as_ref().map_or(0, |s| s.s_mm);
+        self.scoring.start_run(seat.player_id, seq, now, s_mm);
     }
 
-    /// Ends the active run: `RunResult` to the room. Scores, stats and the board hook are
-    /// N6's (`boards.record_multiplayer_run`); N5.1 fills duration and distance.
+    /// Ends the active run: the official score (N6.1), `RunResult` to the room, and a
+    /// verified run to the boards (MP-D7 eligibility: public, or private on the default
+    /// density and clock for the whole run; MP-D9: `verified` also needs no unreported
+    /// hit and the claim acceptance).
     fn end_run(&mut self, i: usize, reason: RunEndReason, now: u32) {
-        let eligible_room = self.is_public() || !self.seats[i].run.custom;
+        let public = self.is_public();
+        let eligible_room = public || !self.seats[i].run.custom;
         let rate = self.shared.params.tick_rate_hz;
-        let seat = &mut self.seats[i];
-        if !seat.run.active {
+        if !self.seats[i].run.active {
             return;
         }
+        let player_id = self.seats[i].player_id;
+        let (time, settings) = (&self.time, &self.settings);
+        let night = |t: u32| time.is_night(settings, t);
+        let official = self
+            .scoring
+            .end_run(
+                player_id,
+                now,
+                &mut *self.traffic,
+                &self.shared.map.map,
+                &night,
+            )
+            .unwrap_or_default();
+        let seat = &mut self.seats[i];
         seat.run.active = false;
         let ticks = u64::try_from(tick_diff(seat.run.start_tick, now).max(0)).unwrap_or(0);
-        let verified = !seat.run.unverified;
+        let verified = !seat.run.unverified && official.verified;
+        let c = official.counts;
+        let n16 = |n: u32| u16::try_from(n).unwrap_or(u16::MAX);
         let result = RunResult {
             player_id: seat.player_id,
             run_seq: seat.run.seq,
@@ -784,16 +848,45 @@ impl Room {
                 verified,
                 leaderboard_eligible: verified && eligible_room,
             },
+            score: official.score,
             duration_ms: u32::try_from(ticks * 1_000 / u64::from(rate.max(1))).unwrap_or(u32::MAX),
             distance_m: u32::try_from(seat.run.distance_mm / 1_000).unwrap_or(u32::MAX),
-            ..RunResult::default()
+            passes: n16(c.passes),
+            close_passes: n16(c.close_passes),
+            cuts: n16(c.cuts),
+            threads: n16(c.threads),
+            trains: n16(c.trains),
+            max_multiplier_milli: official.max_multiplier_milli,
         };
+        if verified {
+            let room = if public {
+                RoomKind::Public
+            } else if eligible_room {
+                RoomKind::PrivateDefault
+            } else {
+                RoomKind::PrivateCustom
+            };
+            let ms_per_tick = 1_000 / i64::from(rate.max(1));
+            let ended_ms = self.time.start_unix_ms + i64::from(now) * ms_per_tick;
+            self.shared.record_run(FinishedRun {
+                account: seat.account,
+                room,
+                result: result.clone(),
+                duration_s: ticks as f64 / f64::from(rate.max(1)),
+                distance_m: seat.run.distance_mm as f64 / 1_000.0,
+                ended_at: ended_ms.div_euclid(1_000),
+            });
+        }
         tracing::info!(
             room = self.id,
             player = seat.player_id,
             run = seat.run.seq,
             reason = ?reason,
             verified,
+            score = result.score,
+            claims_accepted = official.claims_accepted,
+            claims_rejected = official.claims_rejected,
+            unreported_hits = official.unreported_hits,
             distance_m = result.distance_m,
             "run ended"
         );
@@ -952,6 +1045,17 @@ impl Room {
             }
         }
         self.traffic.tick(now, &self.views);
+        let t0 = Instant::now();
+        let (time, settings) = (&self.time, &self.settings);
+        let night = |t: u32| time.is_night(settings, t);
+        self.scoring
+            .tick(now, &mut *self.traffic, &self.shared.map.map, &night);
+        let us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+        self.shared
+            .metrics
+            .scoring_us_sum
+            .fetch_add(us, Ordering::Relaxed);
+        self.route_scoring();
         self.send_frames(now);
         self.events.clear();
         if self.seats.is_empty() {
@@ -962,6 +1066,24 @@ impl Room {
             }
         }
         true
+    }
+
+    /// Scoring's messages into the seats' private replies (`ScoreSync`, `ScoreEvent`) and
+    /// the room's events (`room_event.crew`).
+    fn route_scoring(&mut self) {
+        for (pid, msg) in self.scoring.outbox.drain(..) {
+            if let Some(seat) = self
+                .seats
+                .iter_mut()
+                .find(|s| s.player_id == pid && s.session.is_some())
+            {
+                seat.private.push(msg);
+            }
+        }
+        for c in self.scoring.crew_events.drain(..) {
+            self.events
+                .push((ServerMsg::RoomEvent(RoomEvent::Crew(c)), 0));
+        }
     }
 
     fn expire_seats(&mut self, now: u32) {
@@ -990,7 +1112,10 @@ impl Room {
         let mut crews: Vec<RoomCrew> = Vec::new();
         for s in &self.seats {
             if crews.iter().all(|c| c.crew_slot != s.crew_slot) {
-                crews.push(crew(s.crew_slot));
+                crews.push(RoomCrew {
+                    session_total: self.scoring.crew_total(s.crew_slot),
+                    ..crew(s.crew_slot)
+                });
             }
         }
         ServerMsg::RoomSnapshot(RoomSnapshot {
@@ -1088,7 +1213,8 @@ fn seat_account(s: &Seat) -> AccountId {
     s.account
 }
 
-/// A crew's wire entry: its palette color is its slot; the session total is N6's.
+/// A new crew's wire entry: its palette color is its slot, its session total 0 (scoring
+/// announces changes).
 fn crew(slot: u8) -> RoomCrew {
     RoomCrew {
         crew_slot: slot,

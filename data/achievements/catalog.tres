@@ -1,0 +1,349 @@
+[gd_resource type="Resource" script_class="AchievementCatalog" load_steps=28 format=3]
+
+[ext_resource type="Script" path="res://src/meta/achievements/achievement_catalog.gd" id="1_catalog"]
+[ext_resource type="Script" path="res://src/meta/achievements/achievement_def.gd" id="2_def"]
+
+[sub_resource type="Resource" id="ach_0"]
+script = ExtResource("2_def")
+id = &"first_thread"
+title = "NEEDLE"
+description = "THREAD YOUR FIRST GAP."
+group = &"driving"
+metric = &"threads_total"
+threshold = 1.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.first_thread"
+play_games_id = "PLACEHOLDER_FIRST_THREAD"
+
+[sub_resource type="Resource" id="ach_1"]
+script = ExtResource("2_def")
+id = &"threads_run"
+title = "TEN IN ONE"
+description = "{n} THREADS IN ONE RUN."
+group = &"driving"
+metric = &"threads_run"
+threshold = 10.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.threads_run"
+play_games_id = "PLACEHOLDER_THREADS_RUN"
+
+[sub_resource type="Resource" id="ach_2"]
+script = ExtResource("2_def")
+id = &"threads_total"
+title = "THREAD COUNT"
+description = "{n} THREADS IN TOTAL."
+group = &"driving"
+metric = &"threads_total"
+threshold = 100.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.threads_total"
+play_games_id = "PLACEHOLDER_THREADS_TOTAL"
+
+[sub_resource type="Resource" id="ach_3"]
+script = ExtResource("2_def")
+id = &"close_passes_run"
+title = "CLOSE CALLS"
+description = "{n} CLOSE PASSES IN ONE RUN."
+group = &"driving"
+metric = &"close_passes_run"
+threshold = 25.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.close_passes_run"
+play_games_id = "PLACEHOLDER_CLOSE_PASSES_RUN"
+
+[sub_resource type="Resource" id="ach_4"]
+script = ExtResource("2_def")
+id = &"hairline"
+title = "HAIRLINE"
+description = "A CLOSE PASS UNDER {clearance}."
+group = &"driving"
+metric = &"hairline_run"
+threshold = 1.0
+unit = 0
+hidden = true
+game_center_id = "westbound.achievement.hairline"
+play_games_id = "PLACEHOLDER_HAIRLINE"
+
+[sub_resource type="Resource" id="ach_5"]
+script = ExtResource("2_def")
+id = &"multiplier_50"
+title = "FIFTY TIMES"
+description = "REACH A {n} MULTIPLIER."
+group = &"driving"
+metric = &"multiplier_run"
+threshold = 50.0
+unit = 2
+hidden = false
+game_center_id = "westbound.achievement.multiplier_50"
+play_games_id = "PLACEHOLDER_MULTIPLIER_50"
+
+[sub_resource type="Resource" id="ach_6"]
+script = ExtResource("2_def")
+id = &"multiplier_100"
+title = "TRIPLE DIGITS"
+description = "REACH A {n} MULTIPLIER."
+group = &"driving"
+metric = &"multiplier_run"
+threshold = 100.0
+unit = 2
+hidden = true
+game_center_id = "westbound.achievement.multiplier_100"
+play_games_id = "PLACEHOLDER_MULTIPLIER_100"
+
+[sub_resource type="Resource" id="ach_7"]
+script = ExtResource("2_def")
+id = &"top_speed_300"
+title = "300 CLUB"
+description = "REACH {n}."
+group = &"driving"
+metric = &"top_speed_run"
+threshold = 300.0
+unit = 3
+hidden = false
+game_center_id = "westbound.achievement.top_speed_300"
+play_games_id = "PLACEHOLDER_TOP_SPEED_300"
+
+[sub_resource type="Resource" id="ach_8"]
+script = ExtResource("2_def")
+id = &"first_leg"
+title = "FIRST LEG"
+description = "CROSS YOUR FIRST CHECKPOINT."
+group = &"road"
+metric = &"leg_run"
+threshold = 2.0
+unit = 0
+show_progress = false
+hidden = false
+game_center_id = "westbound.achievement.first_leg"
+play_games_id = "PLACEHOLDER_FIRST_LEG"
+
+[sub_resource type="Resource" id="ach_9"]
+script = ExtResource("2_def")
+id = &"halfway"
+title = "HALFWAY WEST"
+description = "REACH LEG {n} IN ONE RUN."
+group = &"road"
+metric = &"leg_run"
+threshold = 4.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.halfway"
+play_games_id = "PLACEHOLDER_HALFWAY"
+
+[sub_resource type="Resource" id="ach_10"]
+script = ExtResource("2_def")
+id = &"coast"
+title = "THE COAST"
+description = "REACH THE COAST."
+group = &"road"
+metric = &"coast_run"
+threshold = 1.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.coast"
+play_games_id = "PLACEHOLDER_COAST"
+
+[sub_resource type="Resource" id="ach_11"]
+script = ExtResource("2_def")
+id = &"clean_journey"
+title = "CLEAN JOURNEY"
+description = "THE COAST WITHOUT A HIT."
+group = &"road"
+metric = &"clean_coast_run"
+threshold = 1.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.clean_journey"
+play_games_id = "PLACEHOLDER_CLEAN_JOURNEY"
+
+[sub_resource type="Resource" id="ach_12"]
+script = ExtResource("2_def")
+id = &"clean_legs"
+title = "SPOTLESS"
+description = "{n} CLEAN LEGS IN ONE RUN."
+group = &"road"
+metric = &"clean_legs_run"
+threshold = 3.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.clean_legs"
+play_games_id = "PLACEHOLDER_CLEAN_LEGS"
+
+[sub_resource type="Resource" id="ach_13"]
+script = ExtResource("2_def")
+id = &"heat"
+title = "FEEL THE HEAT"
+description = "EARN A HEAT LEG BONUS."
+group = &"road"
+metric = &"heat_legs_run"
+threshold = 1.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.heat"
+play_games_id = "PLACEHOLDER_HEAT"
+
+[sub_resource type="Resource" id="ach_14"]
+script = ExtResource("2_def")
+id = &"night_survived"
+title = "NIGHT OWL"
+description = "DRIVE A FULL NIGHT TO DAWN."
+group = &"road"
+metric = &"nights_run"
+threshold = 1.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.night_survived"
+play_games_id = "PLACEHOLDER_NIGHT_SURVIVED"
+
+[sub_resource type="Resource" id="ach_15"]
+script = ExtResource("2_def")
+id = &"night_thread"
+title = "NIGHT THREAD"
+description = "THREAD A GAP AT NIGHT."
+group = &"road"
+metric = &"night_threads_run"
+threshold = 1.0
+unit = 0
+hidden = true
+game_center_id = "westbound.achievement.night_thread"
+play_games_id = "PLACEHOLDER_NIGHT_THREAD"
+
+[sub_resource type="Resource" id="ach_16"]
+script = ExtResource("2_def")
+id = &"hazards"
+title = "OBSTACLE COURSE"
+description = "{n} HAZARDS WITHOUT A HIT."
+group = &"road"
+metric = &"set_pieces_total"
+threshold = 10.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.hazards"
+play_games_id = "PLACEHOLDER_HAZARDS"
+
+[sub_resource type="Resource" id="ach_17"]
+script = ExtResource("2_def")
+id = &"big_bank"
+title = "BIG BANK"
+description = "BANK A {n} CHAIN."
+group = &"career"
+metric = &"chain_run"
+threshold = 50000.0
+unit = 1
+hidden = false
+game_center_id = "westbound.achievement.big_bank"
+play_games_id = "PLACEHOLDER_BIG_BANK"
+
+[sub_resource type="Resource" id="ach_18"]
+script = ExtResource("2_def")
+id = &"half_million"
+title = "HALF A MILLION"
+description = "SCORE {n} IN ONE RUN."
+group = &"career"
+metric = &"score_run"
+threshold = 500000.0
+unit = 1
+hidden = false
+game_center_id = "westbound.achievement.half_million"
+play_games_id = "PLACEHOLDER_HALF_MILLION"
+
+[sub_resource type="Resource" id="ach_19"]
+script = ExtResource("2_def")
+id = &"objectives"
+title = "ON TASK"
+description = "COMPLETE {n} LEG OBJECTIVES."
+group = &"career"
+metric = &"objectives_total"
+threshold = 10.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.objectives"
+play_games_id = "PLACEHOLDER_OBJECTIVES"
+
+[sub_resource type="Resource" id="ach_20"]
+script = ExtResource("2_def")
+id = &"level_10"
+title = "VETERAN"
+description = "REACH DRIVER LEVEL {n}."
+group = &"career"
+metric = &"level"
+threshold = 10.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.level_10"
+play_games_id = "PLACEHOLDER_LEVEL_10"
+
+[sub_resource type="Resource" id="ach_21"]
+script = ExtResource("2_def")
+id = &"new_wheels"
+title = "NEW WHEELS"
+description = "UNLOCK A SECOND CAR."
+group = &"career"
+metric = &"cars"
+threshold = 2.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.new_wheels"
+play_games_id = "PLACEHOLDER_NEW_WHEELS"
+
+[sub_resource type="Resource" id="ach_22"]
+script = ExtResource("2_def")
+id = &"daily_driver"
+title = "DAILY DRIVER"
+description = "FINISH A DAILY DRIVE."
+group = &"career"
+metric = &"daily_runs_total"
+threshold = 1.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.daily_driver"
+play_games_id = "PLACEHOLDER_DAILY_DRIVER"
+
+[sub_resource type="Resource" id="ach_23"]
+script = ExtResource("2_def")
+id = &"daily_streak"
+title = "EVERY DAY"
+description = "{n}-DAY DAILY DRIVE STREAK."
+group = &"career"
+metric = &"daily_streak"
+threshold = 7.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.daily_streak"
+play_games_id = "PLACEHOLDER_DAILY_STREAK"
+
+[sub_resource type="Resource" id="ach_24"]
+script = ExtResource("2_def")
+id = &"in_the_loop"
+title = "IN THE LOOP"
+description = "FINISH A LOOP PRACTICE RUN."
+group = &"career"
+metric = &"loop_runs_total"
+threshold = 1.0
+unit = 0
+hidden = false
+game_center_id = "westbound.achievement.in_the_loop"
+play_games_id = "PLACEHOLDER_IN_THE_LOOP"
+
+[resource]
+script = ExtResource("1_catalog")
+achievements = Array[ExtResource("2_def")]([SubResource("ach_0"), SubResource("ach_1"), SubResource("ach_2"), SubResource("ach_3"), SubResource("ach_4"), SubResource("ach_5"), SubResource("ach_6"), SubResource("ach_7"), SubResource("ach_8"), SubResource("ach_9"), SubResource("ach_10"), SubResource("ach_11"), SubResource("ach_12"), SubResource("ach_13"), SubResource("ach_14"), SubResource("ach_15"), SubResource("ach_16"), SubResource("ach_17"), SubResource("ach_18"), SubResource("ach_19"), SubResource("ach_20"), SubResource("ach_21"), SubResource("ach_22"), SubResource("ach_23"), SubResource("ach_24")])
+groups = Array[StringName]([&"driving", &"road", &"career"])
+group_titles = PackedStringArray("DRIVING", "THE ROAD", "CAREER")
+hairline_clearance_m = 0.25
+mirror_achievements = true
+mirror_boards = false
+game_center_boards = Dictionary[StringName, String]({
+&"daily": "westbound.board.daily",
+&"distance": "westbound.board.distance",
+&"journey": "westbound.board.journey"
+})
+play_games_boards = Dictionary[StringName, String]({
+&"daily": "PLACEHOLDER_BOARD_DAILY",
+&"distance": "PLACEHOLDER_BOARD_DISTANCE",
+&"journey": "PLACEHOLDER_BOARD_JOURNEY"
+})

@@ -582,6 +582,17 @@ async fn many_rooms(
     secs: u64,
     density: Density,
 ) -> Vec<RoomBot> {
+    many_rooms_with(s, rooms, per_room, secs, density, bot_cfg).await
+}
+
+async fn many_rooms_with(
+    s: &TestServer,
+    rooms: usize,
+    per_room: usize,
+    secs: u64,
+    density: Density,
+    bot_cfg: impl Fn(usize, usize) -> BotConfig,
+) -> Vec<RoomBot> {
     let mut tasks = Vec::new();
     for r in 0..rooms {
         let host = account(s).await;
@@ -621,6 +632,22 @@ fn bot_cfg(room: usize, k: usize) -> BotConfig {
     // Around the traffic's pace, some a little faster: the area of interest churns.
     BotConfig {
         speed_mps: 30.0 + (room * 3 + k) as f64,
+        ..BotConfig::default()
+    }
+}
+
+/// The bench's bots since N6.1 (`ROOMS_BENCH_CLAIMS`, default on): through traffic, with
+/// honest claims (the scoring load); `0` keeps N5.1's lane bots.
+fn bench_cfg(room: usize, k: usize, claims: bool) -> BotConfig {
+    if !claims {
+        return bot_cfg(room, k);
+    }
+    BotConfig {
+        speed_mps: 56.0 + ((room * 3 + k) % 10) as f64,
+        accel_mps2: 8.0,
+        drive: bots::DriveMode::Traffic,
+        claims: bots::ClaimMode::Honest,
+        seed: (room * 16 + k) as u64 + 1,
         ..BotConfig::default()
     }
 }
@@ -680,6 +707,7 @@ async fn bench_20_rooms_of_8_bots() {
         Ok("rush") => Density::Rush,
         _ => Density::Normal,
     };
+    let claims = std::env::var("ROOMS_BENCH_CLAIMS").map_or(true, |v| v != "0");
     let s = common::start_with(|c| {
         gw(c);
         c.rate_limits.enabled = false;
@@ -691,11 +719,23 @@ async fn bench_20_rooms_of_8_bots() {
     let wall0 = std::time::Instant::now();
     let ticks0 = RoomMetrics::get(&m.ticks);
     let us0 = RoomMetrics::get(&m.tick_us_sum);
-    let bots = many_rooms(&s, 20, 8, secs, density).await;
+    let scoring0 = RoomMetrics::get(&m.scoring_us_sum);
+    let bots = many_rooms_with(&s, 20, 8, secs, density, |r, k| bench_cfg(r, k, claims)).await;
     let wall = wall0.elapsed().as_secs_f64();
     let cpu = process_cpu_s() - cpu0;
     let ticks = RoomMetrics::get(&m.ticks) - ticks0;
     let us = RoomMetrics::get(&m.tick_us_sum) - us0;
+    let scoring_us = RoomMetrics::get(&m.scoring_us_sum) - scoring0;
+    let accepted = RoomMetrics::get(&m.claims_accepted);
+    let rejected = m.claims_rejected_total();
+    println!(
+        "ROOMS_BENCH_SCORING claims={claims} scoring_mean_us_per_tick={:.1} scoring_cpu_pct_of_core={:.2} claims_accepted={accepted} claims_rejected={rejected} syncs={} trains={} hits_unreported={}",
+        scoring_us as f64 / ticks.max(1) as f64,
+        scoring_us as f64 / 1e6 / wall * 100.0,
+        RoomMetrics::get(&m.score_syncs),
+        RoomMetrics::get(&m.trains),
+        RoomMetrics::get(&m.hits_unreported),
+    );
     let bytes: u64 = bots.iter().map(|b| b.seen.bytes).sum();
     let wire: u64 = bots.iter().map(|b| b.seen.wire_bytes).sum();
     let traffic_bytes: u64 = bots.iter().map(|b| b.seen.traffic.counts.bytes()).sum();

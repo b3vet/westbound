@@ -48,6 +48,9 @@ var tunnel: float = 0.0
 var tunnel_override: float = -1.0
 ## Music starts on its own (off in tests that count voices).
 var autoplay_music: bool = true
+## WP9.2: the web audio unlock (music waits for the first gesture). Made in setup() on
+## the web; tests set one (with a scripted bridge) before setup.
+var web_audio: WebAudio
 
 ## Banking count-up in progress: ticks left, time to the next, tick index.
 var chime_left: int = 0
@@ -112,6 +115,12 @@ func setup(t: AudioTuning = null) -> void:
 	music.name = "Music"
 	add_child(music)
 	music.setup(tuning)
+	if web_audio == null and WebAudio.wanted():
+		web_audio = WebAudio.new()
+	if web_audio != null:
+		if web_audio.get_parent() == null:
+			add_child(web_audio)
+		web_audio.bind_music(music)
 	_bus_db.resize(AudioBuses.NAMES.size())
 	_bus_target.resize(AudioBuses.NAMES.size())
 	apply_volumes(true)

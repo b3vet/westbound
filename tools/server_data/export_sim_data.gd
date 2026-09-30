@@ -7,7 +7,7 @@ extends SceneTree
 ## client"); docs/SERVER.md → Traffic simulation.
 ##   tools/godot.sh --headless --path . --import      # once, if the project was never imported
 ##   tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_data.gd
-##       [-- --out=westbound-server/crates/sim] [--check] [--only=params|vectors|traces]
+##       [-- --out=westbound-server/crates/sim] [--check] [--only=params|vectors|traces|scoring]
 ##       [--dump=<trace name>:<tick>]
 ## Writes (under --out):
 ##   data/traffic_params.json   TrafficTuning, TrafficRegistry (profiles, types), the spawn mix,
@@ -17,6 +17,8 @@ extends SceneTree
 ##   vectors/loop_closures.json TrafficSim.sync_road_closures on loop_v1 (closures, drop zones)
 ##   vectors/trace_*.json       whole-sim traces: a scripted player, spawns / despawns / hits as
 ##                              ops, and TrafficState.trace_hash() + events after every tick
+##   data/scoring_params.json, vectors/scoring_*.json   N6.1: the scoring rules (sim::scoring),
+##                              see "Scoring (N6.1)" below
 ## Floats are exact: vectors carry IEEE-754 bits as 16 hex digits; the params file carries
 ## readable numbers plus an `exact` map of bits (Godot's JSON writer does not round-trip every
 ## double). --check compares with the committed files and exits 1 when any is stale.
@@ -143,6 +145,11 @@ func _initialize() -> void:
 	if _only == "" or _only == "traces":
 		for sc in SCENARIOS:
 			_emit(VEC_DIR + "trace_%s.json" % sc["name"], _trace(tuning, sc))
+	if _only == "" or _only == "scoring":
+		_emit(SCORING_PARAMS_FILE, _scoring_params_text(tuning))
+		_emit(VEC_DIR + "scoring_hull.json", _hull_vectors())
+		for sc in SCORING_SCENARIOS:
+			_emit(VEC_DIR + "scoring_%s.json" % sc["name"], _scoring_trace(tuning, sc))
 	if _check:
 		if _stale.is_empty():
 			print("SIM_DATA ok (current) files=%d" % _written)
@@ -878,3 +885,423 @@ func _dump(sim: TrafficSim, k: int) -> void:
 			i, ts.vehicle_id[i], _hx(ts.s[i]), _hx(ts.d[i]), _hx(ts.v[i]), _hx(ts.accel[i]), ts.lane[i],
 			ts.target_lane[i], ts.lc_state[i], _hx(ts.lc_timer[i]), _hx(ts.lc_duration[i]), ts.flags[i],
 			sim.leader_of(i)])
+
+
+# ---------------------------------------------------------------- Scoring (N6.1)
+# The server's `sim::scoring` (westbound-server/crates/sim/src/scoring) ports
+# src/scoring/scoring.gd and road_hull.gd. Written with --only=scoring (or no --only):
+#   data/scoring_params.json   ScoringTuning, the LegsTuning sector bonuses, LivesTuning,
+#                              the SunTuning nudges, the player body, the tick rate
+#   vectors/scoring_hull.json  RoadHull.clearance on random box pairs
+#   vectors/scoring_*.json     whole-rule-set traces: a scripted player and cars on
+#                              scripted lines (no traffic model), the ops, and after every
+#                              tick Scoring.trace_hash(), take_boost_fill() and the events
+
+const SCORING_PARAMS_FILE := "data/scoring_params.json"
+const HULL_CASES := 2000
+const HULL_S_RANGE := 12.0
+const HULL_D_RANGE := 6.0
+const HULL_YAW_MAX := 0.5
+const HULL_HALF_LEN_MIN := 0.8
+const HULL_HALF_LEN_MAX := 8.0
+const HULL_HALF_WID_MIN := 0.4
+const HULL_HALF_WID_MAX := 1.3
+## Scoring traces. gates: the share of spawns that are a side-by-side pair around a lane
+## (threads); edges: the share of player moves that end on a shoulder; dips: the share of
+## speed changes below the minimum speed.
+const SCORING_SCENARIOS: Array[Dictionary] = [
+	{"name": "weave_120hz", "seed": 101, "lanes": 3, "hz": 120, "seconds": 75.0, "gates": 0.35, "edges": 0.1,
+		"dips": 0.12},
+	{"name": "weave_20hz", "seed": 202, "lanes": 4, "hz": 20, "seconds": 150.0, "gates": 0.35, "edges": 0.1,
+		"dips": 0.12},
+	{"name": "edges_120hz", "seed": 303, "lanes": 3, "hz": 120, "seconds": 60.0, "gates": 0.2, "edges": 0.35,
+		"dips": 0.3},
+]
+## Scoring rig (tool-local): the window of cars around the player and the player's script.
+const SC_WINDOW_BEHIND_M := 90.0
+const SC_WINDOW_AHEAD_M := 260.0
+const SC_SPAWN_AHEAD_MIN_M := 150.0
+const SC_TARGET_CARS := 24
+const SC_SPAWN_EVERY_S := 0.2
+const SC_BEHIND_SPAWN_P := 0.12
+const SC_PLAYER_KMH_MIN := 120.0
+const SC_PLAYER_KMH_MAX := 240.0
+const SC_DIP_KMH_MIN := 70.0
+const SC_DIP_KMH_MAX := 99.0
+const SC_SPEED_EVERY_MIN_S := 3.0
+const SC_SPEED_EVERY_MAX_S := 8.0
+const SC_MOVE_EVERY_MIN_S := 1.5
+const SC_MOVE_EVERY_MAX_S := 4.5
+const SC_LAT_SPEED_MIN := 1.5
+const SC_LAT_SPEED_MAX := 6.0
+const SC_YAW_MAX := 0.06
+const SC_OFFSET_MAX := 0.9
+const SC_CAR_SLOWER_KMH_MIN := 15.0
+const SC_CAR_SLOWER_KMH_MAX := 70.0
+const SC_CAR_FASTER_KMH := 25.0
+const SC_CAR_LAT_P := 0.015
+const SC_CAR_LAT_SPEED := 1.8
+const SC_GATE_CLEAR_MIN := 0.2
+const SC_GATE_CLEAR_MAX := 1.8
+const SC_GATE_JITTER_M := 0.4
+const SC_BOOST_P := 0.25
+const SC_BOOST_MIN_S := 1.0
+const SC_BOOST_MAX_S := 3.0
+const SC_SHOULDER_IN := 0.6
+const SC_HITS := 2
+const SC_HIT_FROM := 0.15
+const SC_HIT_TO := 0.85
+const SC_GHOST_S := 2.0
+const SC_CHECKPOINT_MIN_S := 12.0
+const SC_CHECKPOINT_MAX_S := 22.0
+const SC_BONUS_BASE: Array[int] = [5000, 3000, 3000, 5000]
+const SC_BONUS_KINDS: Array[StringName] = [&"clean", &"pace", &"threads", &"heat"]
+const SC_END_BEFORE_S := 1.0
+const SC_CAR_LENGTHS: Array[float] = [4.5, 4.2, 5.0, 12.0, 16.0, 2.2]
+const SC_CAR_WIDTHS: Array[float] = [1.8, 1.75, 1.9, 2.5, 2.55, 0.8]
+const SC_SPAWN_GAP_M := 2.0
+const SC_SPAWN_SIDE_GAP_M := 0.2
+const SC_EVENT_CAPACITY := 256
+
+## The hull inset (LivesTuning.collision_inset_m) of the scenario being written: the gates'
+## lateral offsets.
+var _sc_inset := 0.0
+
+
+func _scoring_params_text(tuning: Tuning) -> String:
+	var sc := tuning.scoring
+	var lg := tuning.legs
+	var lv := tuning.lives
+	var sun := tuning.sun
+	var doc := {
+		"format_version": FORMAT_VERSION,
+		"generator": GENERATOR,
+		"godot": Engine.get_version_info()["string"],
+		"sources": ["data/tuning/scoring.tres", "data/tuning/legs.tres", "data/tuning/lives.tres",
+			"data/tuning/sun.tres", "data/tuning/traffic.tres", "data/tuning/net.tres"],
+		"scoring": {
+			"speed_factor_min_kmh": sc.speed_factor_min_kmh,
+			"speed_factor_max_kmh": sc.speed_factor_max_kmh,
+			"speed_factor_at_min": sc.speed_factor_at_min,
+			"speed_factor_at_max": sc.speed_factor_at_max,
+			"night_factor": sc.night_factor,
+			"multiplier_start": sc.multiplier_start,
+			"multiplier_decay_per_s": sc.multiplier_decay_per_s,
+			"decay_term_min_kmh": sc.decay_term_min_kmh,
+			"decay_term_max_kmh": sc.decay_term_max_kmh,
+			"decay_term_at_min": sc.decay_term_at_min,
+			"decay_term_at_max": sc.decay_term_at_max,
+			"boost_decay_factor": sc.boost_decay_factor,
+			"min_speed_kmh": sc.min_speed_kmh,
+			"below_min_drain_per_s": sc.below_min_drain_per_s,
+			"hesitation_timeout_s": sc.hesitation_timeout_s,
+			"min_speed_grace_until_reached": sc.min_speed_grace_until_reached,
+			"min_speed_grace_after_hit_s": sc.min_speed_grace_after_hit_s,
+			"pass_points": sc.pass_points,
+			"pass_multiplier_gain": sc.pass_multiplier_gain,
+			"pass_lateral_window_m": sc.pass_lateral_window_m,
+			"close_pass_points": sc.close_pass_points,
+			"close_pass_multiplier_gain": sc.close_pass_multiplier_gain,
+			"close_pass_clearance_m": sc.close_pass_clearance_m,
+			"cut_points": sc.cut_points,
+			"cut_multiplier_gain": sc.cut_multiplier_gain,
+			"cut_min_speed_kmh": sc.cut_min_speed_kmh,
+			"cut_traffic_window_m": sc.cut_traffic_window_m,
+			"cut_per_car_cooldown_s": sc.cut_per_car_cooldown_s,
+			"thread_points": sc.thread_points,
+			"thread_multiplier_gain": sc.thread_multiplier_gain,
+			"thread_window_s": sc.thread_window_s,
+			"thread_clearance_m": sc.thread_clearance_m,
+			"slipstream_distance_m": sc.slipstream_distance_m,
+			"slipstream_min_speed_kmh": sc.slipstream_min_speed_kmh,
+			"shoulder_decay_factor": sc.shoulder_decay_factor,
+			"shoulder_penalty_after_s": sc.shoulder_penalty_after_s,
+			"shoulder_penalty_block_s": sc.shoulder_penalty_block_s,
+			"boost_fill_slipstream_pct_per_s": sc.boost_fill_slipstream_pct_per_s,
+			"boost_fill_close_pass_pct": sc.boost_fill_close_pass_pct,
+			"boost_fill_thread_pct": sc.boost_fill_thread_pct,
+		},
+		"legs": {
+			"pace_target_kmh": lg.pace_target_kmh,
+			"bonus_threads_min_count": lg.bonus_threads_min_count,
+			"bonus_heat_multiplier": lg.bonus_heat_multiplier,
+			"bonus_heat_hold_s": lg.bonus_heat_hold_s,
+			"bonus_clean_points": lg.bonus_clean_points,
+			"bonus_pace_points": lg.bonus_pace_points,
+			"bonus_threads_points": lg.bonus_threads_points,
+			"bonus_heat_points": lg.bonus_heat_points,
+		},
+		"lives": {
+			"lives": lv.lives,
+			"ghost_period_s": lv.ghost_period_s,
+			"clean_leg_restore": lv.clean_leg_restore,
+			"collision_inset_m": lv.collision_inset_m,
+		},
+		"sun": {
+			"thread_nudge_pct": sun.thread_nudge_pct,
+			"close_pass_nudge_count": sun.close_pass_nudge_count,
+			"close_pass_nudge_window_s": sun.close_pass_nudge_window_s,
+			"close_pass_nudge_pct": sun.close_pass_nudge_pct,
+		},
+		"body": {
+			"player_length_m": tuning.traffic.player_length_m,
+			"player_width_m": tuning.traffic.player_width_m,
+			"max_active_vehicles": tuning.traffic.max_active_vehicles,
+		},
+		"net": {"tick_rate_hz": tuning.net.tick_rate_hz},
+	}
+	var exact := {}
+	_exact_walk(doc, "", exact)
+	doc["exact"] = exact
+	return JSON.stringify(doc, "  ", false, true) + "\n"
+
+
+## RoadHull.clearance on random oriented boxes (overlapping, touching and apart).
+func _hull_vectors() -> String:
+	var r := Rng.new(INPUT_SEED).derive(&"road_hull")
+	var cases: Array = []
+	for n in HULL_CASES:
+		var yaw1 := 0.0 if r.chance(SPECIAL_PCT / PCT) else r.float_range(-HULL_YAW_MAX, HULL_YAW_MAX)
+		var yaw2 := 0.0 if r.chance(SPECIAL_PCT / PCT) else r.float_range(-HULL_YAW_MAX, HULL_YAW_MAX)
+		var s1 := r.float_range(0.0, 100.0)
+		var d1 := r.float_range(0.0, 12.0)
+		var s2 := s1 + r.float_range(-HULL_S_RANGE, HULL_S_RANGE)
+		var d2 := d1 + r.float_range(-HULL_D_RANGE, HULL_D_RANGE)
+		var hl1 := r.float_range(HULL_HALF_LEN_MIN, HULL_HALF_LEN_MAX)
+		var hw1 := r.float_range(HULL_HALF_WID_MIN, HULL_HALF_WID_MAX)
+		var hl2 := r.float_range(HULL_HALF_LEN_MIN, HULL_HALF_LEN_MAX)
+		var hw2 := r.float_range(HULL_HALF_WID_MIN, HULL_HALF_WID_MAX)
+		cases.append([_hx(s1), _hx(d1), _hx(yaw1), _hx(hl1), _hx(hw1), _hx(s2), _hx(d2), _hx(yaw2), _hx(hl2),
+			_hx(hw2), _hx(RoadHull.clearance(s1, d1, yaw1, hl1, hw1, s2, d2, yaw2, hl2, hw2))])
+	var head := _header("RoadHull.clearance (src/scoring/road_hull.gd): two boxes, then the clearance (libm)")
+	head["columns"] = ["s1", "d1", "yaw1", "hl1", "hw1", "s2", "d2", "yaw2", "hl2", "hw2", "clearance"]
+	return _doc_text(head, "cases", cases)
+
+
+## One scoring scenario: the real Scoring rule set on a StraightRoadPath, a TrafficState
+## filled by a tool-local script (cars on straight lines at constant speed, occasional
+## lateral moves), a scripted player, and the run hooks (hits and the ghost, checkpoints,
+## bonuses, night, run end). The ops carry every input; the Rust replay repeats the
+## motion arithmetic exactly.
+func _scoring_trace(base: Tuning, sc: Dictionary) -> String:
+	var hz: int = sc["hz"]
+	var dt := 1.0 / float(hz)
+	var lanes: int = sc["lanes"]
+	var seed_value: int = sc["seed"]
+	var ctx := RunContext.new(seed_value, RunContext.MODE_JOURNEY, base)
+	var road := StraightRoadPath.new(lanes, base.road)
+	var cap := base.traffic.max_active_vehicles
+	var traffic := TrafficState.new(cap)
+	var rules := Scoring.new(ctx)
+	var buf := ScoreEventBuffer.new(SC_EVENT_CAPACITY)
+	var rig := Rng.new(seed_value).derive(&"scoring_rig")
+	_sc_inset = base.lives.collision_inset_m
+	var ticks := roundi(float(sc["seconds"]) * float(hz))
+	var end_tick := ticks - roundi(SC_END_BEFORE_S * float(hz))
+	var player := VehicleState.new()
+	var p_lane := mini(1, lanes - 1)
+	player.s = SC_WINDOW_BEHIND_M + 10.0
+	player.d = road.lane_center_d(p_lane, player.s)
+	player.v = Units.kmh_to_mps((SC_PLAYER_KMH_MIN + SC_PLAYER_KMH_MAX) * 0.5)
+	var start := {"s": _hx(player.s), "d": _hx(player.d), "v": _hx(player.v)}
+	var p_target := NAN
+	var p_lat := 0.0
+	var next_speed := roundi(rig.float_range(SC_SPEED_EVERY_MIN_S, SC_SPEED_EVERY_MAX_S) * float(hz))
+	var next_move := roundi(rig.float_range(SC_MOVE_EVERY_MIN_S, SC_MOVE_EVERY_MAX_S) * float(hz))
+	var boost_off := -1
+	var ghost_off := -1
+	var next_cp := roundi(rig.float_range(SC_CHECKPOINT_MIN_S, SC_CHECKPOINT_MAX_S) * float(hz))
+	var hit_ticks: Array[int] = []
+	for h in SC_HITS:
+		hit_ticks.append(roundi(rig.float_range(SC_HIT_FROM, SC_HIT_TO) * float(end_tick)))
+	var night_on := roundi(float(ticks) / 3.0)
+	var night_off := roundi(2.0 * float(ticks) / 3.0)
+	var c_target := PackedFloat64Array()
+	c_target.resize(cap)
+	c_target.fill(NAN)
+	var c_lat := PackedFloat64Array()
+	c_lat.resize(cap)
+	var spawn_every := maxi(1, roundi(SC_SPAWN_EVERY_S * float(hz)))
+	var ops: Array = []
+	var hashes := PackedStringArray()
+	var events: Array = []
+	var boosts: Array = []
+	var ended := false
+	for k in range(1, ticks + 1):
+		# 1. Player script and cars (before the motion).
+		if k == next_speed:
+			var kmh := rig.float_range(SC_PLAYER_KMH_MIN, SC_PLAYER_KMH_MAX)
+			if rig.chance(float(sc["dips"])):
+				kmh = rig.float_range(SC_DIP_KMH_MIN, SC_DIP_KMH_MAX)
+			player.v = Units.kmh_to_mps(kmh)
+			ops.append([k, "pv", _hx(player.v)])
+			next_speed = k + roundi(rig.float_range(SC_SPEED_EVERY_MIN_S, SC_SPEED_EVERY_MAX_S) * float(hz))
+		if k == next_move and is_nan(p_target):
+			var to := p_lane + (1 if rig.chance(0.5) else -1)
+			if to < 0 or to >= lanes:
+				to = p_lane - (to - p_lane)
+			p_lane = clampi(to, 0, lanes - 1)
+			p_target = road.lane_center_d(p_lane, player.s) + rig.float_range(-SC_OFFSET_MAX, SC_OFFSET_MAX)
+			if rig.chance(float(sc["edges"])):
+				if p_lane == lanes - 1:
+					p_target = road.lanes_right_edge_d(player.s) + SC_SHOULDER_IN
+				else:
+					p_target = road.lanes_left_edge_d(player.s) - SC_SHOULDER_IN * 0.5
+			p_lat = rig.float_range(SC_LAT_SPEED_MIN, SC_LAT_SPEED_MAX)
+			player.yaw = rig.float_range(-SC_YAW_MAX, SC_YAW_MAX)
+			ops.append([k, "steer", _hx(p_target), _hx(p_lat), _hx(player.yaw)])
+			next_move = k + roundi(rig.float_range(SC_MOVE_EVERY_MIN_S, SC_MOVE_EVERY_MAX_S) * float(hz))
+		elif k == next_move:
+			next_move = k + 1
+		if boost_off < 0 and rig.chance(SC_BOOST_P / float(hz)):
+			player.boost_active = true
+			boost_off = k + roundi(rig.float_range(SC_BOOST_MIN_S, SC_BOOST_MAX_S) * float(hz))
+			ops.append([k, "boost", true])
+		elif k == boost_off:
+			player.boost_active = false
+			boost_off = -1
+			ops.append([k, "boost", false])
+		if k % spawn_every == 0:
+			_sc_maintain(traffic, road, rig, player, lanes, float(sc["gates"]), c_target, c_lat, k, ops)
+		# 2. Motion (the Rust replay repeats this arithmetic).
+		player.s += player.v * dt
+		if not is_nan(p_target):
+			var step := p_lat * dt
+			if absf(p_target - player.d) <= step:
+				player.d = p_target
+				p_target = NAN
+			else:
+				player.d += signf(p_target - player.d) * step
+		for i in traffic.capacity:
+			if traffic.active[i] == 0:
+				continue
+			traffic.s[i] += traffic.v[i] * dt
+			if not is_nan(c_target[i]):
+				var cstep := c_lat[i] * dt
+				if absf(c_target[i] - traffic.d[i]) <= cstep:
+					traffic.d[i] = c_target[i]
+					traffic.v_lat[i] = 0.0
+					c_target[i] = NAN
+				else:
+					traffic.v_lat[i] = signf(c_target[i] - traffic.d[i]) * c_lat[i]
+					traffic.d[i] += signf(c_target[i] - traffic.d[i]) * cstep
+		# 3. The rule set.
+		rules.step(dt, player, traffic, road, buf)
+		# 4. Run hooks after the step.
+		if hit_ticks.has(k) and not ended:
+			rules.notify_hit(buf)
+			rules.set_ghost(true)
+			ghost_off = k + roundi(SC_GHOST_S * float(hz))
+			ops.append([k, "hit"])
+		elif k == ghost_off:
+			rules.set_ghost(false)
+			ghost_off = -1
+			ops.append([k, "ghost_off"])
+		if k == next_cp and not ended:
+			rules.notify_checkpoint(buf)
+			ops.append([k, "checkpoint"])
+			for b in SC_BONUS_KINDS.size():
+				if rig.chance(0.5):
+					rules.award_bonus(SC_BONUS_KINDS[b], SC_BONUS_BASE[b], buf)
+					ops.append([k, "bonus", String(SC_BONUS_KINDS[b]), SC_BONUS_BASE[b]])
+			next_cp = k + roundi(rig.float_range(SC_CHECKPOINT_MIN_S, SC_CHECKPOINT_MAX_S) * float(hz))
+		if k == night_on or k == night_off:
+			rules.set_night(k == night_on)
+			ops.append([k, "night", k == night_on])
+		if k == end_tick:
+			rules.notify_run_end(buf)
+			ended = true
+			ops.append([k, "run_end"])
+		# 5. Outputs.
+		for e in buf.size():
+			events.append([k, String(buf.kind[e]), String(buf.tag[e]), buf.points[e], _hx(buf.multiplier[e]),
+				_hx(buf.clearance_m[e]), buf.slot[e], _hx(buf.value[e])])
+		buf.clear()
+		var fill := rules.take_boost_fill()
+		if fill != 0.0:
+			boosts.append([k, _hx(fill)])
+		hashes.append(str(rules.trace_hash()))
+	var head := _header("Scoring trace (src/scoring/scoring.gd): a StraightRoadPath, cars on scripted lines, a scripted "
+		+ "player; per tick: ops before the motion (pv, steer, boost, despawn, csteer, spawn), the motion, "
+		+ "Scoring.step, ops after it (hit, ghost_off, checkpoint, bonus, night, run_end); then the events, "
+		+ "take_boost_fill() and Scoring.trace_hash()")
+	head["name"] = sc["name"]
+	head["seed"] = seed_value
+	head["tick_hz"] = hz
+	head["dt"] = _hx(dt)
+	head["ticks"] = ticks
+	head["capacity"] = cap
+	head["road"] = {"lanes": lanes, "lane_width": _hx(road.lane_width(0.0)),
+		"median_half_width": _hx(road.median_half_width_m), "inner_shoulder": _hx(road.inner_shoulder_m),
+		"shoulder": _hx(road.shoulder_m), "guardrail_offset": _hx(road.guardrail_offset_m)}
+	head["player"] = start
+	head["body"] = {"length": _hx(base.traffic.player_length_m), "width": _hx(base.traffic.player_width_m)}
+	head["counts"] = {"events": events.size(), "ops": ops.size(), "banked": rules.banked()}
+	head["ops"] = ops
+	head["events"] = events
+	head["boost_fill"] = boosts
+	return _doc_text(head, "hashes", Array(hashes))
+
+
+## Keeps the scoring window stocked: cars behind or far ahead go; a few start a lateral
+## move; new ones come in ahead (slower than the player, sometimes a side-by-side pair
+## around a lane: a thread gate) or from behind (faster).
+func _sc_maintain(traffic: TrafficState, road: StraightRoadPath, rig: Rng, player: VehicleState, lanes: int,
+		gates: float, c_target: PackedFloat64Array, c_lat: PackedFloat64Array, k: int, ops: Array) -> void:
+	for i in traffic.capacity:
+		if traffic.active[i] == 1 and (traffic.s[i] < player.s - SC_WINDOW_BEHIND_M
+				or traffic.s[i] > player.s + SC_WINDOW_AHEAD_M + SC_WINDOW_BEHIND_M):
+			traffic.free_slot(i)
+			c_target[i] = NAN
+			ops.append([k, "despawn", i])
+	for i in traffic.capacity:
+		if traffic.active[i] == 1 and is_nan(c_target[i]) and rig.chance(SC_CAR_LAT_P):
+			var ln := clampi(traffic.lane[i] + (1 if rig.chance(0.5) else -1), 0, lanes - 1)
+			if ln != traffic.lane[i]:
+				c_target[i] = road.lane_center_d(ln, traffic.s[i])
+				c_lat[i] = SC_CAR_LAT_SPEED
+				traffic.lane[i] = ln
+				ops.append([k, "csteer", i, _hx(c_target[i]), _hx(c_lat[i]), ln])
+	if traffic.count >= SC_TARGET_CARS:
+		return
+	var behind := rig.chance(SC_BEHIND_SPAWN_P)
+	var s := player.s + rig.float_range(SC_SPAWN_AHEAD_MIN_M, SC_WINDOW_AHEAD_M)
+	var v := player.v - Units.kmh_to_mps(rig.float_range(SC_CAR_SLOWER_KMH_MIN, SC_CAR_SLOWER_KMH_MAX))
+	if behind:
+		s = player.s - SC_WINDOW_BEHIND_M + 5.0
+		v = player.v + Units.kmh_to_mps(SC_CAR_FASTER_KMH)
+	v = maxf(v, Units.kmh_to_mps(SC_DIP_KMH_MIN))
+	if not behind and lanes >= 3 and rig.chance(gates):
+		var mid := rig.int_range(1, lanes - 2)
+		for side: int in [-1, 1]:
+			var t := rig.int_range(0, SC_CAR_LENGTHS.size() - 2)
+			var clear := rig.float_range(SC_GATE_CLEAR_MIN, SC_GATE_CLEAR_MAX)
+			var hw_sum := PLAYER_WIDTH_M * 0.5 + SC_CAR_WIDTHS[t] * 0.5 - 2.0 * _sc_inset
+			var d := road.lane_center_d(mid, s) + float(side) * (hw_sum + clear + rig.float_range(0.0, SC_GATE_JITTER_M))
+			_sc_spawn(traffic, s + rig.float_range(-0.5, 0.5), d, v, SC_CAR_LENGTHS[t], SC_CAR_WIDTHS[t], mid + side,
+				k, ops)
+		return
+	var lane := rig.int_range(0, lanes - 1)
+	var ti := rig.int_range(0, SC_CAR_LENGTHS.size() - 1)
+	var cd := road.lane_center_d(lane, s) + rig.float_range(-SC_OFFSET_MAX, SC_OFFSET_MAX)
+	_sc_spawn(traffic, s, cd, v, SC_CAR_LENGTHS[ti], SC_CAR_WIDTHS[ti], lane, k, ops)
+
+
+func _sc_spawn(traffic: TrafficState, s: float, d: float, v: float, length: float, width: float, lane: int, k: int,
+		ops: Array) -> void:
+	for i in traffic.capacity:
+		if traffic.active[i] == 1 and absf(traffic.s[i] - s) < (traffic.length[i] + length) * 0.5 + SC_SPAWN_GAP_M \
+				and absf(traffic.d[i] - d) < (traffic.width[i] + width) * 0.5 + SC_SPAWN_SIDE_GAP_M:
+			return
+	var i := traffic.allocate()
+	if i < 0:
+		return
+	traffic.s[i] = s
+	traffic.d[i] = d
+	traffic.v[i] = v
+	traffic.v0[i] = v
+	traffic.length[i] = length
+	traffic.width[i] = width
+	traffic.lane[i] = lane
+	traffic.target_lane[i] = lane
+	ops.append([k, "spawn", i, traffic.vehicle_id[i], _hx(s), _hx(d), _hx(v), _hx(length), _hx(width), lane])

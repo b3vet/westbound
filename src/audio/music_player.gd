@@ -10,6 +10,9 @@ extends Node
 ## (set_night(false, over_s), e.g. over the dawn). The clock follows the playing track.
 ## On the web the player uses stream playback (AudioTuning.music_stream_on_web) so bus
 ## effects apply and a long track is never decoded whole into memory.
+## WP9.2: `hold` defers start() until release() (the web page's audio is still locked,
+## WebAudio), so the music starts on the unlock with its fade-in instead of "playing"
+## silently in a suspended context.
 
 var tuning: AudioTuning
 var player: AudioStreamPlayer
@@ -21,6 +24,9 @@ var night: float = 0.0
 var night_target: float = 0.0
 var enabled: bool = true
 var tracks_started: int = 0
+## WP9.2: while true, start() only remembers the request; release() plays it.
+var hold: bool = false
+var _start_held: bool = false
 
 var _night_rate: float = 0.0
 var _gap_left: float = 0.0
@@ -45,12 +51,24 @@ func setup(t: AudioTuning) -> void:
 func start() -> void:
 	if not enabled or tuning == null or tuning.music_tracks.is_empty():
 		return
+	if hold:
+		_start_held = true
+		return
 	if player.playing:
 		return
 	_next()
 
 
+## WP9.2: ends the hold and starts the music if start() was asked for meanwhile.
+func release() -> void:
+	hold = false
+	if _start_held:
+		_start_held = false
+		start()
+
+
 func stop() -> void:
+	_start_held = false
 	if player != null:
 		player.stop()
 	clock.stop()
