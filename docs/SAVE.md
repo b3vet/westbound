@@ -43,6 +43,7 @@ The local save, every player setting, the first-run chooser and the empty-road w
 | `bests` | WP4.1 (`Save.submit_best_score`) | best banked score per mode id |
 | `journeys` | WP6.5 (`Save.record_journey`) | per mode: `count`, `best_time_s`, `best_distance_m` |
 | `stats`, `unlocks`, `garage` | WP8.2 (driver XP and level, lifetime stats incl. the Daily streak, unlocks, the car/paint/rims selection); additive, no version bump | [GARAGE.md](GARAGE.md) |
+| `achievements` | WP8.3: `{unlocked: {id: UTC day}, progress: {metric: value}, mirrored: {id: true}}`; additive | [ACHIEVEMENTS.md](ACHIEVEMENTS.md) |
 | `daily` | WP8.4 (Daily Drive results, streak) | empty until then |
 | any new one | its WP, via `section()` | achievements (WP8.3) can take their own |
 
