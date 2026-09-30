@@ -28,6 +28,14 @@ extends Node3D
 ## dev LOOP button natively): the multiplayer loop instead of the procedural road, s
 ## unwrapped lap after lap, sectors as the legs, the room clock instead of the sun clock;
 ## forks, the finale, the leg objectives and Chase the Sun are off. See RunLoop.
+##
+## Title and attract (WP8.5, MENU; docs/RUN.md → Title and attract): the game boots into
+## the title (the run is the tree's main scene, or `title_on_boot`; `?title=0` /
+## `--title=0` or `?mode=` skip it). MENU builds the same world stack as a run (no second
+## world) and drives the car with RunAttract's bot: traffic runs, but hit detection,
+## lives, scoring, the sun clock and the legs are never stepped, so nothing can hit it.
+## start_mode() (PLAY, DAILY DRIVE, LOOP PRACTICE) rebuilds for the run in the same
+## frame; the pause menu's QUIT and the results' MENU call enter_menu().
 
 const PLAYER_CAR_SCENE := preload("res://src/vehicle/player_car.tscn")
 const CAR_PATHS: Array[String] = [
@@ -84,6 +92,8 @@ const MODE_LOOP := &"loop"
 @export var manual_ticks: bool = false
 ## WP6.5: some checkpoints fork (ForkPlan from the seed). Off: the plain journey.
 @export var forks_enabled: bool = true
+## WP8.5: boot into the title (MENU) even when the run is not the main scene (tests).
+@export var title_on_boot: bool = false
 
 ## StringName of Game.* (BOOT, COUNTDOWN, RUNNING, PAUSED, CRASH, RESULTS).
 var state: StringName = &"boot"
@@ -144,6 +154,9 @@ var screens: RunScreens
 ## WP4.3's Hud (null until src/ui/hud/hud.tscn exists).
 var hud: Node
 var dev: RunDevPanel
+## WP8.5: the title and the online hub (intents in: start_mode), and the attract drive.
+var title: TitleScreens
+var attract := RunAttract.new()
 ## The Events.run_over payload of the last finished run.
 var last_results: Dictionary = {}
 ## The controller while driving (PlayerController on the input hub by default;
@@ -151,7 +164,7 @@ var last_results: Dictionary = {}
 var drive_controller: VehicleController:
 	set(value):
 		drive_controller = value
-		if car != null and state != Game.CRASH:
+		if car != null and state != Game.CRASH and state != Game.MENU:
 			car.controller = value
 ## Dev: lives never run out (LIVES INF).
 var infinite_lives: bool = false
@@ -184,6 +197,14 @@ var _resets: int = 0
 var _best_before: int = 0
 var _pending_journey_save: bool = false
 var _legs_for_loop: bool = false
+# WP8.5: the Journey's base seed (Daily Drive swaps _base_seed for the day's), the MENU
+# world build in progress, titles shown, and a full countdown for a run from the title.
+var _journey_seed: int = 0
+var _menu_build: bool = false
+var _menu_count: int = 0
+var _full_countdown: bool = false
+var _dev_hud_stepped_aside: bool = false
+var _dev_hud_was_visible: bool = false
 
 
 ## Full brake, wheel straight: the fallback crash (the car skids to a stop).
@@ -208,13 +229,18 @@ func _ready() -> void:
 			get_tree().change_scene_to_file.call_deferred(DRIVE_SCENE if target == "drive" else SANDBOX_SCENE)
 			return
 	# N3.2: `?mode=loop` (web) or `--mode=loop` (native) opens the loop test mode.
-	if boot_param("mode") == String(MODE_LOOP):
-		mode = MODE_LOOP
+	var boot_mode := boot_param("mode")
+	if boot_mode == String(MODE_LOOP) or boot_mode == String(RunContext.MODE_DAILY) \
+			or boot_mode == String(RunContext.MODE_JOURNEY):
+		mode = StringName(boot_mode)
 	process_physics_priority = PHYSICS_PRIORITY
 	tuning = Tuning.load_default()
 	_dt = tuning.vehicle.physics_dt()
 	events = ScoreEventBuffer.new(tuning.scoring.event_buffer_capacity * EVENT_SOURCES)
 	_base_seed = run_seed if run_seed != 0 else Rng.random_seed()
+	_journey_seed = _base_seed
+	if mode == RunContext.MODE_DAILY:
+		_base_seed = daily_seed_today()
 
 	sky = $Sky
 	hub = $PlayerInput
@@ -275,6 +301,7 @@ func _ready() -> void:
 	fx.name = "PlayerFx"
 	add_child(fx)
 	_install_screens()
+	_install_title()
 	_build_headlight_lut()
 	_install_hud()
 	dev = RunDevPanel.new()
@@ -289,8 +316,12 @@ func _ready() -> void:
 		crash_sequence = cs
 	GameAudio.attach(self)   # WP7A: audio listens to Events and reads the run (the Audio autoload if present)
 
-	_start_run()
+	if wants_title():
+		enter_menu()
+	else:
+		_start_run()
 	dev.setup(self)
+	_sync_hud()
 	if manual_ticks:
 		set_physics_process(false)
 		set_process(false)
@@ -313,6 +344,76 @@ func retry() -> void:
 	if crash_sequence != null and crash_sequence.has_method(&"reset"):
 		crash_sequence.call(&"reset")
 	_start_run()
+
+
+# ---------------------------------------------------------------- Title (WP8.5)
+
+## Boot into the title: the run is the main scene (the game) or `title_on_boot`, and
+## neither `?title=0` / `--title=0` nor a `?mode=` jump says otherwise.
+func wants_title() -> bool:
+	if boot_param("title") == "0" or not boot_param("mode").is_empty():
+		return false
+	return title_on_boot or (is_inside_tree() and get_tree().current_scene == self)
+
+
+## The title (MENU): the world stack is rebuilt around a fresh Journey road and the car
+## drives itself (RunAttract) with hit detection off; the title opens over it. The pause
+## menu's QUIT, the results' MENU and the boot call this.
+func enter_menu() -> void:
+	if state == Game.PAUSED:
+		get_tree().paused = false
+	if crash_sequence != null and crash_sequence.has_method(&"reset"):
+		crash_sequence.call(&"reset")
+	mode = RunContext.MODE_JOURNEY
+	_base_seed = _journey_seed
+	_menu_build = true
+	_start_run()
+	_menu_build = false
+
+
+## PLAY (Journey), DAILY DRIVE (today's UTC date seed) and LOOP PRACTICE: a run of
+## `run_mode` from a full countdown, in the same frame (no scene load). RETRY keeps it.
+func start_mode(run_mode: StringName) -> void:
+	mode = run_mode
+	_base_seed = daily_seed_today() if run_mode == RunContext.MODE_DAILY else _journey_seed
+	_full_countdown = true
+	retry()
+
+
+## True on the title.
+func is_menu() -> bool:
+	return state == Game.MENU
+
+
+## The Daily Drive's seed for today's UTC date (identical for everyone that day).
+static func daily_seed_today() -> int:
+	var d := Time.get_date_dict_from_system(true)
+	return Rng.daily_seed(int(d["year"]), int(d["month"]), int(d["day"]))
+
+
+## MENU: the attract drive. The car (its bot) and traffic as in RUNNING, the forks (the
+## road holds at an unresolved split); never hit detection, lives, scoring, the sun or the
+## legs. Allocation-free except where RUNNING allocates (the director, the road).
+func _attract_tick(dt: float) -> void:
+	var st := car.state
+	if loop == null:
+		forks.tick(st)
+	car.tick(dt)
+	sim.step(dt, st, car.params, events)
+	director.step(dt, st)
+	if loop == null:
+		forks.guard_traffic()
+	traffic_view.capture_tick()
+	_safety_net()
+	attract.tick(dt)
+
+
+func _install_title() -> void:
+	title = TitleScreens.new()
+	title.name = "TitleScreens"
+	add_child(title)
+	title.bind(hub)
+	title.start.connect(start_mode)
 
 
 ## Ends the countdown now (WP4.4's countdown screen calls this when auto_countdown is off).
@@ -450,6 +551,8 @@ func tick() -> void:
 			if not _crash_by_sequence:
 				car.tick(dt)   # the fallback skid; the cinematic's body carries the car
 			_crash_tick(dt)
+		Game.MENU:
+			_attract_tick(dt)
 	tick_count += 1
 	var smp := car.road_sample()
 	origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
@@ -807,8 +910,15 @@ func _fill_feed() -> void:
 func _start_run() -> void:
 	if state == Game.PAUSED:
 		get_tree().paused = false
-	current_seed = _seed_for(run_count)
-	run_count += 1
+	if not _menu_build:
+		attract.end()
+	if _menu_build:
+		# WP8.5: the title's world (a Journey road of its own seed; no run counted).
+		current_seed = Rng.derive_seed(_journey_seed, "menu/%d" % _menu_count)
+		_menu_count += 1
+	else:
+		current_seed = _seed_for(run_count)
+		run_count += 1
 	tick_count = 0
 	if is_loop():
 		_setup_loop()
@@ -918,9 +1028,23 @@ func _start_run() -> void:
 	fx.reset()
 	last_results = {}
 	sky.sky_t = sun.sky_t
+	if _menu_build:
+		# WP8.5: the title over the attract drive (no countdown, no run_started), under
+		# its own held sky.
+		_countdown_ticks = 0
+		sun.sky_t = tuning.camera.attract_sky_t
+		sky.sky_t = sun.sky_t
+		_update_headlights()
+		_enter(Game.MENU)
+		attract.begin(self)
+		_fill_feed()
+		return
 
-	# A retry counts faster: back driving inside hud.retry_max_s (Run end).
-	var step_s := tuning.hud.countdown_step_s if run_count <= 1 else tuning.hud.retry_countdown_step_s
+	# A retry counts faster: back driving inside hud.retry_max_s (Run end). A run started
+	# from the title (start_mode) counts in full.
+	var step_s := tuning.hud.countdown_step_s if run_count <= 1 or _full_countdown \
+			else tuning.hud.retry_countdown_step_s
+	_full_countdown = false
 	_countdown_step_ticks = maxi(roundi(step_s / _dt), 1)
 	_countdown_ticks = tuning.hud.countdown_from * _countdown_step_ticks
 	_countdown_shown = tuning.hud.countdown_from
@@ -1019,15 +1143,40 @@ func _enter(to: StringName) -> void:
 	state = to
 	if to == Game.COUNTDOWN:
 		Game.start_run(mode)
+	elif to == Game.MENU:
+		Game.enter_menu()
 	elif Game.state != to:
 		Game.change_state(to)
+	if title != null:
+		title.show_state(to)
 	_sync_hud()
 
 
 ## The gameplay HUD steps aside for the pause menu, the crash cinematic and the results.
+## WP8.5: on the title (MENU) the HUD, the touch controls and the dev rows step aside too
+## (the dev HUD stays on its key).
 func _sync_hud() -> void:
+	var menu := state == Game.MENU
 	if hud != null:
-		(hud as CanvasLayer).visible = state != Game.CRASH and state != Game.RESULTS and state != Game.PAUSED
+		(hud as CanvasLayer).visible = state != Game.CRASH and state != Game.RESULTS and state != Game.PAUSED \
+				and not menu
+	var overlay := get_node_or_null(^"Overlay") as CanvasLayer
+	if overlay != null:
+		overlay.visible = not menu
+	if dev != null and dev.controls != null:
+		dev.controls.visible = not menu
+	# The dev HUD (a diagnostic overlay) would cover the title's menu: it steps aside on
+	# the title and comes back after; its key (`) still toggles it there.
+	var dev_hud := get_node_or_null(^"DevHud")
+	if dev_hud != null and dev_hud.has_method(&"set_hud_visible"):
+		if menu and not _dev_hud_stepped_aside:
+			_dev_hud_stepped_aside = true
+			_dev_hud_was_visible = bool(dev_hud.call(&"is_hud_visible"))
+			dev_hud.call(&"set_hud_visible", false)
+		elif not menu and _dev_hud_stepped_aside:
+			_dev_hud_stepped_aside = false
+			if _dev_hud_was_visible:
+				dev_hud.call(&"set_hud_visible", true)
 
 
 func _install_hud() -> void:
@@ -1056,7 +1205,8 @@ func _install_screens() -> void:
 	screens.resume.connect(resume)
 	screens.recalibrate.connect(hub.recalibrate_gyro)
 	screens.retry.connect(retry)
-	screens.quit.connect(retry)   # no title screen until Phase 8: QUIT starts a fresh run
+	screens.quit.connect(enter_menu)   # WP8.5: QUIT goes back to the title
+	screens.results_screen.menu.connect(enter_menu)   # WP8.5: the results' MENU
 	screens.skip.connect(skip)
 	screens.countdown_hold.connect(hold_countdown)
 
@@ -1134,6 +1284,8 @@ func on_journey_complete() -> void:
 ## the hit sweep restarts from the new position.
 func on_fork_swapped() -> void:
 	hits.reset(car.state, sim.state)
+	if state == Game.MENU:
+		attract.next_shot()   # the pass camera's spot moved with the branch
 
 
 # ---------------------------------------------------------------- Dev
@@ -1213,8 +1365,16 @@ func snap_setup(args: Dictionary) -> void:
 		loop.clock_start_unix_s = epoch + Units.min_to_s(float(args.get("clock_min", 0.0)))
 	run_seed = int(args.get("seed", SNAP_SEED))
 	_base_seed = run_seed
+	_journey_seed = run_seed
 	run_count = 0
-	_start_run()
+	# WP8.5: --state=menu (the title over the attract drive), --title=hub|settings|account|
+	# boards (a title view), --shot=orbit|pass and --attract_s= (seconds of attract drive).
+	var menu := str(args.get("state", "")) == "menu"
+	if menu:
+		_menu_count = 0
+		enter_menu()
+	else:
+		_start_run()
 	var s := float(args.get("s", 0.0))
 	if loop != null and args.has("at"):
 		s = loop.place_s(str(args["at"]))
@@ -1257,7 +1417,11 @@ func snap_setup(args: Dictionary) -> void:
 		_update_headlights()
 	if args.has("cam"):
 		rig.set_mode(StringName(str(args["cam"])))
+	if menu:
+		_snap_menu(args)
 	match str(args.get("state", "running")):
+		"menu":
+			pass
 		"running":
 			go()
 		"results":
@@ -1276,10 +1440,37 @@ func snap_setup(args: Dictionary) -> void:
 	if args.has("set_piece") and state == Game.RUNNING:
 		_snap_set_piece(args)
 	if not bool(args.get("hud", true)):
-		for n: Node in [hud, get_node_or_null(^"DevHud"), get_node_or_null(^"Overlay"), screens, dev.controls]:
+		for n: Node in [hud, get_node_or_null(^"DevHud"), get_node_or_null(^"Overlay"), screens, dev.controls, title]:
 			if n != null:
 				n.set(&"visible", false)
 	rig.snap_to_target()
+
+
+## Dev (snaps, WP8.5): the title's attract drive after --s / --sky_t: --shot=orbit|pass
+## (cut to that shot), --attract_s= seconds of it (ticked here), --title=hub|settings|
+## account|boards (a title view, settled) or play (PLAY pressed: title -> countdown).
+func _snap_menu(args: Dictionary) -> void:
+	attract.begin(self)
+	if str(args.get("shot", "orbit")) == "pass":
+		attract.next_shot()
+	var n := roundi(float(args.get("attract_s", 0.0)) / _dt)
+	for k in n:
+		tick()
+		if k % 2 == 0:
+			frame(_dt * 2.0)
+	match str(args.get("title", "")):
+		"play":
+			title.title.play.emit(RunContext.MODE_JOURNEY)   # PLAY: the run's countdown
+			screens.finish_animations()
+		"hub":
+			title.open_hub()
+		"settings":
+			title.title.open_settings()
+		"account":
+			title.title.open_account()
+		"boards":
+			title.title.open_leaderboards()
+	title.finish_animations()
 
 
 ## Dev (snaps, WP6.3): --set_piece=<id> forces that set piece and drives up to it with a

@@ -15,6 +15,7 @@ extends RunScreen
 ## ProfilePanel (name, rename, delete account) and SETTINGS swaps it back.
 ## N7.2: LEADERBOARDS (above QUIT; shown when an online session exists) opens the
 ## LeaderboardsScreen over the menu.
+## WP8.5: QUIT goes back to the title (the run's enter_menu()).
 
 signal resume()
 signal recalibrate()

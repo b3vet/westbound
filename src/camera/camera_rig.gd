@@ -51,6 +51,14 @@ extends Node3D
 ## springs keep following underneath, so the mode's pose is exactly restored. The run
 ## starts it only in a traffic-free breather while the car holds its lane; reduced
 ## motion refuses it (the run still shows the toast).
+##
+## Menu attract (WP8.5, spec Cameras → Scripted cameras → Menu: "a slow drive-by of the
+## selected car on the road"): start_attract() hands the pose to the run's attract
+## director (RunAttract), which sets an eye, a look point, a FOV and a frame yaw every
+## tick (set_attract_view; `cut` for a new shot). The springs keep following underneath,
+## so stop_attract() snaps back to the mode's pose. Only in MENU, where hit detection is
+## off ("No scripted camera ever takes control while traffic can still hit the player").
+## The car's body always shows (the cockpit steps aside), and there is no shake.
 
 ## Runs after the player car's physics tick (default priority 0).
 const PHYSICS_PRIORITY := 100
@@ -118,6 +126,13 @@ var _body_hidden_on: Node3D
 # Journey finale swing: time into it (-1 = off) and the side it swings to.
 var _finale_t: float = -1.0
 var _finale_side: float = -1.0
+
+# Menu attract (WP8.5): on, and the shot's view (render space; moved with the origin).
+var _attract: bool = false
+var _attract_eye := Vector3.ZERO
+var _attract_look := Vector3.FORWARD
+var _attract_fov: float = 0.0
+var _attract_yaw: float = 0.0
 
 
 func _ready() -> void:
@@ -267,6 +282,44 @@ func finale_weight() -> float:
 	var u := clampf(_finale_t / maxf(tuning.finale_swing_s, 1e-3), 0.0, 1.0)   # lint: allow-number divide guard
 	var e := clampf(tuning.finale_swing_ease_frac, 1e-3, 0.5)   # lint: allow-number divide guard
 	return smoothstep(0.0, e, u) * (1.0 - smoothstep(1.0 - e, 1.0, u))
+
+
+## Menu attract (WP8.5): the run's attract director takes the pose (the title). Ends a
+## finale swing; the cockpit steps aside and the car's body shows.
+func start_attract() -> void:
+	stop_finale()
+	_attract = true
+	if _cockpit != null:
+		_cockpit.visible = false
+	_restore_body()
+	_head_xform = Transform3D.IDENTITY
+
+
+## Back to the mode's pose (snapped: a run starts from the title).
+func stop_attract() -> void:
+	if not _attract:
+		return
+	_attract = false
+	_apply_cockpit_view()
+	snap_to_target()
+
+
+func is_attract() -> bool:
+	return _attract
+
+
+## The attract shot's view this tick: the eye and the look point (render space), the FOV
+## (deg) and a yaw (rad, + turns the view left, so the car sits right of centre). `cut`:
+## a new shot, placed at once with no interpolation from the last one.
+func set_attract_view(eye: Vector3, look: Vector3, fov_deg: float, yaw_rad: float, cut: bool = false) -> void:
+	_attract_eye = eye
+	_attract_look = look
+	_attract_fov = fov_deg
+	_attract_yaw = yaw_rad
+	if cut and _attract and _cam != null:
+		_apply_attract()
+		reset_physics_interpolation()
+		_cam.reset_physics_interpolation()
 
 
 ## Places everything at its goal with no spring lag (spawn, mode change, retry).
@@ -461,7 +514,7 @@ static func _relative_xform(ancestor: Node3D, n: Node3D) -> Transform3D:
 
 ## Shows the cockpit and hides the target's body in cockpit mode; restores otherwise.
 func _apply_cockpit_view() -> void:
-	var on := is_cockpit() and _has_target()
+	var on := is_cockpit() and _has_target() and not _attract
 	if on:
 		_ensure_cockpit()
 	if _cockpit != null:
@@ -573,6 +626,20 @@ func _update(dt: float, snap: bool) -> void:
 	_apply_shake()
 	if _finale_t >= 0.0:
 		_apply_finale()
+	if _attract:
+		_apply_attract()
+
+
+## The menu attract's pose (WP8.5): the eye looking at the look point, turned by the
+## frame yaw about the world up; no shake, the attract FOV.
+func _apply_attract() -> void:
+	var view := _attract_look - _attract_eye
+	var b := basis if view.is_zero_approx() else Basis.looking_at(view, Vector3.UP)
+	global_transform = Transform3D(Basis(Vector3.UP, _attract_yaw) * b, _attract_eye)
+	_cam.transform = Transform3D.IDENTITY
+	if _attract_fov > 0.0:
+		_fov_out = _attract_fov
+		_cam.fov = _attract_fov
 
 
 ## Blends the mode's camera pose (this node and the Camera3D) toward the finale's wide
@@ -684,6 +751,8 @@ func _on_settings_changed(key: StringName) -> void:
 func _on_origin_shifted(offset: Vector3) -> void:
 	_pos.vec_value -= offset
 	_prev_anchor -= offset
+	_attract_eye -= offset
+	_attract_look -= offset
 	var t := global_transform
 	t.origin -= offset
 	global_transform = t

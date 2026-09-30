@@ -17,7 +17,8 @@ extends Node
 ##   row 3: RING/WHEEL, SIZE, LIVES
 ##   row 4: LEG (auto or a fixed director leg), SANDBOX, DRIVE (the M3 drive scene), LOOP
 ##          (N3.2: the loop test mode on / off, a new run)
-##   row 5: DENS (runtime traffic density scale, plan D11: x1.0 / x1.25 / x1.5 / x0.75)
+##   row 5: DENS (runtime traffic density scale, plan D11: x1.0 / x1.25 / x1.5 / x0.75),
+##          TITLE (WP8.5: back to the title; the rows step aside there, the dev HUD stays)
 ## The panel reports the director's effective density around the player, its target,
 ## the scale and the director's planning gain to DevStats (&"density",
 ## &"density_target", &"density_scale", &"density_gain"), so the dev report shows them.
@@ -88,6 +89,7 @@ func setup(owner_run: Run) -> void:
 	controls.add_button(c, 4, "DRIVE", BUTTON, run.open_drive_scene, true)
 	_loop_button = controls.add_button(c, 4, "LOOP", BUTTON, _toggle_loop, true)
 	_density_button = controls.add_button(c, 5, "DENS x1.0", BUTTON, _next_density, true)
+	controls.add_button(c, 5, "TITLE", BUTTON, run.enter_menu, true)
 	add_child(controls)
 	Events.camera_mode_changed.connect(func(_m: StringName) -> void: refresh())
 	Events.settings_changed.connect(func(_k: StringName) -> void: refresh())

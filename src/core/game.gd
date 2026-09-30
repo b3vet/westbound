@@ -6,6 +6,8 @@ extends Node
 ## Flow of one run (src/run/run.gd, docs/RUN.md):
 ##   BOOT/MENU -> COUNTDOWN -> RUNNING -> CRASH -> RESULTS -> COUNTDOWN (retry)
 ##   COUNTDOWN / RUNNING <-> PAUSED
+## WP8.5: the game boots into MENU (the title over the attract drive); the pause menu's
+## QUIT and the results' MENU go back there (enter_menu()).
 ## `mode` names the run's mode; `hud_sections()` lists the HUD parts that mode shows.
 
 const BOOT := &"boot"
@@ -74,6 +76,16 @@ func start_run(run_mode: StringName) -> void:
 	if state == COUNTDOWN:
 		return
 	_enter_state(COUNTDOWN)
+
+
+## The title (WP8.5): the pause menu's QUIT, the results' MENU, or a run scene opened on
+## the title. Like start_run, a live run is abandoned: the transition is forced (a quit
+## from PAUSED also announces the unpause) and still announced. Nothing when already there.
+func enter_menu() -> void:
+	if state == MENU:
+		return
+	paused_from = &""
+	_enter_state(MENU)
 
 
 ## Pause from COUNTDOWN or RUNNING; returns false when not allowed now.
