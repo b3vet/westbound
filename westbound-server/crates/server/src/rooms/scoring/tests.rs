@@ -609,3 +609,21 @@ fn acceptance_below_the_threshold_leaves_the_run_unverified() {
     assert_eq!((r.claims_accepted, r.claims_rejected), (1, 4));
     assert!(!r.verified, "20 % accepted");
 }
+
+#[test]
+fn a_run_ending_decides_only_its_own_claims() {
+    let mut h = H::new();
+    let _a = h.driver(1, 0, 3_000.0, 35.0, 1);
+    let b = h.driver(2, 1, 1_000.0, 35.0, 1);
+    h.car(50, b, 20.0, 25.0, LANE[2], 2);
+    let t = done_tick(h.now, 20.0, 10.0);
+    // B claims its pass two ticks before the server will see it complete (inside the
+    // tolerance): the claim waits for B's next states...
+    h.ticks(t - 2 - h.now);
+    h.claim(2, 1, ClaimKind::Pass, t - 2, &[(50, 1_900)]);
+    // ...even when A's run ends meanwhile (A's claims alone are decided at once).
+    h.end(1);
+    h.ticks(20);
+    assert!(h.rejected(2).is_empty(), "{:?}", h.events(2));
+    assert_eq!(RoomMetrics::get(&h.metrics.claims_accepted), 1);
+}

@@ -1278,10 +1278,10 @@ func _sc_maintain(traffic: TrafficState, road: StraightRoadPath, rig: Rng, playe
 			_sc_spawn(traffic, s + rig.float_range(-0.5, 0.5), d, v, SC_CAR_LENGTHS[t], SC_CAR_WIDTHS[t], mid + side,
 				k, ops)
 		return
-	var ln := rig.int_range(0, lanes - 1)
-	var t := rig.int_range(0, SC_CAR_LENGTHS.size() - 1)
-	var d := road.lane_center_d(ln, s) + rig.float_range(-SC_OFFSET_MAX, SC_OFFSET_MAX)
-	_sc_spawn(traffic, s, d, v, SC_CAR_LENGTHS[t], SC_CAR_WIDTHS[t], ln, k, ops)
+	var lane := rig.int_range(0, lanes - 1)
+	var ti := rig.int_range(0, SC_CAR_LENGTHS.size() - 1)
+	var cd := road.lane_center_d(lane, s) + rig.float_range(-SC_OFFSET_MAX, SC_OFFSET_MAX)
+	_sc_spawn(traffic, s, cd, v, SC_CAR_LENGTHS[ti], SC_CAR_WIDTHS[ti], lane, k, ops)
 
 
 func _sc_spawn(traffic: TrafficState, s: float, d: float, v: float, length: float, width: float, lane: int, k: int,

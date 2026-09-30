@@ -691,7 +691,7 @@ Response 200:
 
 ### Hooks for N6, N8 and N9
 
-- **N6, multiplayer runs:** `state.boards.record_multiplayer_run(&MultiplayerRun { account_id, map_id, room: Public | PrivateDefault | PrivateCustom, score, duration_s, distance_m, stats, car, client_build, ended_at, crew })`. It stores the run as `verified`. For a ranked room it writes Loop (the season of `ended_at`, and all-time), and with `crew: Some(CrewSnapshot { crew_id, member_ids })` the crew's Loop crew score: the sum of the best `crew_top_members` members' season entries, rewritten when it changes. It returns the run id, `ranked`, the placements and the new crew score.
+- **N6, multiplayer runs** (called since N6.1 through `leaderboards::mp_runs::run_sink` for every verified run; see "Scoring (N6.1) → Run results and the boards"): `state.boards.record_multiplayer_run(&MultiplayerRun { account_id, map_id, room: Public | PrivateDefault | PrivateCustom, score, duration_s, distance_m, stats, car, client_build, ended_at, crew })`. It stores the run as `verified`. For a ranked room it writes Loop (the season of `ended_at`, and all-time), and with `crew: Some(CrewSnapshot { crew_id, member_ids })` the crew's Loop crew score: the sum of the best `crew_top_members` members' season entries, rewritten when it changes. It returns the run id, `ranked`, the placements and the new crew score.
 - **N8, replay verdicts:** `state.boards.set_run_verification(run_id, Accepted | Rejected)`. Accepted marks the run and its entries `verified` (and writes them if `show_pending` kept them off). Rejected marks the run `rejected` (`reject_reason = replay`) and rebuilds each entry it held from the player's next best eligible run. N8.1's queue worker calls it (see "Replays and verification").
 - **N9, friends and crews (done in N9.1):** `social::friend_ids` feeds the friends view (`store::of_subjects`), `social::crew_of` the crew "me". Board reads fill `crew_tag` and the crew entries' name and tag. `leaderboards::recompute_crew` rewrites a crew's current-season sum when members join, leave, are kicked or delete their account. For N6: `social::crew_snapshot(conn, account_id)` builds the `CrewSnapshot` that `record_multiplayer_run` takes.
 
@@ -1205,7 +1205,7 @@ WP N5.1 (server side), in `crates/server/src/rooms/`. Spec: [multiplayer handoff
 - The **crew leader** is the longest-present connected crewmate whose run is active and who has answered their own placement (seats are in join order). Every placement passes through `RoomTraffic::free_gap` (a real gap with `rooms.traffic = "sim"`: the wanted lane, then its neighbours, ±`spawn_search_m` in `spawn_step_m` steps with `spawn_clear_m` to the nearest car). The speed is the lane's flow speed at that s (the section's `lane_flow_speeds_from_right_kmh`).
 - **Runs.** A seat starts a run at once (`run_seq` 1, then counting). `run_event.start` starts a new run only when none is active; `end` ends it (`quit`); `rejoin` places the player behind the crew (the chain forfeit is N6's).
 - **Crash-out.** `hit_report` with `lives_left = 0`, or a `player_state` with `run_state = crashed`, ends the run (`run_result {crashed}` to the room) and schedules the respawn `rooms.crash_respawn_ms` (3 s, the results toast) later, with a fresh run. Leftovers of the run before (a crashed state in flight, a hit stamped before the new run started) are ignored.
-- **`run_result`** goes to everyone in the room: `player_id`, `run_seq`, `end_reason`, `verified` (no offence), `leaderboard_eligible`, `duration_ms`, `distance_m` (forward distance from accepted states, teleports left out). Score and event counts are 0 until N6 (which also records multiplayer runs on the boards).
+- **`run_result`** goes to everyone in the room: `player_id`, `run_seq`, `end_reason`, `verified` (no offence), `leaderboard_eligible`, `duration_ms`, `distance_m` (forward distance from accepted states, teleports left out), and since N6.1 the official score and event counts (see "Scoring (N6.1)", which also records verified runs on the boards).
 - **Reconnect.** When a seated connection ends, the room holds the seat for `rooms.seat_hold_ms` (15 s): `room_event.connection {connected: false}`, the member's `disconnected` flag, presence cleared. Joining the same room again (by code or id) within the hold takes the seat back: same `player_id`, a fresh snapshot, `connection {connected: true}`, the run intact, a placement where the car was. After the hold the run ends (`run_result {disconnected}`, the banked score kept, N6) and the seat goes (`room_event.leave {timed_out}`).
 - **A second login** (newest wins, see "Sessions") that joins the room takes the seat over the same way; the old connection's link goes inactive at once.
 - **Quick chat** is relayed to everyone else in the room (`quick_chat` with the sender's id); muting is the client's.
@@ -1248,7 +1248,8 @@ A room owns a `Box<dyn RoomTraffic>`: `tick(tick, players)` after the tick's sta
 
 - `rooms.traffic = "sim"` (default since N4.2): `SimTraffic` owns a `sim::traffic::TrafficWorld` (N4.1) seeded per room, filled at the room's density. Players go in as `PlayerInput`s (player index = a free slot of 8, body size from the exported tuning); the world steps in lock-step with the room tick (a room that missed ticks catches up, at most 20 steps, else re-anchors); spawns take real gaps; `write_client` streams each client's area (see "Traffic streaming (N4.2)"). N4.1 measured 199 µs per tick at normal density in release; streaming to 8 clients adds about 60 µs.
 - `rooms.traffic = "none"`: `NoTraffic`. Nothing is simulated and every spawn spot is free.
-- `hit_car(player_id, car_id)` (default: nothing) applies an accepted hit's scripted reaction; N6 calls it once it accepts a hit (N4.2 does not call it from `hit_report`: the hit cross-check is N6's).
+- `hit_car(player_id, car_id)` (default: nothing) applies an accepted hit's scripted reaction; N6.1's scoring calls it once it confirms a reported traffic hit (see "Scoring (N6.1) → Hits").
+- N6.1: `car_history()` (the `sim` ring records every car after each step, for scoring) and `client_has(player_id, car_id)` (the car was streamed to that client).
 
 ### Presence
 
@@ -1456,6 +1457,148 @@ Without sockets (`tests/traffic_stream.rs`, 8 players spread round the loop at 2
 | `traffic_near_m` / `traffic_near_hz` / `traffic_far_hz` | `100.0` / `5` / `1` | Correction rates (spec); the periods are `tick_rate_hz / hz` ticks |
 | `traffic_car_id_hold_ms` | `30000` | A released car id is not reused for this long (MP-D6) |
 
+## Scoring (N6.1)
+
+WP N6.1 (server side). Spec: [multiplayer handoff](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Scoring in multiplayer (crew mechanics, server-authoritative scoring), Time of day in multiplayer (night ×2), Leaderboards ("Multiplayer runs go on the boards automatically"), Testing (scoring; the bots' > 99 % claim acceptance), Tuning reference; [PROTOCOL.md](PROTOCOL.md) §4 (`score_claim`, `hit_report`, `score_sync`, `score_event`, `run_result`, `room_event.crew`, used as frozen); [SCORING.md](SCORING.md) (the rules). The client side (`score_client.gd`, the HUD) is N6.2.
+
+| Where | What |
+| --- | --- |
+| `crates/sim/src/scoring/` | `sim::scoring`: the port of `src/scoring/` (rules, hull, events, params) plus sector facts and the loop road; parity-tested |
+| `crates/sim/data/scoring_params.json` | The scoring tuning, exported from Godot (`export_sim_data.gd --only=scoring`) |
+| `crates/server/src/rooms/car_history.rs` | The room's traffic for the last ticks |
+| `crates/server/src/rooms/scoring/` | `RoomScoring`: states, claims, verification (`claims.rs`), the server's own pass and contact view (`tracker.rs`), the official score (`official.rs`), trains, crew totals, `ScoreSync` / `ScoreEvent` |
+| `crates/server/src/leaderboards/mp_runs.rs` | The board write path for finished multiplayer runs |
+| `crates/bots/src/driver.rs`, `link.rs` | Bots that drive through traffic and claim (honest or cheating); a minimal link simulation |
+
+### `sim::scoring`: the rules, ported
+
+`rules.rs` is `scoring.gd` function for function (same fields, same float expressions, same order), `hull.rs` is `road_hull.gd`, `events.rs` the event buffer with the same kind and tag names. Traffic and road are traits (`ScoringCars`, `ScoringRoad`), so one implementation scores a `TrafficState`, a parity trace's cars and a bot's mirror. `sectors.rs` keeps `LegTracker`'s per-leg facts for the loop's sectors (time, hits, threads, close passes, the Heat hold; Clean, Pace, Threads, Heat in that order), and `road.rs` answers `lane_index_at` / `is_on_shoulder` on the loop map (lane-count tapers included).
+
+Multiplayer additions, none of which changes what the port computes when unused: `begin_tick` / `end_tick` split `step` around its detection and `award` pays one event as the detection would (the official score pays **verified claims** there); `set_crew_factor` multiplies every scored event's points (1.0 by default: `x × 1.0 == x`); `forfeit_chain` (Rejoin crew, tag `rejoin`); the `train` kind.
+
+**Parity** (`crates/sim/tests/scoring_parity.rs`; vectors from `tools/server_data/export_sim_data.gd --only=scoring`): the exporter runs the real `Scoring` on a `StraightRoadPath` with cars on scripted lines (no traffic model: the Rust replay repeats the motion arithmetic exactly) and a scripted player (speed changes and dips below the minimum, lane changes with yaw, shoulder visits, boost), with hits and the ghost, checkpoints, bonuses, night and run end as ops. Results:
+
+| Vectors | Result |
+| --- | --- |
+| `scoring_hull.json`: 2,000 box pairs | 2,000 / 2,000 bit-exact |
+| `scoring_weave_120hz.json` (3 lanes, 75 s at 120 Hz), `scoring_weave_20hz.json` (4 lanes, 150 s at 20 Hz), `scoring_edges_120hz.json` (shoulders, dips, 60 s) | **tick-identical**: 9,000 / 3,000 / 7,200 ticks, every event (kind, tag, points, multiplier, clearance, slot, value: 102 / 191 / 84 events) and `take_boost_fill()` bit-exact, `Scoring.trace_hash()` equal every tick. Every event kind and loss reason occurs |
+
+**When `src/scoring/` changes:** apply the same change to `rules.rs`, re-export (`tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_data.gd -- --only=scoring`), run `cargo test -p sim --test scoring_parity`. The traces fail at the first tick that differs.
+
+### Claims (the contract for the client, N6.2)
+
+The client detects events with its own rules for instant feedback and claims each one: `score_claim {claim_id, tick, kind, side, cars}`. **All ticks are room ticks from `server_now()`.**
+
+| `kind` | `tick` | `cars` (id, clearance mm) | `side` |
+| --- | --- | --- | --- |
+| `pass`, `close_pass` | the tick the client paid it (`Scoring` wrote the event: the car fully behind) | the car, its minimum hull-to-hull clearance over the pass | the car's side at the crossing (`left`/`right`) |
+| `thread` | the tick of the second pass (the one that completed it; send its own `pass` / `close_pass` claim too, first) | first car, second car, each with its clearance | the first car's side |
+| `cut` | the tick the player's centre crossed into the new lane | the nearest eligible car (clearance 0) | `none` |
+
+- Send claims in the order the events happened (the server pays claims of one tick in arrival order), right away. A claim names only cars the client was streamed.
+- **`PlayerState.tick` must describe the car at that tick** (the first physics step at or after it), not a later instant: the server pairs each state with the traffic at its tick. 50 ms off at a 30 m/s closing speed is 1.5 m.
+- Report every hit (`hit_report`, with `car_id` for traffic and the lives left). The client stays authoritative for its lives.
+- Rejected claims come back as `score_event {kind: claim_rejected, ref_id: claim_id, tick: the claim's tick}` (dev HUD). There is no acceptance message: the official score is the answer.
+
+### Verification
+
+Every accepted `PlayerState` of a run goes into the player's state ring (64 ticks). Once the traffic history holds its tick, the **tracker** pairs it with the room's cars at that tick (`car_history.rs`: every live car after each world step, 28 bytes each, for `rooms.stale_state_ms` + 2 ticks) and runs the client's pass rule on the server's data: a car fully ahead enters the longitudinal overlap window and leaves it fully behind; the tick the centres cross, their lateral offset then, the minimum clearance over the window (`RoadHull.clearance`) and the tick it completes. It tracks the cars from `track_ahead_m` ahead to 10 m past the window behind, with a player hull of the game's largest car (`player_length_m` × `player_width_m`: 4.8 × 1.95 m, inset 8 cm), so the server's clearance is never larger than the client's for its body.
+
+| Claim | Accepted when (defaults) | Else |
+| --- | --- | --- |
+| any | every car was streamed to this client (`RoomTraffic::client_has`); the run is in progress and the tick is not before it | `unknown_car`, `no_run` |
+| `pass` | the server saw the pass complete within **±300 ms** (`claim_timing_ms`) of the tick, not claimed yet; the centres' lateral offset ≤ 5.4 m (+ 0.35 m); the claimed side (checked when the offset is over 1 m) | `no_pass`, `timing`, `duplicate`, `lateral`, `side` |
+| `close_pass` | as a pass, and the server's clearance < 1.0 m **+ 0.35 m** and ≤ the claimed clearance **+ 0.35 m** (`claim_clearance_tolerance_m`) | `clearance` |
+| `thread` | the second car's pass completed within ±300 ms; the first car's centres crossed within the thread window (0.5 s) + 300 ms of the second's; opposite sides; each clearance < 1.5 m + 0.35 m and ≤ its claim + 0.35 m; neither pass in another thread | `thread`, `side`, `clearance`, `lateral` |
+| `cut` | the player's states show a lane change (two driving lanes) within ±300 ms; the speed ≥ 140 km/h − `cut_speed_tolerance_kmh` (5); the named car in the lane left or entered, its hull gap ≤ 15 m + `cut_gap_tolerance_m` (2 m); the car not named in an accepted cut in the last 3 s (− 300 ms) | `cut`, `cooldown` |
+
+A claim that matches accepts at once; one that does not waits until the tracker has seen the player's states up to its tick + 300 ms, or `claim_max_wait_ms` (1 s) passed, then it is rejected. `claim_queue` (32) undecided claims per player; more are `queue_full`. Nobody is kicked for rejections (as for plausibility offences). Metrics: `wb_room_claims_total{verdict, reason}`.
+
+### The official score
+
+"The server runs the same scoring rules on accepted claims only" (`official.rs`): one `sim::scoring::Scoring` per run, stepped once per accepted state in tick order, **`official_lag_ms` (1.5 s) behind the room clock** so that every claim, hit report and crewmate pass of a tick is decided before the tick is paid (a claim decided later is paid at the next step and counted in `wb_room_claims_late_total`). A step at tick T after the state before at P, in the client's order:
+
+1. hits and rejoins reported for (P, T]: `notify_hit` (the chain is lost; the lives are the client's `lives_left`), `forfeit_chain`;
+2. night ×2 from the **room clock** at T (`RoomTime::is_night`), the crew factor at T; `begin_tick(T − P)`: the shoulder from the reported `d` (any wheel, with the default body), minimum speed and hesitation from the reported speed;
+3. the accepted claims of (P, T] in arrival order, each paid like the client's detection pays it (base × multiplier before the gain × speed factor × night × crew; the gain unless the shoulder blocks it), each pass or thread then offered to the train log;
+4. `end_tick`: the multiplier decays (boost from the state's flag, the shoulder ×3), a cash-out banks;
+5. the sector: its time and Heat hold. A gantry crossed between P and T (`LoopMap::sector_crossed`) banks the chain (`notify_checkpoint`), pays the earned bonuses (Clean 5,000, Pace 3,000 at ≥ 170 km/h average, Threads 3,000 for 3+, Heat 5,000 for 15 s at ≥ 10×; × night) as `score_event {sector_clean | sector_pace | sector_threads | sector_heat, points, sector}` (`sector` = the sector completed, 1-based: gantry k − 1 → k), and a clean sector gives a life back (up to 2). A run's first sector starts where the run was placed; a placement restarts it.
+
+Points differ from the client's only by the 20 Hz sampling (the multiplier's decay between the client's 120 Hz event and the server's tick, speed read from the state): at most a point or so per event, which the banking-moment easing absorbs.
+
+**Crew proximity** (spec): every crewmate (same `crew_slot`, run in progress) whose state within 2 ticks of T is within **30 m** along the loop (`crew_range_m`) adds **+0.25×** (`crew_bonus_per_mate`) to the factor on each scored event's points, capped at **×2.0** (`crew_factor_cap`). `score_sync.crew_in_range` carries the count.
+
+**Trains** (spec): a pass (same car, same side) or a thread (the same two cars) that a crewmate made **within 1.0 s before** (`train_window_ms`, by the server's crossing ticks) is a train link: it pays **25 base points and +2 multiplier** (`train_points`, `train_multiplier_gain`) right after the pass, like any scored event (× speed, night, crew). Links count up: the crewmate's link + 1 (the first follower is TRAIN ×2). `score_event {train, points, multiplier_gain_milli: 2000, link, ref_id: the car}` goes to every member of the crew.
+
+**`score_sync`** (private): at every banking moment (a bank or a bonus: `flags.banking`) and at least once a second (`sync_interval_ms`), with the official tick it describes (`tick`: the official timeline's, about 1.5 s behind the room), `run_seq`, `banked`, `chain`, `multiplier_milli`, `lives`, `crew_in_range`, `night` (the room clock at that tick) and `unverified`. **The client eases its display to the server's values at banking moments** (spec), comparing with its own history at `tick`, so a correction never takes score away mid-chain.
+
+**Session crew total:** the banked scores of the crew's finished runs this room session plus its members' banked scores so far, in `room_snapshot.crews` and as `room_event.crew` whenever it changes (at most once a second per crew, `crew_total_interval_ms`; at once when a run ends).
+
+### Hits
+
+- **The client is authoritative for its lives.** A `hit_report` (any target) loses the chain at its tick in the official timeline; its `lives_left` is the run's lives; `lives_left = 0` ends the run (N5.1's crash-out).
+- **Accepted traffic hits:** a `hit_report {traffic, car_id}` is confirmed when the tracker saw that car within `hit_confirm_clearance_m` (1 m) of the player within ±300 ms of the hit's tick; then `RoomTraffic::hit_car` applies the scripted reaction (swerve, hard brake, hazards, streamed as N4.2 describes). Metrics `wb_room_hits_confirmed_total` / `_refused_total`.
+- **Server hit detection** (spec): the player's reported hull and a car's overlapping deeper than **0.3 m** (`hit_overlap_m`, the separating-axis penetration, `sim::scoring::hull::penetration`) on **2+ consecutive states** (`hit_overlap_ticks`) is a contact. One the client did not report (no hit report within `hit_match_ms`, 1.5 s, of it, nor a ghost period after one), outside spawn / rejoin protection and the ghost flag, **marks the run unverified** (`wb_room_hits_unreported_total`; logged once per run; `score_sync.flags.unverified`). The run goes on.
+
+### Run results and the boards
+
+`run_result` now carries the official score (the banked total: the run's end loses the held chain, as in single-player; a disconnect keeps the banked score) and the counts (`passes`, `close_passes`, `cuts`, `threads`, `trains`, `max_multiplier_milli`). `verified` = no plausibility offence (N5.1) **and** no unreported server-detected hit **and** the claim acceptance above `verify_min_acceptance_pct` (90 %) once the run has `verify_min_claims` (20) decided claims (**deviation MP-D9**, see below). `leaderboard_eligible` = verified and a ranked room (MP-D7: public, or private on normal density and the `cycle` clock for the whole run).
+
+Every **verified** run goes to the boards: the room hands it to the rooms' run sink (`Rooms::set_run_sink`; the app's is `leaderboards::mp_runs::run_sink`), which, off the room task, takes the player's crew snapshot and calls `record_multiplayer_run` (N7.1): stored as `verified` with the room kind (`public`, `private`, `private_custom`: stats only), Loop season and all-time for ranked rooms, the crew's Loop crew sum. `car` is stored as `unknown` and `build` as 0 (the protocol carries neither). Unverified runs are not written.
+
+### Allocation and cost
+
+Nothing allocates per tick: rings and queues are sized when a player joins (states 64, observed passes 64, contacts 16, near misses 128, claims 32, pending hits 16), the outbox and the seats' private queues keep their capacity. `tests/scoring_alloc.rs` (a counting allocator): 600 ticks of a rush room, 8 players, ~250 honest claims (the client's rules on the same traffic, all accepted), bogus ones, hits, a rejoin and a run ended and restarted: **0 allocations**.
+
+BENCH_PLACEHOLDER
+
+### Bots
+
+`bots::driver`: `DriveMode::Traffic` bots drive through the traffic they are streamed (a simple IDM behind a slower car, an overtake through a clear neighbouring lane, leaving a lane that ends, wandering ±1.3 m in the lane so some passes are close), report their own hits (hull contact on their mirror, 2 lives, a 2 s ghost, the placement's 3 s protection), and with `ClaimMode::Honest` run the client's rules (`sim::scoring`, the parity-tested port) on their traffic mirror carried to each state's tick (the last correction at its speed, lane changes on their intent's curve), turning its events into claims exactly as above. `ClaimMode::Cheat` bends every claim: `InflateClearance` (plain passes claimed close at 0.3 m), `FabricateCars` (cars ahead never passed, or ids never sent), `WrongTiming` (1.5 s early). `bots::link` is a minimal delay line per direction (RTT/2 ± jitter/2; a "lost" frame arrives an RTT later, the order kept, as over TCP); the full N4.4 layer and its metrics are N4.4's.
+
+ACCEPTANCE_PLACEHOLDER
+
+### Tests
+
+| Test | What |
+| --- | --- |
+| `sim/tests/scoring_parity.rs` | The parity table above |
+| `sim::scoring::*::tests` | Params (the spec's numbers), the event buffer, hull and penetration, the loop road against its lane ranges, sector bonuses |
+| `rooms::scoring::tests` | Without sockets, a scripted traffic with a history: an honest pass accepted and paid at its tick (the sync's chain, the banking sync, at least one a second); fabricated, never-passed, late, inflated and duplicate claims each rejected for their reason; close passes and a thread paid on one tick (and a one-sided thread refused); cuts (window, cooldown, too slow); crew proximity ×1.25 and a train (TRAIN ×2, to the crew only), the session crew total; night ×2; sectors (bank, Clean + Pace, a hit spoils Clean and costs a life until a clean sector); an unreported contact (unverified) vs a reported hit (confirmed: the car reacts); rejoin forfeits the chain; claims after the run are `no_run`; acceptance below the threshold |
+| `rooms::scoring::{tracker, ring}::tests`, `rooms::car_history::tests` | The server's pass view (crossing tick, side, clearance), contacts, the ring, the history |
+| `rooms::tests` | Through the room: a claim routed and its rejection in the player's frame, score syncs, `run_result` with the official score, verified runs to the sink (and an unverified one not) |
+| `tests/scoring.rs` | Over real sockets with the mobile link: 8 honest bots in a rush room for 30 s (every claim decided, none rejected); 3 cheats (one per kind) among 5 honest bots (every fabricated and mistimed claim refused, inflated ones refused unless genuinely close, the honest bots' all accepted); `acceptance_run_long` (ignored) |
+| `tests/scoring_alloc.rs` | 0 allocations (above) |
+| `tests/config.rs` | `[scoring]` in the example file equals the defaults |
+
+### Configuration
+
+`[scoring]` (spec values unless marked):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `claim_timing_ms` | `300` | A claim's tick within this of the server's view (spec: ±300 ms) |
+| `claim_clearance_tolerance_m` | `0.35` | Clearance tolerance (spec: +0.35 m) |
+| `cut_gap_tolerance_m` / `cut_speed_tolerance_kmh` | `2.0` / `5.0` | Cut checks on 20 Hz states (not in spec) |
+| `claim_max_wait_ms` / `claim_queue` | `1000` / `32` | The longest a claim waits for its evidence; undecided claims per player (not in spec) |
+| `official_lag_ms` | `1500` | The official timeline's lag behind the room (not in spec; ≤ 2500) |
+| `sync_interval_ms` | `1000` | `score_sync` at least this often (spec: once a second) |
+| `crew_range_m` / `crew_bonus_per_mate` / `crew_factor_cap` | `30.0` / `0.25` / `2.0` | Crew proximity (spec) |
+| `train_window_ms` / `train_points` / `train_multiplier_gain` | `1000` / `25` / `2.0` | Trains (spec) |
+| `hit_overlap_m` / `hit_overlap_ticks` | `0.3` / `2` | Server hit detection (spec) |
+| `hit_match_ms` / `hit_confirm_clearance_m` | `1500` / `1.0` | A report accounts for a contact this close in time; a reported traffic hit is confirmed this close (not in spec) |
+| `verify_min_acceptance_pct` / `verify_min_claims` | `90.0` / `20` | Leaderboard verification (MP-D9, not in spec) |
+| `player_length_m` / `player_width_m` | `4.8` / `1.95` | The hull the server measures with (the largest car; not in spec) |
+| `track_ahead_m` / `crew_total_interval_ms` | `60.0` / `1000` | Tracking range; crew total pacing (not in spec) |
+
+### Deviations and open questions
+
+- **MP-D9 (needs an orchestrator row):** `run_result.verified` also requires no unreported server-detected hit (spec) **and a claim acceptance of at least 90 % once a run has 20 decided claims** (not in spec: a client whose claims keep failing is either cheating or broken). Rejected claims still never kick.
+- **Claim semantics** (the table above) are this WP's reading of PROTOCOL.md's `score_claim` fields; N6.2 implements them. The claim's tick for passes is the completion (when the client pays), which the server matches against its own completion ±300 ms; with a car body up to 0.3 m shorter than the server's hull and a closing speed under ~1 m/s the two completions can drift apart by more than that (rare: the pass then takes seconds).
+- **The official score runs 1.5 s behind the room;** `score_sync.tick` says which tick it describes. The client compares against its own state at that tick.
+- **No car or build on the wire:** multiplayer runs are stored with `car = unknown`, `build = 0`.
+- **`hit_report` for barriers and the roadside** is taken as reported (no server check: the server has no roadside model).
+
 ## Configuration reference
 
 Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`), then environment variables named `WB_<SECTION>__<KEY>` (double underscore). Each environment value is parsed as the key's type. Lists are comma-separated. Unknown keys or bad values in the file or the environment stop startup with every error listed. `RUST_LOG` overrides `log.level`. The defaults are production values: `config/server.example.toml` lists them all, and a test keeps it in sync.
@@ -1516,6 +1659,7 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `rate_limits.social_per_hour` / `_burst` | `WB_RATE_LIMITS__SOCIAL_PER_HOUR` / `__SOCIAL_BURST` | `60` / `20` | Social writes per account, on top of the account limit (see "Social API") |
 | `social.*` | `WB_SOCIAL__…` | see "Social API → Configuration" | Friend, request and block caps; crew size and invite codes; the report limit |
 | `rooms.*` | `WB_ROOMS__…` | see "Rooms → Configuration" | Seats, holds and delays, spawns, the room clock, room queues, plausibility limits, room traffic |
+| `scoring.*` | `WB_SCORING__…` | see "Scoring (N6.1) → Configuration" | Claim tolerances, the official lag, score syncs, crew proximity, trains, hit detection, verification |
 
 The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLINKS__DIR` to the values above. It needs no config file.
 

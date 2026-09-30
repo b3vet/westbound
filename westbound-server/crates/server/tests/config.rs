@@ -400,3 +400,41 @@ fn rooms_traffic_streaming_defaults_and_validation() {
     let errs = c.validate().unwrap_err().0;
     assert_eq!(errs.len(), 4, "{errs:#?}");
 }
+
+#[test]
+fn scoring_defaults_and_validation() {
+    let mut c = Config::default();
+    with_secrets(&mut c);
+    // N6.1 (spec: ±300 ms, +0.35 m; crew +0.25× within 30 m, cap ×2; trains 1.0 s, 25, +2;
+    // hits 0.3 m for 2 ticks).
+    let s = &c.scoring;
+    assert_eq!(
+        (s.claim_timing_ms, s.claim_clearance_tolerance_m),
+        (300, 0.35)
+    );
+    assert_eq!(
+        (s.crew_range_m, s.crew_bonus_per_mate, s.crew_factor_cap),
+        (30.0, 0.25, 2.0)
+    );
+    assert_eq!(
+        (s.train_window_ms, s.train_points, s.train_multiplier_gain),
+        (1_000, 25, 2.0)
+    );
+    assert_eq!((s.hit_overlap_m, s.hit_overlap_ticks), (0.3, 2));
+    let r = westbound_server::rooms::RoomParams::from_config(&c).scoring;
+    assert_eq!(r.verify.timing_ticks, 6);
+    assert_eq!((r.lag_ticks, r.sync_ticks, r.train_ticks), (30, 20, 20));
+    assert_eq!(r.crew_factor(0), 1.0);
+    assert_eq!(r.crew_factor(2), 1.5);
+    assert_eq!(r.crew_factor(7), 2.0, "capped");
+    assert!(r.history_ticks >= 42, "the history covers stale states");
+    c.validate().unwrap();
+
+    c.scoring.claim_clearance_tolerance_m = -0.1;
+    c.scoring.crew_factor_cap = 0.0;
+    c.scoring.verify_min_acceptance_pct = 101.0;
+    c.scoring.claim_queue = 0;
+    c.scoring.official_lag_ms = 5_000;
+    let errs = c.validate().unwrap_err().0;
+    assert_eq!(errs.len(), 5, "{errs:#?}");
+}

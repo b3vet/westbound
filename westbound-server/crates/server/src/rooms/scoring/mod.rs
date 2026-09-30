@@ -490,7 +490,7 @@ impl RoomScoring {
         map: &LoopMap,
         night: &dyn Fn(u32) -> bool,
     ) {
-        self.observe(now, &*traffic, map, false);
+        self.observe(now, &*traffic, map, None);
         for (player, car) in self.hit_cars.drain(..) {
             traffic.hit_car(player, car);
         }
@@ -502,14 +502,21 @@ impl RoomScoring {
         self.crew_totals(now, false);
     }
 
-    /// The trackers, the claims and the hit confirmations. `flush`: decide everything
-    /// with what is there (the run ends).
-    fn observe(&mut self, now: u32, traffic: &dyn RoomTraffic, map: &LoopMap, flush: bool) {
+    /// The trackers, the claims and the hit confirmations. `flush`: this player's run
+    /// ends, decide all of its claims and hits with what is there.
+    fn observe(
+        &mut self,
+        now: u32,
+        traffic: &dyn RoomTraffic,
+        map: &LoopMap,
+        flush_player: Option<u16>,
+    ) {
         let hist = traffic.car_history();
         let rules = &self.rules;
         for p in &mut self.players {
             track(p, hist, map);
             let pid = p.player_id;
+            let flush = flush_player == Some(pid);
             let knows = |car: u16| traffic.client_has(pid, car);
             let decide_now = if flush {
                 now.wrapping_add(rules.verify.wait_ticks)
@@ -756,7 +763,7 @@ impl RoomScoring {
         if !self.players[i].official.active {
             return None;
         }
-        self.observe(now, &*traffic, map, true);
+        self.observe(now, &*traffic, map, Some(player_id));
         for (player, car) in self.hit_cars.drain(..) {
             traffic.hit_car(player, car);
         }

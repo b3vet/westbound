@@ -223,7 +223,8 @@ fn scoring_a_rush_room_allocates_nothing() {
     let accepted = RoomMetrics::get(&metrics.claims_accepted);
     let rejected = metrics.claims_rejected_total();
     println!("scoring: {accepted} claims accepted, {rejected} rejected, {allocs} allocations");
-    let unknown = metrics.claims_rejected(westbound_server::rooms::scoring::claims::Reject::UnknownCar);
+    let unknown =
+        metrics.claims_rejected(westbound_server::rooms::scoring::claims::Reject::UnknownCar);
     assert!(accepted > 20, "honest claims went through: {accepted}");
     assert!(unknown > 0, "the bogus ones did not");
     assert!(
