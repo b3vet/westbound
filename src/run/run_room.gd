@@ -57,6 +57,8 @@ var rejoin_requested: bool = false
 var tick_rate: float = 20.0
 
 var _crash_banked: int = 0
+## Dev (snaps): demo players keep their places around the car (snap_room).
+var demo_remotes: int = 0
 
 var _car_len: float = 4.5
 var _car_w: float = 1.9
@@ -202,6 +204,8 @@ func leave() -> void:
 func frame(real_dt: float) -> void:
 	if session.has_placement():
 		_apply_placement()
+	if demo_remotes > 0:
+		_demo_step(real_dt)
 	_follow_clock()
 	_upload()
 	_draw_remotes()
@@ -377,3 +381,135 @@ func _on_notice(text: String) -> void:
 func _crew_color(m: NetRoomMember) -> Color:
 	var colors := net.room_crew_colors
 	return colors[m.crew_color % colors.size()] if not colors.is_empty() else Color.WHITE
+
+
+# ---------------------------------------------------------------- Dev (snaps)
+
+## Demo players: name, name tag, crew tag, crew slot.
+const DEMO_MEMBERS: Array = [["Dusty", 1234, "WB", 0], ["Kai", 55, "JDM", 1], ["NightOwl", 420, "", 2],
+	["Mara", 9, "WB", 0], ["Rook", 7777, "JDM", 1], ["Vega", 31, "", 3], ["Ash", 808, "WB", 0]]
+## Demo cars around yours: metres ahead, lanes to the right (one within 15 m: translucent).
+const DEMO_OFFSETS: Array = [[9.0, 1], [34.0, -1], [62.0, 0], [115.0, 1], [170.0, -1], [230.0, 0], [290.0, 1]]
+const DEMO_TICK := 1000
+const DEMO_YOU := 7
+const DEMO_BACK_TICKS := 4
+const DEMO_CREWS := 4
+
+
+## Dev (snaps, `--room=demo`): the run drives in a room without a server: `--remotes=N`
+## (default 3) players around the car, a quick chat on the second one's nametag,
+## `--room_toast=1` the crash-out toast, `--room_menu=chat|players` the room menu open.
+static func snap_room(r: Run, args: Dictionary) -> void:
+	var nt := NetTuning.load_default()
+	var road := r.loop.road
+	var rs := NetRoomSession.new(NetLoopbackLink.new(NetTimeSource.new(), Rng.new(1)).client, nt, road.length())
+	var n := clampi(int(args.get("remotes", 3)), 0, mini(nt.room_max_remotes, DEMO_MEMBERS.size()))
+	var members: Array[Dictionary] = []
+	for i in n:
+		var m: Array = DEMO_MEMBERS[i]
+		members.append({"player_id": i, "identity": {"account_id": str(i + 1), "display_name": m[0], "name_tag": m[1]},
+			"crew_tag": m[2], "crew_slot": m[3], "flags": {"host": i == 0, "disconnected": false}})
+	members.append({"player_id": DEMO_YOU, "identity": {"account_id": "99", "display_name": "You", "name_tag": 1},
+		"crew_tag": "WB", "crew_slot": 0, "flags": {"host": n == 0, "disconnected": false}})
+	var crews: Array[Dictionary] = []
+	for slot in DEMO_CREWS:
+		crews.append({"crew_slot": slot, "color": slot, "session_total": 0})
+	var lt := r.loop.tuning
+	rs.enter_demo({"room_id": 1, "code": "K7QX2M", "you": DEMO_YOU, "tick": DEMO_TICK,
+		"settings": {"visibility": "private", "max_players": nt.room_max_remotes + 1, "density": "normal",
+			"time_mode": "cycle", "fixed_cycle_ms": 0},
+		"clock": {"cycle_ms": roundi(r.loop.clock.phase_s() * MS_PER_S), "cycle_len_ms": roundi(lt.room_cycle_s() * MS_PER_S),
+			"day_len_ms": roundi(lt.room_day_s() * MS_PER_S)},
+		"members": members, "crews": crews}, float(DEMO_TICK))
+	var me := r.car.state
+	rs.demo_place(DEMO_TICK, road.wrap_s(me.s), me.d, me.v)
+	var lane := road.lane_index_at(me.d, me.s)
+	for i in n:
+		var o: Array = DEMO_OFFSETS[i]
+		var s := me.s + float(o[0])
+		var d := road.lane_center_d(clampi(lane + int(o[1]), 0, road.lane_count(s) - 1), s)
+		var k := rs.remotes.acquire(i)
+		var back := me.v * float(DEMO_BACK_TICKS) / rs.room.tick_rate
+		rs.remotes.tracks[k].push(DEMO_TICK - DEMO_BACK_TICKS, road.wrap_s(s - back), d, 0.0, me.v, 0, NetRoomSession.RUN_DRIVING)
+		rs.remotes.tracks[k].push(DEMO_TICK, road.wrap_s(s), d, 0.0, me.v, 0, NetRoomSession.RUN_DRIVING)
+	if n > 1:
+		var chat := rs.room.member(1)
+		chat.chat_text = NetRoomChat.PHRASE_TEXT[0]
+		chat.chat_at_s = float(rs.time.now_usec()) / NetRoomSession.USEC_PER_S
+	r.room = RunRoom.new(r, rs)
+	r.room.demo_remotes = n
+	r.room.install()
+	r.room.on_run_started()
+	r.room.protected_left_s = 0.0
+	r.fx.stop_ghost()
+	if n > 1:
+		r.room.hud.add_feed(rs.room.member(1).full_name(), NetRoomChat.PHRASE_TEXT[0], nt.room_crew_colors[1])
+	if str(args.get("room_toast", "")) == "1":
+		r.room.hud.show_result({"player_id": DEMO_YOU, "score": 0, "distance_m": 4210, "duration_ms": 131000,
+			"flags": {"verified": true, "leaderboard_eligible": true}}, 48250)
+	match str(args.get("room_menu", "")):
+		"chat":
+			r.room.hud.menu.open(RoomMenu.Tab.CHAT)
+		"players":
+			r.room.hud.menu.open(RoomMenu.Tab.PLAYERS)
+	r.room.frame(0.0)
+
+
+## Dev (snaps, `--state=menu --title=rooms*`): the online hub's room flows without a server:
+## rooms (the hub, rooms available), rooms_off (no server), rooms_create, rooms_code,
+## rooms_browser (four public rooms), rooms_joining, rooms_failed.
+static func snap_hub(r: Run, which: String) -> void:
+	var hub := r.title.online_hub
+	r.title.open_hub()
+	if which == "rooms_off":
+		hub.rooms = null
+		hub.refresh()
+		return
+	var nt := NetTuning.load_default()
+	var rooms := NetRooms.new()
+	rooms.standalone = true
+	var link := NetLoopbackLink.new(NetTimeSource.new(), Rng.new(1))
+	rooms.set_meta(&"demo_link", link)   # the endpoints only hold weak references
+	rooms.setup(null, link.client, nt, null,
+		RunLoop.loop_road(r.tuning).length())
+	rooms.set_process(false)
+	r.add_child(rooms)
+	hub.rooms = rooms
+	hub.refresh()
+	match which:
+		"rooms_create":
+			hub.open_private()
+		"rooms_code":
+			hub.open_code()
+			hub.lobby.code_field.text = "K7QX2M"
+		"rooms_browser":
+			var rows: Array[Dictionary] = [
+				{"room_id": 12, "players": 7, "max_players": 8, "density": "normal", "night": true},
+				{"room_id": 4, "players": 5, "max_players": 8, "density": "normal", "night": false},
+				{"room_id": 9, "players": 8, "max_players": 8, "density": "normal", "night": false},
+				{"room_id": 21, "players": 1, "max_players": 8, "density": "normal", "night": false}]
+			rooms.session.rooms_listed = rows
+			hub.open_browser()
+		"rooms_joining":
+			hub.open_quick_join()
+		"rooms_failed":
+			hub.open_quick_join()
+			hub.lobby.show_error(NetRoomSession.text_for("room_full"))
+
+
+## Dev (snaps): the demo room's clock runs with the frames and its players keep their
+## places around the car (a state per tick).
+func _demo_step(real_dt: float) -> void:
+	session.demo_tick += real_dt * tick_rate
+	var tick := floori(session.demo_tick)
+	var road := run.loop.road
+	var me := run.car.state
+	var lane := road.lane_index_at(me.d, me.s)
+	for i in demo_remotes:
+		var k := session.remotes.slot_of(i)
+		if k < 0 or session.remotes.tracks[k].newest_tick >= tick:
+			continue
+		var o: Array = DEMO_OFFSETS[i]
+		var s := me.s + float(o[0])
+		var d := road.lane_center_d(clampi(lane + int(o[1]), 0, road.lane_count(s) - 1), s)
+		session.remotes.tracks[k].push(tick, road.wrap_s(s), d, 0.0, me.v, 0, NetRoomSession.RUN_DRIVING)

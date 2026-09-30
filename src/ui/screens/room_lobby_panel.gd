@@ -31,7 +31,7 @@ const TEXT_REFRESH := "REFRESH"
 const TEXT_DENSITY := "TRAFFIC"
 const TEXT_TIME := "TIME OF DAY"
 const DENSITY_LABELS: Array[String] = ["LIGHT", "NORMAL", "RUSH HOUR"]
-const TIME_LABELS: Array[String] = ["CYCLE", "MORNING", "GOLDEN HOUR", "NIGHT"]
+const TIME_LABELS: Array[String] = ["CYCLE", "MORNING", "GOLDEN", "NIGHT"]
 const TIME_CYCLE := 0
 const TIME_MORNING := 1
 const TIME_GOLDEN := 2
@@ -67,6 +67,8 @@ var time_choice: int = TIME_CYCLE
 ## The request the STATUS view shows (TRY AGAIN repeats it).
 var request_title: String = TEXT_QUICK
 
+## Dims the hub behind the panel (the whole canvas).
+var backdrop: ColorRect
 var panel: ScreenPanel
 var title: ScreenText
 var status: ScreenText
@@ -92,6 +94,9 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	focus_mode = Control.FOCUS_NONE
 	visible = false
+	backdrop = ColorRect.new()
+	backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(backdrop)
 	panel = ScreenPanel.new()
 	panel.edge = ScreenPanel.Edge.ACCENT
 	add_child(panel)
@@ -144,6 +149,7 @@ func setup(s: HudStyle, t: HudTuning, net_tuning: NetTuning) -> void:
 	tuning = t
 	net = net_tuning
 	panel.setup(s)
+	backdrop.color = Color(s.ink, Units.pct_to_frac(t.screen_dim_pct))
 	for c in panel.get_children():
 		if c is ScreenButton:
 			(c as ScreenButton).setup(s)
@@ -159,7 +165,9 @@ func setup(s: HudStyle, t: HudTuning, net_tuning: NetTuning) -> void:
 func place(area: Rect2) -> void:
 	_area = area
 	position = Vector2.ZERO
-	size = area.end
+	size = area.end + area.position
+	backdrop.position = Vector2.ZERO
+	backdrop.size = size
 	_layout()
 
 
@@ -329,6 +337,11 @@ func _on_joined(_r: NetRoomState) -> void:
 	_bind(false)
 	visible = false
 	joined.emit(s)
+
+
+## Shows a failure on the STATUS view (a refused join; previews).
+func show_error(message: String) -> void:
+	_on_failed("", message)
 
 
 func _on_failed(_code: String, message: String) -> void:

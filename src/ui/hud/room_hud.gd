@@ -290,19 +290,21 @@ func _relayout() -> void:
 	var sh := net.room_strip_dot_px * ts * 2.0
 	strip.size = Vector2(sw, sh)
 	strip.position = Vector2(_safe.get_center().x - sw * 0.5, _safe.position.y + maxf((m - sh) * 0.5, 0.0))
-	# Under the score panel: the room line, then ROOM and REJOIN CREW, then the feed.
+	# Under the score panel: the room line, then the feed.
 	var x := _safe.position.x + m
 	var y := _safe.position.y + m + hud.score_size_px.y * ts + g
 	line.position = Vector2(x, y)
 	line.size = line.get_combined_minimum_size()
-	y += maxf(line.size.y, HudDraw.cap_height(line.font_px()) * 2.0) + g
-	var bw := net.room_button_width_px * ts
-	room_button.size = Vector2(bw * ROOM_SHARE, hud.touch_target_px)
-	room_button.position = Vector2(x, y)
-	rejoin_button.size = Vector2(bw, hud.touch_target_px)
-	rejoin_button.position = Vector2(x + room_button.size.x + g, y)
-	_feed_top = y + hud.touch_target_px + g
+	_feed_top = y + maxf(line.size.y, HudDraw.cap_height(line.font_px()) * 2.0) + g
 	_place_feed()
+	# Top-right, under the pause / camera buttons and the high-beam slot: REJOIN CREW and
+	# ROOM (the right thumb reaches them; clear of its zone at the bottom).
+	var bw := net.room_button_width_px * ts
+	var top := _safe.position.y + m + hud.button_size_px.y * ts * 2.0 + g * 2.0
+	room_button.size = Vector2(bw * ROOM_SHARE, hud.touch_target_px)
+	room_button.position = Vector2(_safe.end.x - m - room_button.size.x, top)
+	rejoin_button.size = Vector2(bw, hud.touch_target_px)
+	rejoin_button.position = Vector2(room_button.position.x - g - bw, top)
 	menu.place(_safe.grow(-m))
 	_place_toast()
 	_place_banner()

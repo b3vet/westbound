@@ -95,6 +95,9 @@ var states_sent: int = 0
 var last_sent_tick: int = -1
 ## Frames handled in a room (dev HUD).
 var frames_in: int = 0
+## Dev (snaps, previews): the room clock stands at this tick instead of the server's
+## (-1 = off). See enter_demo().
+var demo_tick: float = -1.0
 
 var _request: Request = Request.NONE
 var _request_settings: Dictionary = {}
@@ -204,7 +207,26 @@ func reconnect_left_s() -> float:
 
 ## The room clock (fractional room tick), or -1 before the first clock sample.
 func server_tick() -> float:
+	if demo_tick >= 0.0:
+		return demo_tick
 	return client.clock.server_now() if client.clock.has_sync() else -1.0
+
+
+## Dev (snaps, previews): a room without a server: `snapshot` (vector JSON) applied as if
+## joined, the clock standing at `tick`.
+func enter_demo(snapshot: Dictionary, tick: float) -> void:
+	demo_tick = tick
+	room.apply_snapshot(snapshot)
+	_set_state(State.IN_ROOM)
+
+
+## Dev (snaps, previews): a placement as the server would send it.
+func demo_place(tick: int, s_m: float, d_m: float, speed_mps: float) -> void:
+	placement_tick = tick
+	placement_s = s_m
+	placement_d = d_m
+	placement_speed = speed_mps
+	_placement_pending = true
 
 
 ## Round trip to the server, ms (the room line's ping; 0 before a sample).
@@ -306,7 +328,7 @@ func poll() -> void:
 			if cs == NetClient.State.FAILED:
 				_fail_request(client.failure_reason, client.failure_message)
 			elif now - _request_since_us > roundi(tuning.room_join_timeout_s * USEC_PER_S):
-				_fail_request(REASON_JOIN_TIMEOUT, _text(REASON_JOIN_TIMEOUT))
+				_fail_request(REASON_JOIN_TIMEOUT, text_for(REASON_JOIN_TIMEOUT))
 		State.RECONNECTING:
 			if now >= _reconnect_deadline_us:
 				client.close()
@@ -378,7 +400,7 @@ func _send_request() -> void:
 	cmd["type"] = "lobby_command"
 	var err := client.send_messages([cmd])
 	if err != "":
-		_fail_request(err, _text(err))
+		_fail_request(err, text_for(err))
 		return
 	if _request == Request.BROWSE:
 		_request = Request.NONE
@@ -423,7 +445,7 @@ func _on_server_error(code: String, fatal: bool, _detail: String) -> void:
 			client.send_messages([{"type": "lobby_command", "kind": "room_leave"}])
 			_send_request()
 			return
-		_fail_request(code, _text(code))
+		_fail_request(code, text_for(code))
 	elif state == State.RECONNECTING:
 		# The room is gone or full again: the seat is lost.
 		client.send_messages([{"type": "lobby_command", "kind": "room_leave"}])
@@ -532,7 +554,7 @@ func _send_room(msg: Dictionary) -> bool:
 
 
 func _left(reason: String) -> void:
-	var text := "" if reason == "left" else _text(reason)
+	var text := "" if reason == "left" else text_for(reason)
 	last_code = reason
 	last_message = text
 	left.emit(reason, text)
@@ -545,7 +567,7 @@ func _clear_room() -> void:
 	last_sent_tick = -1
 
 
-static func _text(code: String) -> String:
+static func text_for(code: String) -> String:
 	return String(_TEXT.get(code, NetClient.user_message(code)))
 
 

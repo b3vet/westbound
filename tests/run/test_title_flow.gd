@@ -309,7 +309,7 @@ func test_loop_practice_from_the_online_hub() -> void:
 	var hub := r.title.online_hub
 	check(hub.visible and not r.title.title.visible, "ONLINE: the hub")
 	for b in hub.room_buttons:
-		check(b.disabled and b.note == OnlineHubScreen.TEXT_SOON, "%s: rooms are coming" % b.text)
+		check(b.disabled and b.note == OnlineHubScreen.TEXT_OFF, "%s: rooms need the server (N5.2)" % b.text)
 	_tap(hub.back_button)
 	check(r.title.title.visible and not hub.visible, "BACK: the title")
 	_tap(r.title.title.online_button)

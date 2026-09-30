@@ -82,7 +82,7 @@ func _initialize() -> void:
 	_main.call_deferred()
 
 
-func _process(_delta: float) -> bool:
+func _process(_dt: float) -> bool:
 	for dr in _drivers:
 		dr.rs.poll()
 		dr.drive()
@@ -131,7 +131,7 @@ func _main() -> void:
 	_row("placed", await _wait(func() -> bool: return a.placed), "s %.1f d %.2f tick %d" % [a.s0, a.d, a.tick0])
 	b.rs.join_code(a.rs.room.code)
 	_row("join by code", await _wait(func() -> bool: return b.rs.is_in_room() and b.placed),
-		"B is player %d; placed %.1f m from A" % [b.rs.room.you, absf(_delta(a.s_at(b.tick0), b.s0))])
+		"B is player %d; placed %.1f m from A" % [b.rs.room.you, absf(_ahead(a.s_at(b.tick0), b.s0))])
 	_row("members", await _wait(func() -> bool: return a.rs.room.members.size() == 2), a.rs.room.players_text())
 
 	# States both ways: each sees the other's track where the other says it is.
@@ -145,11 +145,11 @@ func _main() -> void:
 		var now := a.rs.server_tick()
 		var render := now - t.room_interp_delay_ms / MS_PER_S * TICK_HZ
 		a.rs.remotes.sample_all(render, t.room_extrap_max_ms / MS_PER_S * TICK_HZ, t.room_fade_out_s * TICK_HZ)
-		err_a = absf(_delta(b.s_at(render), a.rs.remotes.tracks[sa].s))
+		err_a = absf(_ahead(b.s_at(render), a.rs.remotes.tracks[sa].s))
 		var now_b := b.rs.server_tick()
 		var render_b := now_b - t.room_interp_delay_ms / MS_PER_S * TICK_HZ
 		b.rs.remotes.sample_all(render_b, t.room_extrap_max_ms / MS_PER_S * TICK_HZ, t.room_fade_out_s * TICK_HZ)
-		err_b = absf(_delta(a.s_at(render_b), b.rs.remotes.tracks[sb].s))
+		err_b = absf(_ahead(a.s_at(render_b), b.rs.remotes.tracks[sb].s))
 	_row("remote tracks", ok_tracks and err_a < 1.0 and err_b < 1.0,
 		"A sees B within %.3f m, B sees A within %.3f m (100 ms behind); states sent %d / %d" % [err_a, err_b,
 		a.rs.states_sent, b.rs.states_sent])
@@ -175,7 +175,7 @@ func _main() -> void:
 	before = a.placements
 	a.rs.send_run_event("rejoin", floori(a.rs.server_tick()))
 	var rejoined := await _wait(func() -> bool: return a.placements > before)
-	var behind := _delta(a.s0, b.s_at(a.tick0))
+	var behind := _ahead(a.s0, b.s_at(a.tick0))
 	_row("rejoin crew", rejoined and behind > 0.0 and behind < 120.0, "placed %.1f m behind B" % behind)
 
 	# A dropped socket: B reconnects into the same seat.
@@ -199,7 +199,7 @@ static func _loop_length() -> float:
 	return float((d as Dictionary).get("length_mm", 0)) / MS_PER_S if d is Dictionary else 0.0
 
 
-func _delta(from_s: float, to_s: float) -> float:
+func _ahead(from_s: float, to_s: float) -> float:
 	return fposmod(to_s - from_s + _l * 0.5, _l) - _l * 0.5
 
 

@@ -1526,6 +1526,8 @@ func snap_setup(args: Dictionary) -> void:
 	hub.set_high_beam(bool(args.get("high_beam", false)))
 	if args.has("set_piece") and state == Game.RUNNING:
 		_snap_set_piece(args)
+	if str(args.get("room", "")) == "demo" and loop != null:
+		RunRoom.snap_room(self, args)   # N5.2: the in-room HUD without a server
 	if not bool(args.get("hud", true)):
 		for n: Node in [hud, get_node_or_null(^"DevHud"), get_node_or_null(^"Overlay"), screens, dev.controls, title]:
 			if n != null:
@@ -1557,6 +1559,8 @@ func _snap_menu(args: Dictionary) -> void:
 			title.title.open_account()
 		"boards":
 			title.title.open_leaderboards()
+		var v when v.begins_with("rooms"):
+			RunRoom.snap_hub(self, v)   # N5.2: the hub's room flows without a server
 	title.finish_animations()
 
 

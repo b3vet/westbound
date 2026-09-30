@@ -178,4 +178,5 @@ func test_layout_clear_of_the_thumbs() -> void:
 		for z in zones:
 			check(not c.get_global_rect().intersects(z), "%s clear of the thumb zones" % c.name)
 	for c: Control in [hud.room_button, hud.rejoin_button]:
-		check(c.get_global_rect().end.x < SCREEN.size.x / 3.0, "%s in the left third" % c.name)
+		check(c.get_global_rect().position.x > SCREEN.size.x * 2.0 / 3.0, "%s in the right third" % c.name)
+		check(c.get_global_rect().end.y < SCREEN.size.y * 0.5, "%s in the top half" % c.name)
