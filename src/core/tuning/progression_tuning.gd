@@ -44,16 +44,16 @@ extends Resource
 @export_group("Garage turntable (WP8.2, visual only)")
 ## The turntable's idle spin (degrees per second) and where it starts (0 = nose to camera).
 @export var turntable_spin_deg_s: float = 14.0
-@export var turntable_start_yaw_deg: float = 38.0
+@export var turntable_start_yaw_deg: float = 215.0
 ## A drag on the turntable spins the car (degrees per canvas px).
 @export var turntable_drag_deg_per_px: float = 0.45
 ## Camera: distance from the axis, height, look-at height, vertical field of view.
-@export var turntable_camera_distance_m: float = 8.4
+@export var turntable_camera_distance_m: float = 8.2
 @export var turntable_camera_height_m: float = 2.3
-@export var turntable_look_height_m: float = 0.55
+@export var turntable_look_height_m: float = -0.35
 @export var turntable_fov_deg: float = 30.0
 ## The disc: radius, thickness, and its colours (sRGB, lit by the sky's sun).
-@export var turntable_disc_radius_m: float = 3.3
+@export var turntable_disc_radius_m: float = 2.85
 @export var turntable_disc_height_m: float = 0.14
 @export var turntable_disc_segments: int = 48
 @export var turntable_disc_color: Color = Color(0.16, 0.16, 0.19)
@@ -74,3 +74,7 @@ extends Resource
 ## The XP bar's height (px) and the paint swatch chip's width share of an item.
 @export var garage_xp_bar_px: float = 6.0
 @export var garage_swatch_frac: float = 0.22
+## The driver-level block in the garage's header (px at 100 %).
+@export var garage_level_width_px: float = 250.0
+## Paint names in the list (px at 100 %; three columns with the chip).
+@export var garage_paint_font_px: int = 17

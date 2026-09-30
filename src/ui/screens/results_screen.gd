@@ -11,7 +11,7 @@ extends RunScreen
 ## personal_best, new_best and previous_best). It fades in, counts the score up
 ## (tabular digits, no jitter), pops NEW BEST when the count passes the old best, and
 ## staggers the stat rows in. RETRY (primary, bottom-right thumb reach; mirrored when
-## left-handed) emits `retry`; GARAGE is disabled until Phase 8. Taps are ignored for
+## left-handed) emits `retry`; GARAGE (WP8.2) emits `garage`. Taps are ignored for
 ## results_input_delay_s, so the tap that skipped the crash never lands on RETRY.
 ## N7.2 (multiplayer handoff → Leaderboards): with an online session (NetRunsClient), the
 ## run's submission shows under the tiles (ResultsOnline: placements, NEW PB, VERIFYING,
@@ -20,6 +20,9 @@ extends RunScreen
 ## LeaderboardsScreen over this one.
 ## WP8.5: MENU (beside LEADERBOARDS, away from RETRY) emits `menu`: back to the title.
 ## RETRY keeps the run's mode (the run's retry()).
+## WP8.2: the XP panel under the stats list (right column): the driver level, the XP the
+## run earned (MetaProfile's payload keys, added by Garage.award_run), the bar to the next
+## level, LEVEL UP in gold and what unlocked. Hidden when the payload has no XP keys.
 
 signal retry()
 signal garage()
@@ -36,6 +39,14 @@ const TEXT_GARAGE := "GARAGE"
 const TEXT_LEADERBOARDS := "LEADERBOARDS"
 const TEXT_MENU := "MENU"
 const TEXT_SOON := "SOON"
+const TEXT_XP_LEVEL := "DRIVER LEVEL %d"
+const TEXT_XP_GAINED := "+%s XP"
+const TEXT_XP_NEXT := "%s XP TO LEVEL %d"
+const TEXT_XP_MAX := "MAX LEVEL"
+const TEXT_LEVEL_UP := "LEVEL UP"
+const TEXT_UNLOCKED := "NEW: %s"
+const TEXT_UNLOCKED_MANY := "%d NEW IN THE GARAGE"
+const TEXT_SEP := " · "
 const TEXT_COAST := "COAST REACHED"
 const TEXT_TO_COAST := "OF %d TO THE COAST"
 const TEXT_YES := "YES"
@@ -88,6 +99,12 @@ var stats_panel: ScreenPanel
 ## N7.2: the online line, LEADERBOARDS, and the runs client they follow.
 var online: ResultsOnline
 var boards_button: ScreenButton
+## WP8.2: the XP panel.
+var xp_panel: ScreenPanel
+var xp_level: ScreenText
+var xp_gained: ScreenText
+var xp_bar: GarageXpBar
+var xp_note: ScreenText
 var runs: NetRunsClient
 var leaderboards: LeaderboardsScreen
 ## This run's submission (null: not submitted, or no session).
@@ -169,11 +186,23 @@ func _init() -> void:
 		r.value.align = HORIZONTAL_ALIGNMENT_RIGHT
 		stats_panel.add_child(r.value)
 		_rows.append(r)
+	xp_panel = ScreenPanel.new()
+	xp_panel.name = "XpPanel"
+	xp_panel.visible = false
+	add_child(xp_panel)
+	xp_level = ScreenText.make("", ScreenText.Face.LABEL, 16, ScreenText.Ink.TEXT)
+	xp_panel.add_child(xp_level)
+	xp_gained = ScreenText.make("", ScreenText.Face.LABEL, 16, ScreenText.Ink.ACCENT)
+	xp_gained.tabular = true
+	xp_gained.align = HORIZONTAL_ALIGNMENT_RIGHT
+	xp_panel.add_child(xp_gained)
+	xp_bar = GarageXpBar.new()
+	xp_panel.add_child(xp_bar)
+	xp_note = ScreenText.make("", ScreenText.Face.LABEL, 13, ScreenText.Ink.MUTED)
+	xp_panel.add_child(xp_note)
 	garage_button = ScreenButton.make(TEXT_GARAGE, ScreenButton.Kind.NORMAL, 24)
 	garage_button.name = "Garage"
-	garage_button.note = TEXT_SOON
-	garage_button.disabled = true
-	garage_button.pressed.connect(func() -> void: garage.emit())
+	garage_button.pressed.connect(_on_garage)
 	add_child(garage_button)
 	retry_button = ScreenButton.make(TEXT_RETRY, ScreenButton.Kind.PRIMARY, 24)
 	retry_button.name = "Retry"
@@ -227,6 +256,7 @@ func _restyled() -> void:
 	boards_button.size_px = tuning.font_screen_button_px
 	if leaderboards != null:
 		leaderboards.setup(style, tuning)
+	xp_bar.setup(style)
 	dim.color = Color(style.ink, Units.pct_to_frac(tuning.screen_dim_pct))
 	_layout()
 
@@ -248,6 +278,7 @@ func set_results(payload: Dictionary, legs_to_coast: int, in_miles: bool) -> voi
 				else ScreenText.Ink.TEXT)
 	compare.text = compare_text()
 	compare.set_ink(ScreenText.Ink.GOLD if new_best else ScreenText.Ink.MUTED)
+	_fill_xp()
 	if leaderboards != null:
 		leaderboards.close(false)
 	submission = runs.submission_for(payload) if runs != null else null
@@ -281,6 +312,8 @@ func open() -> void:
 		slide_in(t.panel, dx, tuning.results_fade_in_s, tuning.results_fade_in_s + float(i) * tuning.results_row_stagger_s)
 		i += 1
 	slide_in(stats_panel, -dx, tuning.results_fade_in_s, tuning.results_fade_in_s)
+	if xp_panel.visible:
+		slide_in(xp_panel, -dx, tuning.results_fade_in_s, tuning.results_fade_in_s + float(_rows.size()) * tuning.results_row_stagger_s)
 	if online.visible:
 		slide_in(online, dx, tuning.results_fade_in_s, tuning.results_fade_in_s + float(i) * tuning.results_row_stagger_s)
 	for r in _rows:
@@ -330,6 +363,56 @@ func _on_retry() -> void:
 func _on_menu() -> void:
 	if accepting:
 		menu.emit()
+
+
+func _on_garage() -> void:
+	if accepting:
+		garage.emit()
+
+
+# ---------------------------------------------------------------- XP (WP8.2)
+
+## The XP panel from the payload (hidden without MetaProfile's keys).
+func _fill_xp() -> void:
+	xp_panel.visible = results.has(MetaProfile.R_XP_GAINED)
+	if not xp_panel.visible:
+		return
+	var t := Garage.tuning()
+	var total := int(results.get(MetaProfile.R_XP_TOTAL, 0))
+	var level := int(results.get(MetaProfile.R_LEVEL, 1))
+	var up := level > int(results.get(MetaProfile.R_LEVEL_BEFORE, level))
+	xp_level.text = TEXT_XP_LEVEL % level
+	xp_gained.text = TEXT_XP_GAINED % HudFormat.thousands(int(results.get(MetaProfile.R_XP_GAINED, 0)))
+	xp_bar.frac = Progression.level_progress(total, t)
+	xp_bar.gold = up
+	xp_note.set_ink(ScreenText.Ink.GOLD if up else ScreenText.Ink.MUTED)
+	xp_note.text = xp_note_text(-1.0)
+
+
+## The panel's last line: what unlocked ("LEVEL UP · NEW: SUNSET PAINT"), else the XP to
+## the next level. Shortened to "n NEW IN THE GARAGE" when the names do not fit `max_w`
+## (px; negative: no limit).
+func xp_note_text(max_w: float) -> String:
+	var fresh: Variant = results.get(MetaProfile.R_UNLOCKED, [])
+	var ids: Array = fresh if fresh is Array else []
+	var level := int(results.get(MetaProfile.R_LEVEL, 1))
+	var up := level > int(results.get(MetaProfile.R_LEVEL_BEFORE, level))
+	var head := TEXT_LEVEL_UP + TEXT_SEP if up else ""
+	if ids.is_empty():
+		if up:
+			return TEXT_LEVEL_UP
+		var t := Garage.tuning()
+		if level >= t.max_level:
+			return TEXT_XP_MAX
+		return TEXT_XP_NEXT % [HudFormat.thousands(Progression.xp_to_next(int(results.get(MetaProfile.R_XP_TOTAL, 0)), t)),
+				level + 1]
+	var names := PackedStringArray()
+	for id: Variant in ids:
+		names.append(Garage.catalog().item_name(str(id)))
+	var full := head + TEXT_UNLOCKED % ", ".join(names)
+	if max_w < 0.0 or style == null or HudDraw.text_width(style.label, full, xp_note.font_px()) <= max_w:
+		return full
+	return head + TEXT_UNLOCKED_MANY % ids.size()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -521,6 +604,7 @@ func _layout() -> void:
 		r.value.position = Vector2(sw - pad - maxf(vs.x, sw * VALUE_COL), y + (rh - vs.y) * 0.5)
 		r.value.size = Vector2(maxf(vs.x, sw * VALUE_COL), vs.y)
 		y += rh
+	_layout_xp(Vector2(stats_panel.position.x, stats_panel.position.y + sh + g * 2.0), sw, pad, g)
 	# Left block: header, score, badge + comparison, then the three tiles.
 	var left := a.position.x
 	var hs := header.get_combined_minimum_size()
@@ -576,6 +660,27 @@ func _layout() -> void:
 	var inner := lbw + g * 2.0 if boards_button.visible else 0.0
 	menu_button.size = Vector2(mw, th)
 	menu_button.position = Vector2(a.end.x - inner - mw if mirrored else left + inner, a.end.y - th)
+
+
+## WP8.2: the XP panel under the stats list: level and +XP, the bar, the note line.
+func _layout_xp(at: Vector2, w: float, pad: float, g: float) -> void:
+	var ls := xp_level.get_combined_minimum_size()
+	var gs := xp_gained.get_combined_minimum_size()
+	xp_level.position = Vector2(pad, pad)
+	xp_level.size = ls
+	xp_gained.position = Vector2(w - pad - gs.x, pad)
+	xp_gained.size = gs
+	var bar_h := Garage.tuning().garage_xp_bar_px
+	var row := maxf(ls.y, gs.y)
+	xp_bar.position = Vector2(pad, pad + row + g * 0.5)
+	xp_bar.size = Vector2(w - pad * 2.0, bar_h)
+	if xp_panel.visible:
+		xp_note.text = xp_note_text(w - pad * 2.0)
+	var ns := xp_note.get_combined_minimum_size()
+	xp_note.position = Vector2(pad, xp_bar.position.y + bar_h + g * 0.5)
+	xp_note.size = ns
+	xp_panel.position = at
+	xp_panel.size = Vector2(w, xp_note.position.y + ns.y + pad)
 
 
 ## GARAGE: a share of the menu width. Stats panel: how much it grows with the text
