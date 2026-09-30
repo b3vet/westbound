@@ -637,7 +637,11 @@ func _look_through_accel(i: int, l: int, lk: int, lo: float, hi: float, vi: floa
 		var gap := _ks[nxt] - si - _khl[nxt] - _khl[i]
 		if gap <= 0.0:
 			return -INF
-		a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor))
+		if _pweave[p] == 1 and nxt != _P:
+			a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _wb[p], _pT[p] * _wTk[p], _ws0[p], _pdl[p],
+				_gap_floor))
+		else:
+			a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor))
 		cur = nxt
 	return a
 

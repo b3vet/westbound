@@ -3132,8 +3132,21 @@ impl TrafficSim {
             if gap <= 0.0 {
                 return f64::NEG_INFINITY;
             }
-            a = minf(
-                a,
+            let aj = if self.pweave[p] == 1 && !self.is_player(j) {
+                // WP6.9: a weaving profile's IDM toward traffic, as toward any leader.
+                idm::accel(
+                    vi,
+                    v0,
+                    gap,
+                    vi - self.kv[j],
+                    self.pa[p],
+                    self.wb[p],
+                    hw_t * self.w_tk[p],
+                    self.ws0[p],
+                    self.pdl[p],
+                    self.gap_floor,
+                )
+            } else {
                 idm::accel(
                     vi,
                     v0,
@@ -3145,18 +3158,22 @@ impl TrafficSim {
                     self.ps0[p],
                     self.pdl[p],
                     self.gap_floor,
-                ),
-            );
+                )
+            };
+            a = minf(a, aj);
             cur = j;
         }
         a
     }
 
-    /// MP-D5 (`_predicted_leaders_safe`): the new leader `l` (and, with look-through, the
-    /// ones beyond it while they leave the path) extrapolated `signal + move_min / 2`
-    /// seconds on with its current acceleration (a player holds its speed), against
-    /// vehicle i holding its speed: the gap must stay open and IDM's acceleration there
-    /// must not be below -b_safe.
+    /// MP-D5 (`_predicted_leaders_safe`): a braking new leader `l` (and, with look-through,
+    /// the ones beyond it while they leave the path) extrapolated with its current
+    /// deceleration to when the car is in the lane (`signal + move_min / 2` seconds on),
+    /// against the car holding its speed: the gap must stay open and the car's own IDM
+    /// toward it (as in MOBIL's own-safety check) must not ask for more than b_safe. A
+    /// leader that is not braking (a player holds its speed) is left to that check:
+    /// extrapolating the car's approach alone refuses every gap it closes on (a racer
+    /// 30 km/h faster, within its WP6.9 traffic b_safe).
     #[allow(clippy::too_many_arguments)]
     fn predicted_leaders_safe(
         &self,
@@ -3176,37 +3193,57 @@ impl TrafficSim {
         let mut kk = lk.and_then(|x| self.next_k(x));
         let mut left = self.n.saturating_sub(2);
         loop {
-            let vl = self.kv[cur];
             let al = if self.is_player(cur) {
                 0.0
             } else {
                 self.state.accel[cur]
             };
-            let v_end = vl + al * tau;
-            let (vl_t, dl) = if v_end >= 0.0 {
-                (v_end, (vl + v_end) * 0.5 * tau)
-            } else {
-                (0.0, vl * vl / (-2.0 * al))
-            };
-            let gap = self.road.signed_delta(si, self.ks[cur]) - self.khl[cur] - self.khl[i] + dl
-                - vi * tau;
-            if gap <= 0.0 {
-                return false;
-            }
-            let a = idm::accel(
-                vi,
-                v0,
-                gap,
-                vi - vl_t,
-                self.pa[p],
-                self.pb[p],
-                self.pt[p],
-                self.ps0[p],
-                self.pdl[p],
-                self.gap_floor,
-            );
-            if a < -bsafe {
-                return false;
+            if al < 0.0 {
+                let vl = self.kv[cur];
+                let mut vl_t = vl + al * tau;
+                let mut dl = (vl + vl_t) * 0.5 * tau;
+                if vl_t < 0.0 {
+                    vl_t = 0.0;
+                    dl = vl * vl / (-2.0 * al);
+                }
+                let gap = self.road.signed_delta(si, self.ks[cur]) - self.khl[cur] - self.khl[i]
+                    + dl
+                    - vi * tau;
+                if gap <= 0.0 {
+                    return false;
+                }
+                let a = if self.pweave[p] == 1 {
+                    // WP6.9: a weaving profile's IDM toward traffic (a braking leader is
+                    // traffic).
+                    idm::accel(
+                        vi,
+                        v0,
+                        gap,
+                        vi - vl_t,
+                        self.pa[p],
+                        self.wb[p],
+                        self.pt[p] * self.w_tk[p],
+                        self.ws0[p],
+                        self.pdl[p],
+                        self.gap_floor,
+                    )
+                } else {
+                    idm::accel(
+                        vi,
+                        v0,
+                        gap,
+                        vi - vl_t,
+                        self.pa[p],
+                        self.pb[p],
+                        self.pt[p],
+                        self.ps0[p],
+                        self.pdl[p],
+                        self.gap_floor,
+                    )
+                };
+                if a < -bsafe {
+                    return false;
+                }
             }
             if !(self.config.look_through && self.leaving_path(cur, lo, hi)) {
                 return true;

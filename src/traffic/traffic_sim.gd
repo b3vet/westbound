@@ -1984,15 +1984,23 @@ func _look_through_accel(i: int, l: int, lk: int, lo: float, hi: float, claims: 
 		var gap := _ks[nxt] - si - _khl[nxt] - _khl[i]
 		if gap <= 0.0:
 			return -INF
-		a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor))
+		if _pweave[p] == 1 and nxt != _P:
+			# WP6.9: a weaving profile's IDM toward traffic, as toward any leader.
+			a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _wb[p], hw_t * _wTk[p], _ws0[p], _pdl[p],
+				_gap_floor))
+		else:
+			a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor))
 		cur = nxt
 	return a
 
 
-## The new leader `l` (and, with look-through, the ones beyond it while they leave the
-## path) extrapolated signal + move_min / 2 seconds on with its current acceleration (the
-## player holds its speed), against vehicle i holding its speed: the gap must stay open
-## and IDM's acceleration there must not be below -b_safe.
+## A braking new leader `l` (and, with look-through, the ones beyond it while they leave
+## the path) extrapolated with its current deceleration to when the car is in the lane
+## (signal + move_min / 2 seconds on), against the car holding its speed: the gap must stay
+## open and the car's own IDM toward it (as in MOBIL's own-safety check) must not ask for
+## more than b_safe. A leader that is not braking (the player holds its speed) is left to
+## that check: extrapolating the car's approach alone refuses every gap it closes on (a
+## racer 30 km/h faster, within its WP6.9 traffic b_safe).
 func _predicted_leaders_safe(i: int, l: int, lk: int, lo: float, hi: float, vi: float, v0: float, p: int,
 		bsafe: float) -> bool:
 	var tau := _psig[p] + 0.5 * _pmmin[p]
@@ -2000,19 +2008,25 @@ func _predicted_leaders_safe(i: int, l: int, lk: int, lo: float, hi: float, vi: 
 	var cur := l
 	var kk := lk + 1
 	while true:
-		var vl := _kv[cur]
 		var al := 0.0 if cur == _P else state.accel[cur]
-		var v_end := vl + al * tau
-		var vl_t := v_end
-		var dl := (vl + v_end) * 0.5 * tau
-		if v_end < 0.0:
-			vl_t = 0.0
-			dl = vl * vl / (-2.0 * al)
-		var gap := _ks[cur] - si - _khl[cur] - _khl[i] + dl - vi * tau
-		if gap <= 0.0:
-			return false
-		if Idm.accel(vi, v0, gap, vi - vl_t, _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor) < -bsafe:
-			return false
+		if al < 0.0:
+			var vl := _kv[cur]
+			var vl_t := vl + al * tau
+			var dl := (vl + vl_t) * 0.5 * tau
+			if vl_t < 0.0:
+				vl_t = 0.0
+				dl = vl * vl / (-2.0 * al)
+			var gap := _ks[cur] - si - _khl[cur] - _khl[i] + dl - vi * tau
+			if gap <= 0.0:
+				return false
+			var a: float
+			if _pweave[p] == 1:
+				# WP6.9: a weaving profile's IDM toward traffic (a braking leader is traffic).
+				a = Idm.accel(vi, v0, gap, vi - vl_t, _pa[p], _wb[p], _pT[p] * _wTk[p], _ws0[p], _pdl[p], _gap_floor)
+			else:
+				a = Idm.accel(vi, v0, gap, vi - vl_t, _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor)
+			if a < -bsafe:
+				return false
 		if not (_look_through and _leaving_path(cur, lo, hi)):
 			return true
 		var nxt := -1

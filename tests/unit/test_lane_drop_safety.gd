@@ -88,13 +88,9 @@ func test_mobil_sees_a_fast_car_behind_a_lane_splitting_bike() -> void:
 func test_organic_lane_changes_never_cut_off_a_fast_car_behind_a_bike() -> void:
 	# The same scene run for a while with MOBIL deciding: column cars keep asking for the
 	# free lane 0 while racers arrive behind the splitting bike (from far enough back that
-	# the column cars already in lane 0 are an ordinary approach). Nobody touches. With the
-	# MP-D5 extensions off (WP6.8's model), no racer ever has to brake beyond its MOBIL
-	# b_safe: the WP6.8 property of MOBIL's safety check. With them on (the default), a
-	# racer may brake harder than that, never beyond the clamp: the anticipation brakes
-	# early for a new leader that then brakes hard itself (here a racer cutting back into
-	# lane 0 and braking for the column ahead: MOBIL judged the follower's stock IDM with
-	# the leader holding its speed). docs/TRAFFIC.md, *Lane-drop queue safety*.
+	# the column cars already in lane 0 are an ordinary approach). Nobody touches, and no
+	# racer ever has to brake beyond its MOBIL b_safe; with the MP-D5 extensions (WP6.11,
+	# the default) and without them (WP6.8's model).
 	for on: bool in [false, true]:
 		var sc := _mp_d5_scene(on, SEED + 1)
 		sc.bot.state.s = -5000.0
@@ -124,10 +120,7 @@ func test_organic_lane_changes_never_cut_off_a_fast_car_behind_a_bike() -> void:
 		print("      MP-D5 %s: racers' hardest braking %.2f m/s^2 (b_safe %.1f), %d lane changes" % [
 			label, worst, b_safe, sc.checker.moves])
 		gt(sc.checker.moves, 0, "column cars changed lanes")
-		if on:
-			ge(worst, -tuning.traffic.max_decel_mps2, "on: never beyond the clamp")
-		else:
-			ge(worst, -b_safe - 1e-6, "off: no racer braked beyond its b_safe for a cut-in")
+		ge(worst, -b_safe - 1e-6, "%s: no racer braked beyond its b_safe for a cut-in" % label)
 		eq(sc.checker.collision_pairs, 0, label)
 		eq(sc.checker.total_violations(), 0, sc.checker.summary())
 
