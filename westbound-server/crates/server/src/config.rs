@@ -64,6 +64,7 @@ pub struct Config {
     pub runs: RunsConfig,
     pub social: SocialConfig,
     pub replays: ReplaysConfig,
+    pub rooms: RoomsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -422,6 +423,73 @@ pub struct RunsConfig {
     pub date_late_secs: u64,
 }
 
+/// Rooms and players (N5.1; docs/SERVER.md → "Rooms"). Spec: "Rooms, parties and
+/// matchmaking" (up to 8 players, host rules, the room closes 60 s after it empties),
+/// "Players" (spawning, protection, crash-out, rejoin, the 15 s seat hold, plausibility
+/// checks), "Time of day in multiplayer" (the 32 min cycle). The clock and car numbers
+/// mirror the game's `data/tuning/loop.tres`, `data/cars/*.tres` and
+/// `data/tuning/vehicle.tres`; `tests/rooms_data.rs` pins them to those files.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoomsConfig {
+    /// Seats per room (spec: up to 8). Private rooms may ask for fewer.
+    pub max_players: u8,
+    /// A room with no seats closes after this long (spec: 60 s).
+    pub empty_close_ms: u64,
+    /// A dropped player's seat (and run) is held this long (spec: 15 s).
+    pub seat_hold_ms: u64,
+    /// Spawn and rejoin protection (spec: 3 s).
+    pub protection_ms: u64,
+    /// After a crash-out, the results toast shows this long before the respawn (spec: 3 s).
+    pub crash_respawn_ms: u64,
+    /// Spawns land this far behind the crew leader (spec: about 40 m).
+    pub spawn_behind_leader_m: f64,
+    /// The free-gap search around a spawn spot: this far either way, in steps of this, each
+    /// candidate needing this much room to the nearest car in its lane.
+    pub spawn_search_m: f64,
+    pub spawn_step_m: f64,
+    pub spawn_clear_m: f64,
+    /// Room traffic: `none` (no cars, until N4.2 streams them) or `sim` (the `sim`
+    /// crate's ring runs with the players in it; spawns use its gaps).
+    pub traffic: String,
+    /// The day/night cycle and its day part (loop.tres `room_cycle_min`, `room_day_min`).
+    pub cycle_len_ms: u32,
+    pub day_len_ms: u32,
+    /// UTC instant (ms) at which a cycle starts (loop.tres `room_clock_epoch_unix_s`).
+    pub clock_epoch_unix_ms: i64,
+    /// Bounded command queue of each room task (connections `try_send` into it).
+    pub command_queue: usize,
+    /// A join waits this long for the room task's answer.
+    pub join_timeout_ms: u64,
+    /// Fastest car's top speed with boost: night_viper 285 km/h × (1 + 8 %).
+    pub max_speed_kmh: f64,
+    /// Speed may exceed `max_speed_kmh` by this much (spec: × 1.1).
+    pub speed_tolerance_pct: f64,
+    /// Strongest forward acceleration: engine traction 9 + boost thrust 3 m/s².
+    pub max_accel_mps2: f64,
+    /// Fastest lateral movement (m/s): a lane change peaks near 8.5 m/s, a swerve more.
+    pub max_lateral_speed_mps: f64,
+    /// Acceleration and lateral movement may exceed the car's by this much (spec: × 1.2).
+    pub capability_tolerance_pct: f64,
+    /// `d` may pass the median barrier or the guardrail by this much before it is clamped.
+    pub lateral_margin_m: f64,
+    /// Position slack on the distance checks (quantization, jitter).
+    pub position_slack_m: f64,
+    /// States stamped this far past the room clock are refused.
+    pub future_tolerance_ms: u64,
+    /// States older than this (behind the room clock) are dropped as stale.
+    pub stale_state_ms: u64,
+    /// After a server placement, states far from it are dropped for this long (in flight).
+    pub placement_grace_ms: u64,
+    /// A state within this distance of a placement (plus its speed's reach) acknowledges it.
+    pub placement_radius_m: f64,
+}
+
+/// `rooms.traffic` values.
+pub const ROOM_TRAFFIC_NONE: &str = "none";
+pub const ROOM_TRAFFIC_SIM: &str = "sim";
+const ROOM_TRAFFIC: &[&str] = &[ROOM_TRAFFIC_NONE, ROOM_TRAFFIC_SIM];
+
 /// Production domain (owner, 2026-09-29).
 pub const DEFAULT_PUBLIC_ORIGIN: &str = "https://westbound.sipsakrandevu.com";
 /// The web build on GitHub Pages, until it moves to the production domain.
@@ -641,6 +709,39 @@ impl Default for ReplaysConfig {
             poll_interval_secs: 30,
             keep_top_n: 100,
             cleanup_interval_secs: 3_600,
+        }
+    }
+}
+
+impl Default for RoomsConfig {
+    fn default() -> Self {
+        Self {
+            max_players: 8,
+            empty_close_ms: 60_000,
+            seat_hold_ms: 15_000,
+            protection_ms: 3_000,
+            crash_respawn_ms: 3_000,
+            spawn_behind_leader_m: 40.0,
+            spawn_search_m: 60.0,
+            spawn_step_m: 5.0,
+            spawn_clear_m: 15.0,
+            traffic: ROOM_TRAFFIC_NONE.into(),
+            cycle_len_ms: 32 * 60_000,
+            day_len_ms: 22 * 60_000,
+            clock_epoch_unix_ms: 0,
+            command_queue: 256,
+            join_timeout_ms: 2_000,
+            max_speed_kmh: 307.8,
+            speed_tolerance_pct: 10.0,
+            max_accel_mps2: 12.0,
+            max_lateral_speed_mps: 12.0,
+            capability_tolerance_pct: 20.0,
+            lateral_margin_m: 1.0,
+            position_slack_m: 2.0,
+            future_tolerance_ms: 500,
+            stale_state_ms: 2_000,
+            placement_grace_ms: 2_000,
+            placement_radius_m: 30.0,
         }
     }
 }
@@ -1021,6 +1122,7 @@ impl Config {
         self.validate_leaderboards(&mut errs);
         self.validate_social(&mut errs);
         self.validate_replays(&mut errs);
+        self.validate_rooms(&mut errs);
         if errs.is_empty() {
             Ok(())
         } else {
@@ -1098,6 +1200,51 @@ impl Config {
             if v == 0 {
                 errs.push(format!("replays.{name} must be at least 1"));
             }
+        }
+    }
+
+    fn validate_rooms(&self, errs: &mut Vec<String>) {
+        let r = &self.rooms;
+        if r.max_players == 0 || r.max_players > protocol::messages::MAX_ROOM_PLAYERS {
+            errs.push(format!(
+                "rooms.max_players must be 1..={}",
+                protocol::messages::MAX_ROOM_PLAYERS
+            ));
+        }
+        if r.cycle_len_ms == 0 || r.day_len_ms > r.cycle_len_ms {
+            errs.push(
+                "rooms.cycle_len_ms must be at least 1 and rooms.day_len_ms at most it".into(),
+            );
+        }
+        if r.command_queue == 0 || r.join_timeout_ms == 0 {
+            errs.push("rooms.command_queue and rooms.join_timeout_ms must be at least 1".into());
+        }
+        for (name, v) in [
+            ("spawn_behind_leader_m", r.spawn_behind_leader_m),
+            ("spawn_search_m", r.spawn_search_m),
+            ("spawn_clear_m", r.spawn_clear_m),
+            ("speed_tolerance_pct", r.speed_tolerance_pct),
+            ("capability_tolerance_pct", r.capability_tolerance_pct),
+            ("lateral_margin_m", r.lateral_margin_m),
+            ("position_slack_m", r.position_slack_m),
+            ("placement_radius_m", r.placement_radius_m),
+        ] {
+            if !(v.is_finite() && v >= 0.0) {
+                errs.push(format!("rooms.{name} must be a number >= 0"));
+            }
+        }
+        for (name, v) in [
+            ("max_speed_kmh", r.max_speed_kmh),
+            ("max_accel_mps2", r.max_accel_mps2),
+            ("max_lateral_speed_mps", r.max_lateral_speed_mps),
+            ("spawn_step_m", r.spawn_step_m),
+        ] {
+            if !(v.is_finite() && v > 0.0) {
+                errs.push(format!("rooms.{name} must be a number above 0"));
+            }
+        }
+        if !ROOM_TRAFFIC.contains(&r.traffic.as_str()) {
+            errs.push(format!("rooms.traffic must be one of {ROOM_TRAFFIC:?}"));
         }
     }
 

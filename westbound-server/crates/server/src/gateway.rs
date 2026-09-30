@@ -17,9 +17,14 @@
 //! 3. **Session**: `Welcome`, then the account is registered in `Sessions` (a second login
 //!    replaces the first, see `sessions.rs`).
 //! 4. **Messages**: each passes its type's token bucket (`msg_limits.rs`), then is routed.
-//!    `Ping` → `Pong` with the tick clock. `lobby_command.presence_subscribe` → friends
-//!    presence (N9.1, `presence.rs`). The other lobby and room messages have no owner yet
-//!    (N5/N9).
+//!    `Ping` → `Pong` with the tick clock (the room's while seated). `lobby_command.
+//!    presence_subscribe` → friends presence (N9.1, `presence.rs`). Room commands
+//!    (`room_create`, `room_join_code`, `room_join_id`, `quick_join`, `room_leave`,
+//!    `room_browse`) → the rooms registry (N5.1, `rooms/`); a seated session's
+//!    `player_state`, `run_event`, `hit_report`, `quick_chat` and `room_host_command` go to
+//!    its room task through its bounded queue (`try_send`: a full queue drops, counted).
+//!    Party commands have no owner yet (N9). When the connection ends, a seated player's
+//!    seat is held (`rooms::RoomLink::disconnected`).
 //! 5. **Keepalive**: `ServerKeepalive` (protocol `Keepalive`), dead after 8 s of silence.
 //! 6. **Fatal errors** are sent, then the close frame follows once the client has closed or
 //!    `gateway.fatal_close_delay_ms` passed (see `linger`).
@@ -38,7 +43,7 @@ use protocol::handshake::{
 };
 use protocol::{
     decode_client_frame, AccountId, ClientMsg, DecodeError, ErrorCode, ErrorMsg, FrameBuilder,
-    LobbyCommand, MapHash, Pong, ServerMsg, Text,
+    LobbyCommand, LobbyEvent, MapHash, Pong, RoomList, ServerMsg, Text,
 };
 use tokio::sync::watch;
 
@@ -48,6 +53,7 @@ use crate::config::{parse_map_hash, Config};
 use crate::map::ServerMap;
 use crate::metrics::{HandshakeResult, Metrics};
 use crate::msg_limits::{client_type_index, MessageLimits, Verdict};
+use crate::rooms::{JoinTarget, RoomLink};
 use crate::sessions::{Kick, SessionHandle};
 use crate::tick::{TickClock, TickTime};
 use crate::ws::{error_label, next_message, payload_len, CloseReason, Outbound, ServerKeepalive};
@@ -60,6 +66,8 @@ pub const DETAIL_RATE_LIMITED: &str = "Too many messages; some were dropped.";
 pub const DETAIL_FLOOD: &str = "Too many messages.";
 pub const DETAIL_INTERNAL: &str = "Server error. Please try again.";
 pub const DETAIL_NO_LOBBY: &str = "The lobby is not available yet.";
+pub const DETAIL_NO_PARTIES: &str = "Parties are not available yet.";
+pub const DETAIL_ROOMS_UNAVAILABLE: &str = "Rooms are unavailable. Try again.";
 pub const DETAIL_PRESENCE_UNAVAILABLE: &str = "Friends presence is unavailable. Try again.";
 pub const DETAIL_NOT_IN_ROOM: &str = "You are not in a room.";
 
@@ -143,11 +151,14 @@ pub fn server_build() -> u32 {
     u32::from_str_radix(&hex, 16).unwrap_or(0)
 }
 
-/// **N5 seam.** The clock a `Pong` reports. Today every session gets the server-wide tick
-/// clock (20 Hz since process start); N5 returns the session's room clock while it is in a
-/// room (`server_tick` = the room tick, per PROTOCOL.md §1).
-pub fn pong_clock<'a>(state: &'a AppState, _session: &SessionHandle) -> &'a dyn TickClock {
-    state.tick_clock.as_ref()
+/// The clock a `Pong` reports: the room's tick clock while the session is seated
+/// (`server_tick` = the room tick, per PROTOCOL.md §1; tick 0 = the room's creation), else
+/// the server-wide one (20 Hz since process start).
+pub fn pong_clock<'a>(state: &'a AppState, room: Option<&'a RoomLink>) -> &'a dyn TickClock {
+    match room {
+        Some(r) if r.is_active() => r.clock(),
+        _ => state.tick_clock.as_ref(),
+    }
 }
 
 /// The `Pong` for a `Ping`.
@@ -180,6 +191,8 @@ struct Conn<'a> {
     session: Option<SessionHandle>,
     /// The session's kick signal (see `sessions.rs`).
     kick_rx: Option<watch::Receiver<Option<Kick>>>,
+    /// The session's room seat (N5.1).
+    room: Option<RoomLink>,
 }
 
 /// The connection's next step after a message.
@@ -435,35 +448,155 @@ impl Conn<'_> {
         }
     }
 
+    /// The seated room, if the room still holds the seat (a kick or a close ends it).
+    fn seat(&mut self) -> Option<&RoomLink> {
+        if self.room.as_ref().is_some_and(|r| !r.is_active()) {
+            self.room = None;
+        }
+        self.room.as_ref()
+    }
+
+    /// `room_create` / `room_join_*` / `quick_join`: takes a seat through the registry.
+    async fn room_join(&mut self, target: JoinTarget) -> Step {
+        let Some(session) = self.session.clone() else {
+            return Step::Close(CloseReason::Error);
+        };
+        if self.seat().is_some() {
+            let e = error_msg(
+                ErrorCode::AlreadyInRoom,
+                false,
+                crate::rooms::room::DETAIL_ALREADY_HERE,
+            );
+            return self.reply_step(&e);
+        }
+        let ident = match self.state.db.acquire().await {
+            Ok(mut conn) => crate::rooms::identity_of(&mut conn, session.account_id).await,
+            Err(e) => Err(e),
+        };
+        let (identity, crew_tag) = match ident {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(error = %e, "database error reading the room identity");
+                let e = error_msg(ErrorCode::Internal, false, DETAIL_ROOMS_UNAVAILABLE);
+                return self.reply_step(&e);
+            }
+        };
+        // Earlier replies of this frame go first; the room's snapshot follows on its tick.
+        if let Err(r) = self.flush() {
+            return Step::Close(r);
+        }
+        match self
+            .state
+            .rooms
+            .join(target, &session, identity, crew_tag)
+            .await
+        {
+            Ok(link) => {
+                tracing::info!(
+                    client = %self.client,
+                    account = session.account_id.0,
+                    room = link.room_id,
+                    player = link.player_id,
+                    reconnected = link.reconnected,
+                    "joined room"
+                );
+                self.room = Some(link);
+                Step::Continue
+            }
+            Err(refusal) => self.reply_step(&refusal.to_msg()),
+        }
+    }
+
+    fn reply_step(&mut self, msg: &ServerMsg) -> Step {
+        match self.reply(msg) {
+            Ok(()) => Step::Continue,
+            Err(r) => Step::Close(r),
+        }
+    }
+
     /// An established session's message, after its rate limit.
     async fn route(&mut self, msg: &ClientMsg) -> Step {
         let reply = match msg {
             ClientMsg::Ping(p) => {
-                let Some(session) = &self.session else {
+                if self.session.is_none() {
                     return Step::Close(CloseReason::Error);
-                };
-                Some(pong(
-                    p.client_time_ms,
-                    pong_clock(self.state, session).now(),
-                ))
+                }
+                let state = self.state;
+                let room = self.seat();
+                Some(pong(p.client_time_ms, pong_clock(state, room).now()))
             }
-            ClientMsg::LobbyCommand(LobbyCommand::PresenceSubscribe(p)) => {
-                return self.presence_subscribe(p.enabled).await;
+            ClientMsg::LobbyCommand(cmd) => match cmd {
+                LobbyCommand::PresenceSubscribe(p) => {
+                    return self.presence_subscribe(p.enabled).await;
+                }
+                LobbyCommand::RoomCreate(s) => {
+                    return self.room_join(JoinTarget::Create(s.clone())).await;
+                }
+                LobbyCommand::RoomJoinCode(c) => {
+                    return self.room_join(JoinTarget::Code(c.code.clone())).await;
+                }
+                LobbyCommand::RoomJoinId(r) => {
+                    return self.room_join(JoinTarget::Id(r.room_id)).await;
+                }
+                LobbyCommand::QuickJoin(_) => return self.room_join(JoinTarget::Quick).await,
+                LobbyCommand::RoomLeave(_) => match self.seat() {
+                    Some(link) => {
+                        link.leave().await;
+                        self.room = None;
+                        None
+                    }
+                    None => Some(error_msg(ErrorCode::NotInRoom, false, DETAIL_NOT_IN_ROOM)),
+                },
+                LobbyCommand::RoomBrowse(_) => {
+                    let rooms = self.state.rooms.browse();
+                    Some(ServerMsg::LobbyEvent(LobbyEvent::RoomList(RoomList {
+                        rooms,
+                    })))
+                }
+                // N9: parties.
+                LobbyCommand::PartyCreate(_)
+                | LobbyCommand::PartyInvite(_)
+                | LobbyCommand::PartyJoin(_)
+                | LobbyCommand::PartyLeave(_)
+                | LobbyCommand::PartyKick(_) => {
+                    Some(error_msg(ErrorCode::NotAllowed, false, DETAIL_NO_PARTIES))
+                }
+            },
+            ClientMsg::RoomHostCommand(c) => match self.seat() {
+                Some(link) => {
+                    link.host(c.clone());
+                    None
+                }
+                None => Some(error_msg(ErrorCode::NotInRoom, false, DETAIL_NOT_IN_ROOM)),
+            },
+            // Room traffic goes to the seat's room task. Outside a room it is dropped (a
+            // client racing a leave), as the room drops stale states.
+            ClientMsg::PlayerState(st) => {
+                if let Some(link) = self.seat() {
+                    link.state(st.clone());
+                }
+                None
             }
-            // N5 / N9: party, rooms, Quick Join, the room browser go to the lobby.
-            ClientMsg::LobbyCommand(_) => {
-                Some(error_msg(ErrorCode::NotAllowed, false, DETAIL_NO_LOBBY))
+            ClientMsg::RunEvent(e) => {
+                if let Some(link) = self.seat() {
+                    link.run_event(e.clone());
+                }
+                None
             }
-            ClientMsg::RoomHostCommand(_) => {
-                Some(error_msg(ErrorCode::NotInRoom, false, DETAIL_NOT_IN_ROOM))
+            ClientMsg::HitReport(h) => {
+                if let Some(link) = self.seat() {
+                    link.hit(h.clone());
+                }
+                None
             }
-            // N5: room traffic goes to the session's room task. Outside a room it is dropped
-            // (a client racing a leave), as the room would drop stale states.
-            ClientMsg::PlayerState(_)
-            | ClientMsg::ScoreClaim(_)
-            | ClientMsg::HitReport(_)
-            | ClientMsg::RunEvent(_)
-            | ClientMsg::QuickChat(_) => None,
+            ClientMsg::QuickChat(q) => {
+                if let Some(link) = self.seat() {
+                    link.chat(q.item.clone());
+                }
+                None
+            }
+            // N6: claims are verified by the room.
+            ClientMsg::ScoreClaim(_) => None,
             ClientMsg::Hello(_) => return Step::Close(CloseReason::Error),
         };
         match reply.map(|r| self.reply(&r)) {
@@ -513,6 +646,7 @@ pub async fn run(socket: WebSocket, state: &AppState, client: &str) -> CloseReas
         replies: FrameBuilder::new(),
         session: None,
         kick_rx: None,
+        room: None,
     };
     let hello_deadline = tokio::time::sleep(state.config.hello_timeout());
     tokio::pin!(hello_deadline);
@@ -579,6 +713,12 @@ pub async fn run(socket: WebSocket, state: &AppState, client: &str) -> CloseReas
     }
     if reason == CloseReason::Timeout {
         Metrics::inc(&metrics.ws_timeout_closed);
+    }
+    if let Some(link) = conn.room.take() {
+        if link.is_active() {
+            // Hold the seat (and the run) for the seat hold.
+            link.disconnected().await;
+        }
     }
     if let Some(s) = conn.session.take() {
         state.presence.unsubscribe(s.account_id, s.session_id);
