@@ -481,6 +481,8 @@ func result() -> Dictionary:
 		"signal_violations": c.signal_violations, "unsignaled_moves": c.unsignaled_moves,
 		"ambush_violations": c.ambush_violations, "lane_moves_checked": c.lane_moves_checked,
 		"collision_ticks": c.collisions, "collision_pairs": c.collision_pairs,
+		"body_overlap_pairs": c.body_overlap_pairs, "yaw_only_pairs": c.yaw_only_pairs,
+		"yaw_only_max_kmh": Units.mps_to_kmh(c.yaw_only_max_speed),
 		"collisions_at_pieces": collisions_at_pieces,
 		"decel_violations": c.decel_violations, "brake_flag_violations": c.brake_flag_violations,
 		"offroad_violations": c.offroad_violations, "merges": sim.stat_merges,
