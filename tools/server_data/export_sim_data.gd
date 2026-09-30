@@ -7,7 +7,7 @@ extends SceneTree
 ## client"); docs/SERVER.md → Traffic simulation.
 ##   tools/godot.sh --headless --path . --import      # once, if the project was never imported
 ##   tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_data.gd
-##       [-- --out=westbound-server/crates/sim] [--check] [--only=params|vectors|traces|scoring]
+##       [-- --out=westbound-server/crates/sim] [--check] [--only=params|vectors|detmath|traces|scoring]
 ##       [--dump=<trace name>:<tick>]
 ## Writes (under --out):
 ##   data/traffic_params.json   TrafficTuning, TrafficRegistry (profiles, types), the spawn mix,
@@ -15,6 +15,7 @@ extends SceneTree
 ##   vectors/rng.json           Rng (PCG32 draws, derive_seed)
 ##   vectors/idm.json, mobil.json, no_ambush.json, player_velocity.json   the pure models
 ##   vectors/loop_closures.json TrafficSim.sync_road_closures on loop_v1 (closures, drop zones)
+##   vectors/detmath.json       DetMath (N8.2): every function on DetMathVectors.cases(), bit-exact
 ##   vectors/trace_*.json       whole-sim traces: a scripted player, spawns / despawns / hits as
 ##                              ops, and TrafficState.trace_hash() + events after every tick
 ##   data/scoring_params.json, vectors/scoring_*.json   N6.1: the scoring rules (sim::scoring),
@@ -142,6 +143,8 @@ func _initialize() -> void:
 		_emit(VEC_DIR + "no_ambush.json", _no_ambush_vectors())
 		_emit(VEC_DIR + "player_velocity.json", _velocity_vectors())
 		_emit(VEC_DIR + "loop_closures.json", _loop_closures(tuning))
+	if _only == "" or _only == "vectors" or _only == "detmath":
+		_emit(VEC_DIR + "detmath.json", _detmath_vectors())
 	if _only == "" or _only == "traces":
 		for sc in SCENARIOS:
 			_emit(VEC_DIR + "trace_%s.json" % sc["name"], _trace(tuning, sc))
@@ -428,6 +431,24 @@ func _exact_walk(v: Variant, path: String, out: Dictionary) -> void:
 
 
 # ---------------------------------------------------------------- Pure-model vectors
+
+## DetMath (src/core/det_math.gd, N8.2) on DetMathVectors.cases(): [function, args..., result]
+## as IEEE-754 bits. NaN results compare as NaN (their sign and payload are not pinned).
+func _detmath_vectors() -> String:
+	var cases: Array = []
+	for c: Array in DetMathVectors.cases():
+		var args: Array[float] = []
+		var row: Array = [c[0]]
+		for i in range(1, c.size()):
+			args.append(float(c[i]))
+			row.append(_hx(float(c[i])))
+		row.append(_hx(DetMathVectors.call_fn(String(c[0]), args)))
+		cases.append(row)
+	var head := _header("DetMath (src/core/det_math.gd): [function, arg (, arg2), result] as bits; a NaN result "
+		+ "matches any NaN")
+	head["functions"] = DetMathVectors.FUNCS
+	return _doc_text(head, "cases", cases)
+
 
 func _rng_vectors() -> String:
 	var cases: Array = []
