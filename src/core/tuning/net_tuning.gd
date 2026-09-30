@@ -393,6 +393,22 @@ const PATH := "res://data/tuning/net.tres"
 ## check); a larger step back is taken as it is.
 @export var room_stamp_max_hold_ms: float = 250.0   # not in spec
 
+@export_group("Parties (N9.3)")
+## N9.3 (docs/ROOMS_CLIENT.md → Parties): a party invite stays answerable this long.
+@export var party_invite_show_s: float = 120.0   # not in spec
+## Party invites kept at once (the newest replaces the oldest).
+@export var party_invites_max: int = 4   # not in spec
+## Spec: parties of up to 8 (the server's `social.party_max_members`).
+@export var party_max_members: int = 8
+## A lobby connection that drops while in a party reconnects every this long, for as long
+## as the server holds the party place (its `party_member_hold_ms`).
+@export var party_reconnect_retry_s: float = 2.0   # not in spec
+@export var party_reconnect_window_s: float = 15.0   # not in spec
+## The path of an invite link on the server's origin (`https://<domain>/r/<code>`, spec).
+@export var invite_path: String = "/r/"
+## A kick in the room menu or the party panel waits for a second tap this long.
+@export var confirm_tap_s: float = 3.0   # not in spec
+
 func ping_interval_usec() -> int:
 	return roundi(ping_interval_s * 1.0e6)   # lint: allow-number s -> usec
 

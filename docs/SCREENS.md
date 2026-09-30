@@ -359,6 +359,11 @@ Docs: [ROOMS_CLIENT.md](ROOMS_CLIENT.md). The room buttons open `RoomLobbyPanel`
 
 A refusal shows the server's reason in hot text ("No room with that code.", "That room is full.", ...) with TRY AGAIN and BACK. When the room's snapshot arrives the panel closes and the hub emits `room_ready(session)`; the run drives in the room (in-room HUD: ROOMS_CLIENT.md → Room HUD). Leaving the room (LEAVE ROOM, the pause menu's QUIT), a kick, the room closing or the seat lost come back to the hub with the reason on the ROOMS panel in hot text.
 
+### Party (N9.3)
+
+Docs: [ROOMS_CLIENT.md](ROOMS_CLIENT.md) → Parties. The ROOMS panel has a third column: PARTY over the party's line (`NO PARTY YET`, `3/8 · YOU LEAD`, `3/8 · Dusty#1234 LEADS`, gold `Dusty#1234 INVITES YOU`; shortened with "..."). PARTY opens RoomLobbyPanel's PARTY view (a waiting invite's card first): without a party CREATE PARTY / JOIN PARTY (a code field) / BACK; in one, `PARTY K7QX2M`, the members in two columns (LEADER, YOU; the leader removes with two taps: TAP AGAIN TO REMOVE), who picks the room, INVITE FRIENDS (the account view on FRIENDS), SHARE LINK (or COPY LINK), LEAVE PARTY, BACK. An invite arriving while the hub shows opens PARTY INVITE (gold `name#tag INVITES YOU`, DECLINE, ACCEPT). The friends list gets INVITE on online friends and a live JOIN ("FRIEND'S ROOM · JOINING ROOM 12..."). An invite link (`?room=` / `--room=`) opens the hub with INVITE LINK · JOINING K7QX2M... (a room, else the party). The room menu (ROOMS_CLIENT.md → Room HUD) gets a ROOM tab: the invite link with COPY LINK / SHARE, and for the host TRAFFIC, TIME OF DAY and REMOVE A PLAYER. Snaps: `tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --sweep=party:none,lead,member,kick,invite,link,hub` (and `--seconds=2.5 --sweep=party:room_host,room_player`). Tests: `tests/ui/test_party_ui.gd`, `tests/ui/test_room_menu_host.gd` (flows through iOS-style touch ids and text fit at both text sizes on 1280x720 and a notched 1560x720).
+
+
 ### Flow
 
 | From | Intent | Run |

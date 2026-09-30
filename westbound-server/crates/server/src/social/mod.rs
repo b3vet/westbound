@@ -8,6 +8,8 @@
 //! - `friends`: requests, the friends list, removal, blocks, presence reads (routes too).
 //! - `crews`: crews, roles, invite codes, the Loop crew sums (routes too).
 //! - `reports`: player reports with the per-account daily limit.
+//! - `parties` (N9.3): in-memory parties (create, join, invite, leave, kick, the leader
+//!   moving the party between rooms, member holds on disconnect).
 //!
 //! This module holds the shared reads: [`friend_ids`] (the friends board view and presence),
 //! [`crew_of`] / [`crew_snapshot`] (the Loop crew board, N6's multiplayer runs),
@@ -16,6 +18,7 @@
 
 pub mod crews;
 pub mod friends;
+pub mod parties;
 pub mod reports;
 
 use std::collections::HashMap;
@@ -100,6 +103,26 @@ pub async fn has_blocked(
     .fetch_one(conn)
     .await?;
     Ok(n > 0)
+}
+
+/// **N9.3:** every account that blocked, or was blocked by, any of `ids` (one query). Quick
+/// Join keeps them out of the rooms it picks for `ids` (a player or a whole party), and a
+/// party refuses a joiner blocked either way with one of its members.
+pub async fn blocked_either(conn: &mut SqliteConnection, ids: &[i64]) -> sqlx::Result<Vec<i64>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let json = serde_json::to_string(ids).unwrap_or_else(|_| "[]".into());
+    sqlx::query_scalar!(
+        r#"SELECT blocked_id AS "id!: i64" FROM blocks
+             WHERE account_id IN (SELECT value FROM json_each(?1))
+           UNION
+           SELECT account_id AS "id!: i64" FROM blocks
+             WHERE blocked_id IN (SELECT value FROM json_each(?1))"#,
+        json
+    )
+    .fetch_all(conn)
+    .await
 }
 
 /// A player as the social API shows them.

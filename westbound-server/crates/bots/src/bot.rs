@@ -101,6 +101,8 @@ pub struct Seen {
     pub score_syncs: u32,
     pub last_sync: Option<ScoreSync>,
     pub score_events: Vec<ScoreEvent>,
+    /// N9.3: lobby events other than `room_left` (party state, invites, presence, lists).
+    pub lobby_events: Vec<LobbyEvent>,
 }
 
 impl Seen {
@@ -292,6 +294,8 @@ impl RoomBot {
                 self.seen.room_left = Some(l.reason);
                 self.player_id = None;
             }
+            // N9.3: parties, invites, presence, room lists (the tests read them).
+            ServerMsg::LobbyEvent(e) => self.seen.lobby_events.push(e),
             _ => {}
         }
     }

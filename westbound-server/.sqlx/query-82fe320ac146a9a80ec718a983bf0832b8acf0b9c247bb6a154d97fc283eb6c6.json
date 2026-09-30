@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT blocked_id AS \"id!: i64\" FROM blocks\n             WHERE account_id IN (SELECT value FROM json_each(?1))\n           UNION\n           SELECT account_id AS \"id!: i64\" FROM blocks\n             WHERE blocked_id IN (SELECT value FROM json_each(?1))",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "blocks",
+            "name": "blocked_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "82fe320ac146a9a80ec718a983bf0832b8acf0b9c247bb6a154d97fc283eb6c6"
+}

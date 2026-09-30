@@ -58,6 +58,8 @@ N9.1 adds the account-level social layer:
 
 See "Social API".
 
+N9.3 adds the room-dependent social parts: parties (create, join by code, invites to online friends, leave, kick; the leader moves the party into rooms, Quick Join fits the whole party, a party is one crew in public rooms), blocked players kept out of Quick Join, the `/r/<code>` invite page and generated deep-link files. See "Parties (N9.3)" and "Invite links and deep links".
+
 N5.1 adds rooms and players behind the gateway (see "Rooms"):
 
 - one tokio task per room at 20 Hz with a bounded command queue, one outbound frame per tick per client;
@@ -101,7 +103,8 @@ See "Traffic simulation (N4.1)".
 | `GET /ws` | public | The realtime gateway: binary protocol frames (docs/PROTOCOL.md), `Hello` first. See "Realtime gateway". Limits: 16 KB max inbound message (close 1009), a 64-frame outbound queue (a slow client is dropped), a ping every 2 s, and a close after 8 s of silence. Past 400 connections, the upgrade gets HTTP 503 |
 | `GET /ws/echo` | public | Ops echo of text and binary frames, same limits and connection cap. `gateway.echo_enabled = false` turns it off (404) |
 | `GET /api/v1/echo-check` | public | A small HTML page, used to check a phone (see "Verify a phone connects"): runs the echo on `/ws/echo`, then sends a token-less `Hello` to `/ws` and shows the gateway's `Error` (`map_mismatch` or `auth_failed`) |
-| `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files, read from `deeplinks.dir`, with built-in empty placeholders |
+| `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files: `deeplinks.dir` wins, else generated from the configured app ids (N9.3), else built-in empty placeholders. See "Invite links and deep links" |
+| `GET /r/{code}` | public | N9.3: the invite page for a room or party code (opens the web build with `?room=<code>`; store links). See "Invite links and deep links" |
 | `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API" |
 | `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
 | `POST /api/v1/runs/{run_id}/replay` | public | The replay upload (binary body): see "Replays and verification" |
@@ -173,7 +176,7 @@ To add a migration, run `sqlx migrate add --source migrations <name>`, or create
 
 ### Local TLS (wss://) and the echo checks
 
-`deploy/Caddyfile` runs Caddy with `tls internal` on `https://localhost:8443`. It proxies `/api/*`, `/ws` and `/.well-known/*` to the server. `deploy/local-tls.sh` starts both:
+`deploy/Caddyfile` runs Caddy with `tls internal` on `https://localhost:8443`. It proxies `/api/*`, `/ws`, `/.well-known/*` and `/r/*` (N9.3 invite links) to the server. `deploy/local-tls.sh` starts both:
 
 ```sh
 westbound-server/deploy/local-tls.sh            # Docker: builds westbound-server:local, compose --profile local-tls up
@@ -839,7 +842,7 @@ Measured on this dev box: a 4-minute replay verifies in 10–20 s and peaks at a
 
 WP N9.1, in `crates/server/src/`: `social/` (`mod.rs`: the shared reads `friend_ids`, `crew_of`, `crew_snapshot`, `is_blocked`, player summaries and the account-deletion hook; `friends.rs`: requests, the friends list, blocks, presence reads; `crews.rs`: crews, roles, invite codes; `reports.rs`), `presence.rs` (the presence registry), and the gateway's `presence_subscribe` handling. Spec: multiplayer handoff → "Rooms, parties and matchmaking → Friends and presence", "Crews (persistent)", "Moderation", "Leaderboards → Loop crew", "Data model (SQLite)", "Accounts → Account deletion". Tests: `tests/social.rs` (every route and error, blocking, caps, crews, boards, deletion, reports, admin), `tests/presence.rs` (real WebSockets), `tests/cli.rs` (the admin binary).
 
-Parties, public rooms, Quick Join, the room browser, invites and quick chat need rooms (N5) and come with N9's room work. Its hooks are here: `social::is_blocked` and `presence.set_room`.
+Public rooms, Quick Join, the room browser and quick chat came with N5.1. Parties, invites, blocked players kept out of Quick Join and the invite links are N9.3: see "Parties (N9.3)" and "Invite links and deep links".
 
 All routes are under `/api/v1`, need `Authorization: Bearer`, and use the error format of "Accounts API → Errors". Ids are decimal strings. Every route is under the account rate limit. Social writes (`POST /friends/requests`, `/blocks`, `/crews`, `/crews/join`, `/reports`) also pass the social limit (`rate_limits.social_per_hour` 60, burst 20). A malformed id in a path answers that resource's 404.
 
@@ -886,7 +889,7 @@ All routes are under `/api/v1`, need `Authorization: Bearer`, and use the error 
    - a request is accepted (the new friend's presence goes to both sides, if subscribed);
    - a friend is removed or blocked, or deletes their account (`offline`, and they are no longer watched).
 3. `presence_subscribe {enabled: false}` ends it, as does the session's end. A friend added while the gateway reads the list may be missed until the next subscribe.
-4. A database error while subscribing answers a non-fatal `internal` ("Friends presence is unavailable. Try again."). Party commands still answer `not_allowed` until N9; room commands go to the rooms (N5.1).
+4. A database error while subscribing answers a non-fatal `internal` ("Friends presence is unavailable. Try again."). Party commands go to the parties (N9.3); room commands go to the rooms (N5.1).
 
 **Concurrency** (the registry's design). `PresenceHub` is one `std::sync::Mutex` over subscriber → (session handle, friend set), friend → watchers, and account → room. It is held for map updates, a change's lookups and non-blocking `try_send`s into the watchers' bounded 64-frame queues. It is never held across an `.await`, and never taken per game message.
 - A full queue kicks that client (slow client) instead of blocking.
@@ -996,8 +999,56 @@ Migration `0004_social.sql`:
 | `crew_invite_code_len` | `8` | Invite code length (6–16) |
 | `reports_per_day` | `10` | Reports per account per rolling 24 h |
 | `report_context_max_bytes` | `1024` | Largest report `context` (compact JSON; 2–4096) |
+| `party_max_members` | `8` | N9.3: members per party, the leader included (spec: up to 8; ≤ 16 on the wire) |
+| `party_member_hold_ms` | `15000` | N9.3: a member whose connection ended keeps their place this long (not in spec) |
 
 `[rate_limits]`: `social_per_hour` / `social_burst` (`60` / `20`), the social writes per account.
+
+## Parties (N9.3)
+
+WP N9.3, in `crates/server/src/social/parties.rs` (the registry), the gateway's party commands and follow orders (`gateway.rs`), and the party-aware joins of `rooms/mod.rs` (`JoinOpts`) and `rooms/room.rs` (crew slots). Spec: multiplayer handoff → Rooms, parties and matchmaking → Parties ("Up to 8 players, led by one player. The leader invites online friends, or shares a party code. The party moves between rooms together, and its members are each other's crew in public rooms"), Public rooms (Quick Join "fits your whole party"), Friends and presence (blocking), Crew mechanics. Wire: PROTOCOL.md §4 and §12, unchanged. Parties live only in memory.
+
+**Commands** (`lobby_command`; refusals are non-fatal `error`s):
+
+| Command | What happens | Refusals |
+| --- | --- | --- |
+| `party_create` | A new party with you as leader and a 6-character code (the room-code alphabet, unique among parties and live rooms). You leave any party you were in. Alone in a party already: its state again | |
+| `party_join {code}` | You join (also how an invite is accepted); every member gets `party_state`. You leave any other party first. **If the leader is seated in a room, you follow into it** (a joined invite is an invite to the leader's room) | `party_not_found`, `party_full` (`social.party_max_members`, 8), `blocked` (you and a member blocked each other) |
+| `party_invite {account_id}` | The leader invites an **online friend**: they get `lobby_event.party_invite {from, code}`. Without a party one is made for you first. Declining needs no message | `not_allowed` (not a friend, offline, already a member, yourself; blocking removes the friendship, so a blocked player lands here too), `not_party_leader`, `party_full` |
+| `party_leave` | `party_left {left}` to you; the others get `party_state`. The leader's role passes to the longest-present connected member. An empty party closes | `party_not_found` |
+| `party_kick {account_id}` | Leader only: `party_left {kicked}` to them | `not_party_leader`, `not_allowed` (yourself, not a member) |
+
+`party_state` (code, leader, members in join order) goes to every connected member after every change, and to a member's new session right after `Welcome` (in the same frame). `party_left {disbanded}` is not sent (a party only closes when empty).
+
+**Moving together** (a party of two or more):
+
+- **The leader's joins move the party.** Quick Join needs a free seat for every connected member not already in that room (and never picks a room with an account blocked either way with one of them); a join by code or id refuses a room without those seats (`room_full`, "That room can't fit your whole party."); `room_create` makes the room. Once the leader is seated, every other connected member's connection gets a **follow order**: it leaves its room if it has one (`room_left {left}`) and takes a seat in the leader's room by id, as if it had sent `room_join_id` (errors, e.g. a full room, go to that member as non-fatal errors).
+- **A member's Quick Join** goes to the leader's room; while the leader has none it is refused (`not_party_leader`, "Your party leader picks the room."). A member who creates or joins **any other** room (by code or id, not the leader's and not their own held seat) **leaves the party** (`party_left {left}`) and goes alone. Reconnects (joining the held seat's room by code) are not affected.
+- **Crews.** In a public room a party is one crew: a join carries the party id and takes the crew slot of a seat of the same party, else a free slot (a player alone is a crew of one). Private rooms stay one crew. The slot is kept for the seat's life (leaving the party later does not change it).
+- **Quick Join for everyone** (party or not) now skips rooms where an account blocked either way with the joiner (or a mover) is seated: spec, "a blocked player is never matched into your room through Quick Join". One query (`social::blocked_either`).
+
+**Connections.** Each session gets a follow channel (4 orders) when it starts. When a member's connection ends their place is held for `social.party_member_hold_ms` (15 s): they stay in the party (not moved), a new session takes the place back and gets the state; after the hold they leave as with `party_leave` (the leader's role passes on). A replaced session (second login) never touches its successor.
+
+**Concurrency.** One `std::sync::Mutex` over parties, codes, account → party and the follow channels; held for map updates and non-blocking `try_send`s (session queues, follow channels), never across an `.await`. Lock order: parties, then the session registry. The rooms registry and the presence hub are never taken under it (the gateway reads the leader's seat before or after).
+
+**Tests:** `social::parties::tests` (lifecycle, leader passing, refusals, invites, the follow orders, holds), `rooms::tests::a_party_is_one_crew_in_a_public_room`, `tests/parties.rs` (real sockets: create / join / kick / leave and refusals; invites to online friends only, blocks for party joins and Quick Join; **Quick Join fitting a party of three**: a public room with 2 free seats is skipped and a new one made, the party one crew, a solo player then joins the fullest room with a crew of their own; the leader moving the party into a private room and on to a public one, a member joining the party while the leader is seated following at once, a member going alone leaving the party; a dropped member's place held and the state after the reconnect's `Welcome`), `tests/gateway.rs` (a party command outside a party).
+
+## Invite links and deep links
+
+N9.3. Spec: "The creator gets a code and an invite link `https://<domain>/r/<code>`. The link opens the app through Universal Links (iOS) and App Links (Android), or the web build directly." MP-D1: the server serves the deep-link files itself.
+
+- **`GET /r/{code}`** answers a small HTML page (no scripts): "JOIN K7QX2M", **PLAY IN THE BROWSER** (`deeplinks.web_join_url` with `{code}`, default `https://b3vet.github.io/westbound/?room={code}`; `{origin}` is `server.public_origin`, for a web build on another host that needs `&server=`), **OPEN THE APP** (`<deeplinks.app_scheme>://r/<code>`, only when a scheme is configured), and the App Store / Google Play links (`deeplinks.app_store_url`, `play_store_url`; "COMING SOON" while empty). The code is case-insensitive, dashes and spaces forgiven; any other path answers 404 with the same page saying the link is not valid. Everything configured is HTML-escaped; `Cache-Control: public, max-age=300`, `X-Robots-Tag: noindex`.
+- The code can be a **room's or a party's** (party codes never equal a live room's). The client tries the room first, then the party (docs/ROOMS_CLIENT.md → Parties → Invite links).
+- **Association files.** A file in `deeplinks.dir` wins. Without one, the file is generated from the config: `apple-app-site-association` from `deeplinks.apple_app_ids` (`TEAMID.bundle.id`; `components: [{"/": "/r/*"}]` plus the older `appID` / `paths` form), `assetlinks.json` from `deeplinks.android_package` and `deeplinks.android_cert_sha256`. Without ids, the built-in empty placeholders. `config/dev.toml` sets placeholder ids so the shapes show locally.
+- **Proxies.** `deploy/Caddyfile` routes `/r/*`; on Coolify route `/r/*` and `/.well-known/*` to the container too (see "Coolify setup").
+- **Tests:** `tests/http.rs` (`invite_links_serve_the_join_page`, `deep_link_files_come_from_the_configured_app_ids`, `deep_link_config_is_validated`).
+
+**Owner steps** (can't be tested here):
+
+1. iOS: set `WB_DEEPLINKS__APPLE_APP_IDS=<TEAMID>.<bundle id>`; in Xcode add the Associated Domains entitlement `applinks:westbound.sipsakrandevu.com`. Apple fetches `https://westbound.sipsakrandevu.com/.well-known/apple-app-site-association` (served as `application/json`, no redirect).
+2. Android: set `WB_DEEPLINKS__ANDROID_PACKAGE` and `WB_DEEPLINKS__ANDROID_CERT_SHA256` (the Play app-signing certificate's SHA-256, `AA:BB:...`); the export's manifest needs an `intent-filter` with `android:autoVerify="true"`, scheme `https`, host `westbound.sipsakrandevu.com`, path prefix `/r/`.
+3. The game gets the URL from the OS (a Godot plugin or the export's launch arguments) and passes it to `NetInviteLink.set_pending(NetInviteLink.from_url(url))`; a custom scheme (`WB_DEEPLINKS__APP_SCHEME=westbound`) is the fallback for when Universal Links don't fire (in-app browsers).
+4. Store links: `WB_DEEPLINKS__APP_STORE_URL`, `WB_DEEPLINKS__PLAY_STORE_URL` once the apps are listed.
 
 ## Traffic simulation (N4.1)
 
@@ -1178,7 +1229,7 @@ WP N5.1 (server side), in `crates/server/src/rooms/`. Spec: [multiplayer handoff
 | `room_browse` | `lobby_event.room_list`: public rooms, fullest first, at most 64 (players, max, density, night) | |
 
 - **Room ids** are u32 from 1, never reused while the process runs. **Codes** are 6 characters from the protocol's alphabet (no 0/O, 1/I/L), random (OS RNG), unique among live rooms. Public rooms have codes too (the snapshot carries one).
-- **Public rooms** are created by Quick Join with the spec's settings: normal density, the UTC `cycle` clock, 8 seats, no host. Until parties exist (N9), each public player is a crew of one (its own `crew_slot`).
+- **Public rooms** are created by Quick Join with the spec's settings: normal density, the UTC `cycle` clock, 8 seats, no host. A party is one crew there (N9.3: a seat of the same party gives its `crew_slot`); a player alone is a crew of one.
 - **Private rooms:** everyone is crew slot 0. The creator is host. The host passes to the longest-present player when the host's seat goes (leave, kick, seat hold running out), with `room_event.host_change`.
 - **A room closes** `rooms.empty_close_ms` (60 s) after its last seat went; its code stops working. At server shutdown every seated player gets `room_left {closed}`.
 - **One seat per account.** A second join while seated is `already_in_room`; `room_leave` first. A join into another room releases a seat the account still holds elsewhere (a held seat, or one of a replaced login).
@@ -1664,6 +1715,9 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `ws_rate_limits.violation_per_sec` / `_burst` | `WB_WS_RATE_LIMITS__VIOLATION_PER_SEC` / `__VIOLATION_BURST` | `5` / `100` | Drops allowed before a fatal `rate_limited` |
 | `ws_rate_limits.notice_interval_ms` | `WB_WS_RATE_LIMITS__NOTICE_INTERVAL_MS` | `1000` | At most one non-fatal `rate_limited` notice per interval |
 | `deeplinks.dir` | `WB_DEEPLINKS__DIR` | empty (image: `/data/well-known`) | Directory with `apple-app-site-association` and `assetlinks.json` |
+| `deeplinks.web_join_url` | `WB_DEEPLINKS__WEB_JOIN_URL` | `https://b3vet.github.io/westbound/?room={code}` | N9.3: the invite page's PLAY IN THE BROWSER (`{code}`; `{origin}` = `server.public_origin`) |
+| `deeplinks.apple_app_ids` / `android_package` / `android_cert_sha256` | `WB_DEEPLINKS__APPLE_APP_IDS` (comma-separated), `…__ANDROID_PACKAGE`, `…__ANDROID_CERT_SHA256` | empty | N9.3: generate the association files (a file in `deeplinks.dir` wins) |
+| `deeplinks.app_store_url` / `play_store_url` / `app_scheme` | `WB_DEEPLINKS__APP_STORE_URL`, `…__PLAY_STORE_URL`, `…__APP_SCHEME` | empty | N9.3: the invite page's store links ("coming soon" while empty) and OPEN THE APP |
 | `leaderboards.*`, `runs.*` | `WB_LEADERBOARDS__…`, `WB_RUNS__…` | see "Leaderboards & runs API → Configuration" | Views, cache, replay trigger, legacy caps; plausibility thresholds |
 | `replays.*` | `WB_REPLAYS__…` | see "Replays and verification → Configuration" | Replay files, size cap, the verifier command, the queue, retention |
 | `rate_limits.social_per_hour` / `_burst` | `WB_RATE_LIMITS__SOCIAL_PER_HOUR` / `__SOCIAL_BURST` | `60` / `20` | Social writes per account, on top of the account limit (see "Social API") |
@@ -1716,7 +1770,7 @@ Coolify already has a GHCR registry token for the owner's other projects, so pri
    - Set **Domains** to `https://westbound.sipsakrandevu.com`.
    - Set **Ports Exposes** to `8080`.
    - Leave **Ports Mappings** empty. The proxy reaches the container over Coolify's network.
-4. **WebSockets.** No extra setting. Coolify's proxy, Traefik or Caddy, passes `Upgrade` requests through, so `wss://westbound.sipsakrandevu.com/ws` reaches the container on the same domain. Don't add path rules: the server answers `/api/*`, `/ws` and `/.well-known/*` itself, and returns 404 for everything else.
+4. **WebSockets.** No extra setting. Coolify's proxy, Traefik or Caddy, passes `Upgrade` requests through, so `wss://westbound.sipsakrandevu.com/ws` reaches the container on the same domain. Don't add path rules: the server answers `/api/*`, `/ws`, `/.well-known/*` and `/r/*` (invite links, N9.3) itself, and returns 404 for everything else. **N9.3: if the proxy only routes `/api/*` and `/ws` to the container (MP-D1's wording), add `/r/*` and `/.well-known/*` too**, or route the whole domain to it.
 5. **Persistent storage.** Go to Persistent Storage, then **+ Add**, then **Volume**. Name it `westbound-data` and set the destination path to `/data`. The database, `/data/backups` and `/data/well-known` all live there. A new named volume inherits the image's ownership (uid 65532).
 6. **Environment variables:**
    - `WB_LOG__FORMAT=json`

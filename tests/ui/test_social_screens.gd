@@ -45,6 +45,7 @@ func before_all() -> void:
 func before_each() -> void:
 	tree.paused = false
 	NetSocialClient.join_handler = Callable()
+	NetSocialClient.invite_handler = Callable()
 	fake = NetFakeSocial.new()
 	clock = NetVirtualTime.new(1_000_000)
 	session = NetSession.new()
@@ -59,6 +60,7 @@ func before_each() -> void:
 func after_each() -> void:
 	tree.paused = false
 	NetSocialClient.join_handler = Callable()
+	NetSocialClient.invite_handler = Callable()
 	for n in _nodes:
 		if is_instance_valid(n):
 			n.queue_free()
@@ -254,6 +256,25 @@ func test_join_seam_calls_the_handler() -> void:
 	check(not join.disabled and join.note.is_empty(), "enabled once N5 plugs in")
 	_tap(join)
 	eq(joined, ["%s@12" % ids["c"]] as Array[String])
+
+
+## N9.3: INVITE on an online friend (not an offline one) while the hub's seam is set.
+func test_invite_seam_calls_the_handler() -> void:
+	var ids := _setup_friends()
+	var fp := _friends()
+	check(_row(fp, ids["b"]).button(FriendsPanel.A_INVITE) == null, "no INVITE without the seam")
+	var invited: Array[String] = []
+	NetSocialClient.invite_handler = func(p: NetSocialPlayer) -> void: invited.append(p.account_id)
+	fp.refresh()
+	var invite := _row(fp, ids["b"]).button(FriendsPanel.A_INVITE)
+	if not check(invite != null, "an online friend can be invited"):
+		return
+	check(_row(fp, ids["d"]).button(FriendsPanel.A_INVITE) == null, "not an offline one")
+	check(_row(fp, ids["c"]).button(FriendsPanel.A_JOIN) != null, "a friend in a joinable room: JOIN")
+	ge(invite.size.y, hud.touch_target_px)
+	_tap(invite)
+	eq(invited, [ids["b"]] as Array[String])
+	eq(fp.note.text, FriendsPanel.TEXT_INVITED % "Bravo")
 
 
 func test_accept_cancel_and_add_friend_errors() -> void:
