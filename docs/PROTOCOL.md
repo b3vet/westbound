@@ -325,3 +325,4 @@ Both stay under the 10 KB/s downstream budget. A typical tick is `player_states`
   - **Wire lane** = n − 1 − sim lane, where n is the lane count at the car's `s`. Any lane ≥ n, the ramp, is 7.
   - **A hit** sends `hazard` (4,000 ms) and `hard_brake` (1,000 ms) from the hit's tick, plus a correction every tick for 25 ticks, because there is no swerve kind. A lone 500 ms `hard_brake` is a cut-in brake tap.
 - **Placement acknowledgement (N6.1, MP-D10):** the server accepts a placement only when a state of the placed car answers it: `run_state = protected`, or speed and `d` within the caps plus slack. Clients send `protected` for the whole protection window. Claim semantics are in SERVER.md → *Scoring (N6.1)*.
+- **Planned restart (N10.2, MP-D13):** `server_notice{restart, secs}` is followed by `run_result{room_closed}` and then a WebSocket close with code 1012, meaning "reconnect and rejoin by code". The next instance recreates the room from its code.
