@@ -571,3 +571,52 @@ fn car_ids_are_never_reused_within_the_hold() {
     println!("{reused} ids reused");
     assert!(reused > 0, "the churn reused ids");
 }
+
+/// The streaming's own cost per room tick (8 clients), next to the ring's step (wall time
+/// on this thread). Run in release:
+/// `cargo test --release -p server --test traffic_stream bench_ -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn bench_streaming_cost_per_room_tick() {
+    for density in [Density::Normal, Density::Rush] {
+        let mut h = Harness::new(density, 13, eight_drivers());
+        for _ in 0..40 {
+            h.step();
+        }
+        let ticks = 1_200u32;
+        let (mut sim_ns, mut stream_ns) = (Vec::new(), Vec::new());
+        for _ in 0..ticks {
+            h.now += 1;
+            for d in &mut h.drivers {
+                d.s_m = h.map.wrap_m(d.s_m + d.v * DT);
+            }
+            let views = h.views();
+            let t0 = std::time::Instant::now();
+            h.t.tick(h.now, &views);
+            let t1 = std::time::Instant::now();
+            for v in &views {
+                h.fb.clear();
+                h.t.write_client(v.player_id, v.s_mm, false, &mut h.fb);
+            }
+            let t2 = std::time::Instant::now();
+            sim_ns.push((t1 - t0).as_nanos() as u64);
+            stream_ns.push((t2 - t1).as_nanos() as u64);
+        }
+        let stat = |v: &mut Vec<u64>| {
+            v.sort_unstable();
+            let mean = v.iter().sum::<u64>() as f64 / v.len() as f64 / 1e3;
+            (
+                mean,
+                v[v.len() / 2] as f64 / 1e3,
+                v[v.len() * 99 / 100] as f64 / 1e3,
+            )
+        };
+        let (sm, s50, s99) = stat(&mut sim_ns);
+        let (wm, w50, w99) = stat(&mut stream_ns);
+        println!(
+            "STREAM_BENCH {density:?}: ring step (with the stream's bookkeeping) mean {sm:.0} us, \
+             p50 {s50:.0}, p99 {s99:.0}; 8 clients' traffic writes mean {wm:.0} us, p50 {w50:.0}, \
+             p99 {w99:.0}"
+        );
+    }
+}
