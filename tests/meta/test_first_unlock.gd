@@ -13,9 +13,11 @@ extends "res://tests/integration/run_harness.gd"
 ## checkpoint, about 70 s in), so the gate needs the full-length runs of the soak.
 
 ## A beginner's run (s of driving before the crash), and how many of them the first
-## unlock may take (the gate's "plausible").
+## unlock may take (the gate's "plausible"). WP9.6 (orchestrator, PL-4): 3 -> 4, XP
+## unchanged: N8.2's traces put one install's first unlock on run 4 (runs 1-3 missed the
+## first checkpoint's bank); D27's proposal reads "after 1-4 runs".
 const BEGINNER_RUN_S := 90.0
-const FIRST_UNLOCK_MAX_RUNS := 3
+const FIRST_UNLOCK_MAX_RUNS := 4
 ## The fast tier's run (s).
 const FAST_RUN_S := 30.0
 ## Fresh installs the soak plays (each its own seeds).

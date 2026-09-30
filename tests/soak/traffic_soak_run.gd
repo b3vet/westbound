@@ -287,7 +287,7 @@ func tick() -> void:
 		if events.kind[k] == SetPieceSource.KIND_WARNING:
 			checker.note_set_piece_warning(events.points[k], sim.state, bot.state)
 	active_sum += sim.state.count
-	if sim.state.count >= tuning.traffic.max_active_vehicles:
+	if sim.state.count >= tuning.traffic.active_cap(road.lane_count(bot.state.s)):
 		ticks_at_cap += 1
 	events.clear()
 	metrics.sample(DT, sim.state, bot.state, road)
@@ -481,9 +481,12 @@ func result() -> Dictionary:
 		"signal_violations": c.signal_violations, "unsignaled_moves": c.unsignaled_moves,
 		"ambush_violations": c.ambush_violations, "lane_moves_checked": c.lane_moves_checked,
 		"collision_ticks": c.collisions, "collision_pairs": c.collision_pairs,
+		"body_overlap_pairs": c.body_overlap_pairs, "yaw_only_pairs": c.yaw_only_pairs,
+		"yaw_only_max_kmh": Units.mps_to_kmh(c.yaw_only_max_speed),
 		"collisions_at_pieces": collisions_at_pieces,
 		"decel_violations": c.decel_violations, "brake_flag_violations": c.brake_flag_violations,
 		"offroad_violations": c.offroad_violations, "merges": sim.stat_merges,
+		"long_merge_holds": sim.stat_long_merge_holds,
 		"closed_area_violations": closed_area_violations, "prop_hits": prop_hits,
 		"standstill_beside_fast": standstill_beside_fast,
 		"min_accel": c.min_accel,

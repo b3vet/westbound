@@ -248,7 +248,7 @@ static func _observer_tick(r: TrafficSoakRun, lanes: int) -> void:
 	r.director_usec += Time.get_ticks_usec() - u1
 	r.sim_usec += u1 - u0
 	r.active_sum += r.sim.state.count
-	if r.sim.state.count >= r.tuning.traffic.max_active_vehicles:
+	if r.sim.state.count >= r.tuning.traffic.active_cap(r.road.lane_count(st.s)):
 		r.ticks_at_cap += 1
 	r.peak_active = maxi(r.peak_active, r.sim.state.count)
 	r.time += TrafficSoakRun.DT

@@ -111,7 +111,7 @@ if not runs:
 
 GATES = ["collision_pairs", "signal_violations", "unsignaled_moves", "ambush_violations", "decel_violations",
          "brake_flag_violations", "rear_end_normal", "impossible_traffic", "offroad_violations", "closed_area_violations"]
-COUNTERS = GATES + ["collision_ticks", "collisions_at_pieces", "impossible_windows", "impossible_player_induced", "impossible_checks",
+COUNTERS = GATES + ["collision_ticks", "body_overlap_pairs", "yaw_only_pairs", "collisions_at_pieces", "impossible_windows", "impossible_player_induced", "impossible_checks",
                     "window_checks", "signals", "moves", "cancels", "lane_moves_checked", "player_contact_ticks",
                     "contact_episodes", "rear_end_episodes", "spawned_ahead", "spawned_behind", "despawned",
                     "rejected_cap", "rejected_ghost", "rejected_visible", "rejected_overlap", "sim_signals",
@@ -138,6 +138,7 @@ def summed(rs):
     d["bot_check_ms"] = round(d["bot_check_usec"] / 1000.0 / max(1, d["bot_checks"]), 2)
     d["window_check_ms"] = round(d["window_usec"] / 1000.0 / max(1, d["window_checks"]), 2)
     d["min_accel_mps2"] = min(r["min_accel"] for r in rs)
+    d["yaw_only_max_kmh"] = round(max(float(r.get("yaw_only_max_kmh", 0.0)) for r in rs), 1)
     d["sim_usec_per_tick"] = round(sum(r["sim_usec_per_tick"] * r["ticks"] for r in rs) / max(1, d["ticks"]), 1)
     d["mean_active"] = round(sum(r["mean_active"] * r["ticks"] for r in rs) / max(1, d["ticks"]), 2)
     kinds = {}
@@ -206,6 +207,9 @@ print("  impossible windows: %d total = %d traffic + %d player-induced (in conta
       "+ %d player cut-in (pre-registered rule); %d / %d checks failed" % (
     total["impossible_windows"], total["impossible_traffic"], total["impossible_player_induced"],
     total["impossible_in_closure"], total["impossible_player_cut_in"], total["impossible_checks"], total["window_checks"]))
+print("  collisions as the sim and the view see them (gated): %d pair-ticks (%d body overlaps); "
+      "reported, not gated: %d pair-ticks overlap only with the checker's +-0.28 rad box heading (faster car <= %.1f km/h)" % (
+    total["collision_pairs"], total["body_overlap_pairs"], total["yaw_only_pairs"], total["yaw_only_max_kmh"]))
 print("  standstill_beside_fast %d, player_offroad_ticks %d, oracle %.2f ms per check" % (
     total["standstill_beside_fast"], total["player_offroad_ticks"], total["window_check_ms"]))
 print("  bot: %d passability checks (%.2f ms each), %d without a path" % (

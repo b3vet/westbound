@@ -193,8 +193,11 @@ func test_density_the_player_meets_follows_the_waves() -> void:
 	# vehicles the player passes per km driven, by the phase it is in when it passes
 	# them. Planned: DirectorTuning.wave_density_mult (breather, build rising to the peak)
 	# x the leg's density. (At leg 8 peaks saturate: IDM gaps cap a lane near the target,
-	# docs/SPAWNING.md.)
-	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), 170.0, 4)
+	# docs/SPAWNING.md.) WP9.6: without set pieces. A piece takes its zone's traffic at
+	# the peak it gets, and since WP9.6 most peaks of a 170 km/h player on a straight road
+	# get one (the peak then meets the piece, 11.6 per km here, instead of 125 % traffic):
+	# this is the waves' own shape.
+	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), 170.0, 4, _no_pieces())
 	var met := PackedFloat64Array([0.0, 0.0, 0.0])
 	var driven := PackedFloat64Array([0.0, 0.0, 0.0])
 	var seen := {}
@@ -446,10 +449,12 @@ func test_no_set_pieces_in_blind_windows_or_at_checkpoints() -> void:
 
 
 func test_no_set_piece_the_player_would_not_meet() -> void:
-	# Every peak asks for a piece. A player at 120 km/h would take longer than
-	# set_piece_meet_max_pct of approach_max_s to reach one: none spawns (the peaks are
-	# missed). At 190 km/h pieces spawn, and every one is reached.
-	var slow := _drive_pieces(120.0)
+	# Every peak asks for a piece. A player at 112 km/h (barely faster than the pieces'
+	# 105-125 km/h) would take longer than set_piece_meet_max_pct of approach_max_s to
+	# reach one: none spawns (the peaks are missed). At 190 km/h pieces spawn, and every
+	# one is reached. (WP9.6: approach_max_s 150 -> 240 s and 75 -> 90 % let a 120 km/h
+	# player meet the 105 km/h kinds, so the slow case is now 112 km/h.)
+	var slow := _drive_pieces(112.0)
 	eq(slow[0], 0, "no piece for a slow player")
 	gt(slow[1], 0, "its peaks were missed")
 	var fast := _drive_pieces(190.0)
@@ -480,3 +485,51 @@ func test_blind_check_in_the_meeting_map() -> void:
 	check(w.is_blind(v, 1000.0 + 2600.0 / 2.5), "met within the window")
 	check(not w.is_blind(v, 1000.0 + 2650.0 / 2.5), "met beyond it")
 	le(w.density_mult(v, 1000.0 + 2300.0 / 2.5), Units.pct_to_frac(tuning.director.blind_density_cap_pct) + EPS)
+
+
+func test_meet_pace_is_the_players_cruising_pace() -> void:
+	# WP9.6 (ACCEPTANCE F2): the meet rule and a rolling piece's road fit take the faster
+	# of the waves' pace (a few seconds) and the player's speed smoothed over
+	# set_piece_meet_pace_smoothing_s: a weaving player dipping behind a slow car for a
+	# few seconds is still met at its cruising pace.
+	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), 180.0, PIECE_LEG, _no_pieces())
+	var cruise := player.v
+	for i in roundi(4.0 / COARSE_DT):
+		_step(COARSE_DT)
+	player.v = Units.kmh_to_mps(110.0)   # stuck behind a truck
+	for i in roundi(10.0 / COARSE_DT):
+		_step(COARSE_DT)
+	var tau := tuning.director.set_piece_meet_pace_smoothing_s
+	lt(dir.waves.pace, Units.kmh_to_mps(125.0), "the waves' pace has dropped toward 110")
+	gt(dir.set_pieces.meet_pace, cruise - (cruise - player.v) * (1.0 - exp(-10.0 / tau)) - 0.5,
+		"the cruising pace lags by the slow smoothing")
+	lt(dir.set_pieces.meet_pace, cruise)
+	var v := Units.kmh_to_mps(105.0)
+	var s := player.s + 800.0
+	var p := dir.set_pieces.meet_pace
+	near(dir.set_pieces.meet_x(v, s), player.s + 800.0 * p / (p - v), 1e-6, "met at the cruising pace")
+	lt(dir.set_pieces.meet_x(v, s), dir.waves.meet_x(v, s), "sooner than at the dipped pace")
+	dir.set_pieces.meet_pace = 0.0
+	near(dir.set_pieces.meet_x(v, s), dir.waves.meet_x(v, s), 1e-9, "unset: the waves' meeting map")
+
+
+func test_set_piece_zones_widenings_and_forks() -> void:
+	# WP9.6 (ACCEPTANCE F2): a widening adds lanes on the right, so a rolling piece may
+	# drive through it (clear_of_zones(..., true)); a road-anchored piece (road hooks) and a
+	# lane drop still count. A fork's zone ends set_piece_fork_clear_after_m past its
+	# split, not at the far end of its span (the opposite carriageway's rejoin).
+	var grow := tuning.director.set_piece_feature_clear_m
+	var widen := _waves(SEED, LaneChangeRoadPath.new(3, 4, 2000.0, 250.0, true, tuning.road), 8000.0)
+	check(not widen.clear_of_zones(1900.0, 2100.0), "a widening is a zone for anchored pieces")
+	check(widen.clear_of_zones(1900.0, 2100.0, true), "a rolling piece drives through a widening")
+	var drop := _waves(SEED, LaneChangeRoadPath.new(3, 2, 2000.0, 250.0, true, tuning.road), 8000.0)
+	check(not drop.clear_of_zones(1900.0, 2100.0), "a lane drop is a zone")
+	check(not drop.clear_of_zones(1900.0, 2100.0, true), "for rolling pieces too")
+	var road_f := StraightRoadPath.new(LANES, tuning.road)
+	var split := 3700.0
+	road_f.add_feature(RoadFeature.make(RoadFeature.Kind.FORK, 3000.0, 6350.0, split))
+	var fork := _waves(SEED, road_f, 9000.0)
+	var end := split + tuning.director.set_piece_fork_clear_after_m + grow
+	check(not fork.clear_of_zones(3000.0 - grow + 1.0, 3000.0), "the fork's approach")
+	check(not fork.clear_of_zones(end - 1.0, end - 1.0, true), "up to the breather past the split")
+	check(fork.clear_of_zones(end + 1.0, 6350.0 + grow + 100.0, true), "clear beyond it (the rejoin is ordinary road)")

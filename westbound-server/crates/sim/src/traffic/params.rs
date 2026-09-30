@@ -73,6 +73,12 @@ pub struct TuningParams {
     pub look_through_leaving_leaders: bool,
     pub predict_leader_braking: bool,
     pub anticipate_leader_braking: bool,
+    // Long vehicles merging from a crawl (WP9.6, ACCEPTANCE F1): `SimConfig::single_player`.
+    pub long_merge_guard: bool,
+    pub long_merge_min_length_m: f64,
+    pub long_merge_crawl_mps: f64,
+    pub long_merge_fast_mps: f64,
+    pub long_merge_guard_s: f64,
     pub brake_light_decel_mps2: f64,
     pub brake_light_strong_decel_mps2: f64,
     pub signal_time_floor_s: f64,

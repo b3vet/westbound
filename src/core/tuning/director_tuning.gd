@@ -84,6 +84,11 @@ extends Resource
 ## ... nor does one drive through this range around a lane-count change, tunnel or fork
 ## (road-dependent pieces get their own road hooks in WP6.3).
 @export var set_piece_feature_clear_m: float = 200.0   # not in spec
+## WP9.6 (ACCEPTANCE F2): a fork's set-piece zone ends this far past its split (the end
+## of the traffic breather after it, RoadTuning.fork_breather_after_m), not at the end of
+## its span: the 2 km beyond, where only the opposite carriageway rejoins, is ordinary road
+## for traffic. The whole span (3.4 km) kept rolling pieces off about a third of a journey.
+@export var set_piece_fork_clear_after_m: float = 1200.0   # not in spec
 ## A piece that does not fit the live traffic at its planned rear is tried this much
 ## further ahead, up to the end of its batch.
 @export var set_piece_placement_step_m: float = 10.0   # not in spec
@@ -91,6 +96,10 @@ extends Resource
 ## this share of the piece's approach_max_s (the rest is slack for the pace changing):
 ## a piece a slow player would never meet is not spawned.
 @export_range(0.0, 100.0) var set_piece_meet_max_pct: float = 75.0   # not in spec
+## WP9.6 (ACCEPTANCE F2): the meet rule's pace is the faster of the waves' smoothed pace
+## (wave_pace_smoothing_s, a few seconds: a weaving player's pace dips behind every
+## slow car) and the player's speed smoothed over this long (its cruising pace).
+@export var set_piece_meet_pace_smoothing_s: float = 30.0   # not in spec
 
 @export_group("Density around the player (plan D11; not in spec)")
 ## The window the director's effective density is measured over (dev report, the

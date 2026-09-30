@@ -351,6 +351,22 @@ The server's traffic (N4.1, `westbound-server/crates/sim`) found that at the loo
 - **Server and client.** The server's switches are its own (`mp_traffic.json`, on); the client's network model (`NetworkTrafficSource`) mirrors the look-through (from the car's intent) and the anticipation (docs/NET_TRAFFIC.md). Parity: docs/SERVER.md, *Traffic simulation (N4.1)*.
 - **Tests** (`test_lane_drop_safety.gd`): each extension against its flag off: a racer 200 m behind a car braking at the clamp (off −1.16 m/s², on −5.08, exactly the stopping deceleration); a follower behind a leader signalling out of a lane blocked by a stopped truck (off −0.28, on −5.26); a lane change behind a leader braking at 5 m/s² (off allowed, on refused; a leader holding its speed: allowed both ways); the flags default on; the WP6.8 organic bike scene keeps every racer within its `b_safe` both ways (−2.16 m/s² off, −2.39 on). The soak numbers are in SOAK.md, *WP6.11*.
 
+## Long vehicles merging from a crawl (WP9.6)
+
+WP9.5's acceptance sweep (docs/ACCEPTANCE.md, F1) found a 16 m semi pulling out of a standstill queue at the end of a closing lane (3 → 9 km/h over its 3 s move) while a pickup passed at 95 km/h in the lane beyond its target. The bodies never touched, but a crawling truck swinging its cab toward a lane of fast traffic reads badly, and the checker's old box heading counted it (SOAK.md, *WP9.6*).
+
+| Tuning (`TrafficTuning`, group *Long vehicles merging from a crawl*) | Value |
+| --- | --- |
+| `long_merge_guard` | on |
+| `long_merge_min_length_m` | 12 m: longer than this is long (the 16 m semi; the 12 m coach is not) |
+| `long_merge_crawl_kmh` | 20 km/h: slower than this is a crawl |
+| `long_merge_fast_kmh` | 60 km/h: faster than this is fast (the soak's `standstill_beside_fast` threshold) |
+| `long_merge_guard_s` | 5 s: the fast vehicle would reach the long one's body within this (1 s signal + 3 s move + 1 s) |
+
+**What the model does** (`TrafficSim._long_crawl_held`, called by `_consider_merge` and `_consider_lane_change` just before a signal starts): a long crawling vehicle whose target is lane t checks the lane beyond it (t + (t − lane)). If a vehicle there (the player included) faster than `long_merge_fast_kmh` is behind it and would reach its rear within `long_merge_guard_s`, or is beside it, the lane change does not start this model tick (`stat_long_merge_holds` counts it); MOBIL and the mandatory merge try again as usual. It never blocks a merge for long: a fast car clears the check within a few seconds, and it only applies to the crawl. Allocation-free (walks of the sorted order bounded by the fastest vehicle's reach and the longest body).
+
+**Measured** (SOAK.md, *WP9.6*): neutral on `standstill_beside_fast` in the 500 km all-pieces and canyon soaks (17 and 8, the same with the guard off); in the all-pieces soak it held 174 evaluations, all at the F1 semi, and its heading-only pair-ticks went from 27 to 0. **Server:** ported (`SimConfig::long_merge_guard`, the parity trace `trace_sp_long_merge_120hz`), on in single-player parity and off in `SimConfig::multiplayer` (the server's rules are its own, `mp_traffic.json`; its N4.1 soak gates bodies and the rendered heading and has 0 body overlaps). Tests: `tests/unit/test_traffic_long_merge.gd` (a semi at 5 km/h waits for a car at 100 km/h in lane 0; a slow car, or a van, does not hold it).
+
 ## Hooks and open points
 
 - **Lane geometry tapers:** see *Lateral occupancy* above. Lane-count changes (a right lane ending) are mandatory merges (WP6.2) with early merging, harmonisation and a zipper (WP6.8, *Lane drops*); per-`s` lane centers are still a hook.

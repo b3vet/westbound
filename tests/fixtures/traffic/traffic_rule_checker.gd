@@ -16,9 +16,14 @@ extends RefCounted
 ##   target space. Sampling t in [0, window] every AMBUSH_SAMPLE_S, the car's body at
 ##   that d moving at its speed must not overlap the player's body moving at its
 ##   snapshotted road velocity, grown by the margin on every side.
-## - Collisions: oriented boxes in road space (yaw = atan2(v_lat, v), at most
-##   MAX_BOX_YAW_RAD either way: box_yaw()) inset by LivesTuning.collision_inset_m,
-##   separating-axis test.
+## - Collisions (WP9.6, as the Rust soak's N4.1 criterion): two cars collide when their
+##   boxes overlap as the sim moves them (un-yawed bodies) or as clients draw them
+##   (TrafficViewTuning's heading: atan2(v_lat, max(v, yaw_min_speed)) within +-yaw_max:
+##   view_yaw()), inset by LivesTuning.collision_inset_m, separating-axis test. The older
+##   heading (atan2(v_lat, v) within +-MAX_BOX_YAW_RAD: box_yaw()) is still evaluated and
+##   reported as yaw_only_pairs, not gated: it turns a crawling 16 m semi far enough to
+##   "touch" a car a lane over that the sim and the view never bring near it (ACCEPTANCE
+##   F1). Player contacts keep box_yaw().
 ## - On the road (WP6.2, lane drops): every car's body stays between the left edge of
 ##   lane 0 and the right edge of the driving lanes at its s (lanes_left_edge_d /
 ##   lanes_right_edge_d, which follow a lane drop's taper), within OFFROAD_TOL_M.
@@ -61,7 +66,13 @@ var signal_violations := 0
 var unsignaled_moves := 0
 var ambush_violations := 0
 var collisions := 0            ## ticks with at least one traffic-traffic overlap
-var collision_pairs := 0
+var collision_pairs := 0       ## pair-ticks: body or view-heading overlap (the gate)
+## Pair-ticks whose un-yawed bodies overlap (a subset of collision_pairs).
+var body_overlap_pairs := 0
+## Reported, not gated: pair-ticks that overlap only with box_yaw()'s heading (WP6.8's
+## +-MAX_BOX_YAW_RAD), and the faster car's top speed among them (m/s).
+var yaw_only_pairs := 0
+var yaw_only_max_speed := 0.0
 ## Where the last traffic-to-traffic collision was (s of its first vehicle; NAN: none yet).
 var last_collision_s := NAN
 var player_contacts := 0       ## ticks with a traffic-player overlap
@@ -119,6 +130,8 @@ var _last_lateral_t := -INF
 var _last_hard_brake_t := -INF
 var _time := 0.0
 var _min_warning: float
+var _view_min_v: float
+var _view_max: float
 var _warned_m: Dictionary = {}       # set-piece serial -> measured distance at its first warning
 
 
@@ -136,6 +149,8 @@ func _init(t: Tuning, reg: TrafficRegistry, road_path: RoadPath, p_length: float
 		_max_len = maxf(_max_len, x)
 	quiet_s = traffic_tuning.soak_normal_driving_quiet_s
 	_min_warning = t.director.set_piece_min_warning_m
+	_view_min_v = t.traffic_view.yaw_min_speed_mps()
+	_view_max = deg_to_rad(t.traffic_view.yaw_max_deg)
 
 
 ## A set piece's warning event (SetPieceSource.KIND_WARNING, serial in `points`): the
@@ -168,9 +183,10 @@ func total_violations() -> int:
 
 func summary() -> String:
 	return ("signals %d moves %d cancels %d | violations: signal %d unsignaled %d ambush %d collisions %d "
-		+ "decel %d brake-flags %d | player contacts %d (rear-end %d) episodes %d (rear-end %d, normal driving %d)") % [
+		+ "(heading-only %d pair-ticks, reported) decel %d brake-flags %d | player contacts %d (rear-end %d) episodes %d "
+		+ "(rear-end %d, normal driving %d)") % [
 			signals, moves, cancels, signal_violations, unsignaled_moves, ambush_violations, collisions,
-			decel_violations, brake_flag_violations, player_contacts, rear_end_contacts, contact_episodes,
+			yaw_only_pairs, decel_violations, brake_flag_violations, player_contacts, rear_end_contacts, contact_episodes,
 			rear_end_episodes, rear_end_normal]
 
 
@@ -347,8 +363,17 @@ func _check_boxes(ts: TrafficState, player: VehicleState) -> void:
 				break
 			if ts.s[j] - ts.s[i] >= (ts.length[i] + ts.length[j]) * 0.5:
 				continue
-			if _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], box_yaw(ts.v[i], ts.v_lat[i]),
+			var body := _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], 0.0,
+					ts.s[j], ts.d[j], ts.length[j], ts.width[j], 0.0)
+			var seen := body or _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], view_yaw(ts.v[i], ts.v_lat[i]),
+					ts.s[j], ts.d[j], ts.length[j], ts.width[j], view_yaw(ts.v[j], ts.v_lat[j]))
+			if body:
+				body_overlap_pairs += 1
+			if not seen and _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], box_yaw(ts.v[i], ts.v_lat[i]),
 					ts.s[j], ts.d[j], ts.length[j], ts.width[j], box_yaw(ts.v[j], ts.v_lat[j])):
+				yaw_only_pairs += 1
+				yaw_only_max_speed = maxf(yaw_only_max_speed, maxf(ts.v[i], ts.v[j]))
+			if seen:
 				collision_pairs += 1
 				last_collision_s = ts.s[i]
 				hit_tick = true
@@ -385,8 +410,14 @@ func _check_boxes(ts: TrafficState, player: VehicleState) -> void:
 		player_contacts += 1
 
 
+## A traffic car's heading as TrafficView draws it: atan2(v_lat, max(v, yaw_min_speed))
+## within +-yaw_max (TrafficViewTuning; the Rust checker's view_yaw).
+func view_yaw(v: float, v_lat: float) -> float:
+	return clampf(atan2(v_lat, maxf(v, _view_min_v)), -_view_max, _view_max)
+
+
 ## A traffic box's heading in road space: atan2(v_lat, v), clamped to
-## +-MAX_BOX_YAW_RAD (see there).
+## +-MAX_BOX_YAW_RAD (see there). Gates player contacts; reported only for traffic pairs.
 static func box_yaw(v: float, v_lat: float) -> float:
 	return clampf(atan2(v_lat, maxf(v, 0.0)), -MAX_BOX_YAW_RAD, MAX_BOX_YAW_RAD)
 

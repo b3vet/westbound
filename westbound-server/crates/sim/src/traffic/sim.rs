@@ -187,6 +187,11 @@ pub struct SimConfig {
     /// stopping point (at its current deceleration) needs more than the profile's
     /// comfortable b, the follower brakes for it now (`anticipation_accel`).
     pub anticipate_braking: bool,
+    /// WP9.6 (`TrafficTuning.long_merge_guard`, ACCEPTANCE F1): a long vehicle crawling
+    /// out of its lane waits while a fast vehicle in the lane beyond its target would
+    /// reach it (`long_crawl_held`). Single-player only for now (the server keeps its
+    /// N4.1 rules; its soak gates bodies and the rendered heading).
+    pub long_merge_guard: bool,
     /// MP: a player's reported state is extrapolated at most this far.
     pub player_max_extrapolation_s: f64,
     /// The fixed step (intents' move-start ticks, player extrapolation).
@@ -208,6 +213,7 @@ impl SimConfig {
             look_through: t.look_through_leaving_leaders,
             predict_leaders: t.predict_leader_braking,
             anticipate_braking: t.anticipate_leader_braking,
+            long_merge_guard: t.long_merge_guard,
             player_max_extrapolation_s: 0.0,
             tick_dt: 1.0 / f64::from(t.near_tick_hz),
             events_capacity: t.max_active_vehicles * 4 + 64,
@@ -226,6 +232,7 @@ impl SimConfig {
             look_through: mp.look_through_leaving_leaders,
             predict_leaders: mp.predict_leader_braking,
             anticipate_braking: mp.anticipate_leader_braking,
+            long_merge_guard: false,
             player_max_extrapolation_s: mp.player_max_extrapolation_s,
             tick_dt: 1.0 / p.net.tick_rate_hz,
             events_capacity: mp.capacity * 4 + 64,
@@ -309,6 +316,9 @@ pub struct TrafficSim {
     pub stat_cancel_unsafe: u64,
     pub stat_model_updates: u64,
     pub stat_merges: u64,
+    /// Lane changes a long crawling vehicle did not start for a fast vehicle beyond its
+    /// target (WP9.6, `long_crawl_held`).
+    pub stat_long_merge_holds: u64,
     /// MP
     pub stat_exits: u64,
     pub stat_exit_cancels: u64,
@@ -355,6 +365,13 @@ pub struct TrafficSim {
     close_frac: f64,
     react_cool: f64,
     react_range: f64,
+    // WP9.6: long vehicles merging from a crawl (`TrafficTuning.long_merge_*`).
+    lm_len: f64,
+    lm_crawl: f64,
+    lm_fast: f64,
+    lm_t: f64,
+    /// The longest body's half length (scan bounds).
+    lm_hl_max: f64,
     split_max_v: f64,
     split_v0: f64,
     split_scan: f64,
@@ -567,6 +584,7 @@ impl TrafficSim {
             stat_cancel_unsafe: 0,
             stat_model_updates: 0,
             stat_merges: 0,
+            stat_long_merge_holds: 0,
             stat_exits: 0,
             stat_exit_cancels: 0,
             cap,
@@ -609,6 +627,11 @@ impl TrafficSim {
             close_frac: t.close_pass_horn_frac,
             react_cool: t.reaction_cooldown_s,
             react_range: 0.0,
+            lm_len: t.long_merge_min_length_m,
+            lm_crawl: t.long_merge_crawl_mps,
+            lm_fast: t.long_merge_fast_mps,
+            lm_t: t.long_merge_guard_s,
+            lm_hl_max: 0.0,
             split_max_v: t.lane_split_max_traffic_mps,
             split_v0: t.lane_split_max_speed_mps,
             split_scan: t.lane_split_scan_m,
@@ -777,6 +800,7 @@ impl TrafficSim {
             max_len = maxf(max_len, *x);
         }
         sim.react_range = sim.blind_m + max_len + t.player_length_m;
+        sim.lm_hl_max = maxf(max_len, t.player_length_m) * 0.5;
         sim.clear();
         sim
     }
@@ -804,6 +828,7 @@ impl TrafficSim {
         self.stat_cancel_unsafe = 0;
         self.stat_model_updates = 0;
         self.stat_merges = 0;
+        self.stat_long_merge_holds = 0;
         self.stat_exits = 0;
         self.stat_exit_cancels = 0;
     }
@@ -1479,7 +1504,7 @@ impl TrafficSim {
         } else if gr > 0.0 {
             t = cur + 1;
         }
-        if t < 0 {
+        if t < 0 || self.long_crawl_held(i, t) {
             return;
         }
         self.start_signal(i, t, self.lane_d(t), 0);
@@ -2523,10 +2548,67 @@ impl TrafficSim {
             }
         }
         if gl > 0.0 && gl >= gr {
-            self.start_signal(i, cur - 1, self.lane_d(cur - 1), 0);
-        } else if gr > 0.0 {
+            if !self.long_crawl_held(i, cur - 1) {
+                self.start_signal(i, cur - 1, self.lane_d(cur - 1), 0);
+            }
+        } else if gr > 0.0 && !self.long_crawl_held(i, cur + 1) {
             self.start_signal(i, cur + 1, self.lane_d(cur + 1), 0);
         }
+    }
+
+    /// WP9.6 (ACCEPTANCE F1, `_long_crawl_held`): true when vehicle i is long (longer
+    /// than `long_merge_min_length_m`) and crawling (slower than `long_merge_crawl`) and a
+    /// vehicle faster than `long_merge_fast` in the lane beyond target lane t (players
+    /// included) would reach its body within `long_merge_guard_s`, or is beside it: the
+    /// lane change waits (counted in `stat_long_merge_holds`). Allocation-free.
+    fn long_crawl_held(&mut self, i: usize, t: i32) -> bool {
+        if !self.config.long_merge_guard
+            || self.state.length[i] <= self.lm_len
+            || self.kv[i] >= self.lm_crawl
+        {
+            return false;
+        }
+        let far = t + (t - self.state.lane[i]);
+        if far < 0 || far >= self.road.lane_count(self.ks[i]) {
+            return false;
+        }
+        let c = self.lane_d(far);
+        let lo = c - self.lw * 0.5;
+        let hi = c + self.lw * 0.5;
+        let si = self.ks[i];
+        let rear = si - self.khl[i];
+        let front = si + self.khl[i];
+        let reach = maxf(self.vmax, self.fastest_player()) * self.lm_t;
+        let k = self.rank[i];
+        let mut kk = k;
+        while kk > 0 {
+            kk -= 1;
+            let j = self.ord[kk];
+            if rear - (self.ks[j] + self.lm_hl_max) > reach {
+                break;
+            }
+            if self.kv[j] > self.lm_fast
+                && self.klo[j] < hi
+                && self.khi[j] > lo
+                && self.ks[j] + self.khl[j] + self.kv[j] * self.lm_t >= rear
+            {
+                self.stat_long_merge_holds += 1;
+                return true;
+            }
+        }
+        kk = k + 1;
+        while kk < self.n {
+            let j = self.ord[kk];
+            if self.ks[j] - self.lm_hl_max > front {
+                break;
+            }
+            if self.kv[j] > self.lm_fast && self.klo[j] < hi && self.khi[j] > lo {
+                self.stat_long_merge_holds += 1;
+                return true;
+            }
+            kk += 1;
+        }
+        false
     }
 
     fn consider_split(&mut self, i: usize) {

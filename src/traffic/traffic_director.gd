@@ -154,6 +154,20 @@ var _last_slot: int = -1   ## the slot of the last successful _commit
 var _batch_a: float = 0.0   ## the batch being planned (ctx.intensity, set_pieces_allowed)
 var _batch_b: float = 0.0
 var _peak_done: int = -1    ## id of the last wave peak handled (IntensityWaves.seg_id)
+## WP9.6: the player's speed smoothed over set_piece_meet_pace_smoothing_s (the meet rule).
+var _meet_pace: float = 0.0
+## WP9.6: the peak whose piece did not fit the road (or found another piece live) at an
+## earlier batch and is retried at the next one (-1: none), and why (true: unfit).
+var _retry_id: int = -1
+var _retry_unfit: bool = false
+## WP9.6: the rolling piece scheduled for peak _sched_id in the batch being planned (its
+## instance and serial), and the peak handled before it: a piece that finds no room in
+## the live traffic of its batch (SetPieceSource.unplaced / uncommitted) gives its peak
+## back for the next batch.
+var _sched_inst: SetPieceSource.Instance = null
+var _sched_serial: int = -1
+var _sched_id: int = -1
+var _sched_prev_done: int = -1
 var _forced: SetPieceDef    ## dev: the next batch gets this piece (force_set_piece)
 var _forced_tries: int = 0
 var _closing_floor: float
@@ -366,6 +380,10 @@ func reset(player: VehicleState) -> void:
 	waves.reset(player.s, player.v)
 	waves.plan_to(road, player.s + director_tuning.wave_meet_lookahead_m)
 	_peak_done = -1
+	_meet_pace = maxf(player.v, 0.0)
+	set_pieces.meet_pace = _meet_pace
+	_retry_id = -1
+	_sched_inst = null
 	var batch := director_tuning.spawn_batch_length_m
 	_sync_closures(player, player.s + ahead_distance() + batch)
 	var a := player.s
@@ -388,6 +406,8 @@ func reset(player: VehicleState) -> void:
 func step(dt: float, player: VehicleState) -> void:
 	_player_s = player.s
 	waves.observe_player(dt, player.s, player.v)
+	_meet_pace += (maxf(player.v, 0.0) - _meet_pace) * minf(dt / director_tuning.set_piece_meet_pace_smoothing_s, 1.0)
+	set_pieces.meet_pace = _meet_pace
 	step_despawn(player.s)
 	_step_density(dt, player)
 	if player.s + ahead_distance() >= _spawned_to:
@@ -485,6 +505,7 @@ func _plan_ahead(player: VehicleState) -> void:
 		_clear_for_set_piece(a, a + batch, player)
 		_plan_range(a, a + batch, player)
 		set_pieces.bind_committed()
+		_check_scheduled()
 		_spawned_to = a + batch
 	_top_up_band(player)
 
@@ -500,7 +521,7 @@ func _plan_range(a: float, b: float, player: VehicleState) -> void:
 	batches_planned += 1
 	# Near the cap, thin the batch evenly (dropping vehicles only widens gaps) rather
 	# than committing its near end and leaving the far end empty.
-	var room := traffic_tuning.max_active_vehicles - state.count
+	var room := _active_cap_at(a) - state.count
 	var n := _batch.size()
 	if n > room:
 		rejected_cap += n - maxi(room, 0)
@@ -960,13 +981,19 @@ func in_breather(s: float) -> bool:
 # ---- end WP6.5 hook ----------------------------------------------------------------
 
 
+## WP9.6 (PL-2): the cap on live vehicles for a spawn at s: TrafficTuning.active_cap of
+## the wider of the road at the player and at s (a 4-lane road ahead fills to its cap).
+func _active_cap_at(s: float) -> int:
+	return traffic_tuning.active_cap(maxi(road.lane_count(_player_s), road.lane_count(s)))
+
+
 ## Every spawn goes through here: cap, ghost zone, no pop-in, the live-traffic gap,
 ## then the sim. Allocation-free.
 func _commit(rec: SpawnSource.Record, player: VehicleState) -> bool:
 	if in_breather(rec.s):   # WP6.5 hook
 		rejected_breather += 1
 		return false
-	if state.count >= traffic_tuning.max_active_vehicles or state.is_full():
+	if state.count >= _active_cap_at(rec.s) or state.is_full():
 		rejected_cap += 1
 		return false
 	var d := road.lane_center_d(rec.lane, rec.s) if is_nan(rec.d) else rec.d
@@ -1292,10 +1319,14 @@ func _pass_reroll(player: VehicleState) -> void:
 ##     s = player s + (x - player s) (pace - v) / pace (the meeting map at the piece's
 ##     speed v). While that is beyond this batch, wait; if it is already behind the
 ##     batch start, the batch start is used as long as the player still meets it in the
-##     peak;
+##     peak and, at the faster of the waves' pace and the player's cruising pace
+##     (_meet_pace, WP9.6), within set_piece_meet_max_pct of its approach_max_s;
 ##   - _set_piece_fits: enough lanes, no vehicle of it hidden beyond a blind crest or bend
 ##     while the player drives it (rule 6), met clear of checkpoints, and no lane-count
-##     change, tunnel or fork on the road it drives until it ends.
+##     change, tunnel or fork on the road it drives until it ends;
+##   - WP9.6: a piece that does not fit there (or finds another piece live) is tried
+##     again at the next batch while it would still be met in the peak (placement
+##     retries); only then does the peak count as unfit (or busy).
 ## Then SetPieceSource.schedule() and ctx.set_pieces_allowed for this batch.
 func _schedule_set_piece(a: float, b: float, player: VehicleState) -> void:
 	if not set_pieces_enabled or source != set_pieces or _prefilling or set_pieces.active_count() >= SetPieceSource.MAX_INSTANCES:
@@ -1326,27 +1357,78 @@ func _schedule_set_piece(a: float, b: float, player: VehicleState) -> void:
 	var pace := waves.pace
 	if pace <= v + _closing_floor:
 		if x1 <= player.s + ahead_distance():
-			_peak_handled(id)   # the player is too slow to meet a piece in this peak
-			peaks_missed += 1
+			_give_up_peak(id)   # the player is too slow to meet a piece in this peak
 		return
 	var s_req := player.s + ((x0 + x1) * 0.5 - player.s) * (pace - v) / pace
 	if s_req >= b:
 		return   # a later batch
-	_peak_handled(id)
 	s_req = maxf(s_req, a)
-	if waves.meet_x(v, s_req) > x1 or s_req - player.s \
-			> (pace - v) * def.approach_max_s * Units.pct_to_frac(director_tuning.set_piece_meet_max_pct):
-		peaks_missed += 1   # met beyond the peak, or too late at this pace
+	var reach := (maxf(pace, _meet_pace) - v) * def.approach_max_s \
+		* Units.pct_to_frac(director_tuning.set_piece_meet_max_pct)
+	if set_pieces.meet_x(v, s_req) > x1 or s_req - player.s > reach:
+		_give_up_peak(id)   # met beyond the peak, or too late at this pace
 		return
+	# WP9.6: unfit or busy here, it is retried at the next batch while still met in time.
+	var retry := set_pieces.meet_x(v, b) <= x1 and b - player.s <= reach
 	if not _set_piece_fits(def, v, s_req, lanes):
-		peaks_unfit += 1
+		_hold_peak(id, retry, true)
 		return
 	var x_meet := waves.meet_x(v, s_req)
 	if not set_pieces.can_schedule_at(minf(SetPieceSource.first_notice_s(def, x_meet), x_meet),
 			waves.meet_x(v, s_req + def.length_m) + def.end_margin_m):
-		peaks_busy += 1   # another live piece is still ahead of the player there
+		_hold_peak(id, retry, false)   # another live piece is still ahead of the player there
 		return
-	set_pieces.schedule(def, s_req, lanes, v)
+	_sched_prev_done = _peak_done
+	_peak_handled(id)
+	_sched_inst = set_pieces.schedule(def, s_req, lanes, v)
+	if _sched_inst != null:
+		_sched_serial = _sched_inst.serial
+		_sched_id = id
+		_retry_id = id if retry else -1   # dropped unbound: counted unfit when given up
+		_retry_unfit = true
+
+
+## WP9.6: after the batch's bind: a rolling piece scheduled this batch that got no
+## vehicle in (no room in the live traffic) gives its peak back, to be tried again at the
+## next batch (_schedule_set_piece; _retry_id is set when that can still meet it).
+func _check_scheduled() -> void:
+	if _sched_inst == null:
+		return
+	var dropped := _sched_inst.serial == _sched_serial and _sched_inst.stage == SetPieceSource.Stage.FREE
+	if dropped and _retry_id == _sched_id:
+		_peak_done = _sched_prev_done
+		peaks_seen -= 1
+	elif dropped:
+		peaks_unfit += 1
+	if _retry_id == _sched_id and not dropped:
+		_retry_id = -1
+	_sched_inst = null
+
+
+## WP9.6: peak `id`'s piece did not fit the road here (`unfit`) or found another piece
+## live: with `retry` it waits for the next batch, else the peak is given up.
+func _hold_peak(id: int, retry: bool, unfit: bool) -> void:
+	if retry:
+		_retry_id = id
+		_retry_unfit = unfit
+		return
+	_retry_id = id
+	_retry_unfit = unfit
+	_give_up_peak(id)
+
+
+## Peak `id` gets no piece: counted unfit or busy when a retry was pending (its last
+## reason), else missed.
+func _give_up_peak(id: int) -> void:
+	var was_retry := _retry_id == id
+	_peak_handled(id)
+	if was_retry:
+		if _retry_unfit:
+			peaks_unfit += 1
+		else:
+			peaks_busy += 1
+	else:
+		peaks_missed += 1
 
 
 ## WP6.3: a peak picked a road-anchored kind. Its zone goes where the player meets the
@@ -1363,17 +1445,21 @@ func _schedule_anchored_peak(def: SetPieceDef, id: int, x0: float, x1: float, pl
 	if s0 + def.zone_meet_m > x1:
 		peaks_missed += 1   # the peak is too close for the road hooks
 		return
-	if _place_zone(def, s0, player) == null:
+	# WP9.6: where it does not fit at s0, later starts are tried as long as the player
+	# still meets its interesting part in the peak.
+	if _place_zone(def, s0, player, minf(x1 - def.zone_meet_m, player.s + def.schedule_lead_max_m)) == null:
 		peaks_unfit += 1
 
 
-## Lays a road-anchored `def` out with its zone at s0 (or up to a batch further, in
-## placement steps, where it fits: fits_zone, a free live slot), or returns null.
-func _place_zone(def: SetPieceDef, s0: float, _player: VehicleState) -> SetPieceSource.Instance:
-	road.ensure_generated_to(s0 + def.length_m + director_tuning.spawn_batch_length_m * 2.0)
+## Lays a road-anchored `def` out with its zone at s0 (or up to a batch further, or up to
+## `s_last` when that is further, in placement steps, where it fits: fits_zone, a free
+## live slot), or returns null.
+func _place_zone(def: SetPieceDef, s0: float, _player: VehicleState, s_last: float = -INF) -> SetPieceSource.Instance:
+	var s_end := maxf(s0 + director_tuning.spawn_batch_length_m, s_last)
+	road.ensure_generated_to(s_end + def.length_m + director_tuning.spawn_batch_length_m * 2.0)
 	var step_m := director_tuning.set_piece_placement_step_m
 	var s := s0
-	while s < s0 + director_tuning.spawn_batch_length_m:
+	while s < s_end:
 		var lanes := road.lane_count(s)
 		var v := def.speed_mps(set_pieces.min_speed_mps)
 		var s1 := s + _zone_span(def)
@@ -1432,10 +1518,14 @@ func _schedule_tied(def: SetPieceDef, player: VehicleState, forced: bool) -> Set
 				continue
 		var lanes := road.lane_count(s0 + 1.0) if def.trigger == SetPieceDef.Trigger.TUNNEL else road.lane_count(s0)
 		var s1 := s0 + _tied_span(def, f)
-		if not set_pieces.fits_zone(def, s0, s1, lanes) or _zone_in_breather(def, s0, s1) \
-				or not set_pieces.can_schedule_at(minf(SetPieceSource.first_notice_s(def, s0), s0), s1 + def.end_margin_m):
+		if not set_pieces.fits_zone(def, s0, s1, lanes) or _zone_in_breather(def, s0, s1):
 			peaks_unfit += 1
 			continue
+		if not set_pieces.can_schedule_at(minf(SetPieceSource.first_notice_s(def, s0), s0), s1 + def.end_margin_m):
+			# WP9.6: another live piece overlaps it (a rolling piece still on its long
+			# approach): offered again at the next batch while still in the lead window.
+			_tied_done[def.id] = done
+			break
 		return set_pieces.schedule_zone(def, s0, lanes, def.speed_mps(set_pieces.min_speed_mps))
 	return null
 
@@ -1506,6 +1596,7 @@ func _clear_for_set_piece(a: float, b: float, player: VehicleState) -> void:
 
 func _peak_handled(id: int) -> void:
 	_peak_done = id
+	_retry_id = -1
 	peaks_seen += 1
 
 
