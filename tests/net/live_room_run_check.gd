@@ -9,6 +9,8 @@ extends Node
 ##
 ##   tools/godot.sh --headless --path . res://tests/net/live_room_run_check.tscn -- \
 ##       http://127.0.0.1:18652 --metrics=http://127.0.0.1:19652
+##   xvfb-run -a tools/godot.sh --path . --rendering-method gl_compatibility \
+##       res://tests/net/live_room_run_check.tscn -- http://127.0.0.1:18652 --shot=/tmp/room.png
 ##
 ## A scene (not a SceneTree script) so the autoloads the run needs exist. Refuses the
 ## production host. Last line: `LIVE_ROOM_RUN ok (0 failed)` or `... FAIL (n failed)`.
@@ -26,6 +28,9 @@ const BOT_SEED := 5
 
 var _api := ""
 var _metrics := ""
+## `--shot=<png>`: a screenshot while the streamed traffic is shown (run with a display,
+## e.g. under xvfb-run with the Compatibility renderer).
+var _shot := ""
 var _failed := 0
 var _run: Run
 var _a: NetRoomSession
@@ -37,6 +42,8 @@ func _ready() -> void:
 	for a in args:
 		if a.begins_with("--metrics="):
 			_metrics = a.trim_prefix("--metrics=").trim_suffix("/")
+		elif a.begins_with("--shot="):
+			_shot = a.trim_prefix("--shot=")
 		elif not a.begins_with("--"):
 			_api = a.trim_suffix("/")
 	if _api.is_empty() or _api.contains(PRODUCTION):
@@ -124,11 +131,20 @@ func _main() -> void:
 		_run.car.state.v * t.room_interp_delay_ms / MS_PER_S, _a.states_sent])
 
 	_traffic_rows("traffic streamed")
+	if not _shot.is_empty():
+		await RenderingServer.frame_post_draw
+		var img := get_viewport().get_texture().get_image()
+		print("shot %s: %s" % [_shot, error_string(img.save_png(_shot))])
 
-	# Crash-out: two hits after the protection; the server respawns A 3 s later.
-	_run.force_hit(HitDetection.HIT_BARRIER)
-	await _sleep(Tuning.load_default().lives.ghost_period_s + 0.2)
-	_run.force_hit(HitDetection.HIT_BARRIER)
+	# Crash-out: hits (each after the ghost of the one before, in sim time: a slow frame
+	# rate runs the sim slower than the wall clock) until the last life goes; the server
+	# respawns A 3 s after the report.
+	for k in _run.lives.max_lives:
+		await _wait(func() -> bool: return not _run.lives.is_ghost() and not _run.room.is_protected(), 10.0)
+		if _run.room.crashed:
+			break
+		_run.force_hit(HitDetection.HIT_BARRIER)
+		await _sleep(0.3)
 	var crashed := await _wait(func() -> bool: return _run.room.crashed, 2.0)
 	var respawned := await _wait(func() -> bool: return _run.room.respawns >= 1 and _run.state == Game.RUNNING)
 	_row("crash-out, respawn", crashed and respawned, "respawns %d, lives %d" % [_run.room.respawns, _run.lives.lives])

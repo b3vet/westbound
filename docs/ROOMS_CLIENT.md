@@ -170,6 +170,9 @@ The server logged `room seat taken`, `run ended ... reason=Crashed verified=true
 
 ```sh
 tools/godot.sh --headless --path . res://tests/net/live_room_run_check.tscn -- http://127.0.0.1:18652 --metrics=http://127.0.0.1:19652
+# with a picture of the room and its streamed traffic (Compatibility renderer, virtual display):
+xvfb-run -a -s "-screen 0 1280x720x24" tools/godot.sh --path . --rendering-method gl_compatibility --rendering-driver opengl3 \
+    --audio-driver Dummy --resolution 1280x720 res://tests/net/live_room_run_check.tscn -- http://127.0.0.1:18652 --shot=/tmp/room.png
 ```
 
 Against the server with N4.2's traffic streaming (`rooms.traffic = "sim"`, the default since N4.2; this branch after merging it), 2026-09-30:
