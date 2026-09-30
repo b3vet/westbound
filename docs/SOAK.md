@@ -233,6 +233,54 @@ Metrics by lane count (whole soak): gaps per km 11.9 / 11.1 / 10.8, density 13.2
 
 Both follow the bot's own lateral move, like the three 2-lane windows of the WP3.3 soak. The 3-lane one is a cut-in into the path of a car that was already merging: the contact would be the player's doing ("the player caused it"). Under the oracle's pre-registered rule it still counts as a traffic window, because the player was not yet within 0.3 m of the car at t0. **This was not reclassified here** (it would redefine the gate after seeing the result). See *Findings* point 1 for the option already on the table: counting windows that start during or right after the player's own lateral move as player-induced. For this window, the narrower "the player's lateral move is in progress and the other car's lane change started first" would also apply. The orchestrator decides.
 
+## WP6.1: passability, the bot driver and the gate (pre-registered before the run)
+
+Written before the WP6.1 soak was run; the results section below was added afterwards.
+
+**The bot driver.** The soak's player is now `PassabilityBot` (`tests/soak/passability_bot.gd`), "the same module ... with a bot driver" (spec, *Passability guarantee*). Every 0.5 s it runs `Passability.check_player` from its exact state and drives the path it found (re-extracted with its own target speed and target lane: weaving legs pick a random target lane every 2-6 s, lane-keeping legs keep theirs). Without a path it holds its lateral position and follows the car ahead with IDM, and counts `bot_no_path_checks`. The director checks every committed batch (`TrafficDirector.set_player_params`). The metrics reference and the density survey keep the WP3.3 weaving bot (`TrafficSoakRun.BOT_WEAVE`), so their baselines stay comparable. The impossible-window checker is unchanged and shares no code with `passability.gd`.
+
+**Classification rule (pre-registered).** A window stays a *traffic* window (the gate) unless one of these holds at the failed check that starts it:
+
+1. *Contact* (unchanged since WP3.3): the player is already within the clearance of a hull.
+2. *Player cut-in* (new): the player entered its current lane less than `CUT_IN_WINDOW_S` = 2.0 s earlier (its body started overlapping that lane; a half-lane move included), and at that entry either
+    - the bumper gap to the vehicle ahead in that lane was under `CUT_IN_HEADWAY_S` = 0.8 s at the player's speed, closer than any traffic driver follows (the shortest IDM time headway in play: aggressive 1.0 s × the leg-8 headway scale 0.8), or
+    - the vehicle behind in that lane was closing faster than it can brake away within the gap at the traffic's 6 m/s² clamp: closing² / (2 × 6) > gap.
+
+Justification: the spec's fairness rule "If the player cuts in front of a faster car with an impossible gap, the resulting contact counts as a hit, because the player caused it" puts the consequences of an impossible cut-in on the player. The second bullet is that rule, measured the way the traffic's own model would fail (IDM braking is clamped at 6 m/s²). The first bullet is its mirror image: entering behind a car closer than any traffic driver would follow it is also a gap no driver would accept. 2.0 s = the longest player lane change (~1.2 s) plus the shortest traffic headway (0.8 s): the window must follow directly from that entry. Windows under rule 2 are reported as `impossible_player_cut_in`, not gated. The raw count is reported too.
+
+### Trial runs (before the full soak)
+
+A first 252 km trial (4 shards) found 5 traffic and 4 player-induced windows on 2 lanes: the bot rode 0.3 m behind the car ahead (the search's relaxation allows any speed down to the minimum at once), and one leader braking left it without a path. The bot now keeps a 1.0 s headway in its path choice (`PassabilityBot.HEADWAY_S`, `Passability.extract_path(..., headway_s)`); the second 252 km trial had 0 windows and 0 contacts. The full soak below was run after that and not tuned on.
+
+### Results: the WP6.1 10,000 km soak (before the WP6.2 merge)
+
+`tools/soak.sh --km=10000 --shards=4`, the passability bot, the director checking every batch. The shards were killed twice by container restarts (after 274 and 336 runs); the missing runs were run again with `soak_main.gd --runs=...` into extra shard files and merged with `tools/soak.sh --merge`. 22 runs happened to be run twice, once before and once after merging the integration branch (WP6.4 biomes, road generation): **all 22 traces identical**, so the results hold for the merged tree.
+
+| | |
+| --- | --- |
+| Distance | **10,024 km** in 358 runs (5,040 km on 3 lanes, 2,492 km on 2 lanes, 2,492 km on 4 lanes), 78.3 simulated hours |
+| Throughput | ~9× real time per process (the container was shared with other agents: 1.6-2.4× slower than the D11 soak's 20.7×; the bot's checks add ~20%) |
+| Active vehicles | mean 48.4 (34 / 49 / 65 on 2 / 3 / 4 lanes), peak 90 |
+
+| Counter | Total | Gate |
+| --- | --- | --- |
+| Traffic-to-traffic collisions | 0 | ✅ 0 |
+| Signal-time violations / unsignaled moves / no-ambush violations | 0 / 0 / 0 (168,070 lane moves, 162,024 checked for ambush) | ✅ |
+| Deceleration beyond 6 m/s², brake-light mismatches | 0, 0 (min accel −6.00) | ✅ |
+| Rear-ends of a normally driving player | 0 | ✅ 0 |
+| Contacts with the player | **0** (D11 soak: 136 rear-end contacts, all after the weaving bot's own cut-ins) | reported |
+| Impossible windows (traffic) | **0 on 3 lanes, 0 on 4 lanes, 4 on 2 lanes** | ❌ 2 lanes |
+| Impossible windows (contact / pre-registered cut-in rule) | 0 / 0 | reported |
+| Impossible checks failed | 12 of 281,756 | reported |
+
+Bot: 597,637 passability checks (6.4 / 9.0 / 13.1 ms average on 2 / 3 / 4 lanes, in the shared container), 13 without a path (10 on 2 lanes); mean speed 116 / 129 / 140 km/h on 2 / 3 / 4 lanes. Director: 36,480 ranges checked (21,524 probes), 42 checks failed, 36 re-rolls, 2 removals, 4 ranges unresolved (all on 2 lanes: the failing probe lay before the range, behind vehicles already within min_ahead, so nothing could be removed); 0 spawns refused as visible; the longest check took 51 ticks (a re-roll storm), 9-10 otherwise. Metrics per lane count are within 1% of the D11 soak (gaps per km 12.0 / 11.2 / 11.1, density 13.3 / 12.5 / 12.4).
+
+**The D11 3-lane window** (the bot cutting into a lane a commuter was merging into) and the **D12 2-lane cut-ins** do not occur: the passability bot never enters a gap its prediction shows closing (moving and signaled lane changes occupy both lanes), and keeps a headway. The pre-registered cut-in rule classified nothing.
+
+**The four 2-lane windows** (runs 134, 158, 206, 338; legs 6-8) are all the same situation: the bot is at exactly 100 km/h in lane 0, behind lane-0 traffic at 92-98 km/h (commuters, aggressives, a hesitant: desired speeds 105-160 km/h), with lane 1 at 85-95 km/h; the oracle's path ends 7-8 s ahead (the bot closing at 1-3 km/h). On a 2-lane road the right lane flows at 95 km/h, below the minimum speed, so lane 0 is the only lane at or above it; at leg 6-8 densities (18 per km per lane, IDM headway × 0.8) lane 0's braking waves and cut-ins from lane 1 carry it below 100 km/h for a while. Replaying run 206: every lane-0 vehicle in the 800 m ahead has a desired speed ≥ 105 km/h (no slow vehicle had moved into lane 0); the platoon is simply compressed. This is not the player's doing, and neither the director nor the bot can prevent it: it forms in view, long after the batches were checked, and the bot is already at the minimum speed.
+
+A local experiment (not committed) forbidding vehicles with a desired speed below the minimum from entering the only lane at or above it (a traffic_sim MOBIL rule, the D12 suggestion) did not help: 2 windows in 1,428 km of 2-lane runs, the same compressed platoons. The fix is a 2-lane traffic decision for the orchestrator (not in WP6.1's paths), e.g. a lower density cap or a higher right-lane flow speed on 2-lane roads, or a lower minimum speed there. See docs/PASSABILITY.md, *Open*.
+
 ## WP6.2: the director (waves, rule 6, set pieces, lane drops)
 
 **What changed in the soak.**
@@ -345,3 +393,65 @@ On the way (each a full 1,000 km canyon soak or a 2,000 km all-pieces soak, the 
 | Before the WP6.7 merge and the last two bot changes | **2,016 km** in 72 runs (1,008 km on 3 lanes, a quarter of them the canyon's; 504 km on 2; 504 km on 4), 15.4 simulated hours, 0 unfinished: **all 0, GATE PASSED**. 59 windows, all player-induced; 82 contact episodes, none with a normally driving player; 2,046 mandatory merges; set pieces 313 spawned (toll gantry 235, tunnel squeeze 60, truck wall 8, merge zone 4, road works 2, slalom 2, convoy 1, rolling roadblock 1), 301 started, 240 passed, 0 unmet; 0 collision pairs at a live piece; `standstill_beside_fast` 31 |
 
 WP6.3's all-pieces soak had 195 collision pairs and 1 impossible window in its canyon runs (docs/SET_PIECES.md); the intermediate WP6.8 all-pieces soaks had 0 collisions and 1–3 traffic windows (a toll's booth traffic merging into a drop, a two-lane tunnel slow wall, the bot's forced exit), fixed as above.
+
+## WP6.1 after the WP6.2 merge (the final soak)
+
+WP6.2 changed the traffic (intensity waves, set pieces, lane drops), so the WP6.1 gate was run again on the merged tree, same seed (20260928) and `tools/soak.sh --km=10000 --shards=4`. The classification rule is unchanged (pre-registered above).
+
+**First run (soak b, merged tree).** 10,024 km: 3 lanes 0 windows, 4 lanes 1, 2 lanes 3, one window under the player cut-in rule, 2 rear-end contacts (none of a normally driving player), 1 signal violation. Replaying run 299 (the cut-in and one contact) found a passability bug. The bot lost its path mid-lane-change and froze astride two lanes. The next check snapped its start to the neighbouring grid positions and **exempted a fast car of the lane it had not entered** as a "follower" (vehicle 259, +26 km/h, 0.4 m behind), then drove into it. Fixes:
+
+- a start state exempts only followers that overlap the player's **actual** body;
+- the bot aborts a lost move to the lane holding its center instead of freezing.
+
+A test fails without the first fix.
+
+**Second run (soak c).** Also added TrafficSim's lateral anticipation of the player to the prediction. It produced a 3-lane window (run 112): the prediction had a lane-1 car braking for the player's move, the path then reversed the move, and the car never braked. That is an optimistic model error, so it was reverted: follower braking that depends on the path is not assumed.
+
+**Final run (soak d, commit 86bcc9d), the reported result:**
+
+| | |
+| --- | --- |
+| Distance | **10,024 km** in 358 runs (5,040 km on 3 lanes, 2,492 km on 2 lanes, 2,492 km on 4 lanes), 76.2 simulated hours, 5.2× real time per process (the container at load ~20 on 4 cores) |
+| Gates | collisions 0, unsignaled 0, no-ambush 0 (153,676 moves checked), decel 0 (min −6.00 m/s²), brake flags 0, rear-end of a normal player 0, offroad 0; **signal 1** (below); **impossible (traffic) 5** (below) |
+| Windows per lane count | **3 lanes: 0**, **4 lanes: 1**, **2 lanes: 4**; the cut-in rule classified none (0 player-induced) |
+| Contacts with the player | 1 episode (rear-end, not normal driving) |
+| Bot | 548,649 checks, 31 without a path (0.006%), never off the driving lanes (`player_offroad_ticks` 0) |
+| Director | 34,368 ranges checked (172 with set-piece vehicles), 13 failed checks, 10 re-rolls, 3 removals, **0 unresolved** |
+| Set pieces | 176 spawned, 81 started, 20 passed |
+
+The failures:
+
+- **2 lanes (runs 10, 18, 118, 258; legs 5-8): the D12 platoons.** "Slow wall" windows, the same situation as before the merge. Lane 0's compressed platoon runs at 95-98 km/h, and lane 1 flows at 82-88 km/h below the minimum speed. See the WP6.1 results above and docs/PASSABILITY.md *Open*: a 2-lane traffic decision.
+- **4 lanes (run 247, leg 8): an oracle false positive.**
+    - **The window:** the player is at 100 km/h in lane 0, 13 m behind a motorbike at 91 km/h, with lanes 1-2 busy.
+    - **Why the oracle flags it:** it assumes every vehicle ahead keeps its speed, so the bike is a wall.
+    - **What happened:** the bike's platoon (every vehicle in it desiring ≥ 140 km/h) was accelerating (91 → 97 km/h in 3 s). Passability's forward simulation (IDM) predicted that. Replay: the bot drove the whole window in lane 0 at exactly 100 km/h, with a path at every check and no contact.
+    - **Status:** it still counts under the pre-registered rule (not reclassified). It is evidence for making the oracle's traffic prediction model acceleration.
+- **Signal violation (run 113, t = 95.4 s): not WP6.1.** A set-piece truck (FLAG_SCRIPTED) began signalling while ticking at the far rate (FLAG_FAR), became near mid-signal, and moved after 0.983 s < 1.0 s. No passability check failed in that run, so the director did exactly what it does without passability. For WP6.2 / TrafficSim: the signal timer across the far → near tick change.
+- **Contact (run 99): the bot's own braking.** The search allows any speed down to the minimum at once (the spec's "anywhere from minimum speed to current speed plus acceleration", a relaxation). The bot drove a path that dropped from 117 to 100 km/h within one 0.25 s step, and a motorbike braking at −6 m/s² behind it touched it. Not normal driving (`rear_end_normal` 0).
+
+The canyon soak (lane drops, 2 × 28 km) on the merged tree: 0 windows, 0 contacts, 0 bot checks without a path, the player never off the driving lanes, 0 failed batch checks.
+
+## WP6.1 after the WP6.3 / WP6.6 merges (the gate result)
+
+The integration branch brought WP6.3's set pieces (road works, merge zones, tolls, tunnel squeezes, with sim lane closures and speed zones) and WP6.6's faster traffic (racers, D17). Passability now reads the sim's closures and speed zones (docs/PASSABILITY.md). The gate soak ran on 3753cf9 (`tools/soak.sh --km=10000 --shards=4`, seed 20260928). Container restarts cut it three times, so the missing runs were resumed with `soak_main.gd --runs=...` (tests/out/soak_wp61e, _f, _g). The later merges (to e371593, then 007448c) changed no traffic, road, soak or tuning code that the soak runs (audio, net, loop, run.gd and server only), so the per-run traces are the same on the final tree. The last segment was capped at 30 minutes (orchestrator), which left 41 of the 358 runs unrun.
+
+| | |
+| --- | --- |
+| Distance | **8,876 km** in 317 of 358 runs: 4,424 km on 3 lanes, 2,324 km on 2 lanes, 2,128 km on 4 lanes; 64.2 simulated hours |
+| Gates | collisions 0, signal 0, unsignaled 0, no-ambush 0 (175,942 moves checked), decel 0, brake flags 0, rear-end of a normal player 0, offroad 0, closed areas 0; **impossible (traffic) 1** |
+| Traffic windows per lane count | **3 lanes: 0** (4,424 km), **4 lanes: 0** (2,128 km), **2 lanes: 1** (run 10, leg 6: the D12 slow wall, every lane below the minimum speed ahead) |
+| Other windows | 4 that start in contact with the player (runs 7, 113, 128, 241): the oracle's pre-registered rule 1, player-induced. The cut-in rule classified none |
+| Contacts with the player | 6 episodes (5 rear-end), **0 of a normally driving player** |
+| Bot | 462,227 checks, 99 without a path (0.02%), never off the driving lanes, 0 prop hits |
+| Director | 30,432 ranges checked (167 with set-piece vehicles), 0 failed checks, 0 re-rolls, 0 removals, 0 unresolved |
+
+Not counted: run 334 (2 lanes, leg 2) was running when the 30-minute segment was stopped. Its shard log showed one window, which was lost with the unfinished run and not classified.
+
+The contacts and the in-contact windows follow the bot's own driving at the WP6.6 / D17 speeds (up to ~250 km/h). The search's braking relaxation lets a path drop to the minimum speed within one step (docs/PASSABILITY.md, *Open*), and racers arrive from behind at up to +60 km/h. None involves a normally driving player.
+
+Spot checks on the merged tree (reported, not gated):
+
+- Canyon, 2 × 28 km of lane drops: 0 windows, 0 contacts, the player never off the lanes.
+- `--all-pieces`, 3 runs, 84 km: 1 window at a toll gantry. The bot at 246 km/h braked 238 → 100 km/h in 0.3 s under the relaxation, drove a 50 km/h booth lane, and lost its path moving to the express lane.
+

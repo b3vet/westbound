@@ -1001,6 +1001,7 @@ func _start_run() -> void:
 	_headlights = false
 	sim.set_headlights(false)
 	director.set_night(false)
+	director.set_player_params(car.params)   # WP6.1: passability checks against this car
 	director.reset(car.state)
 	_update_headlights()
 	hits.reset(car.state, sim.state)
@@ -1314,6 +1315,7 @@ func dev_teleport(s: float, v_mps: float) -> void:
 	origin.update_focus(smp.pos_x, smp.pos_y, smp.pos_z)
 	builder.build_all_now(s)
 	fork_view.build_all_now(s)
+	director.set_player_params(car.params)
 	director.reset(car.state)
 	hits.reset(car.state, sim.state)
 	rig.snap_to_target()

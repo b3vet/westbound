@@ -113,7 +113,8 @@ static func cell(lanes: int, leg: int, profile: StringName, seeds: int = 3, legs
 	lane_v.resize(lanes)
 	var v_sum := 0.0
 	for k in seeds:
-		var r := TrafficSoakRun.new(k, SEED + 7919 * leg + 104729 * lanes, legs_per_run, leg_km * Units.M_PER_KM, t, leg)
+		var r := TrafficSoakRun.new(k, SEED + 7919 * leg + 104729 * lanes, legs_per_run, leg_km * Units.M_PER_KM, t, leg,
+			null, false, TrafficSoakRun.BOT_WEAVE)
 		r.check_windows = false
 		target = r.director.target_density_per_km_lane()
 		var observer := profile == SCRIPTED or profile == STEADY

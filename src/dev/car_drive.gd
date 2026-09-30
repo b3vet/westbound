@@ -264,6 +264,7 @@ func _spawn_car(index: int, s: float, v_mps: float = -1.0) -> void:
 		_hits.set_player_body(car_def.length_m, car_def.width_m)
 		_hits.reset(_car.state, _sim.state)
 		_tdir.set_player_box(car_def.length_m, car_def.width_m)
+		_tdir.set_player_params(_car.params)   # WP6.1: passability
 		if _sim.state.count == 0:
 			_tdir.set_leg(_leg, s)
 			_tdir.reset(_car.state)
@@ -295,6 +296,8 @@ func _setup_traffic() -> void:
 	_tdir = TrafficDirector.new(_ctx, _road, _sim, _registry.profiles, _registry.types,
 		car_def.length_m, car_def.width_m)
 	_tdir.set_fog_end(_builder.view_distance_m())
+	if _car != null:
+		_tdir.set_player_params(_car.params)
 	_hits = HitDetection.new(_tuning.lives, _tuning.traffic.max_active_vehicles)
 	_lives = Lives.new(_tuning.lives)
 	_traffic_view = TrafficView.new()

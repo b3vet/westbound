@@ -18,8 +18,10 @@ extends Control
 ##         space (its box at the target d) for signaling cars.
 ##   OCC   the player's predicted occupancy for no-ambush: its box at t = 0 and at
 ##         t = no_ambush_window_s, grown by no_ambush_margin_m, and the swept hull.
-##   PASS  passability paths (Phase 6): polylines in (s, d) set with
-##         set_passability_paths(); empty until the passability module exists.
+##   PASS  passability (WP6.1): the paths the director found for its last batches
+##         (passability_paths, polylines in (s, d), from TrafficDirector.pass_paths_s/_d)
+##         and the player's own path from where it is now (player_path, refreshed by
+##         the sandbox a few times a second), or "NO PATH" when it has none.
 ## A tapped car (select_at) gets every MOBIL term for both sides in a side panel.
 ##
 ## Cost: labels are capped (label_cap, nearest to the camera first), text is drawn
@@ -59,6 +61,7 @@ const COL_BLINK := Color("#ffae1a")
 const COL_OCC := Color(0.3, 0.85, 1.0, 0.9)
 const COL_OCC_FILL := Color(0.3, 0.85, 1.0, 0.16)
 const COL_PASS := Color(0.75, 0.45, 1.0, 0.9)
+const COL_PASS_PLAYER := Color(0.35, 1.0, 0.95, 0.95)
 const COL_PANEL := Color(0.067, 0.102, 0.188, 0.94)
 const COL_SELECT := Color("#ffffff")
 const COL_LINK := Color(0.45, 1.0, 0.6, 0.75)
@@ -93,8 +96,14 @@ var camera: Camera3D
 var player: VehicleState
 var player_length_m: float = 4.5
 var player_width_m: float = 1.9
-## Passability paths (Phase 6): each a polyline of Vector2(s, d).
+## Passability paths the director found (WP6.1): each a polyline of Vector2(s, d).
 var passability_paths: Array[PackedVector2Array] = []
+## The player's own passability path (Vector2(s, d) per 0.25 s), empty when none.
+var player_path := PackedVector2Array()
+## False when the player's last check found no path (its window is impossible).
+var player_path_ok := true
+## One line under the player: the last check's numbers (the sandbox fills it).
+var player_path_note := ""
 
 var _font: Font
 var _smp := RoadSample.new()
@@ -561,12 +570,19 @@ func _draw_passability() -> void:
 	for path in passability_paths:
 		for k in range(1, path.size()):
 			_line_sd(path[k - 1].x, path[k - 1].y, path[k].x, path[k].y, BOX_LIFT_M, COL_PASS)
-	if passability_paths.is_empty():
-		var at := _world(player.s + player_length_m, player.d, BOX_LIFT_M)
-		if not camera.is_position_behind(at):
-			_draw_lines(camera.unproject_position(at) + Vector2(0.0, float(_fs(FONT_SIZE)) * 3.0),
-				PackedStringArray(["passability: no paths yet (Phase 6)"]), PackedColorArray([COL_PASS]),
-				_fs(SMALL_FONT_SIZE), true)
+	for k in range(1, player_path.size()):
+		_line_sd(player_path[k - 1].x, player_path[k - 1].y, player_path[k].x, player_path[k].y, BOX_LIFT_M,
+			COL_PASS_PLAYER)
+	var at := _world(player.s + player_length_m, player.d, BOX_LIFT_M)
+	if camera.is_position_behind(at):
+		return
+	var text := "passability: %s  (%d batch paths)" % ["path" if player_path_ok else "NO PATH",
+		passability_paths.size()]
+	if not player_path_note.is_empty():
+		text += "  " + player_path_note
+	_draw_lines(camera.unproject_position(at) + Vector2(0.0, float(_fs(FONT_SIZE)) * 3.0),
+		PackedStringArray([text]), PackedColorArray([COL_PASS_PLAYER if player_path_ok else COL_BAD]),
+		_fs(SMALL_FONT_SIZE), true)
 
 
 func _draw_selected() -> void:

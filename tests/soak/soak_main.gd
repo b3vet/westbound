@@ -5,7 +5,9 @@ extends SceneTree
 ##
 ##   godot --headless --path . --script res://tests/soak/soak_main.gd -- \
 ##       --shard=0 --shards=4 --km=10000 [--seed=N] [--legs=8] [--leg-km=3.5] \
-##       [--out=tests/out/soak/shard_0.json] [--no-windows] [--all-pieces] [--canyon]
+##       [--out=tests/out/soak/shard_0.json] [--no-windows] [--all-pieces] [--canyon] [--runs=I,J,...]
+##   --runs: exactly these run indices (resume an interrupted soak into another
+##   shard_N.json in the same directory, then `tools/soak.sh --merge --out=DIR`)
 ##   godot ... -- --metrics=fast|reference --out=FILE     # a metrics reference run only
 ##   godot ... -- --density [--lanes=3,4] [--legs=1,...,8] [--profile=scripted|bot|soak] [--seeds=3]
 ##       [--run-legs=2] [--out=FILE]                   # the D11 density survey (DensitySurvey)
@@ -75,15 +77,21 @@ func _main() -> void:
 	var last_print := t0
 	var done_km := 0.0
 	var mine := PackedInt32Array()
-	for k in n_runs:
-		if (k + floori(float(k) / float(shards))) % shards == shard:
-			mine.append(k)
+	if args.has("runs"):
+		# Explicit run indices (resuming an interrupted soak into extra shard files).
+		for x in String(args["runs"]).split(","):
+			mine.append(int(x))
+	else:
+		for k in n_runs:
+			if (k + floori(float(k) / float(shards))) % shards == shard:
+				mine.append(k)
 	print("soak shard %d/%d: runs %d of %d (%.1f km each), seed %d" % [shard, shards, mine.size(), n_runs, run_km,
 		base_seed])
 	# --canyon: every run on the canyon's road (curves, crests, tunnels and their lane drops).
 	var biome: BiomeDef = BiomePlan.load_biome(&"canyon") if args.has("canyon") else null
 	for r in mine:
-		var run := TrafficSoakRun.new(r, base_seed, legs, leg_m, null, 0, biome, args.has("all-pieces"))
+		var run := TrafficSoakRun.new(r, base_seed, legs, leg_m, null, 0, biome, args.has("all-pieces"),
+			TrafficSoakRun.BOT_PASSABILITY)
 		run.check_windows = windows
 		while not run.finished:
 			run.advance(60.0)
