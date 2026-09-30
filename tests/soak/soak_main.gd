@@ -11,7 +11,7 @@ extends SceneTree
 ##   godot ... -- --metrics=fast|reference --out=FILE     # a metrics reference run only
 ##   godot ... -- --density [--lanes=3,4] [--legs=1,...,8] [--profile=scripted|bot|soak] [--seeds=3]
 ##       [--run-legs=2] [--out=FILE]                   # the D11 density survey (DensitySurvey)
-##       [--cap=N] [--density-last=X] [--headway-last=X] [--before] [--gain-min=X] [--gain-max=X]
+##       [--cap=N] [--cap-narrow=N] [--density-last=X] [--headway-last=X] [--before] [--gain-min=X] [--gain-max=X]
 ##       [--weights=PCT,...] [--flows=KMH,...] [--gain-rate=X]   # what-ifs
 ##       [--racer=FIRST,LAST] [--aggressive=FIRST,LAST] [--jitter=PCT] [--tolerance=KMH] [--lookahead=M]
 ##       [--set=profile.field=X;...]                  # fast-traffic what-ifs (plan D15)
@@ -169,6 +169,8 @@ func _density(args: Dictionary) -> int:
 	t.director = base.director.duplicate() as DirectorTuning
 	if args.has("cap"):
 		t.traffic.max_active_vehicles = int(args["cap"])
+	if args.has("cap-narrow"):
+		t.traffic.max_active_vehicles_narrow = int(args["cap-narrow"])
 	if args.has("density-last"):
 		t.director.density_last_per_km_lane = float(args["density-last"])
 	if args.has("before"):
@@ -179,6 +181,7 @@ func _density(args: Dictionary) -> int:
 		t.director.headway_scale_last = 1.0
 		t.director.density_last_per_km_lane = 16.0
 		t.traffic.max_active_vehicles = 60
+		t.traffic.max_active_vehicles_narrow = 60
 	if args.has("headway-last"):
 		t.director.headway_scale_last = float(args["headway-last"])
 	if args.has("weights"):

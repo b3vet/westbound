@@ -287,7 +287,7 @@ func tick() -> void:
 		if events.kind[k] == SetPieceSource.KIND_WARNING:
 			checker.note_set_piece_warning(events.points[k], sim.state, bot.state)
 	active_sum += sim.state.count
-	if sim.state.count >= tuning.traffic.max_active_vehicles:
+	if sim.state.count >= tuning.traffic.active_cap(road.lane_count(bot.state.s)):
 		ticks_at_cap += 1
 	events.clear()
 	metrics.sample(DT, sim.state, bot.state, road)

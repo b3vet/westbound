@@ -34,6 +34,16 @@ const PACE_AHEAD_M := 150.0
 ## ... and with a vehicle beside it in the open lane (or ahead closer than HEADWAY_S), it
 ## drops back this much slower than that vehicle.
 const PACE_DROP_BACK_MPS := 3.0
+## WP9.6 (PL-1): a vehicle ahead in the bot's own lane within OVERTAKE_LOOK_M, slower
+## than the bot's target speed by OVERTAKE_MARGIN_MPS, makes the bot prefer the
+## neighbouring lane with the better pace (_pace_into, at least OVERTAKE_MARGIN_MPS above
+## that vehicle's speed; left first on a tie). The path extraction is greedy and a lane
+## change costs as much as it gains at first, so with its own lane preferred the bot sat
+## at the minimum speed behind a 90 km/h motorbike (its headway pins the path to the
+## slowest speed allowed) until a car beside closed the way out: no path, a fallback
+## below the minimum speed, and 36.5 s following the bike (WP9.5, PL-1).
+const OVERTAKE_LOOK_M := 120.0
+const OVERTAKE_MARGIN_MPS := 3.0
 ## Fallback following (no path): a pushy player's IDM, the car's braking.
 const IDM_A := 3.0
 const IDM_B := 4.0
@@ -264,6 +274,10 @@ func _replan(traffic: TrafficState) -> void:
 		length_m + BOOTH_ESCAPE_M)
 	passability.zones = booths
 	var open := _open_lane_near(target_lane)
+	if open == lane:
+		var pass_lane := _overtake_lane(traffic)
+		if pass_lane >= 0:
+			open = pass_lane
 	var d_pref := road.lane_center_d(open, state.s)
 	# WP6.10: leaving a lane that ends, closes or turns into a booth lane, the bot first
 	# tries to start the move now (the check pinned one step into the half-lane move
@@ -321,6 +335,33 @@ func _follow(dt: float, traffic: TrafficState) -> void:
 	a = clampf(a, -BRAKE, IDM_A)
 	state.v = maxf(0.0, state.v + a * dt)
 	state.s += state.v * dt
+
+
+## WP9.6 (PL-1): the lane to overtake a slow vehicle ahead in the bot's own lane by (see
+## OVERTAKE_LOOK_M), or -1 (nothing slow ahead, or no neighbour is faster). Allocation-free.
+func _overtake_lane(traffic: TrafficState) -> int:
+	var gap := OVERTAKE_LOOK_M
+	var lead_v := INF
+	for i in traffic.capacity:
+		if traffic.active[i] == 0 or not _lane_hit(traffic, i, lane):
+			continue
+		var g := traffic.s[i] - state.s - (traffic.length[i] + length_m) * 0.5
+		if g >= 0.0 and g < gap:
+			gap = g
+			lead_v = traffic.v[i]
+	if lead_v >= v_target - OVERTAKE_MARGIN_MPS:
+		return -1
+	var lanes := road.lane_count(state.s)
+	var best := -1
+	var best_pace := lead_v + OVERTAKE_MARGIN_MPS
+	for t: int in [lane - 1, lane + 1]:
+		if t < 0 or t >= lanes or _lane_ends_ahead(t):
+			continue
+		var p := _pace_into(traffic, t)
+		if p > best_pace:
+			best = t
+			best_pace = p
+	return best
 
 
 ## The pace to take into lane t: a vehicle in it beside the bot or ahead closer than
