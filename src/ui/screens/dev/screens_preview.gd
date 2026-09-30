@@ -15,7 +15,8 @@ extends Node
 ## (default countdown), --step=3|2|1|0 (countdown; 0 = GO), --gyro (calibration card,
 ## RECALIBRATE), --hand=right|left, --text_scale=1|1.25, --units=kmh|mph, --sky_t=<0..1>,
 ## --reduced_motion, --dev (keep the dev rows and dev HUD), --page=game|controls|audio|
-## chooser (settings: the page shown; WP8.1). Prints the screens' visible canvas items
+## chooser (settings: the page shown; WP8.1), --xp=<lifetime XP before the run> (results:
+## the XP panel, WP8.2). Prints the screens' visible canvas items
 ## ("snap: ...").
 
 const RUN_SCENE := preload("res://src/run/run.tscn")
@@ -83,9 +84,9 @@ func snap_setup(args: Dictionary) -> void:
 					"chooser":
 						sp.toggle_chooser()
 		"results":
-			screens.show_results(_payload(FAKE_SCORE, FAKE_BEST, false))
+			screens.show_results(_award(_payload(FAKE_SCORE, FAKE_BEST, false), args))
 		"results_best":
-			screens.show_results(_payload(FAKE_NEW_SCORE, FAKE_BEST, true))
+			screens.show_results(_award(_payload(FAKE_NEW_SCORE, FAKE_BEST, true), args))
 		"warmup":
 			# A fresh save's first Journey from the title (in memory: nothing is written).
 			Save.first_run_enabled = true
@@ -110,6 +111,17 @@ func snap_setup(args: Dictionary) -> void:
 	await get_tree().process_frame
 	print("snap: screen=%s visible_screens=%d items=%d" % [screen, screens.visible_screen_count(),
 			screens.visible_item_count()])
+
+
+## WP8.2: with `xp` (lifetime XP before the run), a fresh in-memory profile records the
+## run: the XP panel's keys (level-up and unlocks as the game shows them).
+func _award(payload: Dictionary, args: Dictionary) -> Dictionary:
+	if not args.has("xp"):
+		return payload
+	var p := MetaProfile.new({MetaProfile.XP: int(args["xp"])}, {}, {}, Garage.catalog(), Garage.tuning())
+	p.refresh_unlocks()
+	payload.merge(p.record_run(payload), true)
+	return payload
 
 
 func _payload(score: int, best_before: int, new_best: bool) -> Dictionary:

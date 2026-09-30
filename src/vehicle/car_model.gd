@@ -89,6 +89,8 @@ const STUB_TIRE_WIDTH_FRAC := 0.13
 const STUB_RIM_RADIUS_FRAC := 0.62
 const STUB_WHEEL_SEGMENTS := 12
 const STUB_RIM_SPOKES := 5
+## Spokes reach this share of the rim radius (no lip ring).
+const STUB_SPOKE_REACH := 0.92
 ## Stub light quads: size (m) and spots (fractions of the half-width / height).
 const STUB_LAMP_SIZE := Vector2(0.34, 0.12)
 const STUB_SIGNAL_SIZE := Vector2(0.14, 0.09)
@@ -313,6 +315,70 @@ func apply_paint(color: Color) -> void:
 			own = mat.duplicate() as ShaderMaterial
 			body.set_surface_override_material(i, own)
 		own.set_shader_parameter(&"paint_color", Vector3(color.r, color.g, color.b))
+
+
+## WP8.2: swaps every wheel's Rim mesh for `style`'s (scaled to the wheel radius, one
+## mesh shared by the four wheels; the left wheels keep their outward turn). A null or
+## model_default style keeps the model's own rims. Call before merge_draw_surfaces()
+## (CarVisual.bind): the merged wheel draws bake the rim in. Returns whether it swapped.
+func apply_rim(style: RimStyle) -> bool:
+	if style == null or style.model_default:
+		return false
+	if merged:
+		push_warning("CarModel.apply_rim: the wheels are already merged; rims unchanged")
+		return false
+	var mesh: ArrayMesh = null
+	for i in rims.size():
+		var r := rims[i] as MeshInstance3D
+		if r == null:
+			continue
+		if mesh == null:
+			var tw := 0.0
+			var t := tires[i] as MeshInstance3D if i < tires.size() else null
+			if t != null and t.mesh != null:
+				tw = t.mesh.get_aabb().size.x
+			mesh = build_styled_rim_mesh(wheel_radius_m * style.radius_frac, tw, style)
+		r.mesh = mesh
+		for s in r.get_surface_override_material_count():
+			r.set_surface_override_material(s, null)
+	return mesh != null
+
+
+## A rim in `style` (RimStyle): the face disc just outside the tire's outer (+X)
+## sidewall, the spokes on it and an optional lip ring, flat-shaded in the trim slot
+## (like build_rim_mesh, which the stock style matches).
+static func build_styled_rim_mesh(radius: float, tire_width: float, style: RimStyle) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var n := STUB_WHEEL_SEGMENTS
+	var x := tire_width * 0.5 + STUB_LIGHT_STANDOFF_M * 0.5
+	var c := Vector3(x, 0.0, 0.0)
+	for k in n:
+		var a0 := TAU * float(k) / float(n)
+		var a1 := TAU * float(k + 1) / float(n)
+		_add_tri(st, c, Vector3(x, cos(a1) * radius, sin(a1) * radius),
+			Vector3(x, cos(a0) * radius, sin(a0) * radius), style.face_color)
+	var sx := x + STUB_LIGHT_STANDOFF_M
+	if style.lip_frac > 0.0:
+		var inner := radius * (1.0 - style.lip_frac)
+		for k in n:
+			var a0 := TAU * float(k) / float(n)
+			var a1 := TAU * float(k + 1) / float(n)
+			_add_quad(st, Vector3(sx, cos(a0) * inner, sin(a0) * inner), Vector3(sx, cos(a1) * inner, sin(a1) * inner),
+				Vector3(sx, cos(a1) * radius, sin(a1) * radius), Vector3(sx, cos(a0) * radius, sin(a0) * radius),
+				style.lip_color)
+	var half := radius * style.spoke_width_frac
+	var reach := radius * (1.0 - style.lip_frac) if style.lip_frac > 0.0 else radius * STUB_SPOKE_REACH
+	for k in maxi(style.spokes, 0):
+		var a := TAU * float(k) / float(style.spokes)
+		var dir := Vector3(0.0, cos(a), sin(a))
+		var side := Vector3(0.0, -sin(a), cos(a)) * half
+		var tip := dir * reach
+		_add_quad(st, Vector3(sx, 0.0, 0.0) + side, Vector3(sx, 0.0, 0.0) - side,
+			Vector3(sx, tip.y, tip.z) - side, Vector3(sx, tip.y, tip.z) + side, style.spoke_color)
+	var mesh := ArrayMesh.new()
+	_commit_slot(st, mesh, Slot.TRIM)
+	return mesh
 
 
 func marker(marker_name: StringName) -> Marker3D:
@@ -778,7 +844,7 @@ static func build_rim_mesh(radius: float, tire_width: float) -> ArrayMesh:
 		var a := TAU * float(k) / float(STUB_RIM_SPOKES)
 		var dir := Vector3(0.0, cos(a), sin(a))
 		var side := Vector3(0.0, -sin(a), cos(a)) * half
-		var tip := dir * radius * 0.92
+		var tip := dir * radius * STUB_SPOKE_REACH
 		_add_quad(st, Vector3(sx, 0.0, 0.0) + side, Vector3(sx, 0.0, 0.0) - side,
 			Vector3(sx, tip.y, tip.z) - side, Vector3(sx, tip.y, tip.z) + side, COLOR_SPOKE)
 	var mesh := ArrayMesh.new()

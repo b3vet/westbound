@@ -340,7 +340,7 @@ func test_settings_and_leaderboards_from_the_title() -> void:
 	check(not tt.play_button.visible, "over the title")
 	tt.leaderboards.close_by_player()
 	check(not tt.leaderboards_open() and tt.play_button.visible, "BACK: the title")
-	check(tt.garage_button.disabled, "GARAGE waits for WP8.2")
+	check(not tt.garage_button.disabled, "GARAGE (WP8.2)")
 	_tap(tt.chip)
 	check(tt.settings_open, "the profile chip opens the settings / account")
 
