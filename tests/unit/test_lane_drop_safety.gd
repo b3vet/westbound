@@ -9,7 +9,10 @@ extends WBTest
 ##     deceleration, and reach the capped speed at its start;
 ##   - nobody stops beside a fast lane at a drop (canyon road, leg-8 traffic);
 ##   - canyon determinism;
-##   - the rule checker's box heading for slow lateral movers (spurious vs real contacts).
+##   - the rule checker's box heading for slow lateral movers (spurious vs real contacts);
+##   - WP6.11 (MP-D5, docs/TRAFFIC.md "Lane-drop queue safety"): anticipating a leader's
+##     stopping point, looking through a leader that leaves the path, MOBIL judging the new
+##     leader as it will be once the car is in the lane; each against its tuning flag off.
 
 const SEED := 680801
 const DT := 1.0 / 120.0
@@ -85,39 +88,48 @@ func test_mobil_sees_a_fast_car_behind_a_lane_splitting_bike() -> void:
 func test_organic_lane_changes_never_cut_off_a_fast_car_behind_a_bike() -> void:
 	# The same scene run for a while with MOBIL deciding: column cars keep asking for the
 	# free lane 0 while racers arrive behind the splitting bike (from far enough back that
-	# the column cars already in lane 0 are an ordinary approach). Nobody touches, and no
-	# racer ever has to brake beyond its MOBIL b_safe.
-	var sc := TrafficScenario.new(SEED + 1)
-	sc.spawner_enabled = false
-	sc.make_bot(TrafficBotPlayer.Mode.CRUISE, 60.0, 2)
-	sc.bot.state.s = -5000.0
-	for k in 14:
-		sc.add(300.0 + 30.0 * float(k), 1, &"commuter", &"sedan", 50.0, 120.0)
-		sc.add(290.0 + 30.0 * float(k), 2, &"commuter", &"sedan", 50.0, 50.0, NAN, TrafficState.FLAG_SCRIPTED)
-	sc.add(750.0, 1, &"truck", &"semi", 50.0, 50.0, NAN, TrafficState.FLAG_SCRIPTED)   # the column's head
-	var bike := sc.add(250.0, 1, &"motorbike", &"motorbike", 50.0, 140.0)
-	var blocker := sc.add(250.0, 0, &"commuter", &"sedan", 50.0, 50.0, NAN, TrafficState.FLAG_SCRIPTED)
-	var racers := PackedInt32Array()
-	var ts := sc.sim.state
-	var b_safe := sc.registry.profiles[sc.registry.profile_index(&"racer")].mobil_b_safe_mps2
-	var worst := 0.0
-	var spawned := false
-	for n in roundi(40.0 / DT):
-		sc.tick()
-		if not spawned and sc.sim.is_lane_splitting(bike):
-			spawned = true
-			sc.sim.despawn(blocker)
-			for k in 4:
-				racers.append(sc.add(ts.s[bike] - 600.0 - 200.0 * float(k), 0, &"racer", &"sports", 200.0, 200.0))
-		for r in racers:
-			if ts.is_active(r):
-				worst = minf(worst, ts.accel[r])
-	check(spawned, "the bike split")
-	print("      racers' hardest braking %.2f m/s^2 (b_safe %.1f), %d lane changes" % [worst, b_safe, sc.checker.moves])
-	gt(sc.checker.moves, 0, "column cars changed lanes")
-	ge(worst, -b_safe - 1e-6, "no racer braked beyond its b_safe for a cut-in")
-	eq(sc.checker.collision_pairs, 0)
-	eq(sc.checker.total_violations(), 0, sc.checker.summary())
+	# the column cars already in lane 0 are an ordinary approach). Nobody touches. With the
+	# MP-D5 extensions off (WP6.8's model), no racer ever has to brake beyond its MOBIL
+	# b_safe: the WP6.8 property of MOBIL's safety check. With them on (the default), a
+	# racer may brake harder than that, never beyond the clamp: the anticipation brakes
+	# early for a new leader that then brakes hard itself (here a racer cutting back into
+	# lane 0 and braking for the column ahead: MOBIL judged the follower's stock IDM with
+	# the leader holding its speed). docs/TRAFFIC.md, *Lane-drop queue safety*.
+	for on: bool in [false, true]:
+		var sc := _mp_d5_scene(on, SEED + 1)
+		sc.bot.state.s = -5000.0
+		for k in 14:
+			sc.add(300.0 + 30.0 * float(k), 1, &"commuter", &"sedan", 50.0, 120.0)
+			sc.add(290.0 + 30.0 * float(k), 2, &"commuter", &"sedan", 50.0, 50.0, NAN, TrafficState.FLAG_SCRIPTED)
+		sc.add(750.0, 1, &"truck", &"semi", 50.0, 50.0, NAN, TrafficState.FLAG_SCRIPTED)   # the column's head
+		var bike := sc.add(250.0, 1, &"motorbike", &"motorbike", 50.0, 140.0)
+		var blocker := sc.add(250.0, 0, &"commuter", &"sedan", 50.0, 50.0, NAN, TrafficState.FLAG_SCRIPTED)
+		var racers := PackedInt32Array()
+		var ts := sc.sim.state
+		var b_safe := sc.registry.profiles[sc.registry.profile_index(&"racer")].mobil_b_safe_mps2
+		var worst := 0.0
+		var spawned := false
+		for n in roundi(40.0 / DT):
+			sc.tick()
+			if not spawned and sc.sim.is_lane_splitting(bike):
+				spawned = true
+				sc.sim.despawn(blocker)
+				for k in 4:
+					racers.append(sc.add(ts.s[bike] - 600.0 - 200.0 * float(k), 0, &"racer", &"sports", 200.0, 200.0))
+			for r in racers:
+				if ts.is_active(r):
+					worst = minf(worst, ts.accel[r])
+		var label := "on" if on else "off"
+		check(spawned, "the bike split")
+		print("      MP-D5 %s: racers' hardest braking %.2f m/s^2 (b_safe %.1f), %d lane changes" % [
+			label, worst, b_safe, sc.checker.moves])
+		gt(sc.checker.moves, 0, "column cars changed lanes")
+		if on:
+			ge(worst, -tuning.traffic.max_decel_mps2, "on: never beyond the clamp")
+		else:
+			ge(worst, -b_safe - 1e-6, "off: no racer braked beyond its b_safe for a cut-in")
+		eq(sc.checker.collision_pairs, 0, label)
+		eq(sc.checker.total_violations(), 0, sc.checker.summary())
 
 
 # ---------------------------------------------------------------- A drop with fast traffic
@@ -417,3 +429,117 @@ func test_rule_checker_box_heading_for_slow_lateral_movers() -> void:
 	# ... and a rear-end at speed.
 	var rear := _pair(&"sedan", 100.0, 7.1, 30.0, 0.0, &"sedan", 104.5, 7.1, 20.0)
 	eq(_collides(rear), 1, "a rear-end is still a collision")
+
+
+# ---------------------------------------------------------------- Lane-drop queue safety (WP6.11, MP-D5)
+
+## A 3-lane straight road with the three MP-D5 extensions on (the tuning's default) or all
+## off, the bot player parked in lane 2 behind the scene, nothing spawning.
+func _mp_d5_scene(on: bool, seed_value: int = SEED) -> TrafficScenario:
+	var t := tuning.duplicate() as Tuning
+	t.traffic = tuning.traffic.duplicate() as TrafficTuning
+	t.traffic.look_through_leaving_leaders = on
+	t.traffic.predict_leader_braking = on
+	t.traffic.anticipate_leader_braking = on
+	var sc := TrafficScenario.new(seed_value, 3, t)
+	sc.spawner_enabled = false
+	sc.make_bot(TrafficBotPlayer.Mode.CRUISE, 60.0, 2)
+	return sc
+
+
+func test_mp_d5_flags_default_on() -> void:
+	check(tuning.traffic.look_through_leaving_leaders, "look_through_leaving_leaders")
+	check(tuning.traffic.predict_leader_braking, "predict_leader_braking")
+	check(tuning.traffic.anticipate_leader_braking, "anticipate_leader_braking")
+
+
+func test_follower_anticipates_a_leader_braking_at_the_clamp() -> void:
+	# A racer at 180 km/h 200 m behind a car at 90 km/h that brakes at the clamp (into a
+	# queue): stock IDM sees a big gap and brakes gently; the anticipation brakes now for
+	# where the leader will stop (s0 behind its stopping point), which needs more than the
+	# racer's comfortable b.
+	var raw := PackedFloat64Array()
+	var expect := 0.0
+	for on: bool in [false, true]:
+		var sc := _mp_d5_scene(on)
+		sc.bot.state.s = 0.0
+		var f := sc.add(100.0, 0, &"racer", &"sports", 180.0, 250.0)
+		var l := sc.add(300.0, 0, &"commuter", &"sedan", 90.0, 120.0)
+		sc.sim.step(0.0, sc.bot.state, null, sc.events)   # the order and the leaders
+		var ts := sc.sim.state
+		ts.accel[l] = -tuning.traffic.max_decel_mps2
+		sc.sim.step(0.0, sc.bot.state, null, sc.events)   # f sees l braking (last tick's accel)
+		eq(sc.sim.leader_of(f), l)
+		raw.append(sc.sim.idm_accel(f))
+		if on:
+			var p := ts.profile_id[f]
+			var vl := ts.v[l]
+			var room := sc.sim.leader_gap(f) - sc.registry.s0[p] + vl * vl / (2.0 * tuning.traffic.max_decel_mps2)
+			expect = -(ts.v[f] * ts.v[f]) / (2.0 * room)
+			lt(expect, -sc.registry.b_comfort[p], "stopping behind it needs more than b")
+	print("      racer's IDM acceleration: %.2f m/s^2 off, %.2f on (stop in time: %.2f)" % [raw[0], raw[1], expect])
+	near(raw[1], expect, 1e-9, "on: brakes for the leader's stopping point")
+	gt(raw[0], expect + 0.5, "off: stock IDM brakes later")
+
+
+func test_follower_anticipation_leaves_ordinary_following_alone() -> void:
+	# A leader braking gently (1 m/s^2) far ahead, or accelerating: nothing to anticipate.
+	for accel: float in [-1.0, 0.5]:
+		var out := PackedFloat64Array()
+		for on: bool in [false, true]:
+			var sc := _mp_d5_scene(on)
+			sc.bot.state.s = 0.0
+			var f := sc.add(100.0, 0, &"commuter", &"sedan", 120.0, 130.0)
+			var l := sc.add(190.0, 0, &"commuter", &"sedan", 115.0, 120.0)
+			sc.sim.step(0.0, sc.bot.state, null, sc.events)
+			sc.sim.state.accel[l] = accel
+			sc.sim.step(0.0, sc.bot.state, null, sc.events)
+			out.append(sc.sim.idm_accel(f))
+		eq(out[1], out[0], "leader at %.1f m/s^2: the same acceleration" % accel)
+
+
+func test_follower_looks_through_a_leader_leaving_the_lane() -> void:
+	# Lane 0: a car at 110 km/h follows a leader at the same speed 60 m ahead that signals
+	# into lane 1; 100 m beyond it the lane is blocked by a stopped car. Off: the follower
+	# only sees its leader. On: the stopped car counts too.
+	var raw := PackedFloat64Array()
+	for on: bool in [false, true]:
+		var sc := _mp_d5_scene(on)
+		sc.bot.state.s = 0.0
+		var f := sc.add(100.0, 0, &"commuter", &"sedan", 110.0, 120.0)
+		var l := sc.add(165.0, 0, &"commuter", &"sedan", 110.0, 120.0, NAN, TrafficState.FLAG_SCRIPTED)
+		sc.add(270.0, 0, &"truck", &"semi", 0.0, 1.0, NAN, TrafficState.FLAG_SCRIPTED)
+		sc.sim.step(0.0, sc.bot.state, null, sc.events)
+		var before := sc.sim.idm_accel(f)
+		check(sc.sim.request_lane_change(l, 1), "the leader signals out of lane 0")
+		sc.sim.step(0.0, sc.bot.state, null, sc.events)
+		eq(sc.sim.leader_of(f), l, "the leader is still the leader while it signals")
+		raw.append(sc.sim.idm_accel(f))
+		if not on:
+			near(raw[0], before, 1e-12, "off: the signal changes nothing")
+	print("      follower's IDM acceleration: %.2f m/s^2 off, %.2f on" % [raw[0], raw[1]])
+	lt(raw[1], raw[0] - 1.0, "on: it brakes for the stopped truck beyond the leaving leader")
+	lt(raw[1], -tuning.traffic.max_decel_mps2 * 0.25, "on: firmly")
+
+
+func test_mobil_judges_the_new_leader_when_in_the_lane() -> void:
+	# A car at 108 km/h in lane 1 asks for lane 0, where a leader at the same speed 45 m
+	# ahead brakes at 5 m/s^2 (into a queue). Now the gap looks fine; by the time the car
+	# would be in the lane (its signal + half its shortest move) the leader is 10 m/s
+	# slower and 10 m closer. Off: allowed. On: refused. A leader holding its speed: both allowed.
+	for leader_accel: float in [0.0, -5.0]:
+		var ok := []
+		for on: bool in [false, true]:
+			var sc := _mp_d5_scene(on)
+			sc.bot.state.s = 0.0
+			var c := sc.add(100.0, 1, &"commuter", &"sedan", 108.0, 108.0, NAN, TrafficState.FLAG_SCRIPTED)
+			var l := sc.add(150.0, 0, &"commuter", &"sedan", 108.0, 108.0, NAN, TrafficState.FLAG_SCRIPTED)
+			sc.sim.step(0.0, sc.bot.state, null, sc.events)
+			sc.sim.state.accel[l] = leader_accel
+			ok.append(sc.sim.request_lane_change(c, 0))
+		if leader_accel == 0.0:
+			check(ok[0] and ok[1], "a leader holding its speed: allowed either way")
+		else:
+			check(ok[0], "off: the gap looks fine now")
+			check(not ok[1], "on: refused, the leader will be too close once the car is in the lane")
+

@@ -69,6 +69,10 @@ pub struct TuningParams {
     pub lane_drop_merge_floor_mps: f64,
     pub lane_drop_merge_floor_until_m: f64,
     pub mobil_follower_horizon_s: f64,
+    // Lane-drop queue safety (MP-D5, WP6.11): `SimConfig::single_player`'s extensions.
+    pub look_through_leaving_leaders: bool,
+    pub predict_leader_braking: bool,
+    pub anticipate_leader_braking: bool,
     pub brake_light_decel_mps2: f64,
     pub brake_light_strong_decel_mps2: f64,
     pub signal_time_floor_s: f64,
@@ -266,16 +270,16 @@ pub struct MpTrafficRules {
     /// Motorbike lane splitting on the server (its boundary targets have no protocol
     /// encoding yet; see docs/SERVER.md → Traffic simulation).
     pub lane_split: bool,
-    /// Not in the GDScript model: a leader leaving the path does not hide what is ahead
-    /// of it (following and MOBIL's own safety look through it). See docs/SERVER.md →
-    /// Traffic simulation, deviations.
+    /// MP-D5 lane-drop queue safety (in the GDScript model since WP6.11, where
+    /// `TrafficTuning` holds the single-player switch): a leader leaving the path does not
+    /// hide what is ahead of it (following and MOBIL's own safety look through it). The
+    /// server's own switch. See docs/SERVER.md → Traffic simulation.
     pub look_through_leaving_leaders: bool,
-    /// Not in the GDScript model: MOBIL's own safety also judges the new leader as it
-    /// will be when the car is in the lane (signal + half the minimum move time), with its
-    /// current deceleration. See docs/SERVER.md → Traffic simulation, deviations.
+    /// MP-D5: MOBIL's own safety also judges the new leader as it will be when the car is
+    /// in the lane (signal + half the minimum move time), with its current deceleration.
     pub predict_leader_braking: bool,
-    /// Not in the GDScript model: a follower brakes for its leader's stopping point when
-    /// that needs more than its comfortable b. See docs/SERVER.md → Traffic simulation.
+    /// MP-D5: a follower brakes for its leader's stopping point when that needs more than
+    /// its comfortable b.
     pub anticipate_leader_braking: bool,
     pub ramps: RampRules,
     pub fill: FillRules,
