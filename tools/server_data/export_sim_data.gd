@@ -319,6 +319,17 @@ func _params_text(tuning: Tuning, reg: TrafficRegistry) -> String:
 			"min_leg": pr.min_leg,
 			"spawn_left_lane_count": pr.spawn_left_lane_count,
 			"spawn_weight": w,
+			"idm_headway_vs_traffic_s": pr.idm_headway_vs_traffic_s,
+			"idm_s0_vs_traffic_m": pr.idm_s0_vs_traffic_m,
+			"idm_b_comfort_vs_traffic_mps2": pr.idm_b_comfort_vs_traffic_mps2,
+			"mobil_b_safe_vs_traffic_mps2": pr.mobil_b_safe_vs_traffic_mps2,
+			"lookahead_lane_choice_m": pr.lookahead_lane_choice_m,
+			"lookahead_gain_per_s": pr.lookahead_gain_per_s,
+			"lookahead_incentive_max_mps2": pr.lookahead_incentive_max_mps2,
+			"lane_change_cooldown_s": pr.lane_change_cooldown_s,
+			"lane_change_cap_count": pr.lane_change_cap_count,
+			"lane_change_cap_window_s": pr.lane_change_cap_window_s,
+			"raw_headway_s": pr.idm_headway_s,
 		})
 	var types: Array = []
 	for ti in reg.type_count():

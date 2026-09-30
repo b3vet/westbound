@@ -35,6 +35,10 @@ struct Report {
 
 fn soak(density: Density, seed: i64, seconds: f64) -> Report {
     let mut room = Room::new(density, seed, BOTS, true);
+    run_soak(&mut room, density, seed, seconds)
+}
+
+fn run_soak(room: &mut Room, density: Density, seed: i64, seconds: f64) -> Report {
     let t0 = std::time::Instant::now();
     room.run(seconds, SAMPLE_S);
     let wall = t0.elapsed().as_secs_f64();
@@ -69,6 +73,11 @@ fn soak(density: Density, seed: i64, seconds: f64) -> Report {
         c.collision_ticks,
         c.collision_pairs,
         room.checker.total_violations(),
+    );
+    println!(
+        "SOAK {density:?} seed {seed}: body overlaps {} pair-ticks; single-player checker heading (+-0.28 rad at any \
+         speed) adds {} pair-ticks, fastest {:.1} m/s",
+        c.body_overlap_pairs, c.yaw_only_pairs, c.yaw_only_max_speed
     );
     assert_eq!(
         room.checker.total_violations(),
@@ -139,4 +148,26 @@ fn soak_hour_normal() {
 #[ignore = "one simulated hour; run with --release -- --ignored"]
 fn soak_hour_rush() {
     assert_stable(&soak(Density::Rush, 103, 3600.0));
+}
+
+/// Not a gate: the same rush hour with the server's three safety extensions off (the
+/// GDScript model's rules alone), to measure what they prevent. Prints the counts.
+#[test]
+#[ignore = "diagnostic; one simulated hour"]
+fn soak_hour_rush_without_mp_extensions() {
+    let mut mp = sim::traffic::MpTrafficRules::builtin().unwrap();
+    mp.look_through_leaving_leaders = false;
+    mp.predict_leader_braking = false;
+    mp.anticipate_leader_braking = false;
+    let mut room = Room::with_rules(Density::Rush, 103, BOTS, true, mp);
+    room.run(3600.0, SAMPLE_S);
+    let c = &room.checker.counts;
+    println!(
+        "WITHOUT MP EXTENSIONS rush 1 h: collision ticks {} pairs {} (body {}), decel violations {}, bot rear-ends {:?}",
+        c.collision_ticks,
+        c.collision_pairs,
+        c.body_overlap_pairs,
+        c.decel_violations,
+        room.contacts()
+    );
 }

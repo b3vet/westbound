@@ -135,6 +135,19 @@ pub struct ProfileParams {
     pub spawn_left_lane_count: i32,
     /// `TrafficTuning.spawn_profile_weights_pct` for this profile (0 when not listed).
     pub spawn_weight: f64,
+    // Weaving (plan D17, WP6.9): toward traffic only; < 0 / 0 = off (DriverProfile).
+    pub idm_headway_vs_traffic_s: f64,
+    pub idm_s0_vs_traffic_m: f64,
+    pub idm_b_comfort_vs_traffic_mps2: f64,
+    pub mobil_b_safe_vs_traffic_mps2: f64,
+    pub lookahead_lane_choice_m: f64,
+    pub lookahead_gain_per_s: f64,
+    pub lookahead_incentive_max_mps2: f64,
+    pub lane_change_cooldown_s: f64,
+    pub lane_change_cap_count: i32,
+    pub lane_change_cap_window_s: f64,
+    /// `DriverProfile.idm_headway_s` as written (the weaving T ratio's denominator).
+    pub raw_headway_s: f64,
 }
 
 /// One `VehicleType`.

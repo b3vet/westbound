@@ -46,6 +46,8 @@ pub const MAX_SPEED_ZONES: usize = 8;
 pub const MAX_HEADWAY_ZONES: usize = 4;
 /// Lane-drop harmonisation zones (WP6.8): one per road lane drop.
 pub const MAX_DROP_ZONES: usize = 8;
+/// Longest lane-change cap a profile may ask for (WP6.9; per-slot ring size).
+pub const WEAVE_CAP_MAX: usize = 8;
 
 const PEND_HAZARD_ON: i32 = 1;
 const PEND_HORN: i32 = 2;
@@ -507,6 +509,23 @@ pub struct TrafficSim {
 
     // Neighbor query results
     q_player: bool,
+
+    // Racers weave harder (plan D17, WP6.9)
+    pweave: Vec<u8>,
+    w_tk: Vec<f64>,
+    ws0: Vec<f64>,
+    wb: Vec<f64>,
+    wbsafe: Vec<f64>,
+    wlook: Vec<f64>,
+    wgain: Vec<f64>,
+    wmax: Vec<f64>,
+    wcool: Vec<f64>,
+    wcap: Vec<i32>,
+    wwin: Vec<f64>,
+    wclock: f64,
+    wvid: Vec<i32>,
+    wn: Vec<i32>,
+    wt: Vec<f64>,
 }
 
 /// No leader / follower.
@@ -725,8 +744,24 @@ impl TrafficSim {
             pending_tag: vec![EventTag::None; cap],
             n_pending: 0,
             q_player: false,
+            pweave: Vec::new(),
+            w_tk: Vec::new(),
+            ws0: Vec::new(),
+            wb: Vec::new(),
+            wbsafe: Vec::new(),
+            wlook: Vec::new(),
+            wgain: Vec::new(),
+            wmax: Vec::new(),
+            wcool: Vec::new(),
+            wcap: Vec::new(),
+            wwin: Vec::new(),
+            wclock: 0.0,
+            wvid: vec![-1; cap],
+            wn: vec![0; cap],
+            wt: vec![0.0; cap * WEAVE_CAP_MAX],
             config,
         };
+        sim.init_weave(params);
         let mut max_len = 0.0;
         for x in &sim.tlen {
             max_len = maxf(max_len, *x);
@@ -1938,6 +1973,7 @@ impl TrafficSim {
         if self.n_pending > 0 {
             self.emit_pending();
         }
+        self.wclock += dt; // WP6.9: the lane-change cap's clock
         self.read_players(dt);
         let ref_s = self.reference_s();
         self.edge = self.road.lanes_left_edge_d(ref_s);
@@ -2117,18 +2153,34 @@ impl TrafficSim {
         if lead >= 0 {
             let l = lead as usize;
             gap = self.road.signed_delta(si, self.ks[l]) - self.khl[l] - self.khl[i];
-            a = idm::accel(
-                vi,
-                v0,
-                gap,
-                vi - self.kv[l],
-                self.pa[p],
-                self.pb[p],
-                hw_t,
-                self.ps0[p],
-                self.pdl[p],
-                self.gap_floor,
-            );
+            a = if self.pweave[p] == 1 && !self.is_player(l) {
+                // WP6.9: a weaving profile behind a traffic car (never behind a player).
+                idm::accel(
+                    vi,
+                    v0,
+                    gap,
+                    vi - self.kv[l],
+                    self.pa[p],
+                    self.wb[p],
+                    hw_t * self.w_tk[p],
+                    self.ws0[p],
+                    self.pdl[p],
+                    self.gap_floor,
+                )
+            } else {
+                idm::accel(
+                    vi,
+                    v0,
+                    gap,
+                    vi - self.kv[l],
+                    self.pa[p],
+                    self.pb[p],
+                    hw_t,
+                    self.ps0[p],
+                    self.pdl[p],
+                    self.gap_floor,
+                )
+            };
         } else {
             a = idm::free_accel(vi, v0, self.pa[p], self.pdl[p]);
         }
@@ -2335,7 +2387,7 @@ impl TrafficSim {
             self.state.flags[i] &= !BLINKERS;
             self.split[i] = self.lc_split[i];
             self.lc_split[i] = 0;
-            self.mobil_t[i] = self.cooldown;
+            self.mobil_t[i] = self.cooldown_of(i);
             self.stat_completed += 1;
             if self.exiting[i] == 1 {
                 self.exited.push(i);
@@ -2429,8 +2481,19 @@ impl TrafficSim {
 
     fn consider_lane_change(&mut self, i: usize) {
         let cur = self.state.lane[i];
-        let gl = self.eval_target(i, cur - 1, true, false);
-        let gr = self.eval_target(i, cur + 1, true, false);
+        let mut gl = self.eval_target(i, cur - 1, true, false);
+        let mut gr = self.eval_target(i, cur + 1, true, false);
+        if self.pweave[self.state.profile_id[i] as usize] == 1 {
+            // WP6.9: weaving racers look ahead (and keep to their lane-change cap).
+            if !self.weave_cap_ok(i) {
+                return;
+            }
+            gl += self.weave_bonus_of(i, cur - 1, cur);
+            gr += self.weave_bonus_of(i, cur + 1, cur);
+            if gl > 0.0 || gr > 0.0 {
+                self.weave_note_change(i);
+            }
+        }
         if gl > 0.0 && gl >= gr {
             self.start_signal(i, cur - 1, self.lane_d(cur - 1), 0);
         } else if gr > 0.0 {
@@ -2625,7 +2688,7 @@ impl TrafficSim {
         self.state.lc_duration[i] = 0.0;
         self.state.flags[i] &= !BLINKERS;
         self.will_cancel[i] = 0;
-        self.mobil_t[i] = self.cooldown;
+        self.mobil_t[i] = self.cooldown_of(i);
         if self.lc_split[i] == 0
             && (self.state.d[i] - self.lane_d(self.state.lane[i])).abs() > self.lw * 0.5 * 0.5
         {
@@ -2728,7 +2791,12 @@ impl TrafficSim {
         if v0 < self.drop_v_merge && (self.cl_n > 0 || self.dz_n > 0) && self.split[i] == 0 {
             v0 += (self.drop_v_merge - v0) * self.match_[i]; // WP6.8: as in step_accel
         }
-        let bsafe = self.pbsafe[p];
+        // WP6.9: a weaving profile's b_safe toward traffic followers.
+        let bsafe = if self.pweave[p] == 0 {
+            self.pbsafe[p]
+        } else {
+            self.wbsafe[p]
+        };
         let mut a_c_new: f64;
         if lead >= 0 {
             let l = lead as usize;
@@ -2737,19 +2805,40 @@ impl TrafficSim {
                 self.q_player = self.is_player(l);
                 return f64::NEG_INFINITY;
             }
-            a_c_new = idm::accel(
-                vi,
-                v0,
-                gl,
-                vi - self.kv[l],
-                self.pa[p],
-                self.pb[p],
-                self.pt[p],
-                self.ps0[p],
-                self.pdl[p],
-                self.gap_floor,
-            );
-            if a_c_new < -bsafe {
+            a_c_new = if self.pweave[p] == 1 && !self.is_player(l) {
+                // WP6.9: its IDM toward traffic.
+                idm::accel(
+                    vi,
+                    v0,
+                    gl,
+                    vi - self.kv[l],
+                    self.pa[p],
+                    self.wb[p],
+                    self.pt[p] * self.w_tk[p],
+                    self.ws0[p],
+                    self.pdl[p],
+                    self.gap_floor,
+                )
+            } else {
+                idm::accel(
+                    vi,
+                    v0,
+                    gl,
+                    vi - self.kv[l],
+                    self.pa[p],
+                    self.pb[p],
+                    self.pt[p],
+                    self.ps0[p],
+                    self.pdl[p],
+                    self.gap_floor,
+                )
+            };
+            let own_bsafe = if self.is_player(l) {
+                self.pbsafe[p]
+            } else {
+                bsafe
+            };
+            if a_c_new < -own_bsafe {
                 self.q_player = self.is_player(l);
                 return f64::NEG_INFINITY;
             }
@@ -2864,10 +2953,11 @@ impl TrafficSim {
             let fo = foll as usize;
             if lead >= 0 {
                 let l = lead as usize;
-                a_n = self.follower_accel(
+                a_n = self.follower_accel_lp(
                     fo,
                     self.road.signed_delta(self.ks[fo], self.ks[l]) - self.khl[l] - self.khl[fo],
                     self.kv[fo] - self.kv[l],
+                    self.is_player(l),
                 );
             } else {
                 a_n = self.follower_accel(fo, f64::INFINITY, 0.0);
@@ -2906,10 +2996,11 @@ impl TrafficSim {
             let ol = self.lead[i];
             if ol >= 0 && ol != of {
                 let l = ol as usize;
-                a_o_new = self.follower_accel(
+                a_o_new = self.follower_accel_lp(
                     o,
                     self.road.signed_delta(self.ks[o], self.ks[l]) - self.khl[l] - self.khl[o],
                     self.kv[o] - self.kv[l],
+                    self.is_player(l),
                 );
             } else {
                 a_o_new = self.follower_accel(o, f64::INFINITY, 0.0);
@@ -3151,6 +3242,12 @@ impl TrafficSim {
     /// IDM acceleration of follower f (slot or a player) at this gap / closing speed.
     /// A player is judged as holding its speed (interaction term only).
     fn follower_accel(&self, f: usize, gap: f64, dv: f64) -> f64 {
+        self.follower_accel_lp(f, gap, dv, false)
+    }
+
+    /// `_follower_accel(f, gap, dv, lead_is_player)`: a weaving follower behind traffic
+    /// uses its IDM toward traffic (WP6.9), behind a player its ordinary one.
+    fn follower_accel_lp(&self, f: usize, gap: f64, dv: f64, lead_is_player: bool) -> f64 {
         if self.is_player(f) {
             return idm::interaction_accel(
                 self.kv[f],
@@ -3164,6 +3261,20 @@ impl TrafficSim {
             );
         }
         let p = self.state.profile_id[f] as usize;
+        if self.pweave[p] == 1 && !lead_is_player {
+            return idm::accel(
+                self.kv[f],
+                self.state.v0[f],
+                gap,
+                dv,
+                self.pa[p],
+                self.wb[p],
+                self.pt[p] * self.w_tk[p],
+                self.ws0[p],
+                self.pdl[p],
+                self.gap_floor,
+            );
+        }
         idm::accel(
             self.kv[f],
             self.state.v0[f],
@@ -3176,6 +3287,152 @@ impl TrafficSim {
             self.pdl[p],
             self.gap_floor,
         )
+    }
+
+    // ------------------------------------------------------------ Racers weave harder (plan D17, WP6.9)
+    // Profiles with any DriverProfile "Weaving" field set (the racer): toward a TRAFFIC
+    // leader their own T / s0 / b, MOBIL's b_safe toward traffic followers their own
+    // (never above the clamp), a lookahead lane-pace bonus in MOBIL's incentive, their own
+    // cooldown and a cap on discretionary lane changes per window. Toward players nothing
+    // changes. Allocation-free after `new`.
+
+    fn init_weave(&mut self, params: &TrafficParams) {
+        for (p, d) in params.profiles.iter().enumerate() {
+            let hw = d.idm_headway_vs_traffic_s;
+            self.w_tk.push(if hw >= 0.0 && d.raw_headway_s > 0.0 {
+                hw / d.raw_headway_s
+            } else {
+                1.0
+            });
+            self.ws0.push(if d.idm_s0_vs_traffic_m >= 0.0 {
+                d.idm_s0_vs_traffic_m
+            } else {
+                self.ps0[p]
+            });
+            self.wb.push(if d.idm_b_comfort_vs_traffic_mps2 > 0.0 {
+                d.idm_b_comfort_vs_traffic_mps2
+            } else {
+                self.pb[p]
+            });
+            let bs = if d.mobil_b_safe_vs_traffic_mps2 > 0.0 {
+                d.mobil_b_safe_vs_traffic_mps2
+            } else {
+                self.pbsafe[p]
+            };
+            self.wbsafe.push(minf(bs, self.max_decel));
+            self.wlook.push(maxf(d.lookahead_lane_choice_m, 0.0));
+            self.wgain.push(d.lookahead_gain_per_s);
+            self.wmax.push(d.lookahead_incentive_max_mps2);
+            self.wcool.push(if d.lane_change_cooldown_s >= 0.0 {
+                d.lane_change_cooldown_s
+            } else {
+                self.cooldown
+            });
+            let cap = d.lane_change_cap_count.clamp(0, WEAVE_CAP_MAX as i32);
+            self.wcap.push(cap);
+            self.wwin.push(d.lane_change_cap_window_s);
+            let on = hw >= 0.0
+                || d.idm_s0_vs_traffic_m >= 0.0
+                || d.idm_b_comfort_vs_traffic_mps2 > 0.0
+                || d.mobil_b_safe_vs_traffic_mps2 > 0.0
+                || self.wlook[p] > 0.0
+                || d.lane_change_cooldown_s >= 0.0
+                || cap > 0;
+            self.pweave.push(u8::from(on));
+        }
+    }
+
+    /// True when profile p weaves.
+    pub fn weaves(&self, p: usize) -> bool {
+        self.pweave[p] == 1
+    }
+
+    /// MOBIL cooldown of vehicle i after a lane change (`_cooldown_of`).
+    fn cooldown_of(&self, i: usize) -> f64 {
+        let p = self.state.profile_id[i] as usize;
+        if self.pweave[p] == 0 {
+            self.cooldown
+        } else {
+            self.wcool[p]
+        }
+    }
+
+    /// The lookahead term of a move of vehicle i from lane `cur` into lane t (`_weave_bonus`).
+    fn weave_bonus_of(&self, i: usize, t: i32, cur: i32) -> f64 {
+        let p = self.state.profile_id[i] as usize;
+        let look = self.wlook[p];
+        if look <= 0.0 || t < 0 || t >= self.road.lane_count(self.ks[i]) {
+            return 0.0;
+        }
+        let diff =
+            self.weave_pace(i, self.lane_d(t), look) - self.weave_pace(i, self.lane_d(cur), look);
+        clampf(self.wgain[p] * diff, -self.wmax[p], self.wmax[p])
+    }
+
+    /// The pace of the lane centred at `c` ahead of vehicle i (`_weave_pace`).
+    fn weave_pace(&self, i: usize, c: f64, look: f64) -> f64 {
+        let p = self.state.profile_id[i] as usize;
+        let hw = self.state.width[i] * 0.5;
+        let lo = c - hw - self.lat_m;
+        let hi = c + hw + self.lat_m;
+        let si = self.ks[i];
+        let v0 = self.state.v0[i];
+        let h = look / v0;
+        let t_gap = self.pt[p] * self.w_tk[p];
+        let mut pace = v0;
+        let mut left = self.n.saturating_sub(1);
+        let mut kk = self.next_k(self.rank[i]);
+        while let Some(x) = kk {
+            if left == 0 {
+                break;
+            }
+            left -= 1;
+            let j = self.ord[x];
+            kk = self.next_k(x);
+            let ahead = self.road.signed_delta(si, self.ks[j]);
+            if ahead > look {
+                break;
+            }
+            if self.klo[j] < hi && self.khi[j] > lo {
+                let vj = self.kv[j];
+                let gap = ahead - self.khl[j] - self.khl[i];
+                pace = minf(pace, maxf(gap + vj * h - self.ws0[p] - vj * t_gap, 0.0) / h);
+            }
+        }
+        pace
+    }
+
+    /// Vehicle i may start another discretionary lane change (`_weave_cap_ok`).
+    fn weave_cap_ok(&mut self, i: usize) -> bool {
+        let p = self.state.profile_id[i] as usize;
+        let cap = self.wcap[p];
+        if cap <= 0 {
+            return true;
+        }
+        if self.wvid[i] != self.state.vehicle_id[i] {
+            self.wvid[i] = self.state.vehicle_id[i];
+            self.wn[i] = 0;
+        }
+        let n = self.wn[i];
+        if n < cap {
+            return true;
+        }
+        let k = ((n - cap) as usize) % WEAVE_CAP_MAX;
+        self.wclock - self.wt[i * WEAVE_CAP_MAX + k] >= self.wwin[p]
+    }
+
+    /// Notes that vehicle i may be starting a discretionary lane change now.
+    fn weave_note_change(&mut self, i: usize) {
+        if self.wcap[self.state.profile_id[i] as usize] <= 0 {
+            return;
+        }
+        if self.wvid[i] != self.state.vehicle_id[i] {
+            self.wvid[i] = self.state.vehicle_id[i];
+            self.wn[i] = 0;
+        }
+        let k = (self.wn[i] as usize) % WEAVE_CAP_MAX;
+        self.wt[i * WEAVE_CAP_MAX + k] = self.wclock;
+        self.wn[i] += 1;
     }
 
     // ------------------------------------------------------------ Ramps (MP)

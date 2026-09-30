@@ -90,7 +90,18 @@ pub struct Room {
 
 impl Room {
     pub fn new(density: Density, seed: i64, bots: usize, weave: bool) -> Room {
-        let (params, mp) = params();
+        Self::with_rules(density, seed, bots, weave, params().1)
+    }
+
+    /// With these server rules (e.g. the MP safety extensions off).
+    pub fn with_rules(
+        density: Density,
+        seed: i64,
+        bots: usize,
+        weave: bool,
+        mp: MpTrafficRules,
+    ) -> Room {
+        let params = params().0;
         let world = TrafficWorld::new(&params, &mp, &map(), density, seed);
         let checker = RuleChecker::new(&params, &world.sim, true);
         let mut rng = Rng::new(seed).derive("bots");
@@ -145,6 +156,19 @@ impl Room {
     /// One tick: bots drive and report (late), the world ticks, the checker observes.
     pub fn tick(&mut self) {
         let dt = self.world.dt();
+        self.drive_bots_and_report();
+        let tick = self.world.tick();
+        self.time += dt;
+        self.debug_trace(tick);
+        self.checker.observe(&self.world.sim, tick);
+        for b in 0..self.bots.len() {
+            self.check_contacts(b);
+        }
+    }
+
+    /// The bots drive one tick and report their (late) state to the world.
+    pub fn drive_bots_and_report(&mut self) {
+        let dt = self.world.dt();
         let now = self.world.tick_index();
         for b in 0..self.bots.len() {
             self.drive_bot(b, dt);
@@ -165,13 +189,6 @@ impl Room {
             let lag = (REPORT_LAG_TICKS as usize).min(bot.history.len() - 1);
             let reported = bot.history[bot.history.len() - 1 - lag].1;
             self.world.set_player(b, reported);
-        }
-        let tick = self.world.tick();
-        self.time += dt;
-        self.debug_trace(tick);
-        self.checker.observe(&self.world.sim, tick);
-        for b in 0..self.bots.len() {
-            self.check_contacts(b);
         }
     }
 
