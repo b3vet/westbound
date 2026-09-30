@@ -39,7 +39,7 @@ extends Resource
 @export var level_xp_exponent: float = 1.8
 @export var max_level: int = 50
 ## The garage's roster, paints and rims (GarageCatalog).
-@export_file("*.tres") var garage_catalog_path: String = "res://data/cars/garage.tres"
+@export_file("*.tres") var garage_catalog_path: String = "res://data/cars/garage/catalog.tres"
 
 @export_group("Garage turntable (WP8.2, visual only)")
 ## The turntable's idle spin (degrees per second) and where it starts (0 = nose to camera).

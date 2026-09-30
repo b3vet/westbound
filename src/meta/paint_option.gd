@@ -3,7 +3,7 @@ extends Resource
 ## A paint colour for the garage (WP8.2). Spec: Garage and progression ("Levels unlock
 ## cars, paint colors and rims"; "Cosmetics. Paint colors and rims now"); Car shader
 ## ("Paint color ... [is a] shader parameter, so recoloring costs nothing"); Art pipeline
-## (one palette of about 30 colours). Listed in data/cars/garage.tres; every paint fits
+## (one palette of about 30 colours). Listed in data/cars/garage/catalog.tres; every paint fits
 ## every car. docs/GARAGE.md.
 
 @export var id: StringName = &""

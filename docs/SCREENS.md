@@ -142,7 +142,8 @@ The whole screen takes the tap during CRASH and emits `skip`, and keys still rea
     - a first record: FIRST RECORD.
 - **Tiles.** DISTANCE (km or mi), LEGS (n, then OF 8 TO THE COAST, or COAST REACHED in gold), TOP SPEED (km/h or mph).
 - **List.** BEST CHAIN, BEST MULTIPLIER (the HUD's × format), THREADS, CLOSE PASSES, TIME AT NIGHT (m:ss), HITS, COAST REACHED.
-- **Buttons.** RETRY is primary, `primary_button_size_px`, bottom-right in thumb reach and mirrored when left-handed. GARAGE is disabled with SOON until WP8.2. MENU (WP8.5) sits next to LEADERBOARDS, away from RETRY, and goes back to the title; it obeys the same tap guard.
+- **Buttons.** RETRY is primary, `primary_button_size_px`, bottom-right in thumb reach and mirrored when left-handed. GARAGE (WP8.2) beside it goes to the title with the garage open (`garage` → `Run.open_garage`). MENU (WP8.5) sits next to LEADERBOARDS, away from RETRY, and goes back to the title; it obeys the same tap guard.
+- **XP (WP8.2).** Under the stats list, a panel: DRIVER LEVEL n and +XP (accent, tabular), the level bar (`GarageXpBar`; gold on a level-up), then LEVEL UP · NEW: SUNSET PAINT, MESH RIMS in gold (shortened to LEVEL UP · n NEW IN THE GARAGE when the names do not fit), or 12,400 XP TO LEVEL 4 (muted), or MAX LEVEL. It reads the payload keys `Garage.award_run` adds (docs/GARAGE.md) and hides without them (tests, tools). It slides in after the rows.
 - **Guard.** RETRY ignores taps (and Enter) for `results_input_delay_s`, so the tap that skipped the crash never lands on it.
 - **Motion.** The screen fades in, the tiles and rows slide in staggered by `results_row_stagger_s`, and the badge pops.
 
@@ -206,7 +207,6 @@ The preview is the real run (`run.tscn`) in the matching state, with the screen 
 ## Deviations
 
 - **Quick retry countdown.** The spec wants a 3-2-1 countdown (with gyro calibration) and also "Retry puts the player back on the road within 2 seconds". Retry reaches COUNTDOWN on the road in the same frame. The retry countdown runs at 0.5 s a step, so the player is driving 1.5 s after RETRY. The first run keeps 1 s steps.
-- **GARAGE** is disabled until Phase 8.
 
 
 ## Account (N1.2)
@@ -330,7 +330,7 @@ The game boots into the title: the run's MENU state over the attract drive (docs
 
 ### Layout
 
-- **Left-anchored, up from the bottom-left thumb:** a row of LEADERBOARDS, SETTINGS and GARAGE (disabled, SOON until WP8.2); above it PLAY (primary, `primary_button_size_px` tall, `menu_button_width_px` wide: Journey), DAILY DRIVE (today's UTC date under the label: "WED SEP 30") and ONLINE ("LOOP PRACTICE · ROOMS SOON"). Every button is at least `touch_target_px` tall.
+- **Left-anchored, up from the bottom-left thumb:** a row of LEADERBOARDS, SETTINGS and GARAGE (WP8.2: the garage); above it PLAY (primary, `primary_button_size_px` tall, `menu_button_width_px` wide: Journey), DAILY DRIVE (today's UTC date under the label: "WED SEP 30") and ONLINE ("LOOP PRACTICE · ROOMS SOON"). Every button is at least `touch_target_px` tall.
 - **Logo:** WESTBOUND in Chakra Petch (the display face) at `font_logo_px`, outlined and speed-tilted (speed_tilt.gdshader), CHASE THE SUN under it in the accent.
 - **Band:** ink at `title_band_pct` from the left edge to `title_band_width_px`, its right edge leaning with the speed tilt and lined with the accent. The attract drive shows through it; the car sits right of centre (the camera's frame yaw).
 - **Profile chip (top-right):** the session's `name#tag` (PLAYER before a sign-in) and its status word (ONLINE, CONNECTING, OFFLINE, ...; ONLINE OFF without a session) after a status diamond (accent online, gold connecting, hot suspended / refused, muted otherwise). It follows `status_changed` / `profile_changed`. It never reaches the logo: the name is shortened with "..." to the room right of it (and `title_chip_max_width_px`). A tap opens ACCOUNT (or the settings without a session).
@@ -353,6 +353,8 @@ ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS O
 | Pause QUIT | `quit` | `enter_menu()` |
 | Results MENU | `menu` | `enter_menu()` |
 | Results RETRY | `retry` | `retry()`: the same mode (Daily keeps the day's seed) |
+| Title GARAGE | `TitleScreens.open_garage` | none while open; DONE → `garage_closed` → `refresh_menu_car()` (the attract drive takes the selected car and look) |
+| Results GARAGE | `garage` | `open_garage()`: `enter_menu()`, then the garage over the title |
 
 ### Cost
 
@@ -370,3 +372,42 @@ tools/snap.sh src/run/run.tscn --state=menu --shot=pass --attract_s=1.5
 ### Tests
 
 `tests/ui/test_title_screen.gd` (every button's intent through iOS-id taps, Enter / Esc, the left-anchored layout and touch targets, the settings and account views, the profile chip following a fake session, FRIENDS / CREW from the hub into the account tabs and back, the Loop board, the text size, nothing drawn when hidden), `tests/ui/test_title_text_fit.gd` (menu with the widest name#tag, settings GAME / AUDIO, account, hub with and without a session; both text sizes, 1280x720 and a notched 1560x720), `tests/run/test_title_flow.gd` (see docs/RUN.md).
+
+
+## Garage (WP8.2)
+
+Car select, paint and rims on a turntable, and the driver level. Spec: UI → Screens ("Garage: car select, paint and rims"); Garage and progression. Progression, unlocks, the save and the turntable's rendering: [GARAGE.md](GARAGE.md).
+
+| File | Class | Role |
+| --- | --- | --- |
+| `garage_screen.gd` | `GarageScreen` | the screen (a RunScreen under TitleScreens, built on the first GARAGE) |
+| `garage_turntable.gd` | `GarageTurntable` | the car on its disc under the live sky (a transparent SubViewport) |
+| `garage_item_button.gd` | `GarageItemButton` | a list item: an OPTION button with the unlock rule in its note, dimmed when locked, a paint chip |
+| `garage_xp_bar.gd` | `GarageXpBar` | the level bar (slanted, accent; gold for a level-up on the results) |
+
+### Layout
+
+- **Top row:** GARAGE (display face, `font_title_px`, speed-tilted) top-left; DONE (primary) top-right; between them, right-aligned, DRIVER LEVEL n, the level bar and "36,123 / 60,629 XP" (tabular; "… XP · MAX LEVEL" at the cap).
+- **Left:** the tabs CAR / PAINT / RIMS (OPTION buttons) and the tab's items in a grid, each `touch_target_px` tall: the 8 roster slots in 2 columns (the car's name; placeholders read COMING SOON), the 12 paints in 3 (the name, a colour chip at the right end that shrinks to clear the name), the 6 rims in 2. The note line: SELECTED on the selected car, the unlock rule on a locked item (LEVEL 4, REACH LEG 4, REACH THE COAST, 7-DAY DAILY STREAK · 2/7, 100 THREADS · 37/100). A locked item is dimmed. The list's width (`progression.garage_list_width_px`) grows with the text size.
+- **Right:** the turntable fills the column from the tabs to the screen's edges; over its lower part, left-anchored: the car's name (display face, `garage_name_font_px`), the state line (SELECTED in the accent; LOCKED · LEVEL 4 or PREVIEW · LOCKED · LEVEL 9 in gold; IN THE WORKS · LEVEL 8, muted, for a placeholder, over an empty disc) and the stats (TOP 270 KM/H · 0-200 IN 8.8 S; mph with the units setting).
+- Not mirrored for left-handed play (like the title: no thumb-side column).
+
+### Behaviour
+
+- **A tap on an unlocked item selects it** (the car; or the selected car's paint or rims) and saves it (end of the frame); the next run and the attract car use it. **A tap on a locked item previews it** on the turntable and names what unlocks it; nothing is selected or written. A new tab (or DONE) drops the preview.
+- **Keys:** Esc and Enter = DONE; Left / Right step through the tab's items (select or preview); Up / Down change the tab (wrapping).
+- **Touch:** ScreenButtons and the turntable read the mouse events Godot emulates from touches, never a raw touch index. A drag on the turntable turns the car.
+- **Cost:** nothing exists before the first GARAGE; closed = `visible = false` and the turntable's viewport stops rendering. Under the title's layer, so nothing draws in gameplay (`TitleScreens.visible_item_count() == 0`).
+- **Reduced motion:** fades only, and the turntable holds its idle spin.
+
+### Preview
+
+```
+tools/snap.sh src/run/run.tscn --renderer=both --state=menu --title=garage --sweep=sky_t:0.2,0.42
+tools/snap.sh src/run/run.tscn --state=menu --title=garage --tab=paint --xp=80000 --pick=teal
+tools/snap.sh src/ui/screens/dev/screens_preview.tscn --screen=results --xp=30000 --text_scale=1.25   # the results' XP panel
+```
+
+### Tests
+
+`tests/ui/test_garage.gd`, `tests/ui/test_garage_text_fit.gd`, `tests/meta/test_garage_run.gd` (see GARAGE.md → Tests).

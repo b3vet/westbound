@@ -2,7 +2,7 @@ class_name RimStyle
 extends Resource
 ## A rim option for the garage (WP8.2). Spec: Modular car convention ("Rim: swappable
 ## mesh (scaled to wheel radius)"; Rim budget 800 triangles, shared); Garage and
-## progression ("Cosmetics. Paint colors and rims now"). Listed in data/cars/garage.tres.
+## progression ("Cosmetics. Paint colors and rims now"). Listed in data/cars/garage/catalog.tres.
 ##
 ## A simple flat-shaded variant of the stub rim (CarModel.build_styled_rim_mesh): a face
 ## disc, spokes, an optional lip ring, in the vehicle shader's trim slot (vertex colours,

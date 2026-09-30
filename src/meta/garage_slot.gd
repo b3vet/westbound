@@ -3,7 +3,7 @@ extends Resource
 ## One of the garage's 8 roster slots (WP8.2). Spec: Garage and progression ("Roster. 8
 ## player cars at launch; 1 unlocked at start"; "Levels unlock cars"; "Milestone
 ## unlocks. Some cars unlock from milestones instead: reach leg 4, reach the coast, a
-## 7-day Daily Drive streak, 100 lifetime threads"). Listed in data/cars/garage.tres.
+## 7-day Daily Drive streak, 100 lifetime threads"). Listed in data/cars/garage/catalog.tres.
 ##
 ## A slot with an empty `car_path` is a placeholder for a car the art pipeline has not
 ## made yet (spec open question: the final roster): it shows as COMING SOON with its

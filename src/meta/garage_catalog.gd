@@ -1,7 +1,7 @@
 class_name GarageCatalog
 extends Resource
 ## Everything the garage offers (WP8.2): the 8 roster slots, the paints and the rims, each
-## with its unlock rule. Spec: Garage and progression. Data: data/cars/garage.tres
+## with its unlock rule. Spec: Garage and progression. Data: data/cars/garage/catalog.tres
 ## (ProgressionTuning.garage_catalog_path). docs/GARAGE.md.
 ##
 ## Unlock ids (the save's `unlocks` keys): "car/<slot id>", "paint/<id>", "rim/<id>".
