@@ -13,7 +13,7 @@ WP N8.2. Spec: Architecture rule 2 (deterministic by seed: "This powers Daily Dr
 | `VehicleInput.quantize()` | The car's inputs as multiples of 1e-4 before physics: what a replay records |
 | `src/net/replay_file.gd`, `replay_recorder.gd` | The replay's input stream (REPLAY_FORMAT.md) |
 | `tools/verifier/replay_verifier.gd` | Re-simulation from the input stream |
-| `tools/verifier/export_verifier.sh`, `westbound-server/verifier/` | The verifier's export, Docker image and compose override |
+| `tools/verifier/export_verifier.sh`, `verify_replay_main.gd`, `westbound-server/verifier/` | The verifier's export (entered through the main scene: `-- --verifier=1`), Docker image and compose override |
 | `tools/determinism/compare.sh --replay`, `tick_cost.gd` | Cross-platform replays; the tick cost measurement |
 
 ## What makes two runs identical
@@ -106,28 +106,39 @@ Honest runs (`soak_long_honest_runs_are_all_accepted`, verified on this machine;
 | Driver | Result | WP8.4 before |
 | --- | --- | --- |
 | `script` (open-loop inputs) | **IDENTICAL, 300 of 300 s** bit for bit (score 17,088, 64 hits, 27 cars at 300 s) | 18 s, then the car's bits drifted |
-| `bot` (SandboxBot, closed loop) | RESULT_BOT | 19 s, traffic another traffic from 26 s |
-| `bot --replay` (each side records its replay; the **native verifier re-simulates the web client's replay**) | RESULT_REPLAY | (no replays) |
+| `bot` (SandboxBot, closed loop) | **IDENTICAL, 300 of 300 s** (score 12,856, 1 hit, 49 cars at 12.1 km) | 19 s, traffic another traffic from 26 s |
+| `bot --replay` (each side records its replay with the run's real lives; the **native verifier re-simulates the web client's replay**) | **IDENTICAL 300 of 300 s; both replays byte-identical (41,267 bytes) and accepted** by the native verifier (recomputed 12,856 = claimed, `playback=resim`) | (no replays) |
 
-The `DT libm` probe still differs on 8 of 10 functions (the platform libraries are what they were); the new `DT detmath` probe is identical on all 10, and the car's `VehicleParams` are identical (46 of 46; `cap_time_s` differed before). Wall time: 4 min 8 s for the 300 s script run without the export on a loaded 4-core box (load 7–8); CI_TIMING.
+The `DT libm` probe still differs on 8 of 10 functions (the platform libraries are what they were); the new `DT detmath` probe is identical on all 10, and the car's `VehicleParams` are identical (46 of 46; `cap_time_s` differed before). Wall time without the export: the web side of a 300 s run takes 112 s on a quiet box (boot included) and 170–210 s at load 7–8, the native side 30 s, a verification about 30 s. For CI (≤ 3 min wall) the handoff proposes `--seconds=180` (about 1.5–2.5 min).
 
 ## Cost
 
-Tick cost before and after, this dev box (4 cores shared with other work: medians of repeated runs, noisy):
+Tick cost before and after, this dev box (4 cores shared with other agents' work, load 2–8; debug build). A/B in one session, three alternating rounds: **A** = this WP, **B** = the same tree with the pre-N8.2 math files (libm) put back (`vehicle_physics`, `vehicle_params`, `lives`, `hit_detection`, `traffic_sim`, `scoring`, `road_hull`, `player_car`, `vehicle_input`). Medians; single numbers move ±15 % between rounds.
 
-COST_TABLE
+| What | B (libm) | A (DetMath) | Change |
+| --- | --- | --- | --- |
+| Whole `Run.tick()`, the Daily check's run (`tools/determinism/tick_cost.gd`, 6 × 60 s each, mean per tick) | 634 µs | 614 µs | within noise |
+| `VehiclePhysics.step` (WBBench) | 9.6 µs | 10.5 µs | +1–3 µs (two `sin_cos`, one `exp`, one `tan`; the grip decay is cached per `dt`) |
+| `Scoring.step`, 60 cars (WBBench: every car beside the player) | 36.4 µs | 56.8 µs | +20 µs in this worst case: the per-overlapping-car heading as a normalized velocity (a `sqrt`, two divisions, more GDScript ops than libm's `atan2` + `cos` + `sin`). In a run only the few cars alongside the player take this path |
+| `HitDetection.step`, 60 cars | 29.1 µs | 25.4 µs | slightly cheaper (no transcendental per car) |
+| `TrafficSim.step`, 90 cars (spread / near) | 427 / 450 µs | 372 / 539 µs | noise (one `sin_cos` per step) |
+| `Lives.step` | 0.48 µs | 0.34 µs | noise |
+
+The tier-independent horizon (800 m instead of the medium tier's 700 m) keeps about 6 % more cars on the road ahead (the Daily check's run at 20 / 40 / 60 s: 33 / 28 / 37 cars vs 28 / 29 / 34), and the whole tick costs 647 vs 591 µs (medians of three alternating 60 s runs, within the noise band). The 120 Hz tick has 8,333 µs; the whole simulation stays under 10 % of it on this box's debug build.
 
 ## Verifier deploy
 
-The verifier is the game's own headless build (build parity): the Godot Linux release template plus this build's pack, exported with a verifier preset, run by `westbound-server verify-worker` in a sidecar container. Nothing here is enabled in production.
+The verifier is the game's own headless build (build parity): a Godot Linux template plus this build's pack, exported with a verifier preset, run by `westbound-server verify-worker` in a sidecar container. Nothing here is enabled in production.
 
-1. **Export preset** (requested, `export_presets.cfg` is orchestrator-owned; the diff is in the handoff): `Verifier (Linux headless)`, platform Linux x86_64, every resource plus `tools/verifier/*` (the other presets exclude all of `tools/`), no tests, docs or dev tools, pack separate (`binary_format/embed_pck=false`).
-2. **`tools/verifier/export_verifier.sh`**: exports into `build/verifier/` as `westbound` (the template) and `<client_build>.pck` (`NetTuning.client_build`: the server command's `{build}`), then records a sample replay with the editor binary and verifies it with the exported binary and pack exactly as the worker will (fresh `HOME`, `nice -n 10`): SMOKE_RESULT.
-3. **`westbound-server/verifier/Dockerfile`**: `debian:bookworm-slim` (glibc, coreutils' `nice`, CA certificates) + the `westbound-server` binary copied from the server image of the same commit + `build/verifier/`. Entrypoint `westbound-server verify-worker`; `WB_REPLAYS__VERIFIER_COMMAND=nice,-n,10,/verifier/westbound,--headless,--main-pack,/verifier/{build}.pck,--script,res://tools/verifier/verify_replay.gd,--,--server=off,...`; `HOME=/home/verifier` (Godot's user dir; nothing is saved), non-root 65532. DOCKER_RESULT
+Two export-template facts shaped it: **templates ignore `--script` and `--main-pack`** (path overrides are compiled out), and **the 4.7 release template crashes (SIGSEGV, no symbols) booting this project headless**, while the debug template runs it. So the verifier is the debug template with its pack next to it (`westbound` + `westbound.pck`, loaded automatically), entered through the game's main scene: `westbound --headless -- --verifier=1 --replay=... --out=...` makes `Run._ready` hand over to `tools/verifier/verify_replay_main.gd` (the command line as a Node; `tools/verifier/verify_replay.gd`, the `--script` entry the editor binary and the server's end-to-end test use, now just adds that node). The release-template crash is an open item (not a platform we ship).
+
+1. **Export preset** (requested, `export_presets.cfg` is orchestrator-owned; the diff is in the handoff): `Verifier (Linux headless)`, platform Linux x86_64, every resource plus `tools/verifier/*` (the other presets exclude all of `tools/`), no tests, docs or dev tools, pack beside the binary (`binary_format/embed_pck=false`), custom feature `verifier`.
+2. **`tools/verifier/export_verifier.sh`**: exports into `build/verifier/<client_build>/` (`NetTuning.client_build`: the server command's `{build}`) as `westbound` + `westbound.pck` (8.8 MB), then records a 20 s sample replay with the editor binary and verifies it with the exported binary exactly as the worker will (fresh `HOME`, `nice -n 10`). Measured: **SMOKE PASS** (`verify_replay: accepted ... playback=resim`). The binary needs glibc ≥ 2.28 and nothing else (`ldd`: libc, libm, libdl, libpthread, librt).
+3. **`westbound-server/verifier/Dockerfile`**: `debian:bookworm-slim` (glibc 2.36, coreutils' `nice`, CA certificates) + the `westbound-server` binary copied from the server image of the same commit + `build/verifier/` as `/verifier/<build>/`. Entrypoint `westbound-server verify-worker`; `WB_REPLAYS__VERIFIER_COMMAND=nice,-n,10,/verifier/{build}/westbound,--headless,--,--verifier=1,--server=off,--replay={replay},--out={out},--seed={seed},--claimed-score={claimed_score},--claimed-hits={claimed_hits}`; `HOME=/home/verifier` (Godot's user dir; nothing is saved), non-root 65532. **Not built here** (no Docker daemon in this environment): the first CI run builds it.
 4. **`westbound-server/verifier/docker-compose.verifier.yml`**: an override that adds the `westbound-verifier` service on the server's `/data` volume with `mem_limit: 1g`, `memswap_limit: 1g`, `cpus: 1` (the spec's budget: one job at a time, `nice 10`, 1 GB) and the same auth secrets (the config loader validates them), and turns the server's own worker off (`WB_REPLAYS__WORKER_ENABLED=false`).
-5. **CI** (requested workflow change, handoff): after the server image is pushed, a `verifier-image` job installs Godot and the Linux templates, runs `tools/verifier/export_verifier.sh`, and builds and pushes `ghcr.io/<owner>/westbound-verifier:{edge,<branch>-<sha>}` with `--build-arg SERVER_IMAGE=<the image just pushed>` and `-f westbound-server/verifier/Dockerfile build/verifier`.
+5. **CI** (requested workflow change, handoff): after the server image is pushed, a `verifier-image` job installs Godot and the export templates, runs `tools/verifier/export_verifier.sh` (the smoke test included), and builds and pushes `ghcr.io/<owner>/westbound-verifier:{edge,<branch>-<sha>}` with `--build-arg SERVER_IMAGE=<the image just pushed>` and `-f westbound-server/verifier/Dockerfile build/verifier`.
 
-**Enabling it in production** (owner): deploy the compose override in Coolify next to the server (same project and volume), with the same `WB_AUTH__*` secrets; the server then leaves the queue to the sidecar. The backlog of stored replays is verified oldest first. Replays recorded by N8.1 clients (no input stream) fall back to the kinematic playback and may be rejected when their traffic diverges: set `runs.supported_builds` to the N8.2 build(s) first, or requeue only N8.2 replays (`admin replay-requeue`). Keep one pack per supported client build in the image.
+**Enabling it in production** (owner): deploy the compose override in Coolify next to the server (same project and volume), with the same `WB_AUTH__*` secrets; the server then leaves the queue to the sidecar and the backlog of stored replays is verified oldest first. Replays recorded by N8.1 clients (no input stream) fall back to the kinematic playback and may be rejected when their traffic diverges: set `runs.supported_builds` to the N8.2 build(s) first. Keep one `/verifier/<build>/` directory per supported client build in the image.
 
 ## Open items
 

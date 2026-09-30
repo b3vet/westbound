@@ -63,6 +63,9 @@ const HUD_SCENE_PATH := "res://src/ui/hud/hud.tscn"
 const SCREENS_SCENE := preload("res://src/ui/screens/run_screens.tscn")
 const DRIVE_SCENE := "res://src/dev/car_drive.tscn"
 const SANDBOX_SCENE := "res://src/traffic/dev/traffic_sandbox.tscn"
+## N8.2: the exported verifier's hand-over (`--verifier=1`) and its command line.
+const VERIFIER_BOOT_PARAM := "verifier"
+const VERIFIER_MAIN := "res://tools/verifier/verify_replay_main.gd"
 ## The journey bonus kind (paid on the crossing that reaches the coast).
 const BONUS_JOURNEY := &"journey"
 ## Sims sharing the run's event buffer: traffic, lives, scoring, sun clock, legs, the
@@ -248,6 +251,15 @@ class CrashController:
 
 
 func _ready() -> void:
+	# N8.2: the exported replay verifier (tools/verifier/export_verifier.sh) runs through the
+	# main scene (export templates ignore `--script`): `-- --verifier=1 --replay=...` hands
+	# over to the verifier's command line; the verification builds its own Run.
+	if boot_param(VERIFIER_BOOT_PARAM) == "1" and get_tree().current_scene == self:
+		set_physics_process(false)
+		set_process(false)
+		get_tree().root.add_child.call_deferred((load(VERIFIER_MAIN) as GDScript).new() as Node)
+		queue_free.call_deferred()
+		return
 	# Web: `?scene=drive` opens the M3 drive scene, `?scene=sandbox` the traffic
 	# sandbox (browsers can't pass scene paths on the command line).
 	if OS.has_feature("web"):
