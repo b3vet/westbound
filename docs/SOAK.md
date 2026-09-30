@@ -37,7 +37,7 @@ tools/test.sh --tier=soak --filter=soak        # soak tier: short soak, metrics 
 - **Road:** the procedural road (`ProceduralRoadPath`) with `lanes_default` from `traffic.soak_lane_counts`, cycled by run index: 3, 3, 2, 4 (farmland has 3 lanes; biomes 2-4).
 - **Traffic:** the real `TrafficRegistry`, `TrafficSim`, `TrafficDirector` (Flow batches ahead, behind spawns, despawn, the cap, the ghost zone) and `OppositeTraffic`.
 - **Legs:** legs 1 to `soak_run_legs` (8) of the legs tuning's length (3.5 km): leg *k* runs at leg *k*'s density and aggressive share (Hesitant from leg 3), night from the second half (headlights on both carriageways).
-- **Player:** a `TrafficBotPlayer`, sized like one of the three `data/cars` (by run index), as the sim's participant. Per leg it draws a target speed in [`soak_bot_min_kmh`, `soak_bot_max_kmh`] = [110, 250] km/h and either weaves (`soak_bot_weave_pct` = 60%: IDM following, a lane change every 2-6 s into the lane with the longest free gap, no care for the car behind) or keeps its lane (IDM following only).
+- **Player:** a `TrafficBotPlayer`, sized like one of the three `data/cars` (by run index), as the sim's participant. Per leg it draws a target speed in [`soak_bot_min_kmh`, `soak_bot_max_kmh`] = [110, 250] km/h and either weaves (`soak_bot_weave_pct` = 60%: IDM following, a lane change every 2-6 s into the lane with the longest free gap, no care for the car behind) or keeps its lane (IDM following only). WP6.8: like a player reading the LANE ENDS sign, it leaves a lane the road drops within 800 m as soon as the lane beside it is clear beside it with at least 1.5 s (30 m) of free road ahead, and never weaves into one; if it is still there 350 m out, it waits for 0.5 s (10 m) of free road ahead beside it until 150 m out, then takes any gap clear beside it (before, it left only 350 m out, into any gap beside it: a 140 km/h cut-in 11 m behind a bus at 86 km/h is a window no traffic rule could prevent). It also counts a car that is already moving into a lane as in that lane, so it no longer swerves into a lane beside an early lane-drop merger entering it 5 m ahead (two cars converging on one lane: a window flagged "other" on the tree merged with WP6.7).
 - **Tick order** (CONTRACTS §4): bot, `TrafficSim.step`, the rule checker (collisions), `notify_hit` for every new contact with the player (like run.gd), `TrafficDirector.step`.
 - **Distance:** a run ends when the bot has driven its legs (28 km); a stuck run times out at 3× its distance at the bot's minimum speed and counts as unfinished.
 
@@ -47,7 +47,7 @@ Per tick, by the independent `TrafficRuleChecker` (it reads only `TrafficState` 
 
 | Counter | Gate | Meaning |
 | --- | --- | --- |
-| `collision_pairs` | 0 | Traffic-to-traffic overlaps (oriented boxes inset by `lives.collision_inset_m`, SAT) |
+| `collision_pairs` | 0 | Traffic-to-traffic overlaps (oriented boxes inset by `lives.collision_inset_m`, SAT; WP6.8: a box's heading `atan2(v_lat, v)` is clamped to ±0.28 rad, see *WP6.8*) |
 | `signal_violations` | 0 | Lateral motion less than the profile's signal time after the blinker came on |
 | `unsignaled_moves` | 0 | Lateral motion without a blinker (hit swerves excepted) |
 | `ambush_violations` | 0 | A lateral move started into the player's predicted space (1.5 s, 1.0 m margin) |
@@ -57,7 +57,7 @@ Per tick, by the independent `TrafficRuleChecker` (it reads only `TrafficState` 
 | `impossible_traffic` | 0 | Impossible windows not caused by the player (below) |
 | `offroad_violations` | 0 | A traffic vehicle's box beyond the drivable lanes (`lanes_left_edge_d` / `lanes_right_edge_d` at its `s`) by more than 0.05 m: e.g. still in a lane that has ended (WP6.2, lane drops) |
 
-Reported, not gated: `contact_episodes` / `rear_end_episodes` (contacts the weaving bot causes by cutting in with an impossible gap: "the resulting contact counts as a hit, because the player caused it"), `impossible_player_induced`, lane moves checked, signals, cancels, director counters, peak and mean active vehicles, tick cost.
+Reported, not gated: `standstill_beside_fast` (WP6.8, per-run JSON: once a second, a vehicle below 15 km/h with one above 60 km/h in the next lane within 40 m), `contact_episodes` / `rear_end_episodes` (contacts the weaving bot causes by cutting in with an impossible gap: "the resulting contact counts as a hit, because the player caused it"), `impossible_player_induced`, lane moves checked, signals, cancels, director counters, peak and mean active vehicles, tick cost.
 
 ### Impossible windows (the pre-director oracle)
 
@@ -312,3 +312,36 @@ Metrics by lane count (whole soak): mean speed per lane 120.6 / 105.7 (2 lanes),
 - **Speeds:** faster left lanes (145 and 120 km/h instead of 135 and 115 on 3 lanes), the racer, the wider commuter and aggressive ranges. The bot drives the reference 5 % faster (5,171 instead of 5,463 simulated seconds for the same 192 km).
 - **Lane changes:** racers and aggressive drivers change lanes twice as often as a commuter, and the fast share grew (15 → 35 % where they may drive), so more vehicle-minutes belong to frequent changers; wider speed spreads also give MOBIL more worthwhile moves.
 - **Density and gaps:** D17's shallower breathers and closer late-leg following bring back what the faster lanes cost (docs/SPAWNING.md, *Fast traffic and density*).
+
+## WP6.8: lane-drop safety (the canyon's 3 → 2 drops)
+
+WP6.3's all-pieces soak found traffic-to-traffic collisions at the canyon's lane drops before tunnels, with no set piece involved (docs/SET_PIECES.md, *Soak (WP6.3)*): cars queued at a standstill at the end of the dropping lane and merged from 0 km/h beside lanes at 130–190 km/h, MOBIL's safety check saw only the nearest follower, and the checker turned a nearly stopped car's box sideways. WP6.8's fixes are in docs/TRAFFIC.md, *Lane drops (WP6.8)*. The checker's box heading is now clamped to ±0.28 rad (`TrafficRuleChecker.box_yaw`); the boxes still move with `d`, so a body overlap still counts (`test_rule_checker_box_heading_for_slow_lateral_movers`).
+
+**Before** (the integration branch at WP6.8's start, same seeds, the same checker as before the clamp): `--canyon` runs 0–17 (504 km): **53 collision pairs** (runs 1 and 12, both at the end of a dropping lane: a stopped queue merging at once, and a coach merging at 3 km/h next to a racer). The all-pieces canyon runs 49 and 53: **132 and 55 pairs**. WP6.3 measured 136 (`--km=500 --canyon`) and 195 (all-pieces) before the unlock-order change it made last.
+
+**After:** `tools/soak.sh --km=1000 --shards=4 --canyon` on the final tree (merged with the integration branch):
+
+| | |
+| --- | --- |
+| Distance | **1,008 km** in 36 runs (all canyon, 3 lanes), 7.9 simulated hours, 0 unfinished; wall 1,064 s (container load 10–14) |
+| Gates | collisions **0**, signal 0, unsignaled 0, no-ambush 0 (23,544 moves checked), decel 0 (min −6.00 m/s², 0 hard set-piece decelerations), brake flags 0, rear-end of a normal player 0, off-road 0, closed areas 0, impossible (traffic) **0**: **GATE PASSED** |
+| Reported | 16 impossible windows, all player-induced (the weaving bot's own cut-ins); 24 contact episodes, none with a normally driving player; 4,307 mandatory merges; 74 tunnel squeezes, 0 collision pairs at a live piece; peak 72 active |
+| Standstills | `standstill_beside_fast` **71** samples in 1,008 km (a vehicle below 15 km/h with one above 60 km/h in the next lane within 40 m, once a second). The four runs with the most before (28, 35, 4, 20; 112 km): **931 → 0**. What is left is the last resort: a platoon of the dropping lane reaching the end together beside a dense through lane, which then slows for them (the zipper) |
+
+On the way (each a full 1,000 km canyon soak or a 2,000 km all-pieces soak, the traffic windows traced run by run): standstill queues and the rotated boxes gone, 0 collisions from the first run on; then the windows that were left, each a slow wall at a drop: a bus dropping back behind car after car to 66 km/h (the merge floor), booth traffic of a toll gantry pulling out at 50 km/h into a drop 650 m on (the hold behind booth speed zones), tunnel sections where trucks and cruisers fell back to 80–100 km/h in two lanes (the harmonisation now holds through the narrowed section), and the soak bot's own forced exit from a dropping lane 11 m behind a bus (it now leaves early, into a real gap). On the tree merged with WP6.7, two more windows, both the bot's: it swerved into a lane beside a lane-drop merger already moving into it 5 m ahead, and, where the dropping lane's early exit found no 1.5 s gap beside a dense through lane (at 80 km/h behind a truck and the zipper), its forced exit cut in 1.5 m behind a car 30 km/h slower; the bot now treats a moving car as in its target lane and waits for a 0.5 s gap on the forced exit (*Player* above). A zipper floor at 100 km/h for the through lane was tried and dropped: through lanes then stopped yielding, and the queues at the end of the lane came back (several times the standstill samples).
+
+**Density at leg 8** (the D11 survey, `--density --lanes=3,4 --legs=8 --profile=scripted --seeds=4 --run-legs=4`; its procedural road has no lane drops), the integration branch with WP6.7 before and after WP6.8: identical, bit for bit, **15.05 per km per lane (84 %) on 3 lanes, 15.92 (88 %) on 4 lanes** (before WP6.7's merge, also identical: 15.18 / 15.92). The changes that reach roads without drops (the hidden-follower check, the zipper at set-piece closures) changed no decision there.
+
+**Metrics baseline: updated, deliberately, for the soak bot.** WP6.7 had refreshed it (set pieces per leg 0.031 since the tunnel squeeze unlocks at leg 4; the racers from behind). WP6.8's traffic changes alone moved one of the 16 reference traces (run 4; the reference road has no lane drops, only set-piece closures) and every metric by less than 0.01 % (lane-1 speed 128.142 → 128.141 km/h). The bot's last change (it no longer weaves into a lane a car is already moving into, see *Player* above) changes where the weaving player goes in every run, so 9 of the 16 traces change and the metrics move by up to 2.3 %, all well inside the test's tolerances: density 10.05 → 10.24 per km per lane, gaps 8.70 → 8.89 per km, lane changes per vehicle-minute 1.146 → 1.120, lane speeds 142.8 / 128.1 / 113.9 → 142.9 / 128.0 / 115.3 km/h. The baseline was rewritten with `--metrics=all` on the final tree so the traces match it.
+
+**Tick cost:** docs/TRAFFIC.md, *Lane drops (WP6.8)* (canyon +0 to +45 % per step, partly more vehicles near drops; farmland within the noise).
+
+**The all-pieces gate** (`tools/soak.sh --km=2000 --shards=4 --all-pieces`). On the final traffic code and soak bot, two container restarts cut the runs short:
+
+| | |
+| --- | --- |
+| Final tree (merged with the integration branch up to N3.2) | **1,904 km** of 2,016 (the soak was killed near its end), all runs finished before that counted: **all 0**: collisions, signal, unsignaled, no-ambush, decel, brake flags, rear-end of a normal player, impossible (traffic), off-road, closed areas. 91 impossible windows, all player-induced; `standstill_beside_fast` 111 |
+| The same traffic code, merged up to Phase 7 audio | 756 km (27 runs) before the second restart: all 0 as above; 33 windows, all player-induced; `standstill_beside_fast` 21 |
+| Before the WP6.7 merge and the last two bot changes | **2,016 km** in 72 runs (1,008 km on 3 lanes, a quarter of them the canyon's; 504 km on 2; 504 km on 4), 15.4 simulated hours, 0 unfinished: **all 0, GATE PASSED**. 59 windows, all player-induced; 82 contact episodes, none with a normally driving player; 2,046 mandatory merges; set pieces 313 spawned (toll gantry 235, tunnel squeeze 60, truck wall 8, merge zone 4, road works 2, slalom 2, convoy 1, rolling roadblock 1), 301 started, 240 passed, 0 unmet; 0 collision pairs at a live piece; `standstill_beside_fast` 31 |
+
+WP6.3's all-pieces soak had 195 collision pairs and 1 impossible window in its canyon runs (docs/SET_PIECES.md); the intermediate WP6.8 all-pieces soaks had 0 collisions and 1–3 traffic windows (a toll's booth traffic merging into a drop, a two-lane tunnel slow wall, the bot's forced exit), fixed as above.

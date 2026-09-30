@@ -16,8 +16,9 @@ extends RefCounted
 ##   target space. Sampling t in [0, window] every AMBUSH_SAMPLE_S, the car's body at
 ##   that d moving at its speed must not overlap the player's body moving at its
 ##   snapshotted road velocity, grown by the margin on every side.
-## - Collisions: oriented boxes in road space (yaw = atan2(v_lat, v)) inset by
-##   LivesTuning.collision_inset_m, separating-axis test.
+## - Collisions: oriented boxes in road space (yaw = atan2(v_lat, v), at most
+##   MAX_BOX_YAW_RAD either way: box_yaw()) inset by LivesTuning.collision_inset_m,
+##   separating-axis test.
 ## - On the road (WP6.2, lane drops): every car's body stays between the left edge of
 ##   lane 0 and the right edge of the driving lanes at its s (lanes_left_edge_d /
 ##   lanes_right_edge_d, which follow a lane drop's taper), within OFFROAD_TOL_M.
@@ -33,6 +34,15 @@ const LATERAL_EPS := 1e-9
 const MAX_MESSAGES := 8
 ## Numerical slack of the on-the-road check (m).
 const OFFROAD_TOL_M := 0.05
+## WP6.8: the steepest heading a traffic box gets. The sim's lateral move is timed (the
+## spec's 1.5-3 s), not steered, so a car moving sideways while nearly stopped had a
+## box heading atan2(v_lat, max(v, 0.1)) of up to ~85 degrees: a 12 m coach crossing two
+## lanes, counting collisions with cars that were never touched. A real car's heading in
+## a lane change is its path's slope; the quickest move (1.5 s, smoothstep over a 3.6 m
+## lane: peak v_lat 3.6 m/s) at 45 km/h is atan(3.6 / 12.5) = 0.28 rad. Above that speed
+## nothing changes. The boxes still move with d, so a car that moves sideways into
+## another still overlaps it (test_traffic_rule_checker_box_heading).
+const MAX_BOX_YAW_RAD := 0.28
 
 var traffic_tuning: TrafficTuning
 var registry: TrafficRegistry
@@ -337,8 +347,8 @@ func _check_boxes(ts: TrafficState, player: VehicleState) -> void:
 				break
 			if ts.s[j] - ts.s[i] >= (ts.length[i] + ts.length[j]) * 0.5:
 				continue
-			if _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], atan2(ts.v_lat[i], maxf(ts.v[i], 0.1)),
-					ts.s[j], ts.d[j], ts.length[j], ts.width[j], atan2(ts.v_lat[j], maxf(ts.v[j], 0.1))):
+			if _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], box_yaw(ts.v[i], ts.v_lat[i]),
+					ts.s[j], ts.d[j], ts.length[j], ts.width[j], box_yaw(ts.v[j], ts.v_lat[j])):
 				collision_pairs += 1
 				last_collision_s = ts.s[i]
 				hit_tick = true
@@ -353,7 +363,7 @@ func _check_boxes(ts: TrafficState, player: VehicleState) -> void:
 	for i in ts.capacity:
 		var touching := false
 		if ts.active[i] == 1 and absf(ts.s[i] - player.s) < (ts.length[i] + player_length) * 0.5 \
-				and _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], atan2(ts.v_lat[i], maxf(ts.v[i], 0.1)),
+				and _overlap(ts.s[i], ts.d[i], ts.length[i], ts.width[i], box_yaw(ts.v[i], ts.v_lat[i]),
 				player.s, player.d, player_length, player_width, player.yaw):
 			touching = true
 			p_contact = true
@@ -373,6 +383,12 @@ func _check_boxes(ts: TrafficState, player: VehicleState) -> void:
 		_touch_vid[i] = ts.vehicle_id[i]
 	if p_contact:
 		player_contacts += 1
+
+
+## A traffic box's heading in road space: atan2(v_lat, v), clamped to
+## +-MAX_BOX_YAW_RAD (see there).
+static func box_yaw(v: float, v_lat: float) -> float:
+	return clampf(atan2(v_lat, maxf(v, 0.0)), -MAX_BOX_YAW_RAD, MAX_BOX_YAW_RAD)
 
 
 ## Oriented boxes (center s, d; full length, width; yaw) inset on every side. SAT.
