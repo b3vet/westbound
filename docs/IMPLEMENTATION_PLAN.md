@@ -46,6 +46,9 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | D23 | Warm-up: 20 s of empty road on the first run | Also skippable (hint panel with SKIP); density comes back over 12 s in 4 steps; only on the first Journey started from the title | Orchestrator, WP8.1 |
 | D24 | Every run can go on the boards | A run with the first-run warm-up is not submitted: the replay verifier rebuilds runs from the seed without the empty road | Orchestrator, WP8.1 |
 | D25 | Settings: one screen | Three pages (GAME, CONTROLS, AUDIO) plus ACCOUNT; they no longer fit on two at 125 % text | Orchestrator, WP8.1 |
+| D26 | Final car roster (open spec question) | 8 slots: Falcon GT, Night Viper, Brute V8 drivable; slots 4–8 "COMING SOON" placeholders showing their unlock rule (the unlock is recorded) until ART delivers cars | Orchestrator, WP8.2 |
+| D27 | XP from runs (loop practice not mentioned) | Journey, Daily and Loop practice earn XP (`xp_modes` in tuning); XP = banked score × 1.0; level L needs 5,000 × (L−1)^1.8; first unlock (SUNSET paint, level 2) after 1–3 runs | Orchestrator, WP8.2 |
+| D28 | Progression for existing players | A save with bests but no XP starts once at the sum of its personal bests; a recorded journey counts as reaching the coast | Orchestrator, WP8.2 |
 
 New deviations get a row here before they are built.
 
@@ -313,7 +316,7 @@ Updated by the orchestrator at every merge.
 | 5 | M5 Sun loop & legs | ✅ sun drives the run and sky, night ×2, dawn, legs + objectives + toast, landmarks + warning signs, night lighting + manual high beams (D8); M5 gate test green; WP5.5/5.6 follow-ups and HUD polish merged | continue |
 | 6 | M6 Director, biomes, journey | ✅ director + set pieces, biomes, journey, D15/D17 fast traffic and racers, passability (D21), lane-drop safety (D20). Gate soak 2,016 km all-pieces with the passability bot: collisions, rule violations, off-road 0 on every lane count; traffic windows 0 on 2 and 4 lanes, 3 on 3 lanes (toll booths, the bot's own lane choice) → 0 in a 1,008 km re-run after the bot fix. Open: D12 two-lane slow wall (not seen in this soak), greedy passability paths, standstills beside fast lanes at canyon drops (~4 per 100 km) | continue |
 | 7 | M7 Audio & feel | 🟨 WP7A audio (engine, wind, pass/traffic, music, stingers, buses) + WP7B haptics/juice merged; WP7.5 one-frame check green (every scoring event sounds, pulses and shows in its frame; slipstream has none per spec). WP7.6 running: one-shot SFX from OGG to WAV (each OGG voice costs ~0.6 ms decoder setup). Owner feel check on native pending | continue |
-| 8 | M8 Meta | 🟨 WP8.5 title, attract drive and online hub; WP8.1 versioned save (migrations keep existing players' settings and bests), settings in 3 pages, first-run chooser + 20 s warm-up (D22–D25). Next: WP8.2 garage, WP8.3 achievements, WP8.4 Daily Drive ghost | continue |
+| 8 | M8 Meta | 🟨 WP8.5 title, attract drive and online hub; WP8.1 versioned save (migrations keep existing players' settings and bests), settings in 3 pages, first-run chooser + 20 s warm-up (D22–D25). WP8.2 garage (8 slots, 12 paints, 6 rims, turntable on the live sky), driver level and milestone unlocks (D26–D28; M8 soak: first unlock in 1–3 runs). Next: WP8.3 achievements, WP8.4 Daily Drive ghost | continue |
 | 9 | M9 Hardening & release | ⬜ | final |
 
 ## 10. Open items for the owner
