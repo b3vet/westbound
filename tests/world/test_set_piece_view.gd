@@ -100,7 +100,7 @@ func test_road_works_props_are_drawn_retro_reflective_in_three_draw_calls() -> v
 		gains[float(sl.material.get_shader_parameter(&"flash_gain"))] = true
 	eq(gains.size(), 2, "on and off")
 	# Past it, and when it ends, nothing is drawn.
-	check(r.run_until_ended(inst, 60.0), "ended")
+	check(r.run_until_ended(inst, 90.0), "ended")   # the bot drives ~100 km/h behind the zone's traffic: ~65 s
 	v.update_view(r.bot.state.s)
 	eq(v.draw_calls(), 0, "nothing drawn once it ended")
 
