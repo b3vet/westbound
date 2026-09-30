@@ -358,6 +358,37 @@ const PATH := "res://data/tuning/net.tres"
 ## player_max_extrapolation_s, mp_traffic.json).
 @export var test_authority_extrapolation_s: float = 0.5   # not in spec
 
+@export_group("Room scoring (N6.2)")
+## N6.2 (docs/ROOMS_CLIENT.md → Scoring in a room): claims, the official score, the crew and
+## train HUD. Claims waiting for the next frame's send (a tick scores a few at most).
+@export var score_claim_queue: int = 32   # not in spec
+## Recent passes kept to name a thread's first car, and how far apart (s, by the claims'
+## ticks) its pass may complete from the second one's (the thread window is 0.5 s between
+## the centres crossing; completions spread by the car lengths over the closing speed).
+@export var score_recent_passes: int = 8   # not in spec
+@export var score_thread_match_s: float = 1.5   # not in spec
+## The local score kept per room tick, to compare with score_sync (the official timeline
+## runs 1.5 s behind the room; plus the round trip and slack).
+@export var score_history_s: float = 8.0   # not in spec
+## The displayed total eases to the official one at banking moments (spec: "the client
+## eases its display to the server's values at banking moments"): up within this long,
+## down (score taken away) more slowly, never in one jump.
+@export var score_ease_up_s: float = 0.6   # not in spec
+@export var score_ease_down_s: float = 2.0   # not in spec
+## Crew proximity (spec): +bonus per crewmate within range along the loop, capped.
+@export var crew_range_m: float = 30.0
+@export var crew_bonus_per_mate: float = 0.25
+@export var crew_factor_cap: float = 2.0
+## The TRAIN ×n badge shows this long after a link (not in spec).
+@export var train_show_s: float = 2.5   # not in spec
+## A server sector bonus the local run already paid (same kind, within this long) was
+## shown in the sector toast; a missing one goes on the event stack.
+@export var sector_match_s: float = 6.0   # not in spec
+## States, hits and claims are stamped with a room clock that never stalls across a step
+## back of the clock estimate up to this large (RunRoom._room_now: the server's `distance`
+## check); a larger step back is taken as it is.
+@export var room_stamp_max_hold_ms: float = 250.0   # not in spec
+
 func ping_interval_usec() -> int:
 	return roundi(ping_interval_s * 1.0e6)   # lint: allow-number s -> usec
 

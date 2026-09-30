@@ -50,6 +50,15 @@ static func award_run(results: Dictionary) -> Dictionary:
 	return award
 
 
+## N6.2: a run in a multiplayer room (loop mode) is over: XP from the server's official
+## score (its run_result, or the last official banked total when the player left first),
+## through award_run like single-player (xp_modes decides; rooms are `loop`). Milestones
+## and the Daily streak do not apply. Returns the award.
+static func award_room_run(official_score: int, threads: int) -> Dictionary:
+	return award_run({RunStats.MODE: Run.MODE_LOOP, RunStats.SCORE: maxi(official_score, 0),
+		RunStats.THREADS: maxi(threads, 0)})
+
+
 ## The UTC day number now (the Daily Drive streak). Meta only, never the simulation.
 static func today() -> int:
 	@warning_ignore("integer_division")

@@ -19,7 +19,8 @@ WP N5.2, the client side of N5 (rooms and players). Spec: [`WESTBOUND_MULTIPLAYE
 | `src/ui/hud/room_menu.gd` | `RoomMenu` | Quick chat and the players (mute, leave) |
 | `src/ui/screens/online_hub_screen.gd` | `OnlineHubScreen` | ROOMS enabled: QUICK JOIN, ROOM BROWSER, PRIVATE ROOM, JOIN BY CODE |
 | `src/ui/screens/room_lobby_panel.gd` | `RoomLobbyPanel` | The hub's room flows (host options, code, browser, joining status) |
-| `src/core/tuning/net_tuning.gd`, `data/tuning/net.tres` | `NetTuning` | The "Rooms (N5.2)" group (below) |
+| `src/core/tuning/net_tuning.gd`, `data/tuning/net.tres` | `NetTuning` | The "Rooms (N5.2)" group (below); "Room scoring (N6.2)" |
+| `src/net/rooms/score_client.gd` | `NetScoreClient` | N6.2: claims from the run's scoring events, the official score and its easing, crew proximity, trains, official sector bonuses (below: Scoring in a room) |
 
 ## Flow
 
@@ -70,13 +71,122 @@ The run drives **loop mode** (`Run.MODE_LOOP`: the loop road, sectors, the room 
 | `snap_setup` / `_snap_menu` | `--room=demo`, `--title=rooms*` (below) |
 
 - **Placements.** The first one starts the run; a placement while crashed out (or during the held countdown) is the respawn: a fresh run there. Any other (REJOIN CREW, a reconnect) teleports and keeps the run; a rejoin forfeits the unbanked chain (`scoring.notify_hit`: chain lost, and the minimum-speed rule paused for its 3 s grace). Every placement gives `room_protection_s` (3 s) of protection: no traffic hits (the run skips contacts; the minimum-speed rule waits until the speed is reached after a fresh run) and the ghost flicker.
-- **Upload.** Once per room tick (`floor(server_now())`) from the frame: the car's state moved back to the tick's instant along its velocity (s − v cos(yaw) · frac / 20, the same for d), so consecutive states agree with their ticks within centimetres (the server's `distance` check). `run_state`: protected, driving, or crashed (CRASH / RESULTS). Flags: brake (input), boost, headlights (night), ghost (hit ghost or protection). While crashed the speed is sent as 0.
+- **Upload.** Once per room tick (N6.2: `floor` of the car's clock, see Scoring in a room → The car's clock; N5.2 used `floor(server_now())`) from the frame: the car's state moved back to the tick's instant along its velocity (s − v cos(yaw) · frac / 20, the same for d), so consecutive states agree with their ticks within centimetres (the server's `distance` check). `run_state`: protected, driving, or crashed (CRASH / RESULTS). Flags: brake (input), boost, headlights (night), ghost (hit ghost or protection). While crashed the speed is sent as 0.
 - **Crash-out.** `hit_report` lives_left 0 at the crash; the cinematic (or the fallback skid) plays, then RESULTS waits. The server's `run_result` for this player shows the toast for 3 s ("CRASHED OUT", SCORE (the server's, or the local banked score until N6 scores), distance, time, RESPAWNING, UNVERIFIED when flagged); the respawn placement 3 s after the report starts a fresh run with 3 s protection. Other players' crash-outs go to the feed.
 - **REJOIN CREW** (HUD button, pause RETRY): `run_event.rejoin`; the server places the car 40 m behind the crew leader.
 - **Room clock.** Every frame `loop.clock.set_time(epoch + room.cycle_ms_at(server_now()) / 1000)`: `cycle` advances with the room clock (public rooms and private `cycle` rooms are UTC-derived, MP-D7), `fixed` and `night` hold the server's value. The loop's RoomClock then gives the sky, night ×2 and the HUD clock that replaces the sun bar (HudLoopFeed). The server's cycle shape (32 / 22 min) equals `loop.tuning` (tested).
 - **Traffic (N4.3, [NET_TRAFFIC.md](NET_TRAFFIC.md) → Integration).** Per room: the local traffic director runs as in loop practice until the server streams traffic (the room's first traffic message: `NetRoomSession.traffic_frame`, `traffic_streamed`). Then `RunRoom` builds N4.3's `NetworkTrafficSource` over the run's own `TrafficState` (its `clear()` drops the local cars; the headway scale of the loop's director leg, the car's body, the room clock's headlights) and feeds it every traffic frame (`apply_frame` with the car's unwrapped s, `server_tick()` and the one-way estimate; `note_frame_bytes`). The run then calls `RunRoom.step_traffic` in place of `sim.step` + `director.step` (the source at `server_tick()`, the player a participant; `director.opposite.step` keeps the opposite carriageway local), `net_traffic.notify_hit` in place of `sim.notify_hit`, skips the local close-pass and surrounding-brake reactions (the server's), and hit reports carry the wire `car_id` of the hit slot. The source and the TrafficState are **kept across respawns and teleports** (`_start_run` keeps the sim, director and view in that case; `room_teleport` moves the car without `director.reset`): the server sends a car once while it stays in the area. A reconnect clears the source (the new snapshot's frame brings the whole area). The join frame's signals go out after its placement and before its traffic, so a run started on `joined` gets the first traffic frame. `NetTrafficStats.report_dev_stats()` / `report_link()` feed the dev HUD every 10 frames. `NetTuning.room_network_traffic = false` keeps the local director (dev).
 - **Capacity.** In a room the loop's tuning copy raises `max_active_vehicles` to `room_traffic_capacity` (128), so the TrafficState, TrafficView's pools, scoring's slots and HitDetection (re-made when the capacity changes) hold the server's whole area at rush density; single-player keeps its 90.
 - **Before the first Pong** of a room `server_tick()` runs from the snapshot's tick and the time since it arrived (behind by the one-way delay; the clock then steps forward), so states, remotes and traffic work from the join frame on.
+
+## Scoring in a room (N6.2)
+
+WP N6.2, the client side of N6. Spec: multiplayer handoff → Scoring in multiplayer (all of it), Client changes (`score_client.gd`; in-room HUD: crew proximity indicator, train counter; room menu: crew total). Contract: [SERVER.md](SERVER.md) → Scoring (N6.1) → Claims (the client contract); [PROTOCOL.md](PROTOCOL.md) §4, §12. Plan: MP-D9 (XP), MP-D10.
+
+**The rules stay the single-player ones.** The run's own `Scoring` (`src/scoring/`, unchanged: parity with the Rust port) scores the network cars at 120 Hz exactly as in loop practice; night ×2 comes from the loop's RoomClock, which follows the room clock every frame (`test_night_doubles_from_the_room_clock`). `NetScoreClient` reads the events the rules wrote into the run's buffer.
+
+**Reading the events.** `RunRoom.tick()` runs inside each 120 Hz tick before that tick's scoring, so it reads the events of the tick before (stamped with that tick's room tick); `RunRoom.frame()` reads the last tick's before the run drains the buffer (`Run.frame` → `adapter.drain()`), then starts again from 0. A stamp is `ceil(room clock)` at the sim tick: the first room tick at or after the event, the tick whose uploaded state (moved back to its instant, N5.2) first shows it.
+
+**The car's clock** (N6.2 fix to N5.2's upload; the contract: "`PlayerState.tick` must describe the car at that tick"). States, hits, run events and claims are stamped with `RunRoom._car_clock`: the room time of the car's latest simulated state, advanced by exactly each 120 Hz tick's `dt` (× 20), following the room clock at most `clock_slew_max_rate` (5 %) faster or slower, and jumping to it when the two are more than `room_stamp_max_hold_ms` (250 ms) apart (a pause, slow motion, a long hitch: a jump forward only lowers the implied speed); outside RUNNING it is the room clock. The live check found two ways the wall-clock stamps broke the server's `distance` check (the run then goes unverified):
+
+- after a frame hitch the physics catches up in bursts (several ticks in one short frame): the car moved 50 ms of sim time while the stamps moved one tick, +2.3 m at 51 m/s (`test_states_follow_the_car_through_hitches`: +1.5 m with wall stamps, < 0.5 m now);
+- the first Pong after a snapshot can land behind the snapshot's own estimate (~100 ms on the loaded box): `_room_now()` (the target the car's clock follows) never runs slower than 95 % of the wall clock across such a step back until the estimate catches up (`test_stamps_never_stall_across_a_clock_step_back`).
+
+Every snapshot resets both.
+
+**Claims** (`observe()` queues them in pre-sized packed arrays: no allocation per tick, `test_the_tick_side_allocates_nothing`; `flush()` sends them from the frame, one small frame each, with reused message dictionaries):
+
+| Event | Claim |
+| --- | --- |
+| `pass` / `close_pass` | `tick` = the tick it was paid (the car fully behind); `cars` = [the car's wire id, `roundi(clearance × 1000)` mm: the rules' minimum hull-to-hull clearance over the pass]; `side` = `right` when the car's d ≥ the player's (+d is right of travel), else `left` |
+| `thread` | at the second pass's tick, after that pass's own claim (the rules write the pass, then the thread); `cars` = [the first car (the most recent unused pass on the other side within `score_thread_match_s`, under the thread clearance), the second car], each with its own clearance; `side` = the first car's |
+| `cut` | at its tick; `cars` = [the nearest eligible car (the event's slot), 0 mm]; `side` = `none` |
+
+- Wire ids come from `NetworkTrafficSource.car_id(slot)` (`score.wire_id`). Until the server streams traffic (the local director's cars) nothing is claimed (`claims_skipped`). Claim ids count from 1 and wrap at 65,535.
+- **No sector claims:** the contract has none; the server finds gantry crossings in the uploaded states.
+- Claims queued while the connection is reconnecting are dropped (the server never saw those states).
+- **Hit reports** (N5.2, checked against the contract): every counted hit (`hit_report` with the traffic car's wire id and `lives_left`; 0 at the crash-out), none while protected. States carry `run_state = protected` for the whole protection (the placement acknowledgement, MP-D10) and `s` wrapped into [0, L) (the server compares wrapped differences), each moved back to its tick's instant.
+
+**The official score** (`score_sync`): the client keeps its local total (banked + chain) per room tick in a ring (`score_history_s`, 8 s). Each sync's official banked + chain is compared with the client's own total **at `sync.tick`** (the official timeline runs 1.5 s behind): the difference is the correction (`pending_offset`; dev HUD `room_score_offset`). It is applied **only at banking moments** (`flags.banking`) and eased: up within `score_ease_up_s` (0.6 s), down over `score_ease_down_s` (2 s), about a point a frame, so the HUD never takes score away mid-chain nor jumps back. The HUD shows local banked + correction (`Hud.set_score_offset`); the chain and multiplier stay local (instant feedback; trains and the crew factor reach the display at the next bank). A new local run (a respawn) starts without a correction; syncs dated before it, or of an older `run_seq`, describe the run before and are ignored. Totals are compared (not banked alone) so a bank one tick apart on the two sides does not read as a whole chain's difference.
+
+**Crew, trains, sectors.**
+
+- **Crew line** (room HUD, under the room line): `CREW ×1.50 · 2 NEAR` in the accent while crewmates (same crew slot, run going: driving or protected) are within `crew_range_m` (30 m) along the loop, `CREW ×1.00` muted otherwise; +`crew_bonus_per_mate` (0.25) each, capped at `crew_factor_cap` (2.0). Counted every frame from the remote tracks (the server's `crew_in_range` comes 1.5 s late; kept as `official_crew_in_range`).
+- **Trains:** `score_event.train` for this player: TRAIN ×n beside the crew line for `train_show_s` (the train counter), `TRAIN ×n +pts` on the event stack (gold), the run's count (`run_trains`); a crewmate's link goes to the chat feed (`Dusty#1234  TRAIN ×3`).
+- **Session crew total:** in the room menu (PLAYERS, beside LEAVE ROOM, gold: `CREW TOTAL 48,250`), from `room_snapshot.crews` / `room_event.crew` (spec: "shown in the room menu").
+- **Sector bonuses:** the loop run pays its own at the gantry (the sector toast). An official one (`score_event.sector_*`) the run did not pay (same kind within `sector_match_s`) goes on the event stack (`PACE +3,000`); the total reconciles at the bank.
+- **The crash-out toast** shows `run_result.score`, the official score (N5.2 showed the local one).
+- **Garage XP** (MP-D9 left rooms without it): `run_result` for this player awards XP from its official score through `Garage.award_room_run` → `Garage.award_run` (mode `loop`, which `xp_modes` includes; threads counted; milestones and the Daily streak do not apply), once per `run_seq`, when the run records (`record_best`, as in single-player). Leaving mid-run (LEAVE ROOM, QUIT, a kick, the seat lost) the result never reaches the client, so the XP comes from the last official banked total (`score_sync`), unless the run had already crashed out.
+- **Chat feed:** a line is kept clear of the event stack's column (a long name is shortened with an ellipsis on the feed; the nametag shows it whole). The crew row moved the feed down by one line; at 125 % text its third line still ends above the thumb zone (tested).
+- Dev HUD: `room_claims_sent`, `room_claims_rejected` (`score_event.claim_rejected`), `room_score_offset`.
+
+**Tuning** (`data/tuning/net.tres`, "Room scoring (N6.2)"):
+
+| Field | Default | Spec |
+| --- | --- | --- |
+| `score_claim_queue` | 32 | not in spec (claims waiting for the frame) |
+| `score_recent_passes` / `score_thread_match_s` | 8 / 1.5 | not in spec (naming a thread's first car) |
+| `score_history_s` | 8 | not in spec (the local total per room tick) |
+| `score_ease_up_s` / `score_ease_down_s` | 0.6 / 2.0 | "eases its display ... at banking moments"; the times are not in spec |
+| `crew_range_m` / `crew_bonus_per_mate` / `crew_factor_cap` | 30 / 0.25 / 2.0 | Crew proximity |
+| `train_show_s` | 2.5 | not in spec |
+| `sector_match_s` | 6 | not in spec |
+| `room_stamp_max_hold_ms` | 250 | not in spec (the car's clock) |
+
+**Tests.**
+
+| File | Covers |
+| --- | --- |
+| `tests/net/test_score_client.gd` | Claims from the real rules' events (ScoringScenario): pass and close pass (tick, side, wire id, clearance), a thread (after both passes; both cars, each clearance, the first car's side), a cut (nearest car, 0 mm, none); local cars never claimed; the claims decoded by a scripted server, in order, ids counting up; the tick side allocates nothing (static memory and objects over 960 ticks); a full queue; the history ring; easing: equal, server ahead (only at banking, up within 0.6 s), server behind (down, a point or so per frame, many steps), the run before and older runs ignored; crew factor (30 m, other crews, the seam, the ×2 cap, a crashed crewmate); trains and a crewmate's train; claim rejections; official sector bonuses the run did not pay |
+| `tests/net/test_score_client_run.gd` | The real Run in a room (`fake_score_server.gd`): streamed cars passed by a bot become claims whose ticks the uploaded states confirm (fully behind at the tick, not 150 ms before); the local director's cars never claimed; score_sync moving the HUD's banked total only at banking, eased up, then down in small steps; the crew line with a crewmate 12 m behind, TRAIN ×3 (badge, stack, count), the crew total in the menu, the official score in the toast; night ×2 from the room clock; XP from run_result once per run, and from the last official banked total on leaving |
+| `tests/ui/test_room_score_hud.gd` | The crew line's texts and ink; the TRAIN badge (counts up, restarts, fades); the crew total in the room menu through iOS-style touch ids; text fit beside the gameplay HUD (busy feed, a full stack, three wide feed lines) at 100 % and 125 % on 1280×720 and a notched 1560×720: inside its box and the safe area, no overlap with any HUD text, top half, clear of the thumb zones |
+
+`tests/net/fake_score_server.gd` extends `fake_room_server.gd`: records `score_claim`s; builds `score_sync`, `score_event` and `run_result`.
+
+### Live check
+
+`tests/net/live_score_check.tscn` drives the game's Run in a private room on a local server with a weaving `SandboxBot` through the streamed traffic, and reads `wb_room_claims_total` (by verdict and reason) and the offences from `/metrics`; it also replays the server's `distance` check on the client's own uploads:
+
+```sh
+# the server (this branch, its own target dir), dev env, a scratch directory: see "Live check" above
+tools/godot.sh --headless --path . res://tests/net/live_score_check.tscn -- http://127.0.0.1:18652 \
+    --metrics=http://127.0.0.1:19652 --drive=300 --density=rush --speed=60
+```
+
+Against `westbound-server` at this branch's base (N6.1 merged; `rooms.traffic = "sim"`), dev env, debug build, 2026-09-30, the headless run at 60 fps on the shared box (a full fast test tier ran alongside the first):
+
+| Run | Claims (all kinds) | Accepted | Rejected | Offences | Official vs local banked |
+| --- | --- | --- | --- | --- | --- |
+| normal density, bot at 62 m/s, 300 s | 38 | **38 (100 %)** | 0 | 0 (verified) | 33,699 vs 33,700 |
+| rush, bot at 64 m/s, 300 s | 57 | **57 (100 %)** | 0 | 0 (verified) | 29,662 vs 29,656 |
+
+```
+account                  ok
+room, the run starts     ok    code NVDM8B, normal traffic, the bot at 62 m/s
+traffic streamed         ok
+claims sent              ok    38 sent (skipped 0, dropped 0, unmatched threads 0); 0 rejections seen by the client; 0 respawns
+official score           ok    313 syncs; official banked 33699 (run 1), local banked 33700, last correction -1, unverified false
+server acceptance        ok    38 of 38 accepted (100.00 %); late 0
+no offences              ok    wb_room_offences_total +0 (server plausibility); client-side distance flags 0
+LIVE_SCORE ok (0 failed)
+```
+
+Over every run against that server during the WP (including the ones before the car's clock fix): **307 of 308 claims accepted (99.7 %)**, the one rejection `no_pass` in a run that also had a `distance` offence from the wall-clock stamps; 6 reported traffic hits, all confirmed; 0 unreported contacts. Before the fix, 5 of 9 development runs went unverified by a `distance` offence; after it, 0 of 2. The official score tracks the local one within a few points (the server's 20 Hz sampling of the multiplier's decay), the banking-moment easing absorbs it. The bot passes mostly in adjacent lanes (few threads or cuts); the server's parity and room tests cover those kinds.
+
+Snaps (both renderers; `--train=N` a TRAIN link, `--sector=<kind>` an official sector bonus, N5.2's `--room=demo` otherwise):
+
+```
+tools/snap.sh src/run/run.tscn --renderer=both --mode=loop --at=desert --room=demo --remotes=4 --speed_kmh=150 --train=3 --sector=pace --tag=room_score
+tools/snap.sh src/run/run.tscn --mode=loop --at=desert --room=demo --remotes=4 --room_menu=players --tag=room_score_menu
+tools/snap.sh src/run/run.tscn --mode=loop --at=city --room=demo --remotes=3 --room_toast=1 --clock_min=26 --train=2 --tag=room_score_night
+```
+
+**Deviations and open points (N6.2).**
+
+- The session crew total is in the room menu only (spec); an earlier HUD row for it pushed the chat feed into the thumb zone at 125 %.
+- Room XP is awarded from the official score (MP-D9 said "no XP for now"): the orchestrator's MP-D9 row needs the update. Mode `loop` (no separate `room` mode in `xp_modes`).
+- Trains and the crew factor are not in the local chain (the client's `Scoring` has no crew factor: `src/scoring/` stays at parity); they reach the display at the next banking moment.
+- `tests/ui/test_room_hud.gd` (N5.2): its toast test now passes the official score (the toast no longer takes the higher of official and local).
 
 ## Remote players
 
@@ -92,6 +202,7 @@ A CanvasLayer (layer 6: over the gameplay HUD, under the in-run screens), hidden
 
 - **Loop strip** (`HudLoopStrip`): the whole loop along the top edge (in the top margin over the sun bar): a mark per sector gantry, a dot per player in the crew color, yours in the accent and larger. One draw call; redraws only when a dot moves a whole pixel.
 - **Room line** under the score panel: `ROOM K7QX2M · 5/8 · 42 MS` (ping rounded to 5 ms, rebuilt only when it changes). The chat feed under it (3 lines, newest first, `name#tag  TEXT` in the crew color, `room_chat_show_s`).
+- **N6.2:** the crew line (`CREW ×1.50 · 2 NEAR`) with the TRAIN ×n badge beside it sits between the room line and the feed; the room menu's PLAYERS shows the session crew total (see Scoring in a room).
 - **REJOIN CREW** and **ROOM** top-right under the pause / camera / high-beam buttons (touch targets, clear of the thumb zones; REJOIN disabled unless driving in the room).
 - **Room menu** (ROOM): CHAT (six phrases, HONK!, two emotes; WAIT while rate-limited; a chat closes the menu) and PLAYERS (a button per member: tap to mute / unmute; YOU and HOST marked; LEAVE ROOM). Esc closes it.
 - **Toast** (crash-out results, 3 s) and **banner** ("RECONNECTING · 12 S", server notices) in the event stack's column.
@@ -223,6 +334,6 @@ tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=title:rooms,
 
 - **Pause in a room** still pauses the local run (the tree): no states go up, so the others see the car fade after 250 ms; the seat is kept (the socket stays up). A room-aware pause (the car keeps driving under the menu) is left open.
 - **Host settings in the room** (kick, density, time mode after creation) are wired in `NetRoomSession.send_host` but have no UI yet; the host picks density and time when creating the room (PRIVATE ROOM).
-- **Invite links / party** (N9) and **crew proximity and train counter** (N6) are not here. Until the server streams traffic, the room's density does not change the local director.
+- **Invite links / party** (N9) are not here (crew proximity and the train counter: N6.2, above). Until the server streams traffic, the room's density does not change the local director.
 - **Remote players as IDM leaders for network cars** (the server has them as participants): not added. N4.3's `NetworkTrafficSource` models one participant (the local player, index `_P` in its sorted order); remote players would need extra participant entries in its sort and leader search (`src/net/traffic/**`, N4.3's file). The per-car bias and the corrections cover the difference meanwhile. Hook: `RunRoom._draw_remotes` already samples every remote at the room clock.
 - **Presence over the room socket:** `NetSocialClient.attach_lobby(rooms.session.client)` would move presence onto this connection; not wired (the friends list keeps polling).
