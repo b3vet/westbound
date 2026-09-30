@@ -10,8 +10,9 @@ use std::time::Duration;
 use super::plausibility::Offence;
 
 /// Upper bounds (µs) of the tick-time buckets; the last bucket is everything above.
-pub const TICK_BUCKETS_US: [u64; 12] = [
-    25, 50, 100, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000,
+pub const TICK_BUCKETS_US: [u64; 17] = [
+    25, 50, 100, 200, 300, 500, 750, 1_000, 1_500, 2_000, 3_000, 4_000, 5_000, 10_000, 20_000,
+    50_000, 100_000,
 ];
 
 /// Why a message for a room never reached it or was not taken.
@@ -232,8 +233,8 @@ mod tests {
         m.observe_tick(Duration::from_micros(700));
         m.observe_tick(Duration::from_millis(3));
         assert_eq!(m.tick_quantile_us(0.5), 50);
-        assert_eq!(m.tick_quantile_us(0.99), 1_000);
-        assert_eq!(m.tick_quantile_us(1.0), 5_000);
+        assert_eq!(m.tick_quantile_us(0.99), 750);
+        assert_eq!(m.tick_quantile_us(1.0), 3_000);
         assert_eq!(RoomMetrics::get(&m.tick_us_max), 3_000);
         let mut out = String::new();
         m.render(&mut out);

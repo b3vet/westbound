@@ -208,7 +208,9 @@ pub fn check(
             lim.placement_radius_m + lim.speed_cap_mps * (since.max(0) as f64) / lim.tick_rate_hz;
         let along = map.signed_delta_mm(p.state.s_mm, out.s_mm).abs() as f64 / MM_PER_M;
         let across = (i64::from(out.d_cm) - i64::from(p.state.d_cm)).abs() as f64 / CMS_PER_MPS;
-        if since >= 0 && along + across <= reach {
+        // A client whose clock estimate lags may stamp its first state a little before
+        // the placement tick; anything near the placement answers it.
+        if since >= -i64::from(lim.future_ticks) && along + across <= reach {
             return Verdict::Accept {
                 state: out,
                 offences,

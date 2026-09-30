@@ -2,11 +2,11 @@
 //! server_tick + tick_fraction / 65536`). Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md →
 //! Networking protocol → Clock sync; the 20 Hz tick from "Room tasks".
 //!
-//! Until rooms exist (N5) there is one server-wide clock: 20 Hz ticks counted from process
-//! start. **N5 seam:** a session inside a room answers `Ping` with that room's clock instead
-//! (the room's `TickClock`, started at room creation); `gateway::pong_clock` is the one place
-//! that picks the clock. Injected through `AppState` so tests can pin the tick
-//! (`ManualTickClock`).
+//! Outside a room there is one server-wide clock: 20 Hz ticks counted from process start.
+//! A session inside a room (N5.1) answers `Ping` with that room's clock instead (the room's
+//! `TickClock`, started at room creation; `rooms::RoomHooks::tick_clock`);
+//! `gateway::pong_clock` is the one place that picks the clock. Injected through `AppState`
+//! so tests can pin the tick (`ManualTickClock`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;

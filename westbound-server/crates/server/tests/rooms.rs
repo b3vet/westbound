@@ -216,6 +216,48 @@ async fn reconnect_within_the_seat_hold_keeps_the_seat() {
 }
 
 #[tokio::test]
+async fn joining_another_room_releases_a_held_seat() {
+    let s = common::start_with(gw).await;
+    let (pa, pb) = (account(&s).await, account(&s).await);
+    let mut a = connect(&s, &pa, BotConfig::default()).await;
+    a.join(LobbyCommand::RoomCreate(private(4))).await.unwrap();
+    let mut b = connect(&s, &pb, BotConfig::default()).await;
+    b.join(LobbyCommand::RoomJoinCode(CodeRef {
+        code: a.bot.code.clone().unwrap(),
+    }))
+    .await
+    .unwrap();
+    let (room_a, pid_b) = (a.bot.room_id, b.bot.player_id.unwrap());
+    let mut bot_b = b.close().await;
+    bot_b.reset_room();
+    // Back online, B quick-joins a public room instead: the held seat goes at once.
+    let url = format!("ws://{}/ws", s.addr);
+    let mut b2 = BotClient::connect(&url, &pb.token, MAP, BUILD, bot_b)
+        .await
+        .unwrap();
+    b2.join(LobbyCommand::QuickJoin(Default::default()))
+        .await
+        .unwrap();
+    assert_ne!(b2.bot.room_id, room_a);
+    let gone = RoomEvent::Leave(MemberLeft {
+        player_id: pid_b,
+        reason: LeaveReason::Left,
+    });
+    assert!(a
+        .pump_until(Duration::from_secs(5), |bot| bot
+            .seen
+            .room_events
+            .contains(&gone))
+        .await
+        .unwrap());
+    assert_eq!(
+        s.state.rooms.seat_of(protocol::AccountId(pb.account)),
+        b2.bot.room_id
+    );
+    s.stop().await;
+}
+
+#[tokio::test]
 async fn the_seat_hold_runs_out() {
     let s = common::start_with(|c| {
         gw(c);

@@ -58,6 +58,15 @@ N9.1 adds the account-level social layer:
 
 See "Social API".
 
+N5.1 adds rooms and players behind the gateway (see "Rooms"):
+
+- one tokio task per room at 20 Hz with a bounded command queue, one outbound frame per tick per client;
+- private rooms with codes and host rules (kick, density, time mode, host passing, close 60 s after empty), public rooms (normal density, UTC clock) with Quick Join and the browser list;
+- the `PlayerState` relay with plausibility checks (offences counted, run unverified, no kicks);
+- server placements: spawn behind the crew leader or at the start gantry, crash-out respawn after 3 s, rejoin crew, 3 s protection, a free-gap seam for traffic;
+- reconnect with a 15 s seat hold, the room clock (UTC-derived, fixed, night) in snapshots and `Pong`, presence `in_room`;
+- the `bots` crate's scripted room clients, the integration tests and the 20 × 8 bench.
+
 N4.1 adds the server's traffic simulation in the pure `sim` crate (not wired into rooms yet; N4.2 does that):
 
 - a port of the client's traffic model (IDM, MOBIL, no-ambush, `TrafficSim` with lane drops and weaving racers), bit-exact against the GDScript model on exported vectors and tick-identical on whole-sim traces;
@@ -213,9 +222,10 @@ WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban 
 5. **Messages** (after `Welcome`). Each message passes its type's token bucket, then is routed:
    - `ping` → `pong` (below).
    - `lobby_command.presence_subscribe` → friends presence (N9.1; see "Social API → Presence").
-   - Other `lobby_command`s → non-fatal `not_allowed` ("The lobby is not available yet") until N5 / N9's room work.
-   - `room_host_command` → non-fatal `not_in_room` until N5.
-   - `player_state`, `score_claim`, `hit_report`, `run_event`, `quick_chat` → dropped quietly until N5 (no room).
+   - `room_create`, `room_join_code`, `room_join_id`, `quick_join`, `room_leave`, `room_browse` → the rooms registry (N5.1; see "Rooms").
+   - Party commands (`party_*`) → non-fatal `not_allowed` ("Parties are not available yet.") until N9.
+   - A seated session's `player_state`, `run_event`, `hit_report`, `quick_chat` and `room_host_command` → its room task (a non-blocking `try_send` into the room's bounded queue; a full queue drops the message, `wb_room_dropped_total{reason="queue_full"}`). Outside a room: `room_host_command` and `room_leave` answer a non-fatal `not_in_room`, the rest is dropped quietly.
+   - `score_claim` → dropped until N6.
    - A second `Hello`, or an undecodable frame → fatal `malformed`.
 6. **Replies.** Everything one inbound frame causes goes out as one outbound frame.
 7. **Fatal errors.** The gateway sends the `Error`, then waits for the client to close, up to `gateway.fatal_close_delay_ms` (1 s), and then sends a close frame (1008 with the error code as the reason; 1011 for `internal`). Without the wait, a client that reads the error and the close in the same socket read can lose the error. Godot's `WebSocketPeer` does: it goes straight to `STATE_CLOSED` with no packet available, so the player would see "connection closed" instead of "please update". `NetClient` closes as soon as it reads a fatal error, so it never waits.
@@ -236,9 +246,9 @@ WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban 
 
 ### Clock (`Pong`)
 
-`Pong` = `client_time_ms` (echoed), `server_tick`, `tick_fraction` (1/65536 tick): `server_now = server_tick + tick_fraction / 65536`. There are no rooms yet, so the clock is **server-wide**: `tick.rs`'s `MonotonicTickClock`, at `gateway.tick_rate_hz` (20 Hz) since process start. The tick wraps at 2^32 (6.8 years). Tests inject a `ManualTickClock` (`AppState::with_clocks`).
+`Pong` = `client_time_ms` (echoed), `server_tick`, `tick_fraction` (1/65536 tick): `server_now = server_tick + tick_fraction / 65536`. Outside a room the clock is **server-wide**: `tick.rs`'s `MonotonicTickClock`, at `gateway.tick_rate_hz` (20 Hz) since process start. The tick wraps at 2^32 (6.8 years). Tests inject a `ManualTickClock` (`AppState::with_clocks`).
 
-**N5 seam:** `gateway::pong_clock(state, session)` is the one place that picks the clock. N5 returns the session's room clock while the session is in a room (PROTOCOL.md: the room tick). A client joining a room calls `NetClock.reset()` anyway.
+**Rooms (N5.1):** `gateway::pong_clock(state, room)` is the one place that picks the clock: while the session holds a seat it is **the room's tick clock** (tick 0 = the room's creation; PROTOCOL.md: the room tick), else the server-wide one. A client joining a room calls `NetClock.reset()` (the tick base changes).
 
 ### Sessions and the duplicate-login policy
 
@@ -862,7 +872,7 @@ All routes are under `/api/v1`, need `Authorization: Bearer`, and use the error 
 
 ### Presence
 
-**Source of truth.** A friend is `online` when the gateway's session registry (`Sessions`) holds a live session for them. They are `in_room` (with `room_id` and `joinable`: the room has space) when a room task has said so through the **N5 seam** `state.presence.set_room(account, Some(RoomPresence { room_id, joinable }))`, and `set_room(account, None)` on leave. Until N5 nobody calls it, so friends are `online` or `offline`. A friend holding a room seat while disconnected shows `offline`.
+**Source of truth.** A friend is `online` when the gateway's session registry (`Sessions`) holds a live session for them. They are `in_room` (with `room_id` and `joinable`: the room has space) when a room task has said so through `state.presence.set_room(account, Some(RoomPresence { room_id, joinable }))`, and `set_room(account, None)` on leave. Since N5.1 the room tasks call it (see "Rooms → Presence"). A friend holding a room seat while disconnected shows `offline`.
 
 **`GET /presence`** → `{"friends": [{"account_id", "status", "room_id", "joinable"}]}`, one entry per accepted friend, by id. This is for polling clients.
 
@@ -876,7 +886,7 @@ All routes are under `/api/v1`, need `Authorization: Bearer`, and use the error 
    - a request is accepted (the new friend's presence goes to both sides, if subscribed);
    - a friend is removed or blocked, or deletes their account (`offline`, and they are no longer watched).
 3. `presence_subscribe {enabled: false}` ends it, as does the session's end. A friend added while the gateway reads the list may be missed until the next subscribe.
-4. A database error while subscribing answers a non-fatal `internal` ("Friends presence is unavailable. Try again."). The other lobby commands still answer `not_allowed` until N5.
+4. A database error while subscribing answers a non-fatal `internal` ("Friends presence is unavailable. Try again."). Party commands still answer `not_allowed` until N9; room commands go to the rooms (N5.1).
 
 **Concurrency** (the registry's design). `PresenceHub` is one `std::sync::Mutex` over subscriber → (session handle, friend set), friend → watchers, and account → room. It is held for map updates, a change's lookups and non-blocking `try_send`s into the watchers' bounded 64-frame queues. It is never held across an `.await`, and never taken per game message.
 - A full queue kicks that client (slow client) instead of blocking.
@@ -1129,6 +1139,192 @@ The N10 target (20 rooms × 8 players ≤ 50 % of 1 vCPU, room tick p99 < 5 ms) 
 - **The three safety extensions** (MP-D5): approve, and schedule their port to `traffic_sim.gd` so the client's network IDM (N4.3) matches the server.
 - **Ramps:** no ramp geometry on the client yet (docs/LOOP_MAP.md): an exiting car moves one lane right onto the shoulder and is gone; an entering car appears on the shoulder at the on-ramp. N4.3 should fade them.
 
+## Rooms (N5.1)
+
+WP N5.1 (server side), in `crates/server/src/rooms/`. Spec: [multiplayer handoff](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Architecture (room tasks), Rooms, parties and matchmaking → Rooms, Players, Time of day in multiplayer, Resource budget; [PROTOCOL.md](PROTOCOL.md) §4 (the messages, used as frozen). The client side is N5.2; traffic streaming is N4.2; scoring is N6; parties are N9.
+
+| File | What |
+| --- | --- |
+| `mod.rs` | `Rooms` (`AppState.rooms`): create, join by code / id, Quick Join, browse, the account → seat index; `RoomLink` (a connection's seat: its room queue and the room clock); `RoomParams` (`[rooms]` converted once) |
+| `room.rs` | One room, synchronous: seats, host rules, runs, placements, plausibility, the relay, one frame per tick per client |
+| `task.rs` | The room's tokio task: its bounded queue and its 20 Hz tick |
+| `clock.rs` | The room clock |
+| `plausibility.rs` | `PlayerState` checks (pure) |
+| `road.rs` | Lane centres, the lane at a `d`, lateral bounds, flow speeds, the start gantry's spawn points |
+| `traffic.rs`, `sim_traffic.rs` | The traffic seam `RoomTraffic` (`NoTraffic`; `SimTraffic` over `sim::traffic::TrafficWorld`) |
+| `metrics.rs` | Room metrics |
+| `tests.rs` | The room core without sockets (commands and ticks by hand) |
+
+### Architecture
+
+- **One task per room.** A `Room` owns its seats, settings, clock and traffic outright; the task hands it each command as it arrives and each 20 Hz tick of the room's clock (`advance_to`). No locks and no `.await` in the room.
+- **Bounded queues.** Connections reach a room through its `mpsc` queue (`rooms.command_queue`, 256). States, run events, hits, chat and host commands use `try_send` (a full queue drops, `wb_room_dropped_total{reason="queue_full"}`). Joins, leaves and the disconnect notice wait for space (up to `rooms.join_timeout_ms`). Rooms reach connections through the session's 64-frame outbound queue (`SessionHandle::send_frame`: a full queue kicks that client as `slow_client`, it never blocks the room).
+- **Timer.** The task's timer fires in the middle of each clock tick, so a boundary never races it. The clock's tick number decides which room tick runs: a late wake-up runs the latest tick once, and the room's timers compare tick numbers.
+- **One frame per tick per client**, built in the seat's own reused `FrameBuilder`: the `room_snapshot` on the tick the player (re)joined, or else that tick's room events; then the seat's private replies (host-command errors); then `player_states`; then traffic (`RoomTraffic::write_client`, N4.2). A tick with nothing to say sends nothing. Only a player leaving gets a separate frame: `lobby_event.room_left`, sent at once.
+- **The registry** (`Rooms`, one `std::sync::Mutex`) holds room id → queue, info and clock, code → id, and account → seat. It is locked to create, find or close a room and when a seat is taken or released; never per tick, never across an `.await`. The presence hub is called after the lock is released.
+- **Allocation.** Per tick, the room reuses its buffers (the seat frames, the relay list, the traffic's player list). Snapshots, room events and log lines allocate, and they happen on joins and changes, not every tick.
+
+### Rooms, codes and caps
+
+| Command | What happens | Refusals (non-fatal `error`) |
+| --- | --- | --- |
+| `room_create {settings}` | A new **private** room; the creator gets the first seat and is host. `max_players` is clamped to `rooms.max_players` (8), `fixed_cycle_ms` is taken modulo the cycle | `not_allowed` (visibility `public`), `server_full` (`limits.max_rooms`, 40), `already_in_room` |
+| `room_join_code {code}` | A seat in the room with that code | `room_not_found`, `room_full`, `not_allowed` (kicked from it), `already_in_room` |
+| `room_join_id {room_id}` | The same by id (browser, a friend's Join button) | as above |
+| `quick_join` | The **public** room with the most players that has a seat (ties: the oldest); a new public room when none fits | `server_full` |
+| `room_leave` | Leaves: `lobby_event.room_left {left}` to the player, `room_event.leave {left}` to the room. A run in progress ends (`run_result {quit}`) | `not_in_room` |
+| `room_browse` | `lobby_event.room_list`: public rooms, fullest first, at most 64 (players, max, density, night) | |
+
+- **Room ids** are u32 from 1, never reused while the process runs. **Codes** are 6 characters from the protocol's alphabet (no 0/O, 1/I/L), random (OS RNG), unique among live rooms. Public rooms have codes too (the snapshot carries one).
+- **Public rooms** are created by Quick Join with the spec's settings: normal density, the UTC `cycle` clock, 8 seats, no host. Until parties exist (N9), each public player is a crew of one (its own `crew_slot`).
+- **Private rooms:** everyone is crew slot 0. The creator is host. The host passes to the longest-present player when the host's seat goes (leave, kick, seat hold running out), with `room_event.host_change`.
+- **A room closes** `rooms.empty_close_ms` (60 s) after its last seat went; its code stops working. At server shutdown every seated player gets `room_left {closed}`.
+- **One seat per account.** A second join while seated is `already_in_room`; `room_leave` first. A join into another room releases a seat the account still holds elsewhere (a held seat, or one of a replaced login).
+
+### Host commands (private rooms)
+
+| `room_host_command` | Effect | Refusals |
+| --- | --- | --- |
+| `kick {player_id}` | The player gets `room_left {kicked}` and cannot rejoin this room; the room gets `room_event.kick`. A run in progress ends | `not_host`; `not_allowed` (yourself, nobody by that id); `not_allowed` in public rooms ("Public rooms have no host") |
+| `set_density {density}` | `room_event.settings` with the new settings and clock; the traffic gets `set_density` | as above |
+| `set_time_mode {time_mode, fixed_cycle_ms}` | The same; `fixed_cycle_ms` modulo the cycle | as above |
+
+**Leaderboard eligibility** (spec: public rooms count; private rooms left on the defaults also count): a run is `leaderboard_eligible` when it is verified and the room is public, or private with normal density and the `cycle` clock for the whole run (a host change to anything else marks every run in progress).
+
+### Players
+
+**Placements.** The protocol has no spawn message, so the server places a player by putting **the player's own id** in its `player_states`: a `PlayerState` with the placement tick, `s`, `d` (the lane centre), the speed, heading 0 and `run_state = protected`. It is repeated every tick until the client sends a state near it (within `rooms.placement_radius_m`, 30 m, plus what the speed cap covers since the placement), and apply each placement tick once. States far from it are dropped as in flight for `rooms.placement_grace_ms` (2 s); after that the next state is taken with a `teleport` offence. Others see the car at its new place at once. **This is a semantic proposal for PROTOCOL.md** (no wire change; see the N5.1 handoff). Placements come with `rooms.protection_ms` (3 s) of protection (`PlayerView.protected_until` for traffic and N6).
+
+| When | Where |
+| --- | --- |
+| A new seat | 40 m (`rooms.spawn_behind_leader_m`) behind the **crew leader**, in the leader's lane; with no crewmate driving, at the start gantry (the spawn points 150 m past sector 0, one lane per player id in turn) |
+| Crash-out respawn, `run_event.start` after a run ended, `run_event.rejoin` | Behind the crew leader; with no crewmate driving, where the car is |
+| Reconnect (a held seat taken back) | Where the car was, run intact |
+
+- The **crew leader** is the longest-present connected crewmate whose run is active and who has answered their own placement (seats are in join order). Every placement passes through `RoomTraffic::free_gap` (a real gap with `rooms.traffic = "sim"`: the wanted lane, then its neighbours, ±`spawn_search_m` in `spawn_step_m` steps with `spawn_clear_m` to the nearest car). The speed is the lane's flow speed at that s (the section's `lane_flow_speeds_from_right_kmh`).
+- **Runs.** A seat starts a run at once (`run_seq` 1, then counting). `run_event.start` starts a new run only when none is active; `end` ends it (`quit`); `rejoin` places the player behind the crew (the chain forfeit is N6's).
+- **Crash-out.** `hit_report` with `lives_left = 0`, or a `player_state` with `run_state = crashed`, ends the run (`run_result {crashed}` to the room) and schedules the respawn `rooms.crash_respawn_ms` (3 s, the results toast) later, with a fresh run. Leftovers of the run before (a crashed state in flight, a hit stamped before the new run started) are ignored.
+- **`run_result`** goes to everyone in the room: `player_id`, `run_seq`, `end_reason`, `verified` (no offence), `leaderboard_eligible`, `duration_ms`, `distance_m` (forward distance from accepted states, teleports left out). Score and event counts are 0 until N6 (which also records multiplayer runs on the boards).
+- **Reconnect.** When a seated connection ends, the room holds the seat for `rooms.seat_hold_ms` (15 s): `room_event.connection {connected: false}`, the member's `disconnected` flag, presence cleared. Joining the same room again (by code or id) within the hold takes the seat back: same `player_id`, a fresh snapshot, `connection {connected: true}`, the run intact, a placement where the car was. After the hold the run ends (`run_result {disconnected}`, the banked score kept, N6) and the seat goes (`room_event.leave {timed_out}`).
+- **A second login** (newest wins, see "Sessions") that joins the room takes the seat over the same way; the old connection's link goes inactive at once.
+- **Quick chat** is relayed to everyone else in the room (`quick_chat` with the sender's id); muting is the client's.
+
+### The relay
+
+Every tick, each client's `player_states` holds every other seated player's **new** state since the last tick (the latest accepted, clamped), plus its own placement while one is pending. A tick with no new states sends none (clients interpolate 100 ms behind and extrapolate up to 250 ms, spec). A held seat's car sends nothing; the `connection` event says why.
+
+### Plausibility (`plausibility.rs`)
+
+The client is authoritative for its car. Every state passes the checks below against the room clock, the previous accepted state and any pending placement. An **offence** marks the run unverified (`run_result.verified = false`, never on a board), is counted (`wb_room_offences_total{kind}`) and logged once per kind per run. The state is still relayed, clamped where a value is simply out of range. Nobody is kicked for offences (the spec has no such rule). All distances along the loop use the wrapped signed difference, so the seam is not a teleport.
+
+| Check | Limit (defaults) | Offence | The state |
+| --- | --- | --- | --- |
+| Speed | the fastest car's boosted top speed × 1.1: 285 km/h × 1.08 × 1.1 = 338.6 km/h | `speed` | clamped |
+| Lateral velocity | 12 m/s × 1.2 | `lateral` | clamped |
+| `d` | from the median barrier's face (0.5 m) to the guardrail (lanes, shoulder, guardrail offset; the wider count inside a lane-count taper), ±1 m | `bounds` | clamped |
+| Distance along the loop between two states | ≥ −2 m and ≤ speed cap × Δt + 2 m | `teleport` | taken |
+| The same against the reported speeds | ≤ (max of the two speeds + a·Δt/2) × Δt + 2 m | `distance` | taken |
+| Forward acceleration | 12 m/s² (engine traction 9 + boost 3) × 1.2 | `accel` | taken (braking is unlimited: hits) |
+| Lateral movement | 12 m/s × 1.2 | `lateral` | taken |
+| Tick ahead of the room clock | > 500 ms | `clock` | dropped |
+| Tick behind the room clock | > 2 s | | dropped (`stale`) |
+| Tick not after the last accepted | | | dropped (`out_of_order`) |
+| Far from a pending placement | within the grace | | dropped (`in_flight`) |
+
+The car numbers are the game's (`data/cars/*.tres`, `data/tuning/vehicle.tres`); `tests/rooms_data.rs` pins them. The lateral cap is an estimate (a lane change peaks near 8.4 m/s); N6/N8 can tighten it from the physics.
+
+### The room clock (`clock.rs`)
+
+- `room_snapshot.clock` and `room_event.settings.clock` give `cycle_ms` at the message's tick, with `cycle_len_ms` (32 min) and `day_len_ms` (22 min). Night ×2 is `cycle_ms ≥ day_len_ms`.
+- **`cycle`** (public rooms, and private rooms by default): UTC-derived, `cycle_ms = (unix_ms − epoch) mod cycle` at the tick's UTC instant. A room reads the UTC time once when it is created (its tick 0) and every tick is 50 ms on, so every room agrees with the UTC phase to the millisecond. This is the client's loop-mode `RoomClock.phase_s()` (`fposmod(unix_s − room_clock_epoch_unix_s, cycle)` with `data/tuning/loop.tres`), in integer milliseconds (`clock::tests`, `tests/rooms_data.rs`).
+- **`fixed`**: `fixed_cycle_ms` (modulo the cycle), held. **`night`**: held at the middle of the night (27 min).
+- Clients advance `cycle_ms` with `server_now()` in `cycle` mode and hold it otherwise (PROTOCOL.md §4).
+- `Pong` answers with the room's tick clock while seated (see "Realtime gateway → Clock").
+
+### Traffic seam
+
+A room owns a `Box<dyn RoomTraffic>`: `tick(tick, players)` after the tick's states (every seated player's latest state, clamped, with heading, lateral velocity and protection), `set_density`, `set_night` (headlights when night starts or ends), `write_client(player_id, s, joined, frame)` (N4.2 streams spawns, despawns, intents and corrections into the client's tick frame), `player_left`, and `free_gap(map, want)`.
+
+- `rooms.traffic = "none"` (default): `NoTraffic`. Nothing is simulated and every spawn spot is free: nobody would see the cars until N4.2 streams them.
+- `rooms.traffic = "sim"`: `SimTraffic` owns a `sim::traffic::TrafficWorld` (N4.1) seeded per room, filled at the room's density. Players go in as `PlayerInput`s (player index = a free slot of 8, body size from the exported tuning); the world steps in lock-step with the room tick (a room that missed ticks catches up, at most 20 steps, else re-anchors); spawns take real gaps. `write_client` is empty until N4.2. Cheap: N4.1 measured 199 µs per tick at normal density in release.
+
+### Presence
+
+A seat sets the player's presence to `in_room` with `joinable` = the room has a free seat (`presence.set_room`), and every seated player's `joinable` is refreshed when the seat count changes. A held seat or a released one clears it (unless the account's seat is in another room by then).
+
+### Metrics
+
+On `/metrics`, after the gateway's:
+
+| Metric | What |
+| --- | --- |
+| `wb_rooms`, `wb_rooms_created_total` | Live rooms, rooms created |
+| `wb_room_seats` | Occupied seats (held ones included) |
+| `wb_room_joins_total`, `wb_room_reconnects_total`, `wb_room_seat_timeouts_total` | New seats, seats taken back, holds run out |
+| `wb_room_placements_total`, `wb_room_crash_outs_total` | Server placements, crash-outs |
+| `wb_room_tick_seconds` (histogram: 25 µs … 100 ms) | Wall time of one room tick; the p99 is read off the buckets (`RoomMetrics::tick_quantile_us`) |
+| `wb_room_offences_total{kind}` | `speed`, `accel`, `lateral`, `bounds`, `teleport`, `distance`, `clock` |
+| `wb_room_dropped_total{reason}` | `queue_full`, `out_of_order`, `stale`, `future`, `in_flight`, `not_seated` |
+
+Logs at INFO: `room created` (id, code, settings), `room seat taken` / `taken back` / `held` / `released`, `run ended` (reason, verified, distance), `implausible player state; run unverified` (once per kind per run), `joined room` (gateway), `room closed (empty)`.
+
+### Configuration
+
+`[rooms]` (the room cap is `limits.max_rooms`, the tick rate `gateway.tick_rate_hz`):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_players` | `8` | Seats per room (spec) |
+| `empty_close_ms` | `60000` | An empty room closes after this (spec) |
+| `seat_hold_ms` | `15000` | A dropped player's seat and run are held this long (spec) |
+| `protection_ms` / `crash_respawn_ms` | `3000` / `3000` | Spawn and rejoin protection; the crash-out results toast before the respawn (spec) |
+| `spawn_behind_leader_m` | `40.0` | Spawns land this far behind the crew leader (spec) |
+| `spawn_search_m` / `spawn_step_m` / `spawn_clear_m` | `60.0` / `5.0` / `15.0` | The free-gap search around a spawn spot (not in spec) |
+| `traffic` | `none` | `none` or `sim` (see "Traffic seam") |
+| `cycle_len_ms` / `day_len_ms` / `clock_epoch_unix_ms` | `1920000` / `1320000` / `0` | The room clock (loop.tres; spec 32 / 22 min) |
+| `command_queue` / `join_timeout_ms` | `256` / `2000` | Each room's queue; how long a join waits for the room (not in spec) |
+| `max_speed_kmh` / `speed_tolerance_pct` | `307.8` / `10.0` | The fastest car with boost; spec × 1.1 |
+| `max_accel_mps2` / `max_lateral_speed_mps` / `capability_tolerance_pct` | `12.0` / `12.0` / `20.0` | The car's capability; spec × 1.2 |
+| `lateral_margin_m` / `position_slack_m` | `1.0` / `2.0` | Allowed overshoot of the barriers; slack on the distance checks (not in spec) |
+| `future_tolerance_ms` / `stale_state_ms` | `500` / `2000` | States stamped this far ahead are refused; this far behind, dropped (not in spec) |
+| `placement_grace_ms` / `placement_radius_m` | `2000` / `30.0` | Placements: in-flight window; acknowledgement radius (not in spec) |
+
+### Tests
+
+| Test | What |
+| --- | --- |
+| `rooms::tests` (unit) | Snapshot, join, leave and host passing; the relay and one frame per tick; placement acknowledgement; offences and the unverified run; reconnect within the hold (same seat, run intact, no teleport); the hold running out; crash-out and the respawn 40 m behind the leader after 3 s; rejoin across the seam; host rules (kick, density, time mode, no rejoin after a kick, eligibility); public rooms (no host, a crew each); full rooms, second logins and quick chat; closing 60 s after empty; shutdown; night from the clock |
+| `rooms::{clock, plausibility, road, metrics, sim_traffic}::tests` | The UTC phase against the client's rule; every check and the seam; lane geometry and spawn points; the tick histogram; the `TrafficWorld` adapter (lock-step, catch-up, free gaps) |
+| `tests/rooms.rs` | Real sockets with `bots::BotClient`s: a private room by code, the relay and the room clock, the gateway's room errors; reconnect within the hold; the hold running out; Quick Join, the browser, join by id, leave, the room cap; 4 rooms × 4 bots; rooms with the `sim` ring; the bench (ignored) |
+| `tests/rooms_data.rs` | The `[rooms]` clock and car numbers against the game's data |
+| `bots` (`bot::tests`) | Placements, one state per tick, the seam |
+
+### Bench: 20 rooms × 8 bots
+
+`cargo test --release -p server --test rooms bench_ -- --ignored --nocapture` (`ROOMS_BENCH_SECS`, `ROOMS_BENCH_TRAFFIC=none|sim`). 20 private rooms of 8 `BotClient`s drive for 20 s over real loopback WebSockets, **bots and server in the same process** on 2 tokio workers. The room tick time comes from `wb_room_tick_seconds`; the process CPU includes the 160 bots' own work (encoding, decoding, their sockets).
+
+Measured 2026-09-30 (release without LTO, the 4-vCPU dev box shared with a Godot soak and other builds: load average 7–8, so wall-time numbers are pessimistic):
+
+| Room traffic | Room ticks | Mean tick | p50 | p99 (bucket bound) | Max | Rooms' CPU (sum of tick time) | Process CPU (incl. bots) | Down per player | Largest frame | Offences |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `none` (N5.1 default) | 9,595 | 57 µs | ≤ 25 µs | ≤ 1 ms | 8.7 ms | 2.0 % of a core | 18 % | 2.5 KB/s | 300 B | 0 |
+| `sim` (`TrafficWorld`, normal density, 857 cars per room) | 9,594 | 427 µs | ≤ 300 µs | ≤ 4 ms | 17.6 ms | 14.8 % of a core | 30 % | 2.5 KB/s | 301 B | 0 |
+
+- **Per room tick:** 57 µs for rooms alone (8 seats: take the tick's states, build and queue 8 frames); about 370 µs more with the traffic ring. The N10 target (20 full rooms ≤ 50 % of one vCPU, tick p99 < 5 ms) holds with room to spare for streaming (N4.2) and scoring (N6); the bench asserts p99 ≤ 5 ms in release. The maxima are scheduler stalls on the loaded box (the tick is wall time).
+- **Downstream** is `player_states` only today (7 × 24 B + headers each tick): 2.5 KB/s per player at the socket payload level, against the spec's 10 KB/s budget with traffic still to come (PROTOCOL.md §11 budgets 4.9 KB/s in all).
+- 20 rooms × 20 Hz × 20 s = 8,000 ticks; the rest ran while the 160 bots were joining.
+
+### For the client (N5.2)
+
+- Join with `room_create` / `room_join_code` / `room_join_id` / `quick_join`; the answer is a `room_snapshot` (with `you`) in the next tick frame, or a non-fatal `error`. Call `NetClock.reset()`: `Pong` now carries the room tick.
+- **Your own id in `player_states` is a placement**: teleport there (apply each placement tick once), set speed, start the 3 s protection, then keep sending states. States sent before you applied it are dropped.
+- A run starts at every placement that begins a run (join, respawn); send `run_event.start` only to start again after `end`. Send `hit_report` with `lives_left = 0` (or `run_state = crashed`) on a crash-out; the respawn placement comes 3 s later. `run_event.rejoin` = the Rejoin crew button.
+- Stamp every `player_state` with the room tick from `server_now()`. `d` is the contract's (+ right of travel, lane 0 next to the median; see the handoff's protocol note).
+- On a dropped connection, reconnect and join the same room by code within 15 s: same seat, run intact, placed where you were.
+- `room_event.connection` fades a member's car; `leave` / `kick` remove it; `host_change`, `settings` (new clock), `crew` as in PROTOCOL.md. `run_result` for everyone (your results toast when `player_id` is you).
+- The room clock: `clock.cycle_ms` at the snapshot's `tick`, advanced with `server_now()` in `cycle` mode; night ×2 when `cycle_ms ≥ day_len_ms` (the loop mode's `RoomClock` with a server-given phase).
+
+
 ## Configuration reference
 
 Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`), then environment variables named `WB_<SECTION>__<KEY>` (double underscore). Each environment value is parsed as the key's type. Lists are comma-separated. Unknown keys or bad values in the file or the environment stop startup with every error listed. `RUST_LOG` overrides `log.level`. The defaults are production values: `config/server.example.toml` lists them all, and a test keeps it in sync.
@@ -1151,7 +1347,7 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `limits.outbound_queue_frames` | `WB_LIMITS__OUTBOUND_QUEUE_FRAMES` | `64` | Per-connection outbound queue; full = disconnect (spec: 64) |
 | `limits.ping_interval_ms` | `WB_LIMITS__PING_INTERVAL_MS` | `2000` | Keepalive ping (spec: 2 s) |
 | `limits.dead_after_ms` | `WB_LIMITS__DEAD_AFTER_MS` | `8000` | Close after this much silence (spec: 8 s) |
-| `limits.max_rooms` | `WB_LIMITS__MAX_ROOMS` | `40` | Room cap (spec; enforced once rooms exist, N5) |
+| `limits.max_rooms` | `WB_LIMITS__MAX_ROOMS` | `40` | Room cap (spec): a create or Quick Join past it answers `server_full` |
 | `limits.max_connections` | `WB_LIMITS__MAX_CONNECTIONS` | `400` | WebSocket cap (spec) |
 | `metrics.enabled` | `WB_METRICS__ENABLED` | `true` | Serve `/metrics` |
 | `metrics.bind` | `WB_METRICS__BIND` | `127.0.0.1:9090` | Must be a loopback address |
@@ -1188,6 +1384,7 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `replays.*` | `WB_REPLAYS__…` | see "Replays and verification → Configuration" | Replay files, size cap, the verifier command, the queue, retention |
 | `rate_limits.social_per_hour` / `_burst` | `WB_RATE_LIMITS__SOCIAL_PER_HOUR` / `__SOCIAL_BURST` | `60` / `20` | Social writes per account, on top of the account limit (see "Social API") |
 | `social.*` | `WB_SOCIAL__…` | see "Social API → Configuration" | Friend, request and block caps; crew size and invite codes; the report limit |
+| `rooms.*` | `WB_ROOMS__…` | see "Rooms → Configuration" | Seats, holds and delays, spawns, the room clock, room queues, plausibility limits, room traffic |
 
 The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLINKS__DIR` to the values above. It needs no config file.
 

@@ -577,8 +577,9 @@ impl Rooms {
                 .map(|e| e.tx.clone());
             (entry, elsewhere)
         };
+        let timeout = self.shared.params.join_timeout;
         if let Some(tx) = elsewhere {
-            let _ = tx.send(Cmd::Release { account }).await;
+            let _ = tokio::time::timeout(timeout, tx.send(Cmd::Release { account })).await;
         }
         let (reply, rx) = oneshot::channel();
         let req = Cmd::Join(JoinReq {
@@ -589,7 +590,6 @@ impl Rooms {
         });
         let busy = Refusal::new(ErrorCode::Internal, DETAIL_ROOM_BUSY);
         let gone = Refusal::new(ErrorCode::RoomNotFound, DETAIL_ROOM_NOT_FOUND);
-        let timeout = self.shared.params.join_timeout;
         match tokio::time::timeout(timeout, entry.tx.send(req)).await {
             Ok(Ok(())) => {}
             Ok(Err(_)) => return Err(gone),
