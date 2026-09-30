@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT response FROM runs WHERE account_id = ? AND idempotency_key = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "response",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "response"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "bde2002278cfb96b27d27e1b12b2af8bd130919fbb4da5ed0fddc82834fb6b7b"
+}

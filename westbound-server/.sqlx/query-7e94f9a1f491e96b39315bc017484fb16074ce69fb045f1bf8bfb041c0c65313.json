@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT crew_id FROM crew_members WHERE account_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "crew_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_members",
+            "name": "crew_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7e94f9a1f491e96b39315bc017484fb16074ce69fb045f1bf8bfb041c0c65313"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE friends SET status = 'accepted', accepted_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4a7765f99960480573c1fab2357516da40cf93926172c47aaa4cc19122947fd9"
+}

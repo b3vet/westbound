@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE reports SET target_id = NULL WHERE target_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "454c7343390f4b585f4c261d077d9278a2bb274219449234319c0ddff07c4614"
+}

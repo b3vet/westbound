@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://src/vehicle/dev/car_preview.gd" id="1_preview"]
+[ext_resource type="PackedScene" path="res://src/sun/sky.tscn" id="2_sky"]
+
+[node name="CarPreview" type="Node3D"]
+script = ExtResource("1_preview")
+
+[node name="Sky" parent="." instance=ExtResource("2_sky")]
+sky_t = 0.38
+
+[node name="Camera3D" type="Camera3D" parent="."]
+current = true
+fov = 62.0
+near = 0.2
+far = 720.0

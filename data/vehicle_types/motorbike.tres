@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="VehicleType" format=3]
+
+[ext_resource type="Script" uid="uid://dfcoc7c2vdpug" path="res://src/vehicle/vehicle_type.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"motorbike"
+display_name = "Motorbike"
+length_m = 2.2
+width_m = 0.8
+height_m = 1.3
+blocks_sightlines = false
+is_motorbike = true
+mass_kg = 250.0
+allowed_profiles = Array[StringName]([&"motorbike"])
+model_scene_paths = PackedStringArray("res://assets/traffic/motorbike_sport.tscn", "res://assets/traffic/motorbike_cruiser.tscn")

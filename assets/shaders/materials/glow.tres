@@ -1,0 +1,20 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://assets/shaders/glow.gdshader" id="1_shader"]
+
+[resource]
+resource_name = "glow"
+render_priority = 1
+shader = ExtResource("1_shader")
+shader_parameter/kind_look = PackedVector4Array(0, 0, 0, 0, 1, 0.95, 0.82, 1.1, 1, 0.16, 0.1, 0.55, 1, 0.14, 0.08, 1.0, 1, 0.28, 0.16, 1.5, 1, 0.62, 0.12, 1.2, 0, 0, 0, 0, 1.3, 0, 0, 0, 0.7, 0, 0, 0, 1.0, 0, 0, 0, 1.5, 0, 0, 0, 0.9, 0, 0, 0)
+shader_parameter/min_px = 3.0
+shader_parameter/max_px = 80.0
+shader_parameter/pull_m = 0.35
+shader_parameter/face_min = -0.25
+shader_parameter/face_max = 0.55
+shader_parameter/day_gain = 0.7
+shader_parameter/pool_color = Vector3(1, 0.92, 0.75)
+shader_parameter/pool_strength = 0.22
+shader_parameter/pool_lift_m = 0.05
+shader_parameter/blend_background_day = 0.05
+shader_parameter/blend_background_night = 0.02

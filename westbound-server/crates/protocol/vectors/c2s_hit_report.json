@@ -1,0 +1,41 @@
+{
+  "protocol_version": 1,
+  "direction": "client_to_server",
+  "type": "hit_report",
+  "type_id": 6,
+  "vectors": [
+    {
+      "name": "traffic",
+      "message": {
+        "car_id": 412,
+        "lives_left": 1,
+        "target": "traffic",
+        "tick": 124000,
+        "type": "hit_report"
+      },
+      "hex": "06080060e40100009c0101"
+    },
+    {
+      "name": "barrier",
+      "message": {
+        "car_id": 0,
+        "lives_left": 0,
+        "target": "barrier",
+        "tick": 124100,
+        "type": "hit_report"
+      },
+      "hex": "060800c4e4010001000000"
+    },
+    {
+      "name": "roadside",
+      "message": {
+        "car_id": 0,
+        "lives_left": 255,
+        "target": "roadside",
+        "tick": 4294967295,
+        "type": "hit_report"
+      },
+      "hex": "060800ffffffff020000ff"
+    }
+  ]
+}

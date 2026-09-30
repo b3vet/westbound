@@ -1,0 +1,20 @@
+[gd_resource type="Resource" script_class="PassabilityTuning" format=3 uid="uid://42knohrvlfsn"]
+
+[ext_resource type="Script" uid="uid://b7av3q14m4r22" path="res://src/core/tuning/passability_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+sim_hz = 10
+horizon_s = 8.0
+step_s = 0.25
+lateral_step_lanes = 0.5
+clearance_m = 0.3
+max_rerolls = 5
+director_enabled = true
+director_slices_per_tick = 1
+max_removals = 8
+arrival_probe_back_m = 50.0
+arrival_probe_merge_m = 10.0
+arrival_slow_margin_kmh = 5.0
+arrival_reach_frac = 0.75
+leader_margin_m = 40.0

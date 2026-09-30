@@ -1,0 +1,16 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://assets/shaders/fog_card.gdshader" id="1"]
+
+[resource]
+render_priority = 1
+shader = ExtResource("1")
+shader_parameter/softness = 0.3
+shader_parameter/brightness = 1.06
+shader_parameter/noise_scale_m = 70.0
+shader_parameter/noise_depth = 0.55
+shader_parameter/near_clear_m = 25.0
+shader_parameter/near_fade_m = 70.0
+shader_parameter/midday_factor = 0.5
+shader_parameter/midday_sun_y = 0.5
+shader_parameter/origin_xz = Vector2(0, 0)

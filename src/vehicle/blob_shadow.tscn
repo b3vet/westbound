@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/vehicle/blob_shadow.gd" id="1_blob"]
+
+[node name="BlobShadow" type="MeshInstance3D"]
+script = ExtResource("1_blob")
+lift_m = 0.04
+margin_frac = 0.18

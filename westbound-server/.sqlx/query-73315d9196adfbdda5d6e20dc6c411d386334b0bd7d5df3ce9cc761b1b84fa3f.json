@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT (SELECT COUNT(*) FROM leaderboard_entries\n                   WHERE board = ?1 AND period_key = ?2 AND score > ?3)\n                + (SELECT COUNT(*) FROM leaderboard_entries\n                   WHERE board = ?1 AND period_key = ?2 AND score = ?3\n                     AND (achieved_at, subject_id) < (?4, ?5)) AS \"n!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "73315d9196adfbdda5d6e20dc6c411d386334b0bd7d5df3ce9cc761b1b84fa3f"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO shadow_contacts (room_id, tick, player_a, player_b, speed, disagreement_m, closing_mps, depth_m, ticks, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "aab5c04f219a8e7c631719ae61f078c700b599bdb001e8293b97ab69e3210278"
+}

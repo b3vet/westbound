@@ -1,0 +1,87 @@
+# westbound-server for Coolify and local runs. Runbook: docs/SERVER.md.
+#
+# Coolify (docs/MULTIPLAYER_PLAN.md MP-D1)
+#   - Either create a "Docker Image" resource from ghcr.io/b3vet/westbound-server:edge
+#     (the runbook's main path), or a "Docker Compose" resource from this file.
+#   - Domain: https://westbound.sipsakrandevu.com -> container port 8080. Coolify's
+#     proxy terminates TLS and passes WebSocket upgrades on /ws through as-is.
+#   - Persistent storage: the named volume below, mounted at /data (database,
+#     nightly backups in /data/backups, deep-link files in /data/well-known).
+#   - Health check: GET /api/v1/health on port 8080 (the image also has a
+#     HEALTHCHECK that runs `westbound-server healthcheck`).
+#   - Secrets (required, the server refuses to start without them): set WB_AUTH__JWT_SECRET and
+#     WB_AUTH__DEVICE_SECRET_PEPPER in Coolify's environment variables (openssl rand -hex 32 each).
+#     Never change the pepper once accounts exist. Local runs: WB_SERVER__ENV=dev.
+#   - No `ports:` here on purpose: Coolify routes through its proxy network.
+#
+# Local
+#   docker compose up -d                        # server only, no published port
+#   deploy/local-tls.sh                         # + Caddy with local TLS on https://localhost:8443
+#   docker compose --profile local-tls down     # stop both
+
+name: westbound
+
+services:
+  westbound-server:
+    image: ${WB_IMAGE:-ghcr.io/b3vet/westbound-server:edge}
+    build:
+      context: .
+      args:
+        WB_BUILD: ${WB_BUILD:-local}
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      WB_SERVER__PUBLIC_ORIGIN: ${WB_SERVER__PUBLIC_ORIGIN:-https://westbound.sipsakrandevu.com}
+      WB_HTTP__CORS_ALLOWED_ORIGINS: ${WB_HTTP__CORS_ALLOWED_ORIGINS:-https://westbound.sipsakrandevu.com,https://b3vet.github.io}
+      WB_LOG__FORMAT: ${WB_LOG__FORMAT:-json}
+      WB_LOG__LEVEL: ${WB_LOG__LEVEL:-info}
+      WB_AUTH__JWT_SECRET: ${WB_AUTH__JWT_SECRET:-}
+      WB_AUTH__DEVICE_SECRET_PEPPER: ${WB_AUTH__DEVICE_SECRET_PEPPER:-}
+      WB_SERVER__ENV: ${WB_SERVER__ENV:-production}
+      WB_BACKUP__RETENTION_DAYS: ${WB_BACKUP__RETENTION_DAYS:-7}
+      WB_BACKUP__TIME_UTC: ${WB_BACKUP__TIME_UTC:-03:17}
+      # N10.2: optional off-site hook (argv, comma-separated, {file} = the backup).
+      WB_BACKUP__UPLOAD_COMMAND: ${WB_BACKUP__UPLOAD_COMMAND:-}
+      # N10.2: the planned restart's notice (spec: 60 s). Keep it below stop_grace_period.
+      WB_SERVER__RESTART_NOTICE_SECS: ${WB_SERVER__RESTART_NOTICE_SECS:-60}
+      # N10.2: the admin API token (32+ bytes; empty = live admin commands off).
+      WB_ADMIN__TOKEN: ${WB_ADMIN__TOKEN:-}
+    volumes:
+      - westbound-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/westbound-server", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    # SIGTERM -> the 60 s restart notice to players (ends early when nobody is
+    # connected), the room handover, close 1012, the last run writes, WAL checkpoint.
+    # Must stay above WB_SERVER__RESTART_NOTICE_SECS + ~10 s (docs/OPERATIONS.md).
+    stop_grace_period: 75s
+    labels:
+      # Coolify reads its own labels; these are informational and safe to keep.
+      org.opencontainers.image.source: "https://github.com/b3vet/westbound"
+      westbound.health-path: "/api/v1/health"
+      westbound.websocket-path: "/ws"
+
+  # Local TLS in front of the server (deploy/Caddyfile, `tls internal`). Not for
+  # Coolify, whose own proxy does this job.
+  caddy:
+    profiles: ["local-tls"]
+    image: caddy:2-alpine
+    depends_on:
+      westbound-server:
+        condition: service_healthy
+    environment:
+      WB_UPSTREAM: westbound-server:8080
+      WB_TLS_PORT: "8443"
+    ports:
+      - "127.0.0.1:${WB_LOCAL_TLS_PORT:-8443}:8443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+volumes:
+  westbound-data:
+  caddy-data:

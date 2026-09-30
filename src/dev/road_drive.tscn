@@ -1,0 +1,21 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://src/dev/road_drive.gd" id="1_drive"]
+[ext_resource type="PackedScene" path="res://src/ui/dev_hud.tscn" id="2_hud"]
+[ext_resource type="PackedScene" path="res://src/sun/sky.tscn" id="3_sky"]
+[ext_resource type="PackedScene" path="res://src/sun/dev/sky_t_slider.tscn" id="4_slider"]
+
+[node name="RoadDrive" type="Node3D"]
+script = ExtResource("1_drive")
+
+[node name="Sky" parent="." instance=ExtResource("3_sky")]
+
+[node name="Camera3D" type="Camera3D" parent="."]
+fov = 62.0
+near = 0.2
+far = 720.0
+
+[node name="DevHud" parent="." instance=ExtResource("2_hud")]
+
+[node name="SkyTSlider" parent="." instance=ExtResource("4_slider")]
+sky_path = NodePath("../Sky")

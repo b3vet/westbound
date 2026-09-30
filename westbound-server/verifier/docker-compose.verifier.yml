@@ -1,0 +1,42 @@
+# The replay verifier sidecar (WP N8.2, N8.3; docs/DETERMINISM.md → Verifier deploy). An
+# override for ../docker-compose.yml (local runs and plain Docker hosts):
+#
+#   docker compose -f docker-compose.yml -f verifier/docker-compose.verifier.yml up -d
+#
+# Coolify: docs/OPERATIONS.md → Replay verification (recommended: a second "Docker Image"
+# resource on the server's volume; or ./docker-compose.coolify.yml, both services in one
+# Compose resource). The verifier runs `westbound-server verify-worker` on the server's
+# /data volume (SQLite in WAL mode works across the two containers on one host), one job at a time,
+# each verifier process under `nice -n 10`, the container capped at 1 GB and one CPU (the
+# spec's resource budget). The server stops running the queue itself.
+#
+# Image: westbound-server/verifier/Dockerfile, built and smoke-tested by CI
+# (.github/workflows/verifier.yml). It holds one verifier per recent client build
+# (/verifier/BUILDS.txt); a replay of a build it lacks, or one it cannot verify (another
+# tuning under the same build number, no input stream), is set aside with the reason and
+# its run stays "verifying" (docs/SERVER.md → Replays and verification).
+
+services:
+  westbound-server:
+    environment:
+      WB_REPLAYS__WORKER_ENABLED: "false"
+
+  westbound-verifier:
+    image: ${WB_VERIFIER_IMAGE:-ghcr.io/b3vet/westbound-verifier:edge}
+    restart: unless-stopped
+    depends_on:
+      westbound-server:
+        condition: service_healthy
+    environment:
+      # The same configuration as the server (Config::load validates the auth secrets).
+      WB_SERVER__ENV: ${WB_SERVER__ENV:-production}
+      WB_AUTH__JWT_SECRET: ${WB_AUTH__JWT_SECRET:-}
+      WB_AUTH__DEVICE_SECRET_PEPPER: ${WB_AUTH__DEVICE_SECRET_PEPPER:-}
+      WB_LOG__FORMAT: ${WB_LOG__FORMAT:-json}
+      WB_LOG__LEVEL: ${WB_LOG__LEVEL:-info}
+    volumes:
+      - westbound-data:/data
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1
+    stop_grace_period: 30s

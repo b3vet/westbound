@@ -1,0 +1,19 @@
+; WestboundThermal iOS plugin (WP9.1). UNTESTED ON DEVICE. Copy this file and the built
+; westbound_thermal.xcframework into res://ios/plugins/westbound_thermal/ and enable the
+; plugin in the iOS export preset (docs/QUALITY.md -> Native plugins).
+
+[config]
+name="WestboundThermal"
+binary="westbound_thermal.xcframework"
+initialization="westbound_thermal_init"
+deinitialization="westbound_thermal_deinit"
+
+[dependencies]
+linked=[]
+embedded=[]
+system=["Foundation.framework"]
+capabilities=[]
+files=[]
+linker_flags=[]
+
+[plist]

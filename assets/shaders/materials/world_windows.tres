@@ -1,0 +1,7 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://assets/shaders/world_windows.gdshader" id="1"]
+
+[resource]
+shader = ExtResource("1")
+shader_parameter/window_glow = Vector3(1, 0.6, 0.28)

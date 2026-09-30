@@ -1,0 +1,46 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "score_sync",
+  "type_id": 74,
+  "vectors": [
+    {
+      "name": "typical",
+      "message": {
+        "banked": 125000,
+        "chain": 4200,
+        "crew_in_range": 2,
+        "flags": {
+          "banking": false,
+          "night": true,
+          "unverified": false
+        },
+        "lives": 2,
+        "multiplier_milli": 12500,
+        "run_seq": 3,
+        "tick": 123460,
+        "type": "score_sync"
+      },
+      "hex": "4a150044e20100030048e8010068100000d4300000020202"
+    },
+    {
+      "name": "banking_max",
+      "message": {
+        "banked": 4294967295,
+        "chain": 4294967295,
+        "crew_in_range": 16,
+        "flags": {
+          "banking": true,
+          "night": true,
+          "unverified": true
+        },
+        "lives": 255,
+        "multiplier_milli": 4294967295,
+        "run_seq": 65535,
+        "tick": 4294967295,
+        "type": "score_sync"
+      },
+      "hex": "4a1500ffffffffffffffffffffffffffffffffffffff1007"
+    }
+  ]
+}

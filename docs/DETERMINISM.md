@@ -1,0 +1,177 @@
+# Determinism: identical runs on every platform and in the verifier (N8.2)
+
+WP N8.2. Spec: Architecture rule 2 (deterministic by seed: "This powers Daily Drive, ghosts and reproducible bug reports"), Implementation milestones → **M8** ("Daily Drive gives identical runs on two devices for the same date"); multiplayer handoff → Leaderboards (single-player runs: the verifier), **N8** ("determinism audit of the single-player sim (seeded RNG only; no `pow`/`sin`/`cos`/`exp` in sim paths; fixed tick; no iteration-order dependence) ... honest replays 100 % accepted"). Before: [DAILY.md → Findings](DAILY.md) (WP8.4: native and wasm agree for 18–19 s, then the math libraries differ by an ulp), [QUALITY.md → Simulation safety](QUALITY.md) (WP9.1: the view distance fed the simulation), [REPLAY_FORMAT.md → Honest replays](REPLAY_FORMAT.md) (N8.1: honest replays diverged after 12–140 s).
+
+| File | What |
+| --- | --- |
+| `src/core/det_math.gd` | `DetMath`: deterministic `sin`, `cos`, `sin_cos`, `tan`, `atan`, `atan2`, `asin`, `exp`, `log`, `pow`, `scalbn` |
+| `westbound-server/crates/sim/src/detmath.rs` | The Rust port, bit for bit (`sim::detmath`) |
+| `westbound-server/crates/sim/vectors/detmath.json` | 3,504 cases (edge cases, branch boundaries, seeded inputs), written by `tools/server_data/export_sim_data.gd` (`--only=detmath`), checked by both languages |
+| `tools/server_data/det_math_vectors.gd` | `DetMathVectors`: the cases |
+| `tools/lint` WB105 | The platform math library in simulation code is an error (docs/TOOLS.md) |
+| `RoadTuning.sim_horizon_m` | The simulation's view of the road ahead (800 m), never the quality tier's view distance |
+| `VehicleInput.quantize()` | The car's inputs as multiples of 1e-4 before physics: what a replay records |
+| `src/net/replay_file.gd`, `replay_recorder.gd` | The replay's input stream (REPLAY_FORMAT.md) |
+| `tools/verifier/replay_verifier.gd` | Re-simulation from the input stream |
+| `tools/verifier/export_verifier.sh`, `verify_replay_main.gd`, `westbound-server/verifier/` | The verifier's export (entered through the main scene: `-- --verifier=1`), Docker image and compose override |
+| `tools/determinism/compare.sh --replay`, `tick_cost.gd` | Cross-platform replays; the tick cost measurement |
+| `.github/workflows/verifier.yml`, `tools/verifier/carry_builds.sh`, `smoke_image.py`, `tamper_replay.gd`, `install_linux_template.sh` | N8.3: the verifier image in CI (older builds carried over, a build-parity warning, an end-to-end smoke test) |
+
+## What makes two runs identical
+
+Same seed + same inputs = same run, on any machine, to the bit:
+
+1. **A fixed tick.** The simulation runs per 120 Hz tick with a fixed `dt`; frames never drive it (`Run.frame()` every 1, 2 or 4 ticks gives the same trace).
+2. **Seeded randomness.** `Rng` streams (PCG32, integer-exact) derived from the run seed; WB102.
+3. **Correctly rounded arithmetic only.** GDScript evaluates every `+ − × ÷` as its own IEEE-754 double operation (the VM calls one evaluator per operator, so nothing can be fused), and `sqrt`, `floor`, `round`, comparisons and int conversions are exact everywhere. The transcendentals are not: glibc, Emscripten's musl, Apple's and Android's libm round `sin`, `cos`, `tan`, `asin`, `atan`, `atan2`, `exp` and `pow` differently in the last bit (the `DT libm` probe below). **Every simulation path calls `DetMath` instead** (below), enforced by WB105.
+4. **No fused multiply-add in Godot's builtins.** `lerpf`, `move_toward`, `smoothstep`, `snappedf` and friends are C++ inside the engine; on ARM a compiler that contracts `a + (b − a) t` into an FMA would round differently from x86-64 and wasm. The official 4.7 templates are built without contraction: `llvm-objdump -d` counts 135 `fmadd`/`fmsub` in the whole 71 MB Android arm64 `libgodot_android.so`, 110 in the 188 MB iOS `libgodot.a` and 0 in the Linux arm64 template (a contracting build has tens of thousands). Re-check with a new engine version.
+5. **Inputs on a grid.** `PlayerCar.tick` quantizes the controller's steer, throttle and brake to multiples of 1e-4 (`VehicleInput.quantize`) before physics. The replay records exactly those values (REPLAY_FORMAT.md → Inputs), so the verifier's car gets the same inputs bit for bit.
+6. **No device setting in the simulation.** The quality tier's view distance is rendering only; the simulation reads `RoadTuning.sim_horizon_m` (QUALITY.md → Simulation safety).
+
+Iteration order: the simulation's containers are structure-of-arrays (`Packed*Array`) walked in slot order; no simulation path iterates a Dictionary. Time: no `Time`/`OS` clock in simulation code (WB102). The N8.1 exact-state check still holds: fed the original's exact car states, a playback reproduces every tick's traffic, scoring, lives, legs, sun, forks and stats for minutes.
+
+## DetMath
+
+fdlibm's algorithms and coefficients (the musl kernels), with the bit tricks replaced by comparisons against constants, so they need only correctly rounded operations: Cody-Waite reduction by π/2 in three 33-bit parts (always all three rounds), the sine, cosine and tangent kernels, the atan argument reduction with its four breakpoints, `exp` with `k ln 2` reduction and the Remez rational, `log` with a binary search for the exponent in an exact table of powers of two, and `scalbn` by exact powers of two (musl's steps). `asin(x) = atan2(x, √((1 − x)(1 + x)))`; `pow` squares for integer exponents (|y| ≤ 1024), takes `√` for y = ½, else `exp(y log x)`. A negative zero is treated as zero. No `fma` (neither GDScript nor the port uses one).
+
+**Two GDScript traps found on the way** (both handled in `det_math.gd`, worth knowing elsewhere):
+
+- **Godot's float literal parser is not correctly rounded.** 17 of fdlibm's 87 constants came out 1 ulp off; literals below about 1e-307 become 0, and `-0.0` becomes `0.0`. Every DetMath constant is therefore written as an integer mantissa times exact powers of two (`7074237752028440 * TWO_M52 / 2` for π/4), with the decimal value and the IEEE bits in a comment; `detmath.rs` uses the bits (`f64::from_bits`).
+- **Inside a class, an unqualified `atan(...)` is Godot's global function**, not the class's own static `atan`. DetMath calls itself as `DetMath.atan(...)`.
+
+Accuracy against this machine's glibc (`tests/unit/test_det_math.gd`, 20,000 inputs each):
+
+| Function | Range | Max error vs libm |
+| --- | --- | --- |
+| `sin`, `cos` | [−4, 4]; ±1e-6 … 1e4 | 1 ulp |
+| `tan` | [−1.5, 1.5]; wide | 2 ulp |
+| `atan` | ±1e-8 … 1e8 | 1 ulp |
+| `atan2` | both ±1e-3 … 1e3 | 1 ulp |
+| `asin` | [−1, 1] | 2 ulp |
+| `exp` | [−740, 705] | 1 ulp |
+| `log` | 1e-300 … 1e300; [0.5, 2] | 1 ulp |
+| `pow` | x 0.05…3, y −4…4 | 12 ulp (≈ 1 ulp per unit of \|y log x\|; load time only) |
+
+sin, cos and tan are accurate for |x| < 2^20·π/2; beyond that the reduction loses bits but stays deterministic. **Parity:** the GDScript and Rust ports agree on all 3,504 vector cases bit for bit (a NaN matches any NaN), and `sin_cos` equals (`sin`, `cos`).
+
+**Cost** (GDScript, this 4-core dev box, per call in a loop): `sin` 0.28 µs, `sin_cos` 0.66 µs (both values), `exp` 0.51 µs, `atan2` 0.3–0.7 µs, `tan` 0.53 µs; the libm builtin is 0.04 µs. The per-tick sites are few (below), so the whole tick barely moves (Cost).
+
+### Where it replaced the platform library
+
+| Site | Before | Now |
+| --- | --- | --- |
+| `VehiclePhysics.step` | `cos`/`sin(yaw)` twice, `exp(−dt / yaw_lag)`, `exp(−dt · grip rate)` | `DetMath.sin_cos` twice, `DetMath.exp`; the grip decay is constant per `dt`: `VehicleParams.lateral_grip_decay(dt)` (cached, DetMath) |
+| `VehiclePhysics.steer_yaw_rate` | `tan(steer_angle)` | `DetMath.tan` |
+| `VehiclePhysics.slip_angle` | `atan2` | `DetMath.atan2` (the capability table's peak slip) |
+| `VehiclePhysics.surface_pitch` | `atan(grade)` | unchanged, `allow-libm`: the body's rendered pitch, never fed back |
+| `VehicleParams.build` | `tan` (slip cap), `pow` (gear ratios), `sin`/`cos` (the lane-change capability table: `cap_time_s`, which WP8.4 found differing), `atan` (`predicted_brake_time`) | DetMath |
+| `Lives` | `sin` (first-hit wobble), `atan2` (heading kick) | DetMath |
+| `HitDetection.step`, `sweep_static_box` | `cos`/`sin(player yaw)`; per nearby car `atan2(v_lat, v)` then `cos`/`sin` | `DetMath.sin_cos` once; a car's heading as its velocity direction `(v, v_lat) / √(v² + v_lat²)`: no transcendental at all |
+| `TrafficSim._read_player` | `cos`/`sin(player yaw)` | `DetMath.sin_cos` |
+| `Scoring.step`, `RoadHull` | `atan2` per overlapping car, then `cos`/`sin` of both headings in `RoadHull.clearance` | the player's `DetMath.sin_cos` once per tick; a car's heading as its velocity direction; new `RoadHull.clearance_cs` takes (cos, sin); `clearance(yaw)` uses DetMath |
+| `RunFinale` hold driver | `asin` | `DetMath.asin` |
+| `SandboxBot` (the determinism check's bot, the sandbox) | `asin` | `DetMath.asin` |
+| `MobilProbe` (sandbox readout) | `cos`/`sin` | `DetMath.sin_cos` (reads what the sim reads) |
+| `ReplayVerifier`, `VerifierLimits` | `cos`/`sin` | DetMath (the same verdict on any machine) |
+| Road generation, forks' world frame, loop world positions, `RunForks` branch origin | `sin`/`cos` of headings | unchanged, `allow-libm`: world positions (rendering). The road's s/d table (curvature, lanes, features) never reads them |
+| `LoopGen` closure solve | `sin`/`cos` | unchanged, `allow-libm` (open item below) |
+| `src/net/` (network traffic, remote players) | | not covered: follows the server's authority, never replayed |
+
+Rust: `sim::traffic::sim::PlayerInput::from_vehicle` (the player's velocity), `sim::scoring::hull` (`clearance`, new `clearance_cs`, `penetration`) and `sim::scoring::rules` (the player's heading once per tick, a car's from its velocity) use `sim::detmath` the same way. The traffic traces did not change (their scripted players drive at yaw 0); the scoring vectors were regenerated, and `scoring_hull.json` (2,000 pairs) and `player_velocity.json` are now bit-exact (they were within 1e-12). `cargo test -p sim` (parity, scoring parity, detmath) passes.
+
+## Tier-independent simulation
+
+WP9.1's three couplings (spawn distance, leg planner horizon, fork candidates) read `RoadTuning.sim_horizon_m` = 800 m (the high tier's view distance; every tier's must be ≤ it, fairness rule 5: no tier may see a car appear inside its fog). The spec's "about 750 m ahead, past the fog end" meant 730 m on the medium tier and 830 m on the high tier; now every tier spawns past 830 m, and batches stay contiguous past `spawn_ahead_m` (`TrafficDirector._plan_ahead`; before, the high tier left centimetre holes between batches). The medium and low tiers therefore play the traffic the high tier always had: the metrics reference moved by up to 8 % (density 10.64 → 9.88 per km per lane; the baseline was rewritten deliberately, SOAK.md → N8.2); the density waves still show (peak / breather 13.2 / 7.2 vehicles met per km at 170 km/h). The alternative, a 700 m horizon, would keep the medium tier's tuning but let high-tier devices see cars appear between 730 and 800 m. The same Daily run at 500 m and 800 m view distance is bit-identical (`tests/run/test_sim_horizon.gd`). `QualityTuning.governor_view_distance_between_runs` is now **false**: the governor's view-distance rung applies live; `tests/platform/test_governor_run.gd` walks the real run through all four rungs and back with the rung live, and the trace and the planner horizon are an ungoverned run's (details: QUALITY.md → Simulation safety).
+
+## Replays: re-simulation instead of playback
+
+N8.1's verifier played the recorded 30 Hz path back kinematically; the path is interpolated between samples, 0.1–0.2 mm off mid-segment, and the director's knife-edge decisions flipped on it (REPLAY_FORMAT.md). With the simulation bit-identical everywhere, N8.2 records the car's exact inputs instead and **re-simulates**: the verifier drives the real `Run.tick` (controller → `VehiclePhysics` → traffic, director, lives, hits, scoring, sun, legs, stats) from GO with the recorded inputs and the run's own lives, and every 30 Hz sample must equal the re-simulated state in wire units, exactly (`path_mismatch` otherwise). The traffic sees the client's car to the bit, so every knife edge falls the same way; nothing in the director needed to change. The kinematic playback stays for replays without inputs (an N8.1 client). This is a spec change (inputs every tick, the verifier re-simulating instead of "playing the recorded path back kinematically"): **requested as deviation MP-D11** (handoff).
+
+Honest runs (`soak_long_honest_runs_are_all_accepted`, verified on this machine; each run ends at its crash or at 11 minutes):
+
+| Driver | Seed | Car | Driven | Hits | Input rows | Replay | Per 10 min | Verdict | Score (recomputed = claimed) | Verify |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| weaving, boosting bot | 20260929 | falcon_gt | 660 s | 0 | 78,973 | 68.6 KB | 60.9 KB | accepted | 52,107 | 64 s |
+| PassabilityDriver | 20260929 | night_viper | 660 s | 0 | 79,053 | 79.8 KB | 70.9 KB | accepted | 45,941 | 60 s |
+| weaving, boosting bot | 424242 | night_viper | 660 s | 0 | 77,891 | 87.9 KB | 78.0 KB | accepted | 52,105 | 59 s |
+| PassabilityDriver | 424242 | brute_v8 | 660 s | 0 | 79,200 | 40.8 KB | 36.2 KB | accepted | 52,023 | 59 s |
+| weaving, boosting bot | 9001 | brute_v8 | 660 s | 0 | 68,711 | 55.3 KB | 49.1 KB | accepted | 49,195 | 64 s |
+| PassabilityDriver | 9001 | falcon_gt | 660 s | 0 | 79,200 | 66.6 KB | 59.1 KB | accepted | 48,999 | 64 s |
+
+(The final tree, after merging the integration branch. An earlier run of the same soak, before the director's batch fix, also accepted 6 of 6, one of them a 639 s run that ended at its crash with 2 hits.)
+
+**6 of 6 honest runs accepted** (N8.1: 0 of 5), every sample re-simulated exactly, every traffic fingerprint matched, the score exactly the client's. `PassabilityDriver` (`tests/verifier/passability_driver.gd`) is the reacting driver: every 0.5 s it runs `Passability.check_player` from the car's exact state, takes the path toward a random preferred lane and steers the real car along it (SandboxBot's cascade), so a 1-ulp difference anywhere would flip its decisions within seconds. The five N8.1 soak runs (`soak_five_honest_bot_runs`) are also all accepted re-simulated. Tampering: edited samples (teleport, lane jump) and edited inputs are `path_mismatch`; inputs out of range `malformed`; the kinematic playback still catches the teleport and the lateral speed by its physics limits. A Daily replay is now verified on its own date's seed (the N8.1 verifier left `daily_date` empty, so a Daily replay would have been re-run on the verifier's today); a date that does not give the run's seed is `seed_mismatch`.
+
+## Cross-platform (native vs wasm)
+
+`tools/determinism/compare.sh --seconds=300` (Linux x86-64 headless debug build vs the web release build in headless Chromium, Emscripten 4.0.20; date 2026-09-30, seed 2754025057311364035, Falcon GT):
+
+| Driver | Result | WP8.4 before |
+| --- | --- | --- |
+| `script` (open-loop inputs) | **IDENTICAL, 300 of 300 s** bit for bit (score 28,278, 47 hits, 25 cars at 300 s) | 18 s, then the car's bits drifted |
+| `bot` (SandboxBot, closed loop) | **IDENTICAL, 300 of 300 s** (score 12,856, 1 hit, 49 cars at 12.1 km; measured before the final merge) | 19 s, traffic another traffic from 26 s |
+| `bot --replay` (each side records its replay with the run's real lives; the **native verifier re-simulates the web client's replay**) | **IDENTICAL 300 of 300 s; both replays byte-identical (50,551 bytes) and accepted** by the native verifier (recomputed 20,948 = claimed, `playback=resim`) | (no replays) |
+
+The `DT libm` probe still differs on 8 of 10 functions (the platform libraries are what they were); the new `DT detmath` probe is identical on all 10, and the car's `VehicleParams` are identical (46 of 46; `cap_time_s` differed before). Wall time without the export: the web side of a 300 s run takes 112 s on a quiet box (boot included) and 170–210 s at load 7–8, the native side 30 s, a verification about 30 s. For CI (≤ 3 min wall) the handoff proposes `--seconds=180` (about 1.5–2.5 min).
+
+## Cost
+
+Tick cost before and after, this dev box (4 cores shared with other agents' work, load 2–8; debug build). A/B in one session, three alternating rounds: **A** = this WP, **B** = the same tree with the pre-N8.2 math files (libm) put back (`vehicle_physics`, `vehicle_params`, `lives`, `hit_detection`, `traffic_sim`, `scoring`, `road_hull`, `player_car`, `vehicle_input`). Medians; single numbers move ±15 % between rounds.
+
+| What | B (libm) | A (DetMath) | Change |
+| --- | --- | --- | --- |
+| Whole `Run.tick()`, the Daily check's run (`tools/determinism/tick_cost.gd`, 6 × 60 s each, mean per tick) | 634 µs | 614 µs | within noise |
+| `VehiclePhysics.step` (WBBench) | 9.6 µs | 10.5 µs | +1–3 µs (two `sin_cos`, one `exp`, one `tan`; the grip decay is cached per `dt`) |
+| `Scoring.step`, 60 cars (WBBench: every car beside the player) | 36.4 µs | 56.8 µs | +20 µs in this worst case: the per-overlapping-car heading as a normalized velocity (a `sqrt`, two divisions, more GDScript ops than libm's `atan2` + `cos` + `sin`). In a run only the few cars alongside the player take this path |
+| `HitDetection.step`, 60 cars | 29.1 µs | 25.4 µs | slightly cheaper (no transcendental per car) |
+| `TrafficSim.step`, 90 cars (spread / near) | 427 / 450 µs | 372 / 539 µs | noise (one `sin_cos` per step) |
+| `Lives.step` | 0.48 µs | 0.34 µs | noise |
+
+The tier-independent horizon (800 m instead of the medium tier's 700 m) keeps about 6 % more cars on the road ahead (the Daily check's run at 20 / 40 / 60 s: 33 / 28 / 37 cars vs 28 / 29 / 34), and the whole tick costs 647 vs 591 µs (medians of three alternating 60 s runs, within the noise band). The 120 Hz tick has 8,333 µs; the whole simulation stays under 10 % of it on this box's debug build.
+
+## Verifier deploy
+
+The verifier is the game's own headless build (build parity): a Godot Linux template plus this build's pack, exported with a verifier preset, run by `westbound-server verify-worker` in a sidecar container. N8.2 built it; N8.3 builds the image in CI and documents the production switch-on (below).
+
+Two export-template facts shaped it: **templates ignore `--script` and `--main-pack`** (path overrides are compiled out), and **the 4.7 release template crashes (SIGSEGV, no symbols) booting this project headless**, while the debug template runs it. So the verifier is the debug template with its pack next to it (`westbound` + `westbound.pck`, loaded automatically), entered through the game's main scene: `westbound --headless -- --verifier=1 --replay=... --out=...` makes `Run._ready` hand over to `tools/verifier/verify_replay_main.gd` (the command line as a Node; `tools/verifier/verify_replay.gd`, the `--script` entry the editor binary and the server's end-to-end test use, now just adds that node). The release-template crash is an open item (not a platform we ship).
+
+1. **Export preset** (requested, `export_presets.cfg` is orchestrator-owned; the diff is in the handoff): `Verifier (Linux headless)`, platform Linux x86_64, every resource plus `tools/verifier/*` (the other presets exclude all of `tools/`), no tests, docs or dev tools, pack beside the binary (`binary_format/embed_pck=false`), custom feature `verifier`.
+2. **`tools/verifier/export_verifier.sh`**: exports into `build/verifier/<client_build>/` (`NetTuning.client_build`: the server command's `{build}`) as `westbound` + `westbound.pck` (8.8 MB), then records a 20 s sample replay with the editor binary and verifies it with the exported binary exactly as the worker will (fresh `HOME`, `nice -n 10`). Measured: **SMOKE PASS** (`verify_replay: accepted ... playback=resim`). The binary needs glibc ≥ 2.28 and nothing else (`ldd`: libc, libm, libdl, libpthread, librt).
+3. **`westbound-server/verifier/Dockerfile`**: `debian:bookworm-slim` (glibc 2.36, coreutils' `nice`, CA certificates) + the `westbound-server` binary copied from the server image of the same commit + `build/verifier/` as `/verifier/<build>/`. Entrypoint `westbound-server verify-worker`; `WB_REPLAYS__VERIFIER_COMMAND=nice,-n,10,/verifier/{build}/westbound,--headless,--,--verifier=1,--server=off,--replay={replay},--out={out},--seed={seed},--claimed-score={claimed_score},--claimed-hits={claimed_hits},--require-inputs=1` (N8.3 added the last flag); `HOME=/home/verifier` (Godot's user dir; nothing is saved), non-root 65532. N8.3: built and run locally (below); about 190 MB (72 MB compressed).
+4. **`westbound-server/verifier/docker-compose.verifier.yml`**: an override that adds the `westbound-verifier` service on the server's `/data` volume with `mem_limit: 1g`, `memswap_limit: 1g`, `cpus: 1` (the spec's budget: one job at a time, `nice 10`, 1 GB) and the same auth secrets (the config loader validates them), and turns the server's own worker off (`WB_REPLAYS__WORKER_ENABLED=false`).
+5. **CI (N8.3):** `.github/workflows/verifier.yml`, below.
+
+### N8.3: the image in CI, build parity, production
+
+**The pipeline** (`.github/workflows/verifier.yml`; pushes to the integration branch touching `src/`, `data/`, `assets/`, `tools/verifier/`, `export_presets.cfg`, `project.godot` or `westbound-server/`, and by hand), one job from one commit:
+
+1. `tools/verifier/export_verifier.sh --keep-sample=...`: the Godot binary and **only the Linux debug template** (`tools/verifier/install_linux_template.sh`: the pinned `.tpz`, two files extracted, about 150 MB cached instead of every platform's templates), the export for `NetTuning.client_build`, and the smoke test (a fresh 20 s bot replay verified by the exported binary exactly as the worker runs it). The replay and its claims are kept for the steps below.
+2. `tools/verifier/carry_builds.sh --from-image=<image>:edge --keep=3`: the older client builds' `/verifier/<build>/` directories from the previously published image (the three newest build numbers stay, or `keep_builds` on a manual run: 1 drops every older build, so their replays are set aside; a build number the fresh export has is replaced), `/verifier/BUILDS.txt` (build, commit, export date), and a **build-parity check**: the previous image's verifier of the *same* build number must accept this commit's replay, else a `Verifier build parity` warning (the simulation changed without a `client_build` bump; replays from players still on the previous web build now fail verification). A warning, not a failure: the new verifier matches the new clients, who are all of them once their pages reload.
+3. The `westbound-server` binary **from this commit's source** (the server Dockerfile with `server.yml`'s layer cache), not `ghcr.io/.../westbound-server:edge`: the server image only rebuilds on `westbound-server/` changes (so `:edge` is "the latest server", which would do), but when one push changes both, `server.yml` may not have pushed yet, and a pull could pair the new game with the old worker. Building from source always pairs the worker with its commit, for a few minutes of cached build.
+4. The image (`docker/build-push-action` on the Docker engine's own builder, so `FROM ${SERVER_IMAGE}` sees the server image just built), then `tools/verifier/smoke_image.py`: the server image (`serve`, worker off) and the verifier image (`verify-worker`, `--cpus 1 --memory 1g`) on one volume; four device accounts submit runs and upload replays through the public API: the honest sample → **verified**; the sample with half its path moved 20 m ahead (`tools/verifier/tamper_replay.gd`) → **rejected** `path_mismatch`; the honest sample with a claimed score above the recomputed one → **rejected** `score_mismatch`; the sample under client build 999999 → **set aside** (run still verifying, the job `failed` with `no verifier for build 999999`). Also the image's binary directly on the honest and the teleported replay. Only then are `:edge` and `:<branch>-<sha7>` pushed, and (optional) the Coolify deploy webhook called.
+
+**Which builds it verifies.** A replay names its client build (`NetTuning.client_build`, `data/tuning/net.tres`: a number bumped by hand, today 1). The web build (`web.yml`) and the verifier are both exported from the pushed commit, so the image always has the build GitHub Pages serves. The server runs `/verifier/{build}/westbound`; a build without its directory is **set aside** by the worker (N8.3, `crates/server/src/replays/worker.rs`): the job `failed` with `"unverifiable": true` and the reason, nothing run, the run still "verifying", and every worker start (a redeploy with a newer image) retries those. The verifier's own "cannot verify" (exit 3 with a result: `tuning_mismatch`, `no_inputs`, an unknown car) is set aside the same way, instead of three retries against the same verifier. `--require-inputs=1` (N8.3, `verify_replay_main.gd`) makes replays without an input stream (N8.1 clients) "cannot verify", so the kinematic playback, which rejects long honest runs, never judges production replays. The rule that keeps parity: **bump `client_build` with every simulation change** (the parity warning catches a missed bump); the image keeps the three newest builds for players still on older ones.
+
+**Measured locally (N8.3):** the export with the Linux debug template alone and its smoke test pass; the server image (built from source) and the verifier image build with CI's commands; `smoke_image.py` passes (each verification about 5 s at 1 CPU; honest verified, teleported rejected `path_mismatch`, inflated rejected `score_mismatch` at 222 claimed vs 61 recomputed, build 999999 set aside); `docker restart` of the sidecar requeues the set-aside job and sets it aside again; `verify-backlog` over the smoke volume (read-only) lists the kept replays; the server's `wb_replay_jobs` counts the sidecar's work; `carry_builds.sh` carried build 1 into a build-2 context, dropped it at `--keep=1`, and warned on a parity failure (a tampered replay standing in for a changed simulation).
+
+**Enabling it in production** (owner): OPERATIONS.md → Replay verification (a second Coolify Docker Image resource on the server's volume, the limits, `WB_REPLAYS__WORKER_ENABLED=false` on the server, a dry run with `verify-backlog` first, checks, rollback, and the alternatives when the volume cannot be shared).
+
+## Open items
+
+- **Loop map generation** (`LoopGen`'s closure solve) still uses the platform `sin`/`cos`: the client regenerates `loop_v1` at run time, so a web client's loop geometry may differ from the exported file in the last bit (curvature included). Loop runs are multiplayer, server-authoritative and never replayed, but the map hash is of the exported file. Moving LoopGen to DetMath changes `loop_v1.json` and its hash (a new map version for the server): a follow-up with the loop's owner.
+- **The server's claim checks** (`crates/server/src/rooms/car_history.rs`: a traffic car's heading by `f64::atan2`) are within tolerance of the client's (±0.35 m), not bit-exact; they could use `sim::detmath` and the velocity-direction form like the client (server crate, not this WP).
+- **Phones are not measured.** iOS and Android are expected to match (no FMA contraction in the templates, DetMath everywhere in the simulation), but no device run was compared. The `DT detmath` line of a device's determinism check (`?determinism=daily` also works in a native build with `--determinism=daily`) answers it.
+- The N8.1 knife edges (the director's density controller, `keeps_live_gaps` on its boundary) are unchanged: exact re-simulation makes them fall the same way; the kinematic fallback still diverges on them.
+
+## Tests
+
+| File | Covers |
+| --- | --- |
+| `tests/unit/test_det_math.gd` | Accuracy against libm per function (ulp bounds above); the shared vectors bit for bit; edge cases (zeros, infinities, NaN, subnormals, overflow and underflow of `exp`, `log` at the ends of the range, `pow` specials); `sin_cos` = (`sin`, `cos`); cost per call (WBBench) |
+| `westbound-server/crates/sim/tests/detmath.rs`, `src/detmath.rs` tests | The vectors bit for bit; `sin_cos`; the power-of-two table; closeness to `std` |
+| `tests/run/test_sim_horizon.gd` | The horizon covers every tier; the Daily run at the low and the high tier's view distance is the same run (trace and planner horizon) |
+| `tests/platform/test_governor_run.gd`, `test_quality_governor.gd` | The view-distance rung live mid-run without changing the run; the WP9.1 hold still works when switched on; live by default |
+| `tests/net/test_replay_recorder.gd` | The input stream (round trip, optional trailing section, samples' inputs rebuilt, quantization, size budget) |
+| `tests/verifier/test_verifier.gd` | Re-simulation (honest accepted exactly, tampering → `path_mismatch` / `malformed`, Daily date), kinematic fallback; soak: 6 long honest runs, 100 % |
+| `tests/meta/test_daily_run.gd` | The determinism check's lines (with `DT detmath`) |
+| `tools/lint --self-test` | WB105 fixtures (`bad_sim.gd`, `src/net/net_sim.gd`, `src/vehicle/vehicle_params.gd`) |

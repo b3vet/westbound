@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO runs (account_id, mode, map_or_seed, date, score, distance_m, duration_s,\n                           stats, car, build, verification, reject_reason, idempotency_key,\n                           created_at)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 14
+    },
+    "nullable": []
+  },
+  "hash": "a0c3f295b262707722ce6b295a6f982bbdf578724d6953eb7495f85896c5f50e"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE replays SET status = ?, not_before = ? WHERE status = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "fb6b336ef2477140ac5912d19495ce2a1e6874ddaa83d46cd10120875418c3c1"
+}

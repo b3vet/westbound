@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT status, COUNT(*) AS \"n!: i64\" FROM replays GROUP BY status ORDER BY status",
+  "describe": {
+    "columns": [
+      {
+        "name": "status",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "n!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "75975d0f6a09607c61ff27a5f7458f90eecf3b669f5b228d4d4d03ce6dadf8a6"
+}

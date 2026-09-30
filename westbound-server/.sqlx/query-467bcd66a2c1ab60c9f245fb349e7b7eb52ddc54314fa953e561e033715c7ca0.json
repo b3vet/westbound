@@ -1,0 +1,93 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.file_path, r.attempts, u.map_or_seed, u.mode, u.build, u.score,\n                      COALESCE(json_extract(u.stats, '$.hits'), 0) AS \"hits!: i64\"\n               FROM replays r JOIN runs u ON u.id = r.run_id WHERE r.run_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "file_path",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "file_path"
+          }
+        }
+      },
+      {
+        "name": "attempts",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "attempts"
+          }
+        }
+      },
+      {
+        "name": "map_or_seed",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "map_or_seed"
+          }
+        }
+      },
+      {
+        "name": "mode",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "mode"
+          }
+        }
+      },
+      {
+        "name": "build",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "build"
+          }
+        }
+      },
+      {
+        "name": "score",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "runs",
+            "name": "score"
+          }
+        }
+      },
+      {
+        "name": "hits!: i64",
+        "ordinal": 6,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "467bcd66a2c1ab60c9f245fb349e7b7eb52ddc54314fa953e561e033715c7ca0"
+}

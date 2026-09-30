@@ -1,0 +1,12 @@
+[gd_resource type="ShaderMaterial" load_steps=3 format=3]
+
+[ext_resource type="Shader" path="res://assets/shaders/vehicle.gdshader" id="1_shader"]
+[ext_resource type="Texture2D" path="res://assets/shaders/materials/vehicle_matcap.tres" id="2_matcap"]
+
+[resource]
+resource_name = "signal"
+shader = ExtResource("1_shader")
+shader_parameter/slot = 4
+shader_parameter/matcap = ExtResource("2_matcap")
+shader_parameter/sheen = 0.0
+shader_parameter/sky_reflect = 0.0

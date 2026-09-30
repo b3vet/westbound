@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="CarDef" format=3]
+
+[ext_resource type="Script" uid="uid://cabuje4bcoqqj" path="res://src/vehicle/car_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"falcon_gt"
+model_scene_path = "res://assets/cars/placeholder/falcon_gt.glb"
+display_name = "Falcon GT"
+top_speed_kmh = 270.0
+zero_to_200_s = 8.8
+braking_mps2 = 9.0
+handling_scale = 1.0
+boost_capacity_scale = 1.0
+length_m = 4.5
+width_m = 1.9
+height_m = 1.25
+mass_kg = 1450.0
+wheelbase_m = 2.65
+gear_count = 6
+default_paint = Color(0.9, 0.2, 0.15, 1)

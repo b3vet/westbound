@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="VehicleType" format=3]
+
+[ext_resource type="Script" uid="uid://dfcoc7c2vdpug" path="res://src/vehicle/vehicle_type.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"van"
+display_name = "Delivery van"
+length_m = 5.9
+width_m = 2.05
+height_m = 2.6
+blocks_sightlines = true
+is_motorbike = false
+mass_kg = 2800.0
+allowed_profiles = Array[StringName]([&"van"])
+model_scene_paths = PackedStringArray("res://assets/traffic/van_a.tscn")

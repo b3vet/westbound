@@ -1,0 +1,139 @@
+{
+  "protocol_version": 1,
+  "frames": [
+    {
+      "name": "client_tick",
+      "direction": "client_to_server",
+      "messages": [
+        {
+          "d_cm": -175,
+          "flags": {
+            "boost": true,
+            "brake": false,
+            "ghost": false,
+            "headlights": true
+          },
+          "heading_e4": 873,
+          "lat_vel_cms": -42,
+          "run_state": "driving",
+          "s_mm": 12345678,
+          "speed_cms": 6944,
+          "steer_e4": -1250,
+          "tick": 123456,
+          "type": "player_state",
+          "yaw_rate_mrad_s": 118
+        },
+        {
+          "client_time_ms": 77,
+          "type": "ping"
+        },
+        {
+          "cars": [
+            {
+              "car_id": 3,
+              "clearance_mm": 1900
+            }
+          ],
+          "claim_id": 1,
+          "kind": "pass",
+          "side": "right",
+          "tick": 123456,
+          "type": "score_claim"
+        }
+      ],
+      "hex": "04160040e201004e61bc0051ff6903201bd6ff76001efb06020204004d000000050d00010040e2010000020103006c07"
+    },
+    {
+      "name": "server_tick",
+      "direction": "server_to_client",
+      "messages": [
+        {
+          "players": [
+            {
+              "player_id": 1,
+              "state": {
+                "d_cm": -175,
+                "flags": {
+                  "boost": true,
+                  "brake": false,
+                  "ghost": false,
+                  "headlights": true
+                },
+                "heading_e4": 873,
+                "lat_vel_cms": -42,
+                "run_state": "driving",
+                "s_mm": 12345678,
+                "speed_cms": 6944,
+                "steer_e4": -1250,
+                "tick": 123456,
+                "yaw_rate_mrad_s": 118
+              }
+            }
+          ],
+          "type": "player_states"
+        },
+        {
+          "cars": [
+            {
+              "car_id": 412,
+              "d_cm": 525,
+              "s_mm": 13000250,
+              "speed_cms": 3056
+            }
+          ],
+          "tick": 123456,
+          "type": "traffic_correction"
+        },
+        {
+          "intents": [
+            {
+              "car_id": 412,
+              "duration_ms": 2500,
+              "kind": "lane_change",
+              "move_start_tick": 123476,
+              "start_tick": 123456,
+              "target_lane": 1
+            }
+          ],
+          "type": "traffic_intent"
+        },
+        {
+          "banked": 0,
+          "chain": 0,
+          "crew_in_range": 0,
+          "flags": {
+            "banking": false,
+            "night": false,
+            "unverified": false
+          },
+          "lives": 0,
+          "multiplier_milli": 0,
+          "run_seq": 0,
+          "tick": 123456,
+          "type": "score_sync"
+        }
+      ],
+      "hex": "45190001010040e201004e61bc0051ff6903201bd6ff76001efb0602490f0040e20100019c013a5ec6000d02f00b480f00019c010040e2010054e2010001c4094a150040e201000000000000000000000000000000000000"
+    },
+    {
+      "name": "same_type_twice",
+      "direction": "server_to_client",
+      "messages": [
+        {
+          "car_ids": [
+            1,
+            2
+          ],
+          "type": "traffic_despawn"
+        },
+        {
+          "car_ids": [
+            3
+          ],
+          "type": "traffic_despawn"
+        }
+      ],
+      "hex": "4705000201000200470300010300"
+    }
+  ]
+}

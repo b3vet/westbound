@@ -1,0 +1,44 @@
+[gd_resource type="Resource" script_class="QualityTuning" format=3 uid="uid://2im8kql1gip"]
+
+[ext_resource type="Script" uid="uid://c7miourimh3le" path="res://src/core/tuning/quality_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+tier_names = PackedStringArray("low", "medium", "high")
+default_tier = "medium"
+render_scale = PackedFloat64Array(0.6, 0.75, 0.9)
+msaa_samples = PackedInt32Array(0, 0, 2)
+view_distance_m = PackedFloat64Array(500, 700, 800)
+particle_scale = PackedFloat64Array(0.5, 1, 1)
+web_msaa_samples = 0
+gameplay_fps = 60
+menu_fps = 30
+battery_saver_fps = 30
+governor_window_s = 10.0
+governor_miss_frac = 0.1
+governor_step_down_interval_s = 10.0
+governor_step_up_after_s = 60.0
+governor_render_scale_step = 0.1
+governor_render_scale_floor = 0.5
+governor_particle_step_frac = 0.5
+governor_view_distance_step_m = 150.0
+governor_fps_floor = 30
+draw_call_budget = 100
+triangle_budget = 150000
+far_plane_margin_m = 20.0
+dev_render_scale_steps = PackedFloat64Array(0.6, 0.75, 0.85, 1)
+dev_msaa_steps = PackedInt32Array(0, 2, 4)
+governor_miss_factor = 1.5
+governor_up_miss_frac = 0.02
+governor_ignore_frame_s = 0.5
+governor_relapse_window_s = 60.0
+governor_up_backoff_factor = 2.0
+governor_step_up_max_s = 300.0
+governor_report_percentile = 0.95
+governor_hist_bin_ms = 0.5
+governor_hist_max_ms = 100.0
+cooling_icon_any_reason = false
+governor_view_distance_between_runs = false
+thermal_poll_s = 2.0
+thermal_ios_levels = PackedInt32Array(0, 1, 2, 3)
+thermal_android_levels = PackedInt32Array(0, 1, 2, 3, 3, 3, 3)

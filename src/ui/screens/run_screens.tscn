@@ -1,0 +1,20 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://src/ui/screens/run_screens.gd" id="1_screens"]
+[ext_resource type="PackedScene" path="res://src/ui/screens/countdown_screen.tscn" id="2_countdown"]
+[ext_resource type="PackedScene" path="res://src/ui/screens/crash_screen.tscn" id="3_crash"]
+[ext_resource type="PackedScene" path="res://src/ui/screens/results_screen.tscn" id="4_results"]
+[ext_resource type="PackedScene" path="res://src/ui/screens/pause_screen.tscn" id="5_pause"]
+
+[node name="RunScreens" type="CanvasLayer"]
+process_mode = 3
+layer = 60
+script = ExtResource("1_screens")
+
+[node name="Countdown" parent="." instance=ExtResource("2_countdown")]
+
+[node name="Crash" parent="." instance=ExtResource("3_crash")]
+
+[node name="Results" parent="." instance=ExtResource("4_results")]
+
+[node name="Pause" parent="." instance=ExtResource("5_pause")]

@@ -1,0 +1,54 @@
+[gd_resource type="Resource" script_class="Tuning" format=3 uid="uid://f3al8o8mg5of"]
+
+[ext_resource type="Script" uid="uid://b1umg7emg88p7" path="res://src/core/tuning/tuning.gd" id="1_script"]
+[ext_resource type="Resource" uid="uid://2im8kql1gip" path="res://data/tuning/quality.tres" id="2_quality"]
+[ext_resource type="Resource" uid="uid://dkoj7fvkflcyn" path="res://data/tuning/road.tres" id="3_road"]
+[ext_resource type="Resource" uid="uid://bk5bktneofah5" path="res://data/tuning/vehicle.tres" id="4_vehicle"]
+[ext_resource type="Resource" uid="uid://dluwwsvm3j5dw" path="res://data/tuning/controls.tres" id="5_controls"]
+[ext_resource type="Resource" uid="uid://b32uy2dtn3l08" path="res://data/tuning/camera.tres" id="6_camera"]
+[ext_resource type="Resource" uid="uid://bv15q1nvxkjwk" path="res://data/tuning/traffic.tres" id="7_traffic"]
+[ext_resource type="Resource" uid="uid://ddsblggqbqoaa" path="res://data/tuning/director.tres" id="8_director"]
+[ext_resource type="Resource" uid="uid://42knohrvlfsn" path="res://data/tuning/passability.tres" id="9_passability"]
+[ext_resource type="Resource" uid="uid://cbl0bbitefc2g" path="res://data/tuning/scoring.tres" id="10_scoring"]
+[ext_resource type="Resource" uid="uid://bqj10g7drve2e" path="res://data/tuning/lives.tres" id="11_lives"]
+[ext_resource type="Resource" uid="uid://ne6q4vdt3r3p" path="res://data/tuning/sun.tres" id="12_sun"]
+[ext_resource type="Resource" uid="uid://bt0oo7gnr6cuu" path="res://data/tuning/legs.tres" id="13_legs"]
+[ext_resource type="Resource" uid="uid://q8tlf4mb5ocy" path="res://data/tuning/feel.tres" id="14_feel"]
+[ext_resource type="Resource" uid="uid://b65iva0d51nhw" path="res://data/tuning/hud.tres" id="15_hud"]
+[ext_resource type="Resource" uid="uid://dq87et61steb1" path="res://data/tuning/progression.tres" id="16_progression"]
+[ext_resource type="Resource" path="res://data/tuning/traffic_view.tres" id="17_traffic_view"]
+[ext_resource type="Resource" path="res://data/tuning/crash.tres" id="18_crash"]
+[ext_resource type="Resource" path="res://data/tuning/landmarks.tres" id="19_landmarks"]
+[ext_resource type="Resource" path="res://data/tuning/night.tres" id="20_night"]
+[ext_resource type="Resource" path="res://data/tuning/net.tres" id="21_net"]
+[ext_resource type="Resource" path="res://data/tuning/loop.tres" id="22_loop"]
+[ext_resource type="Resource" path="res://data/tuning/audio.tres" id="23_audio"]
+[ext_resource type="Resource" path="res://data/tuning/meta.tres" id="24_meta"]
+[ext_resource type="Resource" path="res://data/tuning/daily.tres" id="25_daily"]
+
+[resource]
+script = ExtResource("1_script")
+quality = ExtResource("2_quality")
+road = ExtResource("3_road")
+vehicle = ExtResource("4_vehicle")
+controls = ExtResource("5_controls")
+camera = ExtResource("6_camera")
+traffic = ExtResource("7_traffic")
+director = ExtResource("8_director")
+passability = ExtResource("9_passability")
+scoring = ExtResource("10_scoring")
+lives = ExtResource("11_lives")
+sun = ExtResource("12_sun")
+legs = ExtResource("13_legs")
+feel = ExtResource("14_feel")
+hud = ExtResource("15_hud")
+progression = ExtResource("16_progression")
+traffic_view = ExtResource("17_traffic_view")
+crash = ExtResource("18_crash")
+landmarks = ExtResource("19_landmarks")
+night = ExtResource("20_night")
+net = ExtResource("21_net")
+loop = ExtResource("22_loop")
+audio = ExtResource("23_audio")
+meta = ExtResource("24_meta")
+daily = ExtResource("25_daily")

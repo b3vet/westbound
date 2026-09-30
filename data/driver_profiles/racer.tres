@@ -1,0 +1,37 @@
+[gd_resource type="Resource" script_class="DriverProfile" format=3]
+
+[ext_resource type="Script" uid="uid://nuob0r5kscpw" path="res://src/traffic/driver_profile.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"racer"
+display_name = "Racer"
+desired_speed_min_kmh = 190.0
+desired_speed_max_kmh = 250.0
+idm_a_max_mps2 = 3.0
+idm_b_comfort_mps2 = 4.0
+idm_headway_s = 0.9
+idm_s0_m = 1.5
+idm_delta = 4.0
+mobil_politeness = 0.02
+mobil_threshold_mps2 = 0.1
+mobil_keep_right_bias_mps2 = 0.05
+mobil_b_safe_mps2 = 4.0
+signal_time_s = 0.6
+lane_change_move_min_s = 1.5
+lane_change_move_max_s = 1.5
+lane_change_frequency_scale = 2.0
+cancel_probability = 0.0
+keep_right = false
+keep_right_lane_count = 0
+lane_split = false
+min_leg = 1
+spawn_left_lane_count = 2
+idm_headway_vs_traffic_s = 0.5
+idm_s0_vs_traffic_m = 1.0
+mobil_b_safe_vs_traffic_mps2 = 4.5
+lookahead_lane_choice_m = 300.0
+lookahead_gain_per_s = 0.2
+lookahead_incentive_max_mps2 = 2.0
+lane_change_cap_count = 2
+lane_change_cap_window_s = 10.0

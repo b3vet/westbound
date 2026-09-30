@@ -1,0 +1,151 @@
+[gd_resource type="Resource" script_class="BiomeDef" load_steps=12 format=3]
+
+[ext_resource type="Script" path="res://src/road/biome_def.gd" id="1_biome"]
+[ext_resource type="Script" path="res://src/road/roadside/field_grid_def.gd" id="2_grid"]
+[ext_resource type="Script" path="res://src/road/roadside/roadside_prop.gd" id="3_prop"]
+[ext_resource type="Script" path="res://src/world/elevated/elevated_def.gd" id="4_elevated"]
+[ext_resource type="Script" path="res://src/world/horizon_sets/horizon_set_def.gd" id="5_horizon"]
+
+[sub_resource type="Resource" id="FieldGrid_blocks"]
+script = ExtResource("2_grid")
+cell_length_m = 90.0
+band_depth_m = 60.0
+band_count = 4
+gap_m = 10.0
+setback_m = 22.0
+crop_mesh_paths = PackedStringArray("res://assets/props/city/plaza_tile.res")
+crop_weights = PackedFloat64Array(1)
+bare_chance_frac = 0.25
+yard_chance_frac = 0.75
+yard_band_count = 4
+yard_mesh_paths = PackedStringArray("res://assets/props/city/office_tower.res", "res://assets/props/city/apartment_block.res", "res://assets/props/city/warehouse.res", "res://assets/props/city/midrise.res")
+yard_weights = PackedFloat64Array(0.22, 0.3, 0.22, 0.26)
+tree_row_chance_frac = 0.2
+tree_mesh_paths = PackedStringArray("res://assets/props/city/street_tree.res")
+tree_weights = PackedFloat64Array(1)
+tree_spacing_m = 12.0
+tree_scale_min_factor = 0.9
+tree_scale_max_factor = 1.1
+
+[sub_resource type="Resource" id="Prop_skyscrapers"]
+script = ExtResource("3_prop")
+id = &"skyscrapers"
+mesh_paths = PackedStringArray("res://assets/props/city/skyscraper.res")
+pattern = 0
+sides = 0
+density_per_km = 6.0
+cell_length_m = 400.0
+setback_min_m = 250.0
+setback_max_m = 460.0
+facing = 0
+yaw_jitter_deg = 40.0
+scale_min_factor = 0.75
+scale_max_factor = 1.3
+
+[sub_resource type="Resource" id="Prop_sound_walls"]
+script = ExtResource("3_prop")
+id = &"sound_walls"
+mesh_paths = PackedStringArray("res://assets/props/city/sound_wall.res")
+pattern = 1
+sides = 0
+density_per_km = 4.0
+cell_length_m = 400.0
+setback_min_m = 0.5
+setback_max_m = 1.5
+facing = 0
+row_count_min = 3
+row_count_max = 9
+row_spacing_m = 12.0
+
+[sub_resource type="Resource" id="Prop_neon_boards"]
+script = ExtResource("3_prop")
+id = &"neon_boards"
+mesh_paths = PackedStringArray("res://assets/props/city/neon_board.res")
+pattern = 0
+sides = 0
+density_per_km = 6.0
+cell_length_m = 400.0
+setback_min_m = 3.0
+setback_max_m = 14.0
+facing = 0
+yaw_offset_deg = 18.0
+
+[sub_resource type="Resource" id="Prop_neon_blades"]
+script = ExtResource("3_prop")
+id = &"neon_blades"
+mesh_paths = PackedStringArray("res://assets/props/city/neon_blade.res")
+pattern = 0
+sides = 0
+density_per_km = 5.0
+cell_length_m = 400.0
+setback_min_m = 2.0
+setback_max_m = 10.0
+facing = 0
+yaw_offset_deg = 10.0
+
+[sub_resource type="Resource" id="Elevated_city"]
+script = ExtResource("4_elevated")
+cell_length_m = 1400.0
+chance_frac = 0.6
+length_min_m = 700.0
+length_max_m = 1250.0
+ramp_m = 220.0
+height_m = 10.0
+girder_depth_m = 1.6
+deck_overhang_m = 0.9
+parapet_height_m = 1.0
+parapet_width_m = 0.35
+pier_spacing_m = 40.0
+pier_width_m = 1.8
+cap_depth_m = 1.3
+cap_length_m = 2.4
+pier_min_height_m = 2.0
+row_step_m = 20.0
+build_units_per_frame = 4
+rebuild_step_m = 100.0
+concrete_color = Color(0.66, 0.66, 0.64, 1)
+fascia_color = Color(0.56, 0.58, 0.6, 1)
+underside_color = Color(0.3, 0.31, 0.33, 1)
+pier_color = Color(0.6, 0.6, 0.6, 1)
+under_ground_color = Color(0.33, 0.34, 0.35, 1)
+
+[sub_resource type="Resource" id="Horizon_city"]
+script = ExtResource("5_horizon")
+id = &"city_skyline"
+layer_land = Vector4(0, 0, 0, 0)
+layer_mist = Vector4(0, 0, 0, 0)
+layer_windows = Vector4(1, 0.7, 0, 0)
+window_color = Color(1, 0.82, 0.58, 1)
+sea_softness = 0.18
+
+[resource]
+script = ExtResource("1_biome")
+id = &"city"
+display_name = "City at Night"
+order = 5
+lane_count = 4
+curve_frequency_scale = 0.9
+crest_frequency_scale = 0.6
+tunnel_frequency_scale = 0.2
+scatter_props = Array[ExtResource("3_prop")]([SubResource("Prop_skyscrapers"), SubResource("Prop_sound_walls"), SubResource("Prop_neon_boards"), SubResource("Prop_neon_blades")])
+field_grid = SubResource("FieldGrid_blocks")
+fence_mesh_path = ""
+fence_setback_m = 0.0
+world_tint_offset = Color(-0.006, -0.002, 0.01, 0)
+fog_tint_offset = Color(-0.008, 0, 0.012, 0)
+horizon_cards = PackedStringArray()
+horizon_layer_style = Vector4(4, 4, 1, 3)
+horizon_layer_height_m = Vector4(190, 330, 500, 2600)
+heat_shimmer = 0.0
+horizon_set = &"city_skyline"
+ground_color = Color(0.37, 0.38, 0.4, 1)
+verge_color = Color(0.46, 0.48, 0.45, 1)
+rock_color = Color(0.58, 0.58, 0.56, 1)
+rock_shade_color = Color(0.46, 0.47, 0.48, 1)
+traffic_palette = PackedColorArray(0.11, 0.11, 0.13, 1, 0.94, 0.93, 0.89, 1, 0.6, 0.63, 0.66, 1, 0.98, 0.78, 0.16, 1, 0.55, 0.1, 0.12, 1, 0.1, 0.14, 0.3, 1, 0.3, 0.31, 0.35, 1, 0.1, 0.58, 0.6, 1, 0.42, 0.25, 0.62, 1, 0.96, 0.46, 0.13, 1)
+set_piece_ids = Array[StringName]([&"slalom", &"merge_zone", &"road_works", &"convoy", &"truck_wall", &"rolling_roadblock"])
+set_piece_weights = PackedFloat64Array(1, 2.4, 2, 0.6, 0.6, 0.8)
+landmark_style = &"sign_gantry"
+landmark_styles = Array[StringName]([&"sign_gantry", &"toll_gantry", &"tunnel_portal"])
+elevated = SubResource("Elevated_city")
+horizon_def = SubResource("Horizon_city")

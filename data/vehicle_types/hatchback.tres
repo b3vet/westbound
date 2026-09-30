@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="VehicleType" format=3]
+
+[ext_resource type="Script" uid="uid://dfcoc7c2vdpug" path="res://src/vehicle/vehicle_type.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"hatchback"
+display_name = "Hatchback"
+length_m = 4.2
+width_m = 1.8
+height_m = 1.5
+blocks_sightlines = false
+is_motorbike = false
+mass_kg = 1250.0
+allowed_profiles = Array[StringName]([&"cruiser", &"hesitant"])
+model_scene_paths = PackedStringArray("res://assets/traffic/hatchback_a.tscn", "res://assets/traffic/hatchback_b.tscn")

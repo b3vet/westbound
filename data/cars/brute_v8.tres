@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="CarDef" format=3]
+
+[ext_resource type="Script" uid="uid://cabuje4bcoqqj" path="res://src/vehicle/car_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"brute_v8"
+model_scene_path = "res://assets/cars/placeholder/brute_v8.glb"
+display_name = "Brute V8"
+top_speed_kmh = 260.0
+zero_to_200_s = 8.2
+braking_mps2 = 9.0
+handling_scale = 1.08
+boost_capacity_scale = 1.05
+length_m = 4.8
+width_m = 1.95
+height_m = 1.35
+mass_kg = 1650.0
+wheelbase_m = 2.8
+gear_count = 6
+default_paint = Color(0.95, 0.65, 0.1, 1)

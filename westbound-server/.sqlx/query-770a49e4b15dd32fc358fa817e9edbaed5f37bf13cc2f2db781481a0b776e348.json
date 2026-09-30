@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT run_id AS \"run_id!\" FROM replays WHERE status = ? AND not_before <= ?\n               ORDER BY created_at, run_id LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "run_id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "run_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "770a49e4b15dd32fc358fa817e9edbaed5f37bf13cc2f2db781481a0b776e348"
+}

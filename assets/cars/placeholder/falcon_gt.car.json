@@ -1,0 +1,13 @@
+{
+	"root_name": "Car_FalconGT",
+	"source": "cool_drive models/falcon_gt.glb (owner's project; Tripo P1 wheel-less body)",
+	"forward_axis": "+X",
+	"length_m": 4.5,
+	"width_m": 1.9,
+	"height_m": 1.25,
+	"lift_frac": 0.025,
+	"wheel_radius_frac": 0.075,
+	"wheel_track_frac": 0.78,
+	"wheel_base_frac": 0.59,
+	"wheel_offset_z_frac": 0.0
+}

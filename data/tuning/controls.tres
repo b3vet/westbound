@@ -1,0 +1,49 @@
+[gd_resource type="Resource" script_class="ControlsTuning" format=3 uid="uid://dluwwsvm3j5dw"]
+
+[ext_resource type="Script" uid="uid://bt13b0j7no0ym" path="res://src/core/tuning/controls_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+drag_max_cm = 2.5
+drag_dead_zone_pct = 4.0
+response_curve_exponent = 1.6
+drag_release_ms = 80.0
+drag_brake_threshold_pct = 30.0
+flick_boost_min_mps = 0.6
+gyro_max_angle_deg = 25.0
+gyro_dead_zone_deg = 2.0
+gyro_smoothing_ms = 60.0
+flick_window_ms = 40.0
+flick_rearm_pct = 50.0
+gyro_min_gravity_mps2 = 2.0
+gamepad_dead_zone_pct = 12.0
+fallback_screen_height_cm = 6.8
+min_left_inset_cm = 0.7
+pedal_width_cm = 1.3
+pedal_height_cm = 1.6
+boost_cap_height_cm = 0.8
+brake_width_cm = 1.2
+brake_height_cm = 1.8
+controls_margin_cm = 0.4
+controls_gap_cm = 0.3
+pedal_capture_cm = 0.6
+boost_cap_rearm_cm = 0.25
+pedal_brake_min_pct = 20.0
+setting_scale_min_factor = 0.5
+setting_scale_max_factor = 2.0
+controls_scale_min_factor = 0.6
+controls_scale_max_factor = 1.6
+overlay_ring_alpha_pct = 40.0
+overlay_ring_radius_px = 30.0
+overlay_dot_radius_px = 12.0
+overlay_idle_alpha_pct = 55.0
+overlay_label_px = 15.0
+wheel_visual_diameter_cm = 2.4
+wheel_visual_max_deg = 135.0
+wheel_facets = 12
+wheel_rim_inner_pct = 76.0
+wheel_hub_pct = 26.0
+wheel_spoke_width_pct = 18.0
+wheel_edge_alpha_pct = 85.0
+keyboard_steer_ramp_s = 0.15
+first_run_warmup_s = 20.0

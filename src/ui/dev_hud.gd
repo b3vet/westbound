@@ -1,0 +1,469 @@
+extends CanvasLayer
+## Dev HUD overlay. Spec: Tech stack → Testing (dev HUD: fps, frame time, draw
+## calls, primitives, render scale, active vehicles, sim time per tick, thermal
+## state; toggled by a three-finger tap or the backtick key) and Performance
+## budget (HUD labels update only when their value changes; no blur).
+##
+## Reads engine monitors and `DevStats`; no system depends on it. Hidden by
+## default in release builds. While hidden it does not process at all; only
+## `_input` stays live to catch the toggle gesture.
+##
+## Sits on the left edge, vertically centred: the gameplay HUD owns all four
+## corners and the top-centre, and the middle third stays clear for traffic.
+##
+## COPY (owner request, M2) puts a DevReport (build, device, renderer, scene,
+## these rows, all DevStats values) on the clipboard; on web it opens an HTML
+## panel with a native Copy button because iOS Safari blocks other paths.
+##
+## Quality row (WP4.6, owner: "a bit too low res"): 3D <scale> cycles the render
+## scale and MSAA <n> the MSAA steps (QualityTuning.dev_render_scale_steps /
+## dev_msaa_steps), applied live through Quality.set_dev_override for the session;
+## the tier button shows the tier ("*" while overridden) and goes back to it. The
+## draws row adds the 3D share (the root viewport's draws, dev overlays excluded) and
+## the 3d scale row the internal 3D resolution.
+##
+## Governor (WP9.1, docs/QUALITY.md): the governor row shows the rung and its name, what
+## the governor sees (calm / hold / frames / thermal / idle), the last step's reason, the
+## frame-time p95 and the missed-frame share over its window; the thermal row adds the
+## source when there is one ("native", "forced"). THERMAL <state> forces the thermal state
+## for the session (auto → nominal → fair → serious → critical → auto) to check the governor
+## on a device (M9 gate); the boot override is `?thermal=` / `--thermal=`.
+
+const QUALITY_SCRIPT := preload("res://src/platform/quality.gd")
+
+## Refresh the readouts at most this often (4 Hz).
+const REFRESH_INTERVAL_USEC := 250_000
+## "Worst frame" covers the last full one-second window plus the current one.
+const WORST_WINDOW_USEC := 1_000_000
+## Three touches that all went down within this window toggle the HUD.
+const TAP_WINDOW_MSEC := 300
+const TAP_FINGERS := 3
+## Touch indices tracked for the gesture (more are ignored).
+const MAX_TOUCHES := 10
+## Gap to the safe-area edge, in canvas pixels (8 px spacing grid).
+const EDGE_MARGIN := 8.0
+const USEC_PER_MSEC := 1000.0
+const PLACEHOLDER := "-"
+## Touch-sized COPY button (canvas px) and how long "COPIED" shows.
+const COPY_BUTTON_HEIGHT := 44.0
+const COPIED_FLASH_S := 1.5
+
+const COLOR_TEXT := Color("#f4f7ff")
+const COLOR_MUTED := Color("#8a93ad")
+const COLOR_HOT := Color("#ff5a4d")
+## Quality-row button text (flat buttons: the color marks them as tappable).
+const COLOR_ACCENT := Color("#7fd4ff")
+
+## GOVERNOR (WP9.1) is last so the earlier rows keep their indices.
+enum Row { FPS, FRAME, DRAWS, TRIS, SCALE, MSAA, VEHICLES, SIM, THERMAL, QUALITY, NET_CORR, NET_LINK,
+	GOVERNOR }
+const ROW_NAMES: PackedStringArray = [
+	"fps", "frame", "draws", "tris", "3d scale", "msaa", "vehicles", "sim tick", "thermal", "quality",
+	"net corr", "net link", "governor",
+]
+const PCT := 100.0
+## Network traffic rows (N4.3, NetTrafficStats keys): m → cm, bytes → kB.
+const NET_CM_PER_M := 100.0
+const NET_BYTES_PER_KB := 1000.0
+## Suffix on the tier button while a dev override is active.
+const OVERRIDE_MARK := "*"
+
+## Start visible in debug builds (release builds always start hidden).
+@export var start_visible_in_debug: bool = true
+
+@onready var _panel: PanelContainer = $Panel
+@onready var _grid: GridContainer = $Panel/Grid
+
+var _value_labels: Array[Label] = []
+var _copy_button: Button
+var _scale_button: Button
+var _msaa_button: Button
+var _tier_button: Button
+var _thermal_button: Button
+var _hot: PackedByteArray = PackedByteArray()
+
+var _last_frame_usec: int = 0
+var _frame_sum_usec: int = 0
+var _frame_count: int = 0
+var _worst_window_usec: int = 0
+var _worst_prev_usec: int = 0
+var _window_start_usec: int = 0
+var _last_refresh_usec: int = 0
+
+## Press time per touch index, or -1 while that finger is up.
+var _touch_down_msec: PackedInt64Array = PackedInt64Array()
+var _tap_armed: bool = true
+## Browser touch ids (large on iOS Safari) → slots 0..MAX_TOUCHES-1.
+var _touch_slots := TouchSlots.new(MAX_TOUCHES)
+
+
+func _ready() -> void:
+	_touch_down_msec.resize(MAX_TOUCHES)
+	_touch_down_msec.fill(-1)
+	_build_rows()
+	_build_buttons()
+	get_viewport().size_changed.connect(_update_safe_area)
+	_update_safe_area()
+	set_hud_visible(OS.is_debug_build() and start_visible_in_debug)
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey:
+		var key := event as InputEventKey
+		if key.pressed and not key.echo \
+				and (key.physical_keycode == KEY_QUOTELEFT or key.keycode == KEY_QUOTELEFT):
+			toggle()
+			get_viewport().set_input_as_handled()
+	elif event is InputEventScreenTouch:
+		var touch := event as InputEventScreenTouch
+		var down := touch.pressed and not touch.canceled
+		var slot := _touch_slots.acquire(touch.index) if down else _touch_slots.release(touch.index)
+		if handle_touch(slot, down, Time.get_ticks_msec()):
+			toggle()
+
+
+func _process(_delta: float) -> void:
+	var now := Time.get_ticks_usec()
+	if _last_frame_usec > 0:
+		var dt := now - _last_frame_usec
+		_frame_sum_usec += dt
+		_frame_count += 1
+		_worst_window_usec = maxi(_worst_window_usec, dt)
+	_last_frame_usec = now
+	if now - _window_start_usec >= WORST_WINDOW_USEC:
+		_worst_prev_usec = _worst_window_usec
+		_worst_window_usec = 0
+		_window_start_usec = now
+	if now - _last_refresh_usec >= REFRESH_INTERVAL_USEC:
+		refresh()
+
+
+func is_hud_visible() -> bool:
+	return visible
+
+
+func toggle() -> void:
+	set_hud_visible(not visible)
+
+
+func set_hud_visible(on: bool) -> void:
+	visible = on
+	set_process(on)
+	if on:
+		var now := Time.get_ticks_usec()
+		_last_frame_usec = 0
+		_frame_sum_usec = 0
+		_frame_count = 0
+		_worst_window_usec = 0
+		_worst_prev_usec = 0
+		_window_start_usec = now
+		refresh()
+
+
+## Feed one touch press/release. Returns true when it completes a
+## three-finger tap (the caller toggles). Exposed for tests.
+func handle_touch(index: int, pressed: bool, now_msec: int) -> bool:
+	if index < 0 or index >= MAX_TOUCHES:
+		return false
+	if not pressed:
+		_touch_down_msec[index] = -1
+		_tap_armed = true
+		return false
+	_touch_down_msec[index] = now_msec
+	if not _tap_armed:
+		return false
+	var recent := 0
+	for t in _touch_down_msec:
+		if t >= 0 and now_msec - t <= TAP_WINDOW_MSEC:
+			recent += 1
+	if recent >= TAP_FINGERS:
+		_tap_armed = false
+		return true
+	return false
+
+
+## Re-read every value and update the labels whose text changed.
+func refresh() -> void:
+	_last_refresh_usec = Time.get_ticks_usec()
+
+	var fps := int(Performance.get_monitor(Performance.TIME_FPS))
+	var cap := Engine.max_fps
+	_set_row(Row.FPS, "%d  cap %d" % [fps, cap] if cap > 0 else "%d" % fps)
+
+	if _frame_count > 0:
+		var avg_ms := float(_frame_sum_usec) / float(_frame_count) / USEC_PER_MSEC
+		var worst_ms := float(maxi(_worst_prev_usec, _worst_window_usec)) / USEC_PER_MSEC
+		_set_row(Row.FRAME, "%.1f ms  worst %.1f" % [avg_ms, worst_ms])
+		_frame_sum_usec = 0
+		_frame_count = 0
+	elif _value_labels[Row.FRAME].text.is_empty():
+		_set_row(Row.FRAME, PLACEHOLDER)
+
+	var draws := int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
+	var draws_3d := get_viewport().get_render_info(Viewport.RENDER_INFO_TYPE_VISIBLE,
+		Viewport.RENDER_INFO_DRAW_CALLS_IN_FRAME)
+	var draw_budget: int = DevStats.get_value(DevStats.DRAW_CALL_BUDGET, 0)
+	if draw_budget > 0:
+		_set_row(Row.DRAWS, "%d / %d  3d %d" % [draws, draw_budget, draws_3d])
+	else:
+		_set_row(Row.DRAWS, "%d  3d %d" % [draws, draws_3d])
+	_set_hot(Row.DRAWS, draw_budget > 0 and draws > draw_budget)
+
+	var tris := int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME))
+	var tri_budget: int = DevStats.get_value(DevStats.TRIANGLE_BUDGET, 0)
+	if tri_budget > 0:
+		_set_row(Row.TRIS, "%s / %s" % [_count(tris), _count(tri_budget)])
+	else:
+		_set_row(Row.TRIS, _count(tris))
+	_set_hot(Row.TRIS, tri_budget > 0 and tris > tri_budget)
+
+	var scale_3d := get_viewport().scaling_3d_scale
+	var internal := QUALITY_SCRIPT.internal_3d_size(_window_size(), scale_3d)
+	_set_row(Row.SCALE, "%.2f  %dx%d" % [scale_3d, internal.x, internal.y])
+	_set_row(Row.MSAA, _msaa_label())
+
+	var vehicles: Variant = DevStats.get_value(DevStats.VEHICLES)
+	_set_row(Row.VEHICLES, PLACEHOLDER if vehicles == null else str(vehicles))
+
+	if DevStats.sim_tick_sample_count() > 0:
+		_set_row(Row.SIM, "%.2f ms  max %.2f" % [
+			DevStats.get_sim_tick_avg_usec() / USEC_PER_MSEC,
+			float(DevStats.get_sim_tick_max_usec()) / USEC_PER_MSEC])
+	else:
+		_set_row(Row.SIM, PLACEHOLDER)
+
+	var thermal: Variant = DevStats.get_value(DevStats.THERMAL)
+	var source := String(DevStats.get_value(QUALITY_SCRIPT.DEV_THERMAL_SOURCE, Thermal.SOURCE_NONE))
+	var thermal_text := PLACEHOLDER if thermal == null else String(thermal)
+	if thermal != null and source != String(Thermal.SOURCE_NONE):
+		thermal_text += "  " + source
+	_set_row(Row.THERMAL, thermal_text)
+	_set_hot(Row.THERMAL, thermal == Thermal.SERIOUS or thermal == Thermal.CRITICAL)
+
+	var tier: Variant = DevStats.get_value(DevStats.QUALITY_TIER)
+	var rung: int = DevStats.get_value(DevStats.GOVERNOR_RUNG, 0)
+	var dev: bool = DevStats.get_value(DevStats.QUALITY_DEV_OVERRIDE, false)
+	_set_row(Row.QUALITY, PLACEHOLDER if tier == null else "%s%s  gov %d" % [
+		tier, OVERRIDE_MARK if dev else "", rung])
+	_set_hot(Row.QUALITY, rung > 0)
+	_refresh_governor_row(rung)
+	_refresh_quality_buttons(scale_3d, tier, dev)
+	_set_text(_thermal_button, "THERMAL %s" % (String(thermal) if source == String(Thermal.SOURCE_FORCED)
+		and thermal != null else "auto"))
+	_refresh_net_rows()
+
+
+## "r2 particles  frames  last thermal  p95 17.5 ms  miss 12%" ("-" before the governor
+## reports; red while a step is held).
+func _refresh_governor_row(rung: int) -> void:
+	var pressure: Variant = DevStats.get_value(QUALITY_SCRIPT.DEV_GOVERNOR_PRESSURE)
+	if pressure == null:
+		_set_row(Row.GOVERNOR, PLACEHOLDER)
+		return
+	var names: PackedStringArray = QUALITY_SCRIPT.RUNG_NAMES
+	var rung_name := names[clampi(rung, 0, names.size() - 1)]
+	var reason := String(DevStats.get_value(QUALITY_SCRIPT.DEV_GOVERNOR_REASON, "none"))
+	var p95: float = DevStats.get_value(QUALITY_SCRIPT.DEV_GOVERNOR_P95_MS, 0.0)
+	var miss: float = DevStats.get_value(QUALITY_SCRIPT.DEV_GOVERNOR_MISS, 0.0)
+	var text := "r%d %s  %s" % [rung, rung_name, String(pressure)]
+	if rung > 0:
+		text += "  last %s" % reason
+	text += "  p95 %.1f ms  miss %.0f%%" % [p95, miss * PCT]
+	if bool(DevStats.get_value(QUALITY_SCRIPT.DEV_COOLING, false)):
+		text += "  cooling"
+	_set_row(Row.GOVERNOR, text)
+	_set_hot(Row.GOVERNOR, rung > 0)
+
+
+## Dev thermal button: cycles the forced thermal state (session only).
+func cycle_thermal() -> void:
+	Quality.cycle_dev_thermal()
+	refresh()
+
+
+## Network traffic (N4.3; spec: multiplayer handoff → Client network traffic, "Dev HUD adds
+## network metrics: average and maximum correction size, late intents per minute, RTT and
+## clock offset"): corrections per second, mean / max / p99 correction; late intents per
+## minute, downstream traffic bytes per second, RTT and the clock's remaining slew. Red on a
+## visible teleport. "-" outside network mode.
+func _refresh_net_rows() -> void:
+	var cps: Variant = DevStats.get_value(NetTrafficStats.DEV_CORR_PER_S)
+	if cps == null:
+		_set_row(Row.NET_CORR, PLACEHOLDER)
+		_set_row(Row.NET_LINK, PLACEHOLDER)
+		return
+	var mean: float = DevStats.get_value(NetTrafficStats.DEV_ERR_MEAN_M, 0.0)
+	var mx: float = DevStats.get_value(NetTrafficStats.DEV_ERR_MAX_M, 0.0)
+	var p99: float = DevStats.get_value(NetTrafficStats.DEV_ERR_P99_M, 0.0)
+	var teleports: int = DevStats.get_value(NetTrafficStats.DEV_TELEPORTS, 0)
+	_set_row(Row.NET_CORR, "%.0f/s  %.1f/%.0f cm  p99 %.1f" % [float(cps), mean * NET_CM_PER_M,
+		mx * NET_CM_PER_M, p99 * NET_CM_PER_M])
+	_set_hot(Row.NET_CORR, teleports > 0)
+	var late: float = DevStats.get_value(NetTrafficStats.DEV_LATE_PER_MIN, 0.0)
+	var bps: float = DevStats.get_value(NetTrafficStats.DEV_BYTES_PER_S, 0.0)
+	var rtt: float = DevStats.get_value(NetTrafficStats.DEV_RTT_MS, 0.0)
+	var slew: float = DevStats.get_value(NetTrafficStats.DEV_CLOCK_SLEW_MS, 0.0)
+	_set_row(Row.NET_LINK, "late %.1f/min  %.1f kB/s  rtt %.0f  clk %+.1f ms" % [late,
+		bps / NET_BYTES_PER_KB, rtt, slew])
+
+
+## The rows as [[name, value], ...], refreshed now (dev report, tests).
+func rows_snapshot() -> Array:
+	refresh()
+	var out: Array = []
+	for i in ROW_NAMES.size():
+		out.append([ROW_NAMES[i], _value_labels[i].text])
+	return out
+
+
+## Full plain-text report for playtest feedback.
+func report_text() -> String:
+	var scene := get_tree().current_scene
+	return DevReport.compose(rows_snapshot(), scene.scene_file_path if scene != null else "?")
+
+
+func copy_report() -> void:
+	var copied := DevReport.share(report_text())
+	if copied:
+		_copy_button.text = "COPIED"
+		get_tree().create_timer(COPIED_FLASH_S).timeout.connect(func() -> void: _copy_button.text = "COPY")
+
+
+## Dev quality row: next render scale step (live, session only).
+func cycle_render_scale() -> void:
+	Quality.cycle_dev_render_scale()
+	refresh()
+
+
+## Dev quality row: next MSAA step (live, session only).
+func cycle_msaa() -> void:
+	Quality.cycle_dev_msaa()
+	refresh()
+
+
+## Dev quality row: back to the tier's render scale and MSAA.
+func reset_quality() -> void:
+	Quality.clear_dev_override()
+	refresh()
+
+
+## Button texts of the quality row (tests).
+func quality_button_texts() -> PackedStringArray:
+	return PackedStringArray([_scale_button.text, _msaa_button.text, _tier_button.text])
+
+
+## The thermal button's text (tests).
+func thermal_button_text() -> String:
+	return _thermal_button.text
+
+
+## Current text of a readout (tests).
+func get_row_text(row: Row) -> String:
+	return _value_labels[row].text
+
+
+func _set_row(row: Row, text: String) -> void:
+	var label := _value_labels[row]
+	if label.text != text:
+		label.text = text
+
+
+func _set_hot(row: Row, hot: bool) -> void:
+	var flag := 1 if hot else 0
+	if _hot[row] == flag:
+		return
+	_hot[row] = flag
+	_value_labels[row].add_theme_color_override(&"font_color", COLOR_HOT if hot else COLOR_TEXT)
+
+
+## 12345 -> "12.3k"; below 1000 as is.
+static func _count(n: int) -> String:
+	if n < 1000:
+		return "%d" % n
+	if n % 1000 == 0:
+		return "%.0fk" % (float(n) / 1000.0)
+	return "%.1fk" % (float(n) / 1000.0)
+
+
+func _build_rows() -> void:
+	_hot.resize(ROW_NAMES.size())
+	_hot.fill(0)
+	for row_name in ROW_NAMES:
+		var name_label := Label.new()
+		name_label.text = row_name
+		name_label.add_theme_color_override(&"font_color", COLOR_MUTED)
+		_grid.add_child(name_label)
+		var value := Label.new()
+		value.add_theme_color_override(&"font_color", COLOR_TEXT)
+		_grid.add_child(value)
+		_value_labels.append(value)
+
+
+func _build_buttons() -> void:
+	var box := VBoxContainer.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel.remove_child(_grid)
+	box.add_child(_grid)
+	_panel.add_child(box)
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(row)
+	_scale_button = _add_button(row, "3D", cycle_render_scale)
+	_msaa_button = _add_button(row, "MSAA", cycle_msaa)
+	_tier_button = _add_button(row, "TIER", reset_quality)
+	for b: Button in [_scale_button, _msaa_button, _tier_button]:
+		b.add_theme_color_override(&"font_color", COLOR_ACCENT)
+	_thermal_button = _add_button(box, "THERMAL auto", cycle_thermal)
+	_thermal_button.add_theme_color_override(&"font_color", COLOR_ACCENT)
+	_copy_button = Button.new()
+	_copy_button.text = "COPY"
+	_copy_button.focus_mode = Control.FOCUS_NONE
+	_copy_button.custom_minimum_size = Vector2(0.0, COPY_BUTTON_HEIGHT)
+	_copy_button.pressed.connect(copy_report)
+	box.add_child(_copy_button)
+
+
+func _add_button(parent: Control, text: String, action: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size = Vector2(0.0, COPY_BUTTON_HEIGHT)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# Flat: text only, so the row batches with the readouts instead of adding a
+	# stylebox + text draw pair per button (the dev HUD costs draw calls too).
+	b.flat = true
+	b.pressed.connect(action)
+	parent.add_child(b)
+	return b
+
+
+func _refresh_quality_buttons(scale_3d: float, tier: Variant, dev: bool) -> void:
+	_set_text(_scale_button, "3D %.2f" % scale_3d)
+	_set_text(_msaa_button, "MSAA %s" % _msaa_label())
+	var tier_text := "TIER" if tier == null else String(tier).to_upper()
+	_set_text(_tier_button, tier_text + (OVERRIDE_MARK if dev else ""))
+
+
+static func _set_text(b: Button, text: String) -> void:
+	if b.text != text:
+		b.text = text
+
+
+## MSAA as applied to the viewport ("off", "2x", "4x").
+func _msaa_label() -> String:
+	return DevReport.viewport_msaa_label(get_viewport())
+
+
+## Window size in device pixels (what the 3D scale applies to).
+func _window_size() -> Vector2i:
+	var w := get_window()
+	return w.size if w != null else Vector2i(get_viewport().get_visible_rect().size)
+
+
+## Keep the panel inside the display safe area (notch, rounded corners, the phone's
+## minimum left inset on web: ScreenInsets, WP9.7).
+func _update_safe_area() -> void:
+	var full := get_viewport().get_visible_rect()
+	var inset := maxf(0.0, ScreenInsets.canvas_safe_rect(full).position.x - full.position.x)
+	_panel.offset_left = inset + EDGE_MARGIN
+	_panel.offset_right = _panel.offset_left

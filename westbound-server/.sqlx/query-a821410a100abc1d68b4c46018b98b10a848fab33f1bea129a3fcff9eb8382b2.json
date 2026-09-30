@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT crew_id, role, joined_at FROM crew_members WHERE account_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "crew_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_members",
+            "name": "crew_id"
+          }
+        }
+      },
+      {
+        "name": "role",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "crew_members",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "joined_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_members",
+            "name": "joined_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a821410a100abc1d68b4c46018b98b10a848fab33f1bea129a3fcff9eb8382b2"
+}

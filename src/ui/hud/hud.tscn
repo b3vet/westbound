@@ -1,0 +1,118 @@
+[gd_scene load_steps=16 format=3]
+
+[ext_resource type="Script" path="res://src/ui/hud/hud.gd" id="1_hud"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_score.gd" id="2_score"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_sun_bar.gd" id="3_sun"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_chain.gd" id="4_chain"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_multiplier.gd" id="5_mult"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_event_stack.gd" id="6_stack"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_lives.gd" id="7_lives"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_button.gd" id="8_button"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_min_speed.gd" id="9_min"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_speedo.gd" id="10_speedo"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_boost.gd" id="11_boost"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_flyer.gd" id="12_flyer"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_glitter.gd" id="13_glitter"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_objective.gd" id="14_objective"]
+[ext_resource type="Script" path="res://src/ui/hud/widgets/hud_leg_toast.gd" id="15_toast"]
+
+[node name="Hud" type="CanvasLayer"]
+layer = 5
+script = ExtResource("1_hud")
+
+[node name="Root" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Score" type="Control" parent="Root"]
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("2_score")
+
+[node name="Objective" type="Control" parent="Root"]
+visible = false
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("14_objective")
+
+[node name="Sun" type="Control" parent="Root"]
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("3_sun")
+
+[node name="Chain" type="Control" parent="Root"]
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("4_chain")
+
+[node name="Multiplier" type="Control" parent="Root"]
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("5_mult")
+
+[node name="Stack" type="Control" parent="Root"]
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("6_stack")
+
+[node name="LegToast" type="Control" parent="Root"]
+visible = false
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("15_toast")
+
+[node name="Lives" type="Control" parent="Root"]
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("7_lives")
+
+[node name="Pause" type="BaseButton" parent="Root"]
+layout_mode = 3
+focus_mode = 0
+script = ExtResource("8_button")
+
+[node name="Camera" type="BaseButton" parent="Root"]
+layout_mode = 3
+focus_mode = 0
+script = ExtResource("8_button")
+glyph = 1
+
+[node name="HighBeam" type="BaseButton" parent="Root"]
+visible = false
+layout_mode = 3
+focus_mode = 0
+script = ExtResource("8_button")
+glyph = 2
+
+[node name="MinSpeed" type="Control" parent="Root"]
+visible = false
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("9_min")
+
+[node name="Speedo" type="Control" parent="Root"]
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("10_speedo")
+
+[node name="Boost" type="Control" parent="Root"]
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("11_boost")
+
+[node name="Flyer" type="Control" parent="Root"]
+visible = false
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("12_flyer")
+
+[node name="Glitter" type="Control" parent="Root"]
+visible = false
+layout_mode = 3
+mouse_filter = 2
+script = ExtResource("13_glitter")

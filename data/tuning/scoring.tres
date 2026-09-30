@@ -1,0 +1,48 @@
+[gd_resource type="Resource" script_class="ScoringTuning" format=3 uid="uid://cbl0bbitefc2g"]
+
+[ext_resource type="Script" uid="uid://d3abdj022iw4o" path="res://src/core/tuning/scoring_tuning.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+speed_factor_min_kmh = 100.0
+speed_factor_max_kmh = 250.0
+speed_factor_at_min = 1.0
+speed_factor_at_max = 2.0
+night_factor = 2.0
+multiplier_start = 1.0
+multiplier_decay_per_s = 0.5
+decay_term_min_kmh = 100.0
+decay_term_max_kmh = 250.0
+decay_term_at_min = 1.0
+decay_term_at_max = 0.1
+boost_decay_factor = 0.5
+min_speed_kmh = 100.0
+below_min_drain_per_s = 3.0
+hesitation_timeout_s = 3.0
+min_speed_grace_until_reached = true
+min_speed_grace_after_hit_s = 3.0
+pass_points = 10
+pass_multiplier_gain = 1.0
+pass_lateral_window_m = 5.4
+close_pass_points = 30
+close_pass_multiplier_gain = 3.0
+close_pass_clearance_m = 1.0
+cut_points = 15
+cut_multiplier_gain = 1.0
+cut_min_speed_kmh = 140.0
+cut_traffic_window_m = 15.0
+cut_per_car_cooldown_s = 3.0
+thread_points = 50
+thread_multiplier_gain = 5.0
+thread_window_s = 0.5
+thread_clearance_m = 1.5
+slipstream_distance_m = 15.0
+slipstream_min_speed_kmh = 120.0
+shoulder_decay_factor = 3.0
+shoulder_penalty_after_s = 2.0
+shoulder_penalty_block_s = 3.0
+boost_full_s = 3.0
+boost_fill_slipstream_pct_per_s = 20.0
+boost_fill_close_pass_pct = 10.0
+boost_fill_thread_pct = 25.0
+event_buffer_capacity = 32

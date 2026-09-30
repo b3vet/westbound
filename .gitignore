@@ -1,0 +1,17 @@
+# Godot
+.godot/
+*.translation
+# Builds and exports
+build/
+*.apk
+*.aab
+*.ipa
+*.pck
+# Local-only
+build_info.cfg
+export_credentials.cfg
+.DS_Store
+tests/out/
+
+# Agent worktrees (orchestration scratch, never committed)
+.claude/worktrees/

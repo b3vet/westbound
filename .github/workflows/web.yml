@@ -1,0 +1,116 @@
+name: Web
+
+# Builds the Web export, smoke-tests it in headless Chromium and (once the
+# owner enables GitHub Pages) deploys it for phone playtesting.
+# See docs/BUILDING.md.
+#
+# Deploy is gated on repository variables (Settings > Secrets and variables >
+# Actions > Variables), so this workflow stays green before Pages is set up:
+#   PAGES_ENABLED = true        turn the deploy job on
+#   PAGES_BRANCH  = <branch>    optional: only deploy pushes to this branch
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Godot binary + web export templates. Separate key from ci.yml's
+      # binary-only cache so the templates get saved too.
+      - name: Cache Godot and export templates
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/westbound
+          key: godot-4.7-stable-web-linux-${{ hashFiles('tools/export_templates.sh', 'tools/godot.sh') }}
+          restore-keys: |
+            godot-4.7-stable-web-linux-
+            godot-4.7-stable-linux
+
+      - name: Export Web build
+        run: tools/export_web.sh
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/web_smoke/package-lock.json
+
+      - name: Install smoke-test deps
+        working-directory: tools/web_smoke
+        run: |
+          npm ci
+          npx playwright install --with-deps --only-shell chromium
+
+      - name: Smoke test (headless Chromium)
+        run: node tools/web_smoke/smoke.mjs --timeout 90000 --settle 6000 --gzip --json build/web_metrics.json
+
+      - name: Portrait phone (rotated to landscape) and landscape phone
+        run: |
+          node tools/web_smoke/smoke.mjs --timeout 90000 --portrait --dpr 1 --settle 6000 --screenshot build/web_smoke_portrait.png
+          node tools/web_smoke/smoke.mjs --timeout 90000 --landscape --dpr 1 --settle 6000 --screenshot build/web_smoke_landscape.png
+
+      - name: Audio unlock (default autoplay policy, first tap)
+        run: node tools/web_smoke/smoke.mjs --timeout 90000 --settle 8000 --audio-unlock tap --screenshot build/web_smoke_unlock.png
+
+      - name: Stale page reloads once
+        run: node tools/web_smoke/smoke.mjs --timeout 90000 --stale --settle 6000 --screenshot build/web_smoke_stale.png
+
+      - name: Daily Drive determinism (native vs wasm, 180 s)
+        run: tools/determinism/compare.sh --seconds=180 --no-export
+
+      - name: Upload smoke screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-smoke-screenshot
+          path: |
+            build/web_smoke*.png
+            build/web_metrics.json
+          if-no-files-found: ignore
+
+  deploy:
+    needs: build
+    if: >-
+      vars.PAGES_ENABLED == 'true' &&
+      github.event_name != 'pull_request' &&
+      (vars.PAGES_BRANCH || github.ref_name) == github.ref_name
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

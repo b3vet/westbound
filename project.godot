@@ -1,0 +1,183 @@
+; Engine configuration file.
+; Owned by the orchestrator (see CLAUDE.md). Request changes in your WP handoff note.
+
+config_version=5
+
+[application]
+
+config/name="Westbound"
+config/description="Chase the sun. Cut through traffic."
+run/main_scene="res://src/run/run.tscn"
+config/features=PackedStringArray("4.7", "Mobile")
+run/max_fps=60
+config/icon="res://icon.svg"
+boot_splash/bg_color=Color(0.043, 0.063, 0.125, 1)
+boot_splash/show_image=false
+
+[shader_globals]
+
+wb_sky_zenith={
+"type": "color",
+"value": Color(0.0284, 0.159, 0.6308, 1)
+}
+wb_sky_horizon={
+"type": "color",
+"value": Color(0.8714, 0.6939, 0.4621, 1)
+}
+wb_sun_dir={
+"type": "vec3",
+"value": Vector3(0, 0.4067, -0.9135)
+}
+wb_sun_disc_color={
+"type": "color",
+"value": Color(1, 0.8962, 0.6724, 1)
+}
+wb_sun_disc_size={
+"type": "float",
+"value": 0.0314
+}
+wb_sun_glow={
+"type": "float",
+"value": 0.45
+}
+wb_stars={
+"type": "float",
+"value": 0.0
+}
+wb_cloud_lit={
+"type": "color",
+"value": Color(1, 0.956, 0.8714, 1)
+}
+wb_cloud_shadow={
+"type": "color",
+"value": Color(0.4508, 0.4677, 0.6038, 1)
+}
+wb_fog_color={
+"type": "color",
+"value": Color(0.8148, 0.6868, 0.521, 1)
+}
+wb_fog_start={
+"type": "float",
+"value": 175.0
+}
+wb_fog_end={
+"type": "float",
+"value": 700.0
+}
+wb_horizon_tint_0={
+"type": "color",
+"value": Color(0.1981, 0.1845, 0.107, 1)
+}
+wb_horizon_tint_1={
+"type": "color",
+"value": Color(0.2789, 0.2622, 0.1715, 1)
+}
+wb_horizon_tint_2={
+"type": "color",
+"value": Color(0.3613, 0.3613, 0.2918, 1)
+}
+wb_horizon_tint_3={
+"type": "color",
+"value": Color(0.4564, 0.4852, 0.552, 1)
+}
+wb_ambient={
+"type": "color",
+"value": Color(0.3231, 0.3712, 0.5089, 1)
+}
+wb_sun_light_color={
+"type": "color",
+"value": Color(1, 0.8714, 0.6868, 1)
+}
+wb_sun_light_energy={
+"type": "float",
+"value": 0.95
+}
+wb_shadow_tint={
+"type": "color",
+"value": Color(0.2705, 0.2918, 0.4342, 1)
+}
+wb_road_tone={
+"type": "color",
+"value": Color(0.0685, 0.0704, 0.0844, 1)
+}
+wb_lane_line_tint={
+"type": "color",
+"value": Color(0.8879, 0.8714, 0.7914, 1)
+}
+wb_emissive_headlight={
+"type": "float",
+"value": 0.0
+}
+wb_emissive_streetlamp={
+"type": "float",
+"value": 0.0
+}
+wb_emissive_reflector={
+"type": "float",
+"value": 0.0
+}
+wb_player_light_pos={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+wb_player_light_dir={
+"type": "vec3",
+"value": Vector3(0, 0, -1)
+}
+wb_player_light_strength={
+"type": "float",
+"value": 0.0
+}
+wb_biome_tint_offset={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+
+[autoload]
+
+Events="*res://src/core/events.gd"
+Settings="*res://src/core/settings.gd"
+Save="*res://src/core/save.gd"
+Game="*res://src/core/game.gd"
+Quality="*res://src/platform/quality.gd"
+Net="*res://src/net/session.gd"
+Haptics="*res://src/platform/haptics.gd"
+
+[debug]
+
+gdscript/warnings/untyped_declaration=1
+gdscript/warnings/inferred_declaration=0
+gdscript/warnings/unsafe_property_access=0
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/handheld/orientation=4
+window/vsync/vsync_mode=1
+
+[editor]
+
+; Godot 4.7's export-time text→binary conversion empties PackedStringArray
+; properties holding res:// paths (vehicle-type models, biome prop meshes), which
+; silently removed traffic and farmland scenery from web builds. Keep text.
+export/convert_text_resources_to_binary=false
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+common/physics_ticks_per_second=120
+common/max_physics_steps_per_frame=8
+common/physics_interpolation=true
+
+[rendering]
+
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+renderer/rendering_method.web="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+anti_aliasing/quality/msaa_3d=0
+scaling_3d/scale=0.75
+environment/defaults/default_clear_color=Color(0.043, 0.063, 0.125, 1)

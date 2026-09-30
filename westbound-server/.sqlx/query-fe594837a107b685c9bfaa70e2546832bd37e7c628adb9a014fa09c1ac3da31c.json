@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account_b AS \"id!: i64\" FROM friends WHERE account_a = ?1 AND status = 'accepted'\n           UNION ALL\n           SELECT account_a AS \"id!: i64\" FROM friends WHERE account_b = ?1 AND status = 'accepted'",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "friends",
+            "name": "account_b"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fe594837a107b685c9bfaa70e2546832bd37e7c628adb9a014fa09c1ac3da31c"
+}

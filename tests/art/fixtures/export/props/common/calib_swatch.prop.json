@@ -1,0 +1,8 @@
+{
+	"material": "world_windows",
+	"mesh": "calib_swatch",
+	"meta": {
+		"length_m": 10.0
+	},
+	"tris_budget": 1000
+}

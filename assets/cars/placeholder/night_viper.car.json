@@ -1,0 +1,13 @@
+{
+	"root_name": "Car_NightViper",
+	"source": "cool_drive models/night_viper.glb (owner's project; Tripo P1 wheel-less body)",
+	"forward_axis": "+X",
+	"length_m": 4.6,
+	"width_m": 1.95,
+	"height_m": 1.15,
+	"lift_frac": 0.0,
+	"wheel_radius_frac": 0.0736,
+	"wheel_track_frac": 0.79,
+	"wheel_base_frac": 0.55,
+	"wheel_offset_z_frac": 0.046
+}

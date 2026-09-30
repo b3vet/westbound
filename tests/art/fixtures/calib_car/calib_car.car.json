@@ -1,0 +1,5 @@
+{
+	"modular": true,
+	"root_name": "Car_CalibCar",
+	"source": "in-house, generated: tools/art/make_calibration.gd (ArtCalib.build_car)"
+}

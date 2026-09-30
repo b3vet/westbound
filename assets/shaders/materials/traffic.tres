@@ -1,0 +1,23 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://assets/shaders/traffic.gdshader" id="1_shader"]
+
+[resource]
+resource_name = "traffic"
+shader = ExtResource("1_shader")
+shader_parameter/pivot_height = 0.5
+shader_parameter/lens_factor = 0.55
+shader_parameter/tail_day_level = 0.6
+shader_parameter/tail_night_level = 0.9
+shader_parameter/brake_level = 1.25
+shader_parameter/brake_strong_level = 1.8
+shader_parameter/blinker_level = 1.4
+shader_parameter/head_level = 1.5
+shader_parameter/hot_core = 0.35
+shader_parameter/paint_sky_reflect = 0.18
+shader_parameter/glass_sky_reflect = 0.55
+shader_parameter/fresnel_power = 3.0
+shader_parameter/rim_gain = 1.1
+shader_parameter/rim_power = 2.0
+shader_parameter/rim_backlit_power = 2.0
+shader_parameter/backlit_fill = 0.25

@@ -1,0 +1,74 @@
+{
+  "protocol_version": 1,
+  "direction": "server_to_client",
+  "type": "traffic_intent",
+  "type_id": 72,
+  "vectors": [
+    {
+      "name": "every_kind",
+      "message": {
+        "intents": [
+          {
+            "car_id": 412,
+            "duration_ms": 2500,
+            "kind": "lane_change",
+            "move_start_tick": 123476,
+            "start_tick": 123456,
+            "target_lane": 1
+          },
+          {
+            "car_id": 412,
+            "duration_ms": 0,
+            "kind": "cancel",
+            "move_start_tick": 123466,
+            "start_tick": 123466,
+            "target_lane": 0
+          },
+          {
+            "car_id": 97,
+            "duration_ms": 4000,
+            "kind": "hazard",
+            "move_start_tick": 123500,
+            "start_tick": 123500,
+            "target_lane": 0
+          },
+          {
+            "car_id": 98,
+            "duration_ms": 600,
+            "kind": "horn",
+            "move_start_tick": 123501,
+            "start_tick": 123501,
+            "target_lane": 0
+          },
+          {
+            "car_id": 99,
+            "duration_ms": 1500,
+            "kind": "hard_brake",
+            "move_start_tick": 123502,
+            "start_tick": 123502,
+            "target_lane": 0
+          }
+        ],
+        "type": "traffic_intent"
+      },
+      "hex": "484700059c010040e2010054e2010001c4099c01014ae201004ae201000000006100026ce201006ce2010000a00f6200036de201006de201000058026300046ee201006ee2010000dc05"
+    },
+    {
+      "name": "max",
+      "message": {
+        "intents": [
+          {
+            "car_id": 65535,
+            "duration_ms": 65535,
+            "kind": "lane_change",
+            "move_start_tick": 4294967295,
+            "start_tick": 4294967295,
+            "target_lane": 7
+          }
+        ],
+        "type": "traffic_intent"
+      },
+      "hex": "480f0001ffff00ffffffffffffffff07ffff"
+    }
+  ]
+}
