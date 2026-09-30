@@ -23,6 +23,10 @@
 //!   `population.rs` decides who exits and when a car enters.
 //! - **Fixed rate.** With `near_radius_m = INF` every car runs its model every tick.
 //!
+//! The MP-D5 lane-drop queue safety (look-through, predicted leaders, anticipation) was
+//! found here (N4.1) and is part of both models since WP6.11 (`SimConfig::look_through`
+//! etc.: `TrafficTuning` for single-player, `mp_traffic.json` on the server).
+//!
 //! Pure and allocation-free after `new`: `step`, `spawn`, `despawn`, `notify_hit` and
 //! every query use preallocated vectors. Events go to `events` (fixed capacity).
 
@@ -170,17 +174,18 @@ pub struct SimConfig {
     pub move_time_at_signal: bool,
     /// Motorbike lane splitting.
     pub lane_split: bool,
-    /// MP (not in the GDScript model): a leader that is signalling or moving out of the
-    /// path does not hide what is ahead of it. Following (IDM) and MOBIL's own-safety
-    /// check also judge the next vehicle on the path beyond it (`look_through_leader`).
+    /// MP-D5 lane-drop queue safety (`TrafficTuning.look_through_leaving_leaders`, WP6.11):
+    /// a leader that is signalling or moving out of the path does not hide what is ahead
+    /// of it. Following (IDM) and MOBIL's own-safety check also judge the next vehicle on
+    /// the path beyond it (`look_through_accel`).
     pub look_through: bool,
-    /// MP (not in the GDScript model): MOBIL's own-safety check also judges each new
+    /// MP-D5 (`predict_leader_braking`): MOBIL's own-safety check also judges each new
     /// leader as it will be when the car is in the lane (signal time + half the minimum
-    /// move time on), with its current deceleration (`predicted_leader_safe`).
+    /// move time on), with its current deceleration (`predicted_leaders_safe`).
     pub predict_leaders: bool,
-    /// MP (not in the GDScript model): when stopping behind the leader's own stopping
-    /// point (at its current deceleration) needs more than the profile's comfortable b,
-    /// the follower brakes for it now (`anticipation_accel`).
+    /// MP-D5 (`anticipate_leader_braking`): when stopping behind the leader's own
+    /// stopping point (at its current deceleration) needs more than the profile's
+    /// comfortable b, the follower brakes for it now (`anticipation_accel`).
     pub anticipate_braking: bool,
     /// MP: a player's reported state is extrapolated at most this far.
     pub player_max_extrapolation_s: f64,
@@ -200,9 +205,9 @@ impl SimConfig {
             near_radius_m: t.near_radius_m,
             move_time_at_signal: false,
             lane_split: true,
-            look_through: false,
-            predict_leaders: false,
-            anticipate_braking: false,
+            look_through: t.look_through_leaving_leaders,
+            predict_leaders: t.predict_leader_braking,
+            anticipate_braking: t.anticipate_leader_braking,
             player_max_extrapolation_s: 0.0,
             tick_dt: 1.0 / f64::from(t.near_tick_hz),
             events_capacity: t.max_active_vehicles * 4 + 64,
@@ -413,6 +418,8 @@ pub struct TrafficSim {
 
     // Per slot
     acc_t: Vec<f64>,
+    /// Far: `acc_t` already accumulated when a signal began between ticks (WP6.10).
+    sig_pre: Vec<f64>,
     acc_n: Vec<i32>,
     due: Vec<u8>,
     mdt: Vec<f64>,
@@ -662,6 +669,7 @@ impl TrafficSim {
             rank: vec![0; total],
             n: 0,
             acc_t: fz(cap),
+            sig_pre: fz(cap),
             acc_n: vec![0; cap],
             due: vec![0; cap],
             mdt: fz(cap),
@@ -1021,6 +1029,7 @@ impl TrafficSim {
         st.flags[i] = f;
 
         self.acc_t[i] = 0.0;
+        self.sig_pre[i] = 0.0;
         self.acc_n[i] = self.state.vehicle_id[i] % self.far_ratio;
         self.due[i] = 0;
         self.mdt[i] = 0.0;
@@ -2191,14 +2200,24 @@ impl TrafficSim {
         } else {
             a = idm::free_accel(vi, v0, self.pa[p], self.pdl[p]);
         }
-        if self.config.look_through && lead >= 0 {
-            // MP: past a leader leaving the path, the next one counts too.
+        // MP-D5: past a leader leaving the path, the next one counts too; and the leader's
+        // own stopping point. The guards skip the calls (INF) for the common case, as the
+        // GDScript does (its calls are the cost there).
+        if self.config.look_through
+            && lead >= 0
+            && !self.is_player(lead as usize)
+            && self.state.lc_state[lead as usize] != LC_NONE
+        {
             a = minf(
                 a,
                 self.look_through_accel(i, lead as usize, lead_k, lo, hi, false, vi, v0, p, hw_t),
             );
         }
-        if self.config.anticipate_braking && lead >= 0 {
+        if self.config.anticipate_braking
+            && lead >= 0
+            && ((!self.is_player(lead as usize) && self.state.accel[lead as usize] < 0.0)
+                || self.kv[lead as usize] <= 0.0)
+        {
             a = minf(a, self.anticipation_accel(lead as usize, gap, vi, p));
         }
         if self.cl_n > 0 {
@@ -2324,7 +2343,10 @@ impl TrafficSim {
     }
 
     fn tick_signaling(&mut self, i: usize, mdt: f64) {
-        let timer = self.state.lc_timer[i] + mdt;
+        // A signal started between ticks (request_lane_change) on a far vehicle: this model
+        // dt also holds the time accumulated before the blinker came on (WP6.10).
+        let timer = self.state.lc_timer[i] + mdt - self.sig_pre[i];
+        self.sig_pre[i] = 0.0;
         self.state.lc_timer[i] = timer;
         let ok = !self
             .eval_move(
@@ -2627,6 +2649,10 @@ impl TrafficSim {
         self.state.target_lane[i] = t;
         self.state.lc_timer[i] = 0.0;
         self.state.lc_duration[i] = self.psig[p];
+        // Outside a model tick (a scripted request) a far vehicle may hold accumulated dt
+        // from before the blinker; the next model tick must not count it (fairness rule 1,
+        // WP6.10). The server runs every car every tick (acc_t stays 0): a no-op there.
+        self.sig_pre[i] = self.acc_t[i];
         self.lc_target_d[i] = target_d;
         self.lc_split[i] = split;
         self.split[i] = 0;
@@ -2850,8 +2876,8 @@ impl TrafficSim {
                 self.q_player = self.is_player(l);
                 return f64::NEG_INFINITY;
             }
-            if self.config.look_through {
-                // MP: a new leader leaving the target lane hides nothing.
+            if self.config.look_through && !self.is_player(l) && self.state.lc_state[l] != LC_NONE {
+                // MP-D5: a new leader leaving the target lane hides nothing.
                 let a2 = self.look_through_accel(i, l, lead_k, lo, hi, true, vi, v0, p, self.pt[p]);
                 if a2 < -bsafe {
                     return f64::NEG_INFINITY;
@@ -3048,11 +3074,12 @@ impl TrafficSim {
         v
     }
 
-    /// MP look-through: while the leader `l` (at order position `lk`) is signalling or
-    /// moving out of the path [lo, hi] (its target does not overlap it), the next vehicle
-    /// on the path beyond it counts too: the most restrictive IDM acceleration of those
-    /// (INF when `l` stays on the path; -INF when one of them already overlaps i). `claims`:
-    /// match paths by claims (MOBIL's target lane) instead of physical intervals.
+    /// MP-D5 look-through (`_look_through_accel`): while the leader `l` (at order position
+    /// `lk`) is signalling or moving out of the path [lo, hi] (its target does not overlap
+    /// it), the next vehicle on the path beyond it counts too: the most restrictive IDM
+    /// acceleration of those (INF when `l` stays on the path; -INF when one of them already
+    /// overlaps i). `claims`: match paths by claims (MOBIL's target lane) instead of
+    /// physical intervals.
     #[allow(clippy::too_many_arguments)]
     fn look_through_accel(
         &self,
@@ -3105,8 +3132,21 @@ impl TrafficSim {
             if gap <= 0.0 {
                 return f64::NEG_INFINITY;
             }
-            a = minf(
-                a,
+            let aj = if self.pweave[p] == 1 && !self.is_player(j) {
+                // WP6.9: a weaving profile's IDM toward traffic, as toward any leader.
+                idm::accel(
+                    vi,
+                    v0,
+                    gap,
+                    vi - self.kv[j],
+                    self.pa[p],
+                    self.wb[p],
+                    hw_t * self.w_tk[p],
+                    self.ws0[p],
+                    self.pdl[p],
+                    self.gap_floor,
+                )
+            } else {
                 idm::accel(
                     vi,
                     v0,
@@ -3118,17 +3158,22 @@ impl TrafficSim {
                     self.ps0[p],
                     self.pdl[p],
                     self.gap_floor,
-                ),
-            );
+                )
+            };
+            a = minf(a, aj);
             cur = j;
         }
         a
     }
 
-    /// MP: the new leader `l` (and, with look-through, the ones beyond it while they leave
-    /// the path) extrapolated `signal + move_min / 2` seconds on with its current
-    /// acceleration (a player holds its speed), against vehicle i holding its speed: the
-    /// gap must stay open and IDM's acceleration there must not be below -b_safe.
+    /// MP-D5 (`_predicted_leaders_safe`): a braking new leader `l` (and, with look-through,
+    /// the ones beyond it while they leave the path) extrapolated with its current
+    /// deceleration to when the car is in the lane (`signal + move_min / 2` seconds on),
+    /// against the car holding its speed: the gap must stay open and the car's own IDM
+    /// toward it (as in MOBIL's own-safety check) must not ask for more than b_safe. A
+    /// leader that is not braking (a player holds its speed) is left to that check:
+    /// extrapolating the car's approach alone refuses every gap it closes on (a racer
+    /// 30 km/h faster, within its WP6.9 traffic b_safe).
     #[allow(clippy::too_many_arguments)]
     fn predicted_leaders_safe(
         &self,
@@ -3148,37 +3193,57 @@ impl TrafficSim {
         let mut kk = lk.and_then(|x| self.next_k(x));
         let mut left = self.n.saturating_sub(2);
         loop {
-            let vl = self.kv[cur];
             let al = if self.is_player(cur) {
                 0.0
             } else {
                 self.state.accel[cur]
             };
-            let v_end = vl + al * tau;
-            let (vl_t, dl) = if v_end >= 0.0 {
-                (v_end, (vl + v_end) * 0.5 * tau)
-            } else {
-                (0.0, vl * vl / (-2.0 * al))
-            };
-            let gap = self.road.signed_delta(si, self.ks[cur]) - self.khl[cur] - self.khl[i] + dl
-                - vi * tau;
-            if gap <= 0.0 {
-                return false;
-            }
-            let a = idm::accel(
-                vi,
-                v0,
-                gap,
-                vi - vl_t,
-                self.pa[p],
-                self.pb[p],
-                self.pt[p],
-                self.ps0[p],
-                self.pdl[p],
-                self.gap_floor,
-            );
-            if a < -bsafe {
-                return false;
+            if al < 0.0 {
+                let vl = self.kv[cur];
+                let mut vl_t = vl + al * tau;
+                let mut dl = (vl + vl_t) * 0.5 * tau;
+                if vl_t < 0.0 {
+                    vl_t = 0.0;
+                    dl = vl * vl / (-2.0 * al);
+                }
+                let gap = self.road.signed_delta(si, self.ks[cur]) - self.khl[cur] - self.khl[i]
+                    + dl
+                    - vi * tau;
+                if gap <= 0.0 {
+                    return false;
+                }
+                let a = if self.pweave[p] == 1 {
+                    // WP6.9: a weaving profile's IDM toward traffic (a braking leader is
+                    // traffic).
+                    idm::accel(
+                        vi,
+                        v0,
+                        gap,
+                        vi - vl_t,
+                        self.pa[p],
+                        self.wb[p],
+                        self.pt[p] * self.w_tk[p],
+                        self.ws0[p],
+                        self.pdl[p],
+                        self.gap_floor,
+                    )
+                } else {
+                    idm::accel(
+                        vi,
+                        v0,
+                        gap,
+                        vi - vl_t,
+                        self.pa[p],
+                        self.pb[p],
+                        self.pt[p],
+                        self.ps0[p],
+                        self.pdl[p],
+                        self.gap_floor,
+                    )
+                };
+                if a < -bsafe {
+                    return false;
+                }
             }
             if !(self.config.look_through && self.leaving_path(cur, lo, hi)) {
                 return true;
@@ -3206,10 +3271,11 @@ impl TrafficSim {
         }
     }
 
-    /// MP: the deceleration that stops a follower at vi (profile p) s0 behind where its
-    /// leader `l`, `gap` ahead, stops at its current deceleration; applied only when it
-    /// exceeds the comfortable b (an emergency IDM would react to too late: a racer
-    /// closing at 50 m/s on a car braking at the clamp into a queue). INF otherwise.
+    /// MP-D5 (`_anticipation_accel`): the deceleration that stops a follower at vi
+    /// (profile p) s0 behind where its leader `l`, `gap` ahead, stops at its current
+    /// deceleration; applied only when it exceeds the comfortable b (an emergency IDM would
+    /// react too late: a racer closing at 50 m/s on a car braking at the clamp into a
+    /// queue). INF otherwise.
     fn anticipation_accel(&self, l: usize, gap: f64, vi: f64, p: usize) -> f64 {
         let vl = self.kv[l];
         let al = if self.is_player(l) {

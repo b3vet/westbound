@@ -37,6 +37,7 @@ const TEXT_FIT: Array[Array] = [
 	["res://tests/ui/test_settings_panel.gd", ["test_pause_settings_text_fits", "test_title_settings_text_fits"]],
 	["res://tests/ui/test_leaderboards_screen.gd", ["test_text_fits_every_setting"]],
 	["res://tests/ui/test_achievements_toast.gd", ["test_clear_of_thumbs_middle_and_readouts", "test_every_title_fits"]],
+	["res://tests/ui/test_room_score_hud.gd", ["test_room_scoring_text_fits_beside_the_hud"]],
 ]
 
 
@@ -121,6 +122,10 @@ func test_tablet_leaderboards() -> void:
 
 func test_tablet_achievement_toast() -> void:
 	await _rerun_row(10)
+
+
+func test_tablet_room_scoring_lines() -> void:
+	await _rerun_row(11)
 
 
 # ---------------------------------------------------------------- No text-fit test of their own
@@ -272,21 +277,26 @@ func test_room_hud_fits_everywhere() -> void:
 		Settings.set_value(&"text_scale", float(c[2]))   # the room HUD restyles live (WP9.3)
 		hud.set_screen(c[0], c[1])
 		hud.show_result({"score": 88_888_888, "distance_m": 888_888, "duration_ms": 5_999_000,
-				"flags": {"verified": false}}, 0)
+				"flags": {"verified": false}})
+		hud.set_crew(7, 8.88)
+		hud.show_train(99)
 		for i in 3:
 			hud.add_feed(WIDE_NAME, "NICE PASS!", Color.WHITE)
 		hud.show_notice("RECONNECTING  ·  88 S")
 		hud.advance(0.0)
 		await _capture(hud)
 		var what: String = "room HUD %s" % c[3]
-		ge(_check(hud, c[1], what), 6, "%s: its texts were drawn" % what)
+		ge(_check(hud, c[1], what), 8, "%s: its texts were drawn" % what)
+		check(hud.crew_line.is_visible_in_tree() and hud.train_badge.is_visible_in_tree(),
+				"%s: the crew line and TRAIN badge show" % what)
 		var hl := HudLayout.new()
 		hl.build(ht, c[0], c[1], null, float(c[2]))
 		var rects := hl.rects()
 		for k in rects.size():
 			if not ROOM_CLEAR_OF.has(names[k]) or rects[k].size.x <= 0.0:
 				continue
-			for ctl: Control in [hud.room_button, hud.rejoin_button, hud.line, hud.feed[0], hud.strip]:
+			for ctl: Control in [hud.room_button, hud.rejoin_button, hud.line, hud.crew_line, hud.train_badge,
+					hud.feed[0], hud.strip]:
 				check(not ctl.get_global_rect().grow(-TOL).intersects(rects[k]),
 						"%s: %s sits on the HUD's %s" % [what, ctl.name, names[k]])
 		hud.menu.open()

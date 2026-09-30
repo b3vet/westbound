@@ -17,7 +17,8 @@ extends RefCounted
 ## TrafficSim's own float accumulation gives (checked: `move_tick_mismatches` stays 0). On
 ## the loop (LoopRoadPath) the population is RunLoop's: the loop's director leg, the
 ## section's density and lane flow speeds. Not here: the Rust server's ring population and
-## ramps, the MP-D5 safety extensions, remote players. The director keeps traffic
+## ramps, remote players (the MP-D5 safety extensions run here too, through the sim's
+## tuning since WP6.11). The director keeps traffic
 ## `test_authority_margin_m` beyond both edges of the area of interest, so cars enter and
 ## leave the area by driving.
 ##

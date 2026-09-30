@@ -106,14 +106,15 @@ Settings → TEXT SIZE is 100 % or 125 % (`hud.text_scales`) for the HUD and eve
 | Leaderboards | `tests/ui/test_leaderboards_screen.gd` | sweep |
 | Cooling icon (WP9.1) | `tests/platform/test_cooling_icon.gd` (1280, 1361, 1560) | a HUD rect in the sweep's HUD re-run |
 | First-run warm-up hint | **new**: the sweep, all three canvases | the sweep |
-| Room HUD (strip, line, feed, toast, banner) and room menu | **new**: the sweep, all three canvases | the sweep |
+| Room HUD (strip, line, N6.2 crew line and TRAIN badge, feed, toast, banner) and room menu | **new**: the sweep, all three canvases; the crew line and badge beside the HUD: `tests/ui/test_room_score_hud.gd` | the sweep (both) |
 
 **The sweep.** `tests/a11y/test_text_size_sweep.gd` re-runs each per-screen test's own methods on the tablet canvas: it loads the test's source, swaps its `CANVASES` constant for `[1280×960]`, and runs the methods through `run_all.gd`'s lifecycle, forwarding every failure. Each screen keeps its own fixture and rules, and nothing is copied. The warm-up hint and the room HUD, which had no text-fit test, get the same rules (inside its box, its panel or button and the safe area; no overlaps; touch-sized buttons; off the HUD's panels) at all three canvases.
 
 **Findings and fixes.** Every screen with a text-fit test also fits the tablet canvas at both sizes. The two new checks found three problems, all fixed:
 
 - **Warm-up hint, 125 % on 1280×720 and 1280×960:** its panel (the two lines with SKIP beside them, 413 px) reached 14 px into the event stack's column. When it would, SKIP now goes under the lines (a narrower, taller panel; the warm-up's road is empty, so nothing is read there). The notched 1560 canvas keeps the one-row panel. `FirstRunWarmupHint._layout`.
-- **Room chat feed, 125 % on 1280×720:** a long `name#tag  TEXT` line ran under the crash-out toast in the centre column. Feed lines are now shortened with "..." to stop short of the event stack's column (`RoomHud._place_feed`, `SocialUi.fit_text`); `feed_text()` still returns the full line.
+- **Room chat feed, 125 % on 1280×720:** a long `name#tag  TEXT` line ran under the crash-out toast in the centre column. N6.2 landed the same rule in parallel (the name shortened with "…" so the line ends before the event stack's column); the merge keeps that one rule and makes it live: the sender and message are kept whole and every layout (a text-size change included) re-fits the shown line (`RoomHud._fit_feed`, `_place_feed`); `feed_text()` returns the full line.
+- **Room crash-out toast, 125 % on 1280×720 and 1560×720 (after N6.2's crew line moved the feed down):** the official-score line made the toast wider than the event stack's column, and it ran over the chat feed. A toast that would reach over the feed's column now drops below the feed's reserved area (`RoomHud._place_toast`).
 - **Room HUD text size was not live:** it read the setting once, at setup, so a change made during a room run left it at the old size. It now restyles on `settings_changed(text_scale)` (`RoomHud.restyle()`).
 
 ## Audio and haptic redundancy

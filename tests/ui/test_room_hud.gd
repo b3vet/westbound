@@ -145,8 +145,8 @@ func test_loop_strip_dots_and_idle() -> void:
 
 
 func test_crash_out_toast_lasts_3s() -> void:
-	hud.show_result({"player_id": 1, "score": 0, "distance_m": 2345, "duration_ms": 95000,
-		"flags": {"verified": false, "leaderboard_eligible": false}}, 12500)
+	hud.show_result({"player_id": 1, "score": 12500, "distance_m": 2345, "duration_ms": 95000,
+		"flags": {"verified": false, "leaderboard_eligible": false}})   # N6.2: the official score
 	check(hud.is_toast_shown())
 	eq(hud.toast_title.text, RoomHud.TEXT_CRASHED_OUT)
 	eq(hud.toast_sub.text, "SCORE 12,500  ·  2.3 KM  ·  1:35  ·  RESPAWNING  ·  UNVERIFIED")

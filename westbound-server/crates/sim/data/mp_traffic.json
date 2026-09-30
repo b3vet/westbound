@@ -1,5 +1,5 @@
 {
-  "_comment": "Server-only traffic rules (N4.1). Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md -> Traffic -> Server simulation and Tuning reference (multiplayer). Everything shared with the client comes from traffic_params.json (exported from Godot); these are the rules the Godot tuning does not hold. Values marked 'not in spec' in docs/SERVER.md -> Traffic simulation.",
+  "_comment": "Server-only traffic rules (N4.1). Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md -> Traffic -> Server simulation and Tuning reference (multiplayer). Everything shared with the client comes from traffic_params.json (exported from Godot); these are the rules the Godot tuning does not hold, plus the server's own switches for the MP-D5 lane-drop queue safety extensions (TrafficTuning holds the single-player ones since WP6.11; both on). Values marked 'not in spec' in docs/SERVER.md -> Traffic simulation.",
   "format_version": 1,
   "signal_time_floor_s": 1.0,
   "density_per_km_lane": {"light": 6.0, "normal": 10.0, "rush": 14.0},

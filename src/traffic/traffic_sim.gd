@@ -251,6 +251,9 @@ var _drop_release: float
 var _drop_floor: float
 var _drop_floor_until: float
 var _drop_narrow_max: float
+var _look_through := false          # MP-D5 (WP6.11): a leader leaving the path hides nothing
+var _predict_leaders := false       # MP-D5: MOBIL judges the new leader when the car is in the lane
+var _anticipate := false            # MP-D5: brake for the leader's own stopping point
 var _vmax := 0.0                   # fastest vehicle this step (bounds MOBIL's follower scan)
 var _cl_lo := INF                  # this step: no closure's merge zone starts before here ...
 var _cl_hi := -INF                 # ... and none ends after here
@@ -1433,6 +1436,7 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 			lead = j
 			break
 		kk += 1
+	var lead_k := kk
 	var a: float
 	var gap := INF
 	var hw_t := _pT[p] if _hz_n == 0 else _pT[p] * headway_scale_at(si)   # WP6.3 headway zones
@@ -1445,6 +1449,13 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 			a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor)
 	else:
 		a = Idm.free_accel(vi, v0, _pa[p], _pdl[p])
+	# MP-D5: past a leader leaving the path, the next one counts too; and the leader's own
+	# stopping point. The guards skip the calls (INF) for the common case: a leader in
+	# lane, not braking (GDScript calls are the cost here).
+	if _look_through and lead >= 0 and lead != _P and state.lc_state[lead] != _NONE:
+		a = minf(a, _look_through_accel(i, lead, lead_k, lo, hi, false, vi, v0, p, hw_t))
+	if _anticipate and lead >= 0 and ((lead != _P and state.accel[lead] < 0.0) or _kv[lead] <= 0.0):
+		a = minf(a, _anticipation_accel(lead, gap, vi, p))
 	if _cl_n > 0:
 		a = minf(a, _closure_wall_accel(i, vi, v0, p))
 	if _sz_n > 0:
@@ -1814,6 +1825,7 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool 
 			lead = j
 			break
 		kk += 1
+	var lead_k := kk
 	var foll := -1
 	kk = k - 1
 	while kk >= 0:
@@ -1841,6 +1853,15 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool 
 		else:
 			a_c_new = Idm.accel(vi, v0, gl, vi - _kv[lead], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor)
 		if a_c_new < -(bsafe if lead != _P else _pbsafe[p]):
+			_q_player = lead == _P
+			return -INF
+		if _look_through and lead != _P and state.lc_state[lead] != _NONE:
+			# MP-D5: a new leader leaving the target lane hides nothing.
+			var a2 := _look_through_accel(i, lead, lead_k, lo, hi, true, vi, v0, p, _pT[p])
+			if a2 < -bsafe:
+				return -INF
+			a_c_new = minf(a_c_new, a2)
+		if _predict_leaders and not _predicted_leaders_safe(i, lead, lead_k, lo, hi, vi, v0, p, bsafe):
 			_q_player = lead == _P
 			return -INF
 	else:
@@ -1927,6 +1948,126 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool 
 	elif v0 < tuning.lane_flow_speed_mps(t, lanes):
 		bias += _disc
 	return inc - Mobil.threshold(_pth[p], bias, to_right)
+
+
+# ---------------------------------------------------------------- Lane-drop queue safety (MP-D5, WP6.11)
+# Ported from the server's sim crate (N4.1: westbound-server/crates/sim/src/traffic/sim.rs,
+# look_through_accel / predicted_leaders_safe / anticipation_accel / leaving_path), which
+# found them at the loop's rush-hour lane-drop queues. Flags: TrafficTuning's
+# look_through_leaving_leaders, predict_leader_braking, anticipate_leader_braking.
+
+## Look-through: while the leader `l` (at order position `lk`) is signalling or moving out
+## of the path [lo, hi] (its target does not overlap it), the next vehicle on the path
+## beyond it counts too: the most restrictive IDM acceleration of those (INF when `l`
+## stays on the path; -INF when one of them already overlaps i). `claims`: match paths by
+## claims (MOBIL's target lane) instead of physical intervals.
+func _look_through_accel(i: int, l: int, lk: int, lo: float, hi: float, claims: bool, vi: float,
+		v0: float, p: int, hw_t: float) -> float:
+	var si := _ks[i]
+	var a := INF
+	var cur := l
+	var kk := lk + 1
+	while _leaving_path(cur, lo, hi):
+		var nxt := -1
+		while kk < _n:
+			var j := _ord[kk]
+			kk += 1
+			if j == i or _ks[j] - si > _look:
+				break
+			var jlo := _kclo[j] if claims else _klo[j]
+			var jhi := _kchi[j] if claims else _khi[j]
+			if jlo < hi and jhi > lo:
+				nxt = j
+				break
+		if nxt < 0:
+			break
+		var gap := _ks[nxt] - si - _khl[nxt] - _khl[i]
+		if gap <= 0.0:
+			return -INF
+		if _pweave[p] == 1 and nxt != _P:
+			# WP6.9: a weaving profile's IDM toward traffic, as toward any leader.
+			a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _wb[p], hw_t * _wTk[p], _ws0[p], _pdl[p],
+				_gap_floor))
+		else:
+			a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor))
+		cur = nxt
+	return a
+
+
+## A braking new leader `l` (and, with look-through, the ones beyond it while they leave
+## the path) extrapolated with its current deceleration to when the car is in the lane
+## (signal + move_min / 2 seconds on), against the car holding its speed: the gap must stay
+## open and the car's own IDM toward it (as in MOBIL's own-safety check) must not ask for
+## more than b_safe. A leader that is not braking (the player holds its speed) is left to
+## that check: extrapolating the car's approach alone refuses every gap it closes on (a
+## racer 30 km/h faster, within its WP6.9 traffic b_safe).
+func _predicted_leaders_safe(i: int, l: int, lk: int, lo: float, hi: float, vi: float, v0: float, p: int,
+		bsafe: float) -> bool:
+	var tau := _psig[p] + 0.5 * _pmmin[p]
+	var si := _ks[i]
+	var cur := l
+	var kk := lk + 1
+	while true:
+		var al := 0.0 if cur == _P else state.accel[cur]
+		if al < 0.0:
+			var vl := _kv[cur]
+			var vl_t := vl + al * tau
+			var dl := (vl + vl_t) * 0.5 * tau
+			if vl_t < 0.0:
+				vl_t = 0.0
+				dl = vl * vl / (-2.0 * al)
+			var gap := _ks[cur] - si - _khl[cur] - _khl[i] + dl - vi * tau
+			if gap <= 0.0:
+				return false
+			var a: float
+			if _pweave[p] == 1:
+				# WP6.9: a weaving profile's IDM toward traffic (a braking leader is traffic).
+				a = Idm.accel(vi, v0, gap, vi - vl_t, _pa[p], _wb[p], _pT[p] * _wTk[p], _ws0[p], _pdl[p], _gap_floor)
+			else:
+				a = Idm.accel(vi, v0, gap, vi - vl_t, _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor)
+			if a < -bsafe:
+				return false
+		if not (_look_through and _leaving_path(cur, lo, hi)):
+			return true
+		var nxt := -1
+		while kk < _n:
+			var j := _ord[kk]
+			kk += 1
+			if j == i or _ks[j] - si > _look:
+				break
+			if _kclo[j] < hi and _kchi[j] > lo:
+				nxt = j
+				break
+		if nxt < 0:
+			return true
+		cur = nxt
+	return true
+
+
+## The deceleration that stops a follower at vi (profile p) s0 behind where its leader
+## `l`, `gap` ahead, stops at its current deceleration; applied only when it exceeds the
+## comfortable b (an emergency IDM would react too late: a racer closing at 50 m/s on a
+## car braking at the clamp into a queue). INF otherwise.
+func _anticipation_accel(l: int, gap: float, vi: float, p: int) -> float:
+	var vl := _kv[l]
+	var al := 0.0 if l == _P else state.accel[l]
+	var stop_l := 0.0
+	if al < 0.0:
+		stop_l = vl * vl / (-2.0 * al)
+	elif vl > 0.0:
+		return INF
+	var room := gap - _ps0[p] + stop_l
+	var a_stop := -(vi * vi) / (2.0 * room) if room > 0.0 else -INF
+	return a_stop if a_stop < -_pb[p] else INF
+
+
+## A vehicle signalling or moving to a target whose body does not overlap [lo, hi].
+func _leaving_path(j: int, lo: float, hi: float) -> bool:
+	if j == _P or state.lc_state[j] == _NONE:
+		return false
+	var hw := state.width[j] * 0.5
+	var t := _lc_target_d[j]
+	return not (t - hw < hi and t + hw > lo)
 
 
 ## IDM acceleration of follower f (slot or the player) at this gap / closing speed.
@@ -2091,6 +2232,9 @@ func _cache_tuning() -> void:
 	_drop_floor = Units.kmh_to_mps(t.lane_drop_merge_floor_kmh)
 	_drop_floor_until = t.lane_drop_merge_floor_until_m
 	_drop_narrow_max = t.lane_drop_narrow_max_m
+	_look_through = t.look_through_leaving_leaders
+	_predict_leaders = t.predict_leader_braking
+	_anticipate = t.anticipate_leader_braking
 
 
 # ---------------------------------------------------------------- Racers weave harder (plan D17, WP6.9)
