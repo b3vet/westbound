@@ -327,7 +327,7 @@ Updated by the orchestrator at every merge.
 
 ## 10. Open items for the owner
 
-**Deferred to the owner's playtest (2026-09-30; current behaviour stays):** O1 how racers get past the player (current weaving); O2 traffic spawn distance 800 vs 700 m (800 m, N8.2's sim horizon); O3 speed lines under reduced motion (on); O4 warning sound/haptic for TOO SLOW, set-piece warnings, shoulder penalty, HESITATED haptic (none). **Still open:** O9 set pieces per journey (~2 at 150 km/h; options: accept, slower hidden rolling pieces, more road-tied pieces, restate M6); O5 web gyro on iPhone (on; native-only is a one-line switch); O6 cockpit camera improvements; O7 roadside props repeating per loop lap; O8 the D12 two-lane slow wall. The 📱 device checklist is in docs/ACCEPTANCE.md.
+**Owner decisions after the playtest (2026-10-01):** O1 racers passing, O2 spawn distance (800 m), O4 no extra warning cues: keep as is. O3 speed lines under reduced motion: deferred to a later controls/verification pass. O5 web gyro: needs tweaking, deferred. O6 cockpit camera: hidden from players (code and assets kept) until better car and interior models (WP9.8; Blender work planned on the owner's PC). O7 roadside props per loop lap: stay. O8 D12 two-lane slow wall: stays for variety, as long as it doesn't repeat too much. O9 set pieces per journey: explained, awaiting the owner's call. New requests: default controls drag steering + manual throttle + wheel look (WP9.8); web portrait shown rotated to landscape and a left safe-area inset for the camera cutout (WP9.7).
 
 - **Cockpit camera** (D11): works, but the owner wants improvements at some point (feel and look). Per-car interiors come with ART5.
 
