@@ -119,3 +119,18 @@ jobs:
           labels: org.opencontainers.image.revision=${{ github.sha }}
           push: true
           cache-from: type=gha,scope=westbound-server
+
+      # Optional: the Coolify server resource's deploy webhook (docs/OPERATIONS.md →
+      # Automatic deploys). Without the two secrets: redeploy the server in Coolify by hand.
+      - name: Redeploy the server on Coolify
+        if: steps.meta.outputs.push == 'true'
+        env:
+          COOLIFY_SERVER_WEBHOOK: ${{ secrets.COOLIFY_SERVER_WEBHOOK }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          if [[ -z "${COOLIFY_SERVER_WEBHOOK}" || -z "${COOLIFY_TOKEN}" ]]; then
+            echo "No COOLIFY_SERVER_WEBHOOK / COOLIFY_TOKEN secrets: redeploy the server in Coolify."
+            exit 0
+          fi
+          curl -fsS --retry 3 -H "Authorization: Bearer ${COOLIFY_TOKEN}" "${COOLIFY_SERVER_WEBHOOK}"
+          echo

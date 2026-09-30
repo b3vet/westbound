@@ -33,6 +33,20 @@ For the owner running `westbound-server` on Coolify. The technical reference is 
 - **After every deploy:** `https://westbound.sipsakrandevu.com/api/v1/health` shows `"status":"ok"` and the new `build`; the logs show `listening` with the version and build.
 - **Before a risky update:** take a manual backup: `docker exec <container> westbound-server backup /data/backups/pre-deploy-$(date +%F).db` (the host's shell fills in the date).
 
+### Automatic deploys (Coolify webhooks)
+
+Both workflows can redeploy their Coolify resource right after pushing a new image. They skip this step when the secrets below are missing.
+
+1. **Coolify: create an API token.** Go to Keys & Tokens → API tokens → create one with the **deploy** permission. Copy it; it is shown once.
+2. **Coolify: copy each resource's deploy webhook.** For the server resource and the verifier resource, open the resource → Webhooks. Copy the Deploy Webhook URL, which looks like `https://<coolify>/api/v1/deploy?uuid=<uuid>&force=false`. Change `force=false` to `force=true`, so Coolify pulls the image again even though the tag (`:edge`) didn't change.
+3. **GitHub: add the secrets.** In the repository, go to Settings → Secrets and variables → Actions → New repository secret:
+   - `COOLIFY_TOKEN`: the API token;
+   - `COOLIFY_SERVER_WEBHOOK`: the server resource's URL;
+   - `COOLIFY_VERIFIER_WEBHOOK`: the verifier resource's URL.
+4. **Check it works.** After the next push that touches `westbound-server/`, the **Server** workflow's last step, "Redeploy the server on Coolify", prints Coolify's answer. Coolify's Deployments tab shows a new deployment, and `/api/v1/health` reports the new `build`. The **Verifier** workflow's last step does the same for the verifier; it runs after pushes that touch the game or the server.
+
+The Coolify URL must be reachable from GitHub's runners (the public internet). A planned restart (60 s notice, room handover) happens on every automatic server deploy, exactly as with a manual one.
+
 ## Restarts: what players see
 
 A redeploy, a Coolify **Restart** or **Stop**, and `docker stop` all send SIGTERM. The server then:
