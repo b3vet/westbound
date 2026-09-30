@@ -143,12 +143,15 @@ Allocation-free per check after `_init` (`test_checks_allocate_nothing`); all st
 
 ## Soak
 
-docs/SOAK.md, *WP6.1* (before the WP6.2 merge) and *WP6.1 after the WP6.2 merge* (the final soak, 10,024 km):
+docs/SOAK.md, *WP6.1 after the WP6.3 / WP6.6 merges* (the gate result). The soak ran 8,876 km in 317 of the 358 runs; the last segment was capped at 30 minutes after container restarts.
 
-- **3 lanes:** 0 impossible windows (5,040 km).
-- **4 lanes:** 1 window (2,492 km). It is an oracle false positive: the oracle holds an accelerating motorbike platoon at constant speed, and the bot drove the window at 100 km/h without contact.
-- **2 lanes:** 4 windows (2,492 km), the D12 platoons: a 2-lane traffic decision, below.
-- **Gates and director:** 0 contacts of a normally driving player, 0 collisions and rule violations except one set-piece signal timing (WP6.2, not passability), and 0 unresolved director batches.
+- **3 lanes:** 0 traffic windows in 4,424 km.
+- **4 lanes:** 0 traffic windows in 2,128 km.
+- **2 lanes:** 1 traffic window in 2,324 km, the D12 slow wall.
+- **Gates:** 0 on every other gate, and 0 contacts of a normally driving player.
+- **Director:** 0 failed checks.
+
+The earlier soaks (before the merges, 10,024 km each) are in the same file.
 
 ## Open / deviations
 

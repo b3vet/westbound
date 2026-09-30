@@ -399,3 +399,26 @@ The failures:
 
 The canyon soak (lane drops, 2 × 28 km) on the merged tree: 0 windows, 0 contacts, 0 bot checks without a path, the player never off the driving lanes, 0 failed batch checks.
 
+## WP6.1 after the WP6.3 / WP6.6 merges (the gate result)
+
+The integration branch brought WP6.3's set pieces (road works, merge zones, tolls, tunnel squeezes, with sim lane closures and speed zones) and WP6.6's faster traffic (racers, D17). Passability now reads the sim's closures and speed zones (docs/PASSABILITY.md). The gate soak ran on 3753cf9 (`tools/soak.sh --km=10000 --shards=4`, seed 20260928). Container restarts cut it three times, so the missing runs were resumed with `soak_main.gd --runs=...` (tests/out/soak_wp61e, _f, _g). The later merges (to e371593, then 007448c) changed no traffic, road, soak or tuning code that the soak runs (audio, net, loop, run.gd and server only), so the per-run traces are the same on the final tree. The last segment was capped at 30 minutes (orchestrator), which left 41 of the 358 runs unrun.
+
+| | |
+| --- | --- |
+| Distance | **8,876 km** in 317 of 358 runs: 4,424 km on 3 lanes, 2,324 km on 2 lanes, 2,128 km on 4 lanes; 64.2 simulated hours |
+| Gates | collisions 0, signal 0, unsignaled 0, no-ambush 0 (175,942 moves checked), decel 0, brake flags 0, rear-end of a normal player 0, offroad 0, closed areas 0; **impossible (traffic) 1** |
+| Traffic windows per lane count | **3 lanes: 0** (4,424 km), **4 lanes: 0** (2,128 km), **2 lanes: 1** (run 10, leg 6: the D12 slow wall, every lane below the minimum speed ahead) |
+| Other windows | 4 that start in contact with the player (runs 7, 113, 128, 241): the oracle's pre-registered rule 1, player-induced. The cut-in rule classified none |
+| Contacts with the player | 6 episodes (5 rear-end), **0 of a normally driving player** |
+| Bot | 462,227 checks, 99 without a path (0.02%), never off the driving lanes, 0 prop hits |
+| Director | 30,432 ranges checked (167 with set-piece vehicles), 0 failed checks, 0 re-rolls, 0 removals, 0 unresolved |
+
+Not counted: run 334 (2 lanes, leg 2) was running when the 30-minute segment was stopped. Its shard log showed one window, which was lost with the unfinished run and not classified.
+
+The contacts and the in-contact windows follow the bot's own driving at the WP6.6 / D17 speeds (up to ~250 km/h). The search's braking relaxation lets a path drop to the minimum speed within one step (docs/PASSABILITY.md, *Open*), and racers arrive from behind at up to +60 km/h. None involves a normally driving player.
+
+Spot checks on the merged tree (reported, not gated):
+
+- Canyon, 2 × 28 km of lane drops: 0 windows, 0 contacts, the player never off the lanes.
+- `--all-pieces`, 3 runs, 84 km: 1 window at a toll gantry. The bot at 246 km/h braked 238 → 100 km/h in 0.3 s under the relaxation, drove a 50 km/h booth lane, and lost its path moving to the express lane.
+
