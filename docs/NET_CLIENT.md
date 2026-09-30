@@ -404,7 +404,9 @@ WP N7.2: single-player run submission, the offline queue, the one-time legacy up
 | `src/net/run_submission.gd` | `NetRunSubmission` | One run on its way: state (QUEUED, SENDING, DONE, REJECTED, FAILED, EXPIRED), why it waits, the receipt |
 | `src/net/boards_client.gd` | `NetBoards` | `GET /boards/{board}` with a short cache, single flight per page; `POST /reports`, `POST /blocks` |
 | `src/net/board_page.gd` | `NetBoardPage` (+ `Entry`) | A board read as typed data (entries, `me`, markers, crew rows) |
-| `src/net/fake_boards.gd` | `NetFakeBoards` | `NetFakeAccounts` plus the boards, runs, reports and blocks routes (tests, the preview) |
+| `src/net/fake_boards.gd` | `NetFakeBoards` | `NetFakeAccounts` plus the boards, runs, replay upload, reports and blocks routes (tests, the preview) |
+| `src/net/replay_recorder.gd` | `NetReplayRecorder` | N8.1: records Journey / Daily runs (a child of `NetRunsClient`); see Replays |
+| `src/net/replay_file.gd` | `NetReplayFile` | N8.1: the `.wbr` format ([`REPLAY_FORMAT.md`](REPLAY_FORMAT.md)) |
 
 ### Wiring
 
@@ -429,7 +431,7 @@ On `run_over` a **Journey or Daily Drive** run is submitted (`NetRunPayload.elig
 
 - A queued run remembers the account that played it: another account's runs wait for that account; a run queued before the first sign-in (no account yet) goes with the first account.
 - A run past the server's date window (the end of its UTC day + `runs_date_late_s`, 6 h) is dropped without a request (EXPIRED). The queue keeps at most `runs_queue_max` (50) runs.
-- `replay_required` / `verification: pending` shows as VERIFYING; the replay upload itself is N8.
+- `replay_required` / `verification: pending` shows as VERIFYING; the replay goes up after the receipt (Replays, below).
 
 **Payload mapping** (`NetRunPayload.build`; docs/RUN.md → `run_over`):
 
@@ -450,6 +452,21 @@ On `run_over` a **Journey or Daily Drive** run is submitted (`NetRunPayload.elig
 
 Once per account, the first time it is online: `POST /runs/legacy` with the local Journey best (`Save.best_score("journey")`). The save keeps no longest distance and Daily bests have no date (the server refuses them), so Journey is the only entry; with no best there is nothing to send. Accepted, `already_uploaded`, `over_cap` or any non-transient refusal marks it done for that account (in the queue's document); a network failure tries again at the next connection.
 
+### Replays (N8.1)
+
+Spec: multiplayer handoff → Leaderboards (single-player runs, step 3). The format and the verifier: [`REPLAY_FORMAT.md`](REPLAY_FORMAT.md); the server: [`SERVER.md`](SERVER.md) → Replays and verification.
+
+- **Recording.** `configure()` gives the client a `NetReplayRecorder` child (`/root/Net/RunsClient/ReplayRecorder`). It attaches to each Journey and Daily run on `Events.run_started` and records it (30 Hz path and inputs, exact boost edges and discontinuities, the event log, a traffic fingerprint a second). No online session, no client, no recording.
+- **Stored with the run.** At `run_over` the client finishes the recording (`finish(results, date)`: the header gets the claims and the submission's date) and stores the bytes in their own document, `replay_<key>` (base64 in the encrypted `user://net/replay_<key>.dat`, or `localStorage["westbound.net.v1.replay_<key>"]`), before anything is sent; the queued run gets `replay: true`. At most `replay_keep_max` (10) replays wait on the device (the oldest go); an expired or dropped run takes its replay with it. `NetRunSubmission.replay_state` says where it is: `stored`, `queued`, `uploading`, `uploaded`, `not_needed`, `refused`.
+- **The receipt decides.** `replay_required` on a `pending` run: an upload (key, run id, account) joins the `uploads` list in the queue document. Otherwise the replay is deleted (`not_needed`).
+- **Upload.** After the runs, in the same pass, one at a time: `POST /runs/{run_id}/replay` with the file (`NetApi.request` with a `PackedByteArray` body: `application/octet-stream`, `HTTPRequest.request_raw`, which the web export supports), the receipt's run id patched into the header (`NetReplayFile.patch_run_id`). Another account's upload waits for that account.
+
+| Answer | Then |
+| --- | --- |
+| 201, or 200 `duplicate: true` | Uploaded: the local copy is deleted (`uploaded`) |
+| network, 5xx, 429, 401 / not signed in / banned | Kept (`queued`), on the runs' retry schedule (`runs_retry_s` doubling to `runs_retry_max_s`, or Retry-After) |
+| any other 4xx (`replay_not_required`, `not_owner`, `body_too_large`, `invalid_replay`, `replay_mismatch`) | Dropped and deleted (`refused`) |
+
 ### Leaderboards (`NetBoards`)
 
 - `fetch(board, period, view, force)`: `GET /boards/{board}?period=&view=&limit=` (`limit` = `boards_global_limit` 100 for `global`, `boards_around_me_limit` 10 for `around_me`, none for `friends`). `period` is `current` (the season, the week, today), `all`, or a date on Daily Drive.
@@ -466,6 +483,12 @@ Once per account, the first time it is online: `POST /runs/legacy` with the loca
 | `runs_queue_max` | 50 | not in spec |
 | `runs_date_late_s` | 21600 | the server's `runs.date_late_secs` |
 | `runs_min_distance_m` | 500 | not in spec |
+| `replay_sample_ticks` | 4 | the spec's 30 Hz at the 120 Hz tick |
+| `replay_fingerprint_ticks` | 120 | not in spec (the traffic fingerprint, once a second) |
+| `replay_reserve_s` | 900 | not in spec (the recorder's first allocation) |
+| `replay_max_bytes` | 4194304 | the server's `replays.max_bytes` |
+| `replay_keep_max` | 10 | not in spec |
+| `verify_*` | see REPLAY_FORMAT.md → Verification | the verifier's thresholds: `verify_score_pct` 3 (the spec), `verify_limit_factor` 1.2 |
 | `boards_global_limit` / `boards_around_me_limit` | 100 / 10 | views: global top 100, around me |
 | `boards_cache_s` / `boards_refresh_min_s` | 30 / 3 | not in spec |
 | `boards_daily_days_back` | 14 | not in spec |
@@ -595,7 +618,8 @@ Both sources merge the same way: later entries replace earlier ones (`apply_pres
 
 | File | Covers |
 | --- | --- |
-| `tests/net/test_runs_client.gd` | The body from the real `RunStats.results` has exactly the documented keys (integers as integers, the seed's digits, the date, car, build, UUID); the receipt; Daily's date across midnight; Loop and scoreless crashes not sent; the offline queue across a relaunch with the same key; a network failure then a duplicate answer; 429 Retry-After; `build_unsupported`; refused and expired runs dropped; another account's run kept; the legacy upload once (and `already_uploaded`, network failure, nothing to send) |
+| `tests/net/test_runs_client.gd` | The body from the real `RunStats.results` has exactly the documented keys (integers as integers, the seed's digits, the date, car, build, UUID); the receipt; Daily's date across midnight; Loop and scoreless crashes not sent; the offline queue across a relaunch with the same key; a network failure then a duplicate answer; 429 Retry-After; `build_unsupported`; refused and expired runs dropped; another account's run kept; the legacy upload once (and `already_uploaded`, network failure, nothing to send). N8.1: the replay uploaded after a receipt that asks (binary, the run id patched in, deleted after), deleted when not needed, kept through an offline relaunch, kept and retried through 503s, dropped on a 409, the oldest dropped past `replay_keep_max` |
+| `tests/net/test_replay_recorder.gd` | N8.1: the format and the recorder on a real Run (REPLAY_FORMAT.md → Tests) |
 | `tests/net/test_boards_client.gd` | The path of every board × period × view; parsing (markers, `me`, crew rows); signed out; cache, force and single flight; report and block bodies |
 | `tests/ui/test_leaderboards_screen.gd` | The screens (SCREENS.md → Leaderboards → Tests) |
 

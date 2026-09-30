@@ -21,6 +21,17 @@ extends Node
 ## A queued run from another account stays for that account; one past the server's date
 ## window is dropped. Loop practice runs are never submitted.
 ##
+## Replays (N8.1; docs/NET_CLIENT.md → Replays): a NetReplayRecorder child records every
+## Journey and Daily run. At run_over the replay is stored on the device next to the queued
+## run (its own document, "replay_<key>": base64 in NetFileStore / NetWebStore), before
+## anything is sent. When the receipt says `replay_required` (a pending run), an upload
+## (run id, key, account) joins the uploads queue; otherwise the replay is deleted. Uploads
+## go after the runs in the same pass, one at a time, as `POST /runs/{run_id}/replay`
+## (the .wbr bytes with the receipt's run id patched into the header): 201 / 200 (the
+## server already has it) delete it; network, 5xx, 429 and session failures keep it for
+## the same retry schedule; any other 4xx (not required, too large, not the owner)
+## drops it. At most `replay_keep_max` replays wait on the device (the oldest go).
+##
 ## Legacy upload (once per account): the local Journey best (Save) as a `legacy` entry,
 ## `POST /runs/legacy`, the first time the account is online. The save keeps no Daily
 ## date (the server refuses those) and no longest distance, so Journey is all there is.
@@ -40,6 +51,13 @@ const I_KEY := "key"
 const I_ACCOUNT := "account"
 const I_BODY := "body"
 const I_CREATED := "created"
+const K_UPLOADS := "uploads"
+const K_REPLAYS := "replays"
+const I_RUN := "run_id"
+const I_REPLAY := "replay"
+const REPLAY_B64 := "b64"
+const REPLAY_STORE_PREFIX := "replay_"
+const PATH_REPLAY_SUFFIX := "/replay"
 
 const PATH_RUNS := "/runs"
 const PATH_LEGACY := "/runs/legacy"
@@ -66,6 +84,13 @@ var local_bests: Callable
 var car_of: Callable
 ## The latest run_over's submission (null when that run was not eligible).
 var last: NetRunSubmission
+## N8.1: records the runs (a child; null until configured).
+var recorder: NetReplayRecorder
+## (results: Dictionary, date: String) -> PackedByteArray: the finished run's replay
+## (invalid = the recorder's). Tests hand in a made-up replay.
+var replay_source: Callable
+## (key: String) -> NetSessionStore: where a replay waits (invalid = the platform's store).
+var replay_store_for: Callable
 
 var _doc: Dictionary = {}
 var _subs: Dictionary[String, NetRunSubmission] = {}
@@ -110,6 +135,9 @@ func configure(s: NetSession, queue_store: NetSessionStore, net_tuning: NetTunin
 	time = clock if clock != null else NetTimeSource.new()
 	boards = NetBoards.new(s, net_tuning, time)
 	_doc = store.load_data()
+	if recorder == null:
+		recorder = NetReplayRecorder.new(net_tuning, net_tuning.client_build)
+		add_child(recorder)
 	_configured = true
 
 
@@ -147,6 +175,8 @@ func _process(_delta: float) -> void:
 func on_run_over(results: Dictionary) -> void:
 	if not _configured or not NetRunPayload.eligible(results, tuning):
 		last = null
+		if recorder != null:
+			recorder.cancel()
 		return
 	var sub := NetRunSubmission.new()
 	sub.key = NetRunPayload.uuid4()
@@ -154,12 +184,18 @@ func on_run_over(results: Dictionary) -> void:
 	sub.mode = String(results.get(RunStats.MODE, ""))
 	sub.date = NetRunPayload.run_date(sub.mode, int(results.get(RunStats.SEED, 0)), now_unix())
 	var body := NetRunPayload.build(results, sub.key, sub.date, _car(results), tuning.client_build)
+	var item := {I_KEY: sub.key, I_ACCOUNT: session.account_id() if session != null else "",
+			I_BODY: body, I_CREATED: now_unix()}
+	var replay := _finish_replay(results, sub.date)
+	if not replay.is_empty() and _save_replay(sub.key, replay):
+		item[I_REPLAY] = true
+		sub.replay_state = NetRunSubmission.REPLAY_STORED
 	var q := _queue()
-	q.append({I_KEY: sub.key, I_ACCOUNT: session.account_id() if session != null else "",
-			I_BODY: body, I_CREATED: now_unix()})
+	q.append(item)
 	while q.size() > maxi(tuning.runs_queue_max, 1):
 		var dropped: Dictionary = q.pop_front()
 		_expire(String(dropped.get(I_KEY, "")))
+		_drop_replay(String(dropped.get(I_KEY, "")))
 	_persist()
 	_subs[sub.key] = sub
 	last = sub
@@ -187,6 +223,7 @@ func flush() -> void:
 		if _expired(item):
 			_remove(key)
 			_expire(key)
+			_drop_replay(key)
 			continue
 		var sub := sub_for(key, item)
 		sub.state = NetRunSubmission.State.SENDING
@@ -195,6 +232,7 @@ func flush() -> void:
 		var r: NetApiResult = await session.api.request(HTTPClient.METHOD_POST, PATH_RUNS, body, NetApi.AUTH)
 		if r.ok:
 			sub.apply_receipt(r.data)
+			_after_receipt(sub, item, played_by if not played_by.is_empty() else account)
 			_remove(key)
 			_retry_delay_s = 0.0
 			submission_changed.emit(sub)
@@ -209,7 +247,10 @@ func flush() -> void:
 			break
 		sub.state = NetRunSubmission.State.FAILED
 		_remove(key)
+		_drop_replay(key)
 		submission_changed.emit(sub)
+	if _retry_at_usec < 0:
+		await _upload_replays(account)
 	_sending = false
 
 
@@ -271,6 +312,158 @@ func _on_status(_s: NetSession.Status) -> void:
 		kick()
 	else:
 		_mark_waiting()
+
+
+# ---------------------------------------------------------------- Replays (N8.1)
+
+## Replays waiting for their upload (after a receipt that required one).
+func pending_uploads() -> int:
+	return _uploads().size()
+
+
+## Replays kept on this device (waiting for a receipt or an upload).
+func stored_replays() -> PackedStringArray:
+	var out := PackedStringArray()
+	for k: Variant in _replays():
+		out.append(String(k))
+	return out
+
+
+func _finish_replay(results: Dictionary, date: String) -> PackedByteArray:
+	if replay_source.is_valid():
+		return replay_source.call(results, date) as PackedByteArray
+	if recorder == null:
+		return PackedByteArray()
+	return recorder.finish(results, date)
+
+
+## The receipt decides: an upload for a pending run that needs it, else the replay goes.
+func _after_receipt(sub: NetRunSubmission, item: Dictionary, account: String) -> void:
+	if not bool(item.get(I_REPLAY, false)):
+		return
+	var key := sub.key
+	if sub.replay_required and not sub.run_id.is_empty() \
+			and sub.verification == NetRunSubmission.VERIFICATION_PENDING:
+		for u: Dictionary in _uploads():
+			if String(u.get(I_KEY, "")) == key:
+				return
+		_uploads().append({I_KEY: key, I_RUN: sub.run_id, I_ACCOUNT: account, I_CREATED: now_unix()})
+		sub.replay_state = NetRunSubmission.REPLAY_QUEUED
+		_persist()
+	else:
+		_drop_replay(key)
+		sub.replay_state = NetRunSubmission.REPLAY_NOT_NEEDED
+
+
+## Sends this account's waiting replays, in order (called from flush()).
+func _upload_replays(account: String) -> void:
+	var i := 0
+	while i < _uploads().size():
+		var u: Dictionary = _uploads()[i]
+		var key := String(u.get(I_KEY, ""))
+		var run_id := String(u.get(I_RUN, ""))
+		if String(u.get(I_ACCOUNT, "")) != account:
+			i += 1
+			continue
+		var bytes := _load_replay(key)
+		if bytes.is_empty() or not run_id.is_valid_int() \
+				or not NetReplayFile.patch_run_id(bytes, run_id.to_int()):
+			_remove_upload(key)
+			_drop_replay(key)
+			continue
+		var sub := sub_for(key)
+		sub.replay_state = NetRunSubmission.REPLAY_UPLOADING
+		submission_changed.emit(sub)
+		var path := PATH_RUNS + "/" + run_id + PATH_REPLAY_SUFFIX
+		var r: NetApiResult = await session.api.request(HTTPClient.METHOD_POST, path, bytes, NetApi.AUTH)
+		if r.ok:
+			_remove_upload(key)
+			_drop_replay(key)
+			_retry_delay_s = 0.0
+			sub.replay_state = NetRunSubmission.REPLAY_UPLOADED
+			submission_changed.emit(sub)
+			continue
+		sub.error = r.error
+		if _keeps(r):
+			sub.replay_state = NetRunSubmission.REPLAY_QUEUED
+			submission_changed.emit(sub)
+			if r.is_transient():
+				_schedule_retry(r.retry_after_s)
+			return
+		_remove_upload(key)
+		_drop_replay(key)
+		sub.replay_state = NetRunSubmission.REPLAY_REFUSED
+		submission_changed.emit(sub)
+
+
+## Stores a replay (base64 in its own document) and records it in the queue document;
+## past replay_keep_max the oldest stored replays go. False when it could not be kept.
+func _save_replay(key: String, bytes: PackedByteArray) -> bool:
+	if bytes.size() > tuning.replay_max_bytes:
+		return false
+	var st := _replay_store(key)
+	if not st.save_data({REPLAY_B64: Marshalls.raw_to_base64(bytes)}):
+		return false
+	var list := _replays()
+	list.append(key)
+	while list.size() > maxi(tuning.replay_keep_max, 1):
+		var old := String(list[0])
+		_drop_replay(old)
+		_remove_upload(old)
+	_persist()
+	return true
+
+
+func _load_replay(key: String) -> PackedByteArray:
+	var d := _replay_store(key).load_data()
+	var b64: Variant = d.get(REPLAY_B64, "")
+	if not (b64 is String) or (b64 as String).is_empty():
+		return PackedByteArray()
+	return Marshalls.base64_to_raw(b64 as String)
+
+
+func _drop_replay(key: String) -> void:
+	var list := _replays()
+	var i := list.find(key)
+	if i < 0:
+		return
+	list.remove_at(i)
+	_replay_store(key).clear()
+	_persist()
+
+
+func _replay_store(key: String) -> NetSessionStore:
+	if replay_store_for.is_valid():
+		return replay_store_for.call(key) as NetSessionStore
+	var doc := REPLAY_STORE_PREFIX + key
+	if OS.has_feature("web"):
+		return NetWebStore.new(NetJsBridge.new(), doc)
+	return NetFileStore.new(doc)
+
+
+func _uploads() -> Array:
+	var u: Variant = _doc.get(K_UPLOADS)
+	if not (u is Array):
+		u = []
+		_doc[K_UPLOADS] = u
+	return u as Array
+
+
+func _replays() -> Array:
+	var r: Variant = _doc.get(K_REPLAYS)
+	if not (r is Array):
+		r = []
+		_doc[K_REPLAYS] = r
+	return r as Array
+
+
+func _remove_upload(key: String) -> void:
+	var u := _uploads()
+	for i in u.size():
+		if String((u[i] as Dictionary).get(I_KEY, "")) == key:
+			u.remove_at(i)
+			_persist()
+			return
 
 
 # ---------------------------------------------------------------- Legacy

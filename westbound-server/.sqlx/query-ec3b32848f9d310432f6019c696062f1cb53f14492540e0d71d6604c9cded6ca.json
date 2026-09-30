@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT file_path, status, file_deleted_at FROM replays WHERE run_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "file_path",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "file_path"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "file_deleted_at",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "replays",
+            "name": "file_deleted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ec3b32848f9d310432f6019c696062f1cb53f14492540e0d71d6604c9cded6ca"
+}

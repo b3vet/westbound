@@ -14,6 +14,8 @@ const LABEL_CHAIN := "CHAIN"
 var _value: int = -1
 var _text: String = ""
 var _pulse_t: float = -1.0
+## Pulses started (tests: WP7.5's one-frame check reads it right after the drain).
+var pulses: int = 0
 
 
 func set_chain(v: int) -> void:
@@ -39,6 +41,7 @@ func _has_plate() -> bool:
 
 func pulse() -> void:
 	_pulse_t = 0.0
+	pulses += 1
 
 
 func animate(dt: float) -> bool:

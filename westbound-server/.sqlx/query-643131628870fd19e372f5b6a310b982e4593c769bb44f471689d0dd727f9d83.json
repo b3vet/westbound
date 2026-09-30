@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE replays SET file_deleted_at = ? WHERE run_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "643131628870fd19e372f5b6a310b982e4593c769bb44f471689d0dd727f9d83"
+}

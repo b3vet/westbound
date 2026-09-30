@@ -361,6 +361,24 @@ func boost_lit() -> int:
 	return _boost.lit_segments()
 
 
+## WP7.5 one-frame check read-outs: the boost meter shows BOOSTING, the chain pulses
+## started, the event stack's pushes, and the banked chain flying to the total.
+func boost_burning() -> bool:
+	return _boost.pulsing()
+
+
+func chain_pulses() -> int:
+	return _chain.pulses
+
+
+func event_pushes() -> int:
+	return _stack.changes
+
+
+func bank_flying() -> bool:
+	return _flyer.flying()
+
+
 ## N3.2: the top-centre plate shows the room clock (loop mode), and its countdown.
 func clock_shown() -> bool:
 	return _sun.is_clock()
@@ -583,6 +601,8 @@ func _connect_events(on: bool) -> void:
 		[Events.settings_changed, _on_setting_changed],
 		[Events.high_beam_changed, _on_high_beam_changed],
 		[Events.journey_complete, _on_journey_complete],
+		[Events.boost_started, _on_boost_started],
+		[Events.boost_ended, _on_boost_ended],
 	]
 	for p in pairs:
 		var sig: Signal = p[0]
@@ -764,6 +784,16 @@ func _animate_high_beam(dt: float) -> void:
 	_hb_alpha = minf(_hb_alpha + step, want) if want > _hb_alpha else maxf(_hb_alpha - step, want)
 	_high_beam.modulate.a = _hb_alpha
 	_high_beam.visible = _hb_alpha > 0.0
+
+
+## The boost meter turns gold in the frame boost starts (WP7.5's one-frame rule), not
+## when the HUD next reads the feed; the feed then keeps it in step.
+func _on_boost_started() -> void:
+	_boost.set_boosting(true)
+
+
+func _on_boost_ended() -> void:
+	_boost.set_boosting(false)
 
 
 func _on_gear(gear: int) -> void:

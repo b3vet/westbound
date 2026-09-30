@@ -18,6 +18,14 @@ func request(_method: int, _url: String, _headers: PackedStringArray, _body: Str
 	return NetHttpResponse.failed(HTTPRequest.RESULT_CANT_CONNECT)
 
 
+## Sends one request with a binary body (the replay upload, WP N8.1). Same contract as
+## request().
+func request_raw(_method: int, _url: String, _headers: PackedStringArray, _body: PackedByteArray,
+		_timeout_s: float) -> NetHttpResponse:
+	await _tree().process_frame
+	return NetHttpResponse.failed(HTTPRequest.RESULT_CANT_CONNECT)
+
+
 ## Waits `seconds` of real time (ignores pause and Engine.time_scale).
 func wait(seconds: float) -> void:
 	await _tree().create_timer(maxf(seconds, 0.0), true, false, true).timeout
