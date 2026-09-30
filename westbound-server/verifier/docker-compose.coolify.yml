@@ -1,0 +1,70 @@
+# westbound-server AND the replay verifier sidecar in one file, for a Coolify "Docker
+# Compose" resource (WP N8.3). The ALTERNATIVE path: the recommended one keeps the
+# server's existing "Docker Image" resource and adds the verifier as a second Docker Image
+# resource on the same volume (docs/OPERATIONS.md → Replay verification). Use this file
+# only if that volume cannot be shared in your Coolify, or when moving to Compose anyway.
+#
+# The westbound-server service mirrors ../docker-compose.yml (keep them in step); the
+# verifier is ./docker-compose.verifier.yml's. Moving the server from a Docker Image
+# resource to this one means a NEW volume: take a backup, deploy this resource stopped,
+# restore the backup into its volume (docs/OPERATIONS.md → Restore), then start it and
+# retire the old resource. Coolify: Domains on westbound-server only (port 8080); set the
+# secrets once in Environment Variables (both services read them).
+
+name: westbound
+
+services:
+  westbound-server:
+    image: ${WB_IMAGE:-ghcr.io/b3vet/westbound-server:edge}
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      WB_SERVER__PUBLIC_ORIGIN: ${WB_SERVER__PUBLIC_ORIGIN:-https://westbound.sipsakrandevu.com}
+      WB_HTTP__CORS_ALLOWED_ORIGINS: ${WB_HTTP__CORS_ALLOWED_ORIGINS:-https://westbound.sipsakrandevu.com,https://b3vet.github.io}
+      WB_LOG__FORMAT: ${WB_LOG__FORMAT:-json}
+      WB_LOG__LEVEL: ${WB_LOG__LEVEL:-info}
+      WB_AUTH__JWT_SECRET: ${WB_AUTH__JWT_SECRET:-}
+      WB_AUTH__DEVICE_SECRET_PEPPER: ${WB_AUTH__DEVICE_SECRET_PEPPER:-}
+      WB_SERVER__ENV: ${WB_SERVER__ENV:-production}
+      WB_BACKUP__RETENTION_DAYS: ${WB_BACKUP__RETENTION_DAYS:-7}
+      WB_BACKUP__TIME_UTC: ${WB_BACKUP__TIME_UTC:-03:17}
+      WB_BACKUP__UPLOAD_COMMAND: ${WB_BACKUP__UPLOAD_COMMAND:-}
+      WB_SERVER__RESTART_NOTICE_SECS: ${WB_SERVER__RESTART_NOTICE_SECS:-60}
+      WB_ADMIN__TOKEN: ${WB_ADMIN__TOKEN:-}
+      # The verifier service below runs the queue (exactly one worker per database).
+      WB_REPLAYS__WORKER_ENABLED: "false"
+    volumes:
+      - westbound-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/westbound-server", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    stop_grace_period: 75s
+
+  westbound-verifier:
+    image: ${WB_VERIFIER_IMAGE:-ghcr.io/b3vet/westbound-verifier:edge}
+    restart: unless-stopped
+    depends_on:
+      westbound-server:
+        condition: service_healthy
+    environment:
+      # Config::load validates the auth secrets; the worker never uses them.
+      WB_SERVER__ENV: ${WB_SERVER__ENV:-production}
+      WB_AUTH__JWT_SECRET: ${WB_AUTH__JWT_SECRET:-}
+      WB_AUTH__DEVICE_SECRET_PEPPER: ${WB_AUTH__DEVICE_SECRET_PEPPER:-}
+      WB_LOG__FORMAT: ${WB_LOG__FORMAT:-json}
+      WB_LOG__LEVEL: ${WB_LOG__LEVEL:-info}
+    volumes:
+      - westbound-data:/data
+    # The spec's budget: one job at a time (the worker), each verifier under nice 10
+    # (the image's command), 1 GB and one CPU for the container.
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1
+    stop_grace_period: 30s
+
+volumes:
+  westbound-data:

@@ -7,6 +7,7 @@ For the owner running `westbound-server` on Coolify. The technical reference is 
 | What | Where |
 | --- | --- |
 | Image | `ghcr.io/b3vet/westbound-server:edge` (CI pushes it from the `claude/game-implementation-phases-asl5jz` branch); rollback tags `claude-game-implementation-phases-asl5jz-<sha7>` |
+| Replay verifier (N8.3) | `ghcr.io/b3vet/westbound-verifier:edge`, a second resource on the same volume: see "Replay verification" |
 | Public | `https://westbound.sipsakrandevu.com` → container port 8080 (`/api/*`, `/ws`, `/r/*`, `/.well-known/*`) |
 | Volume | `/data`: `westbound.db` (+ `-wal`, `-shm`), `backups/`, `well-known/`, `replays/`, `room-handover.json` |
 | Inside the container only | `/metrics` on `127.0.0.1:9090`; the admin API on `127.0.0.1:9091` (needs `WB_ADMIN__TOKEN`) |
@@ -23,6 +24,7 @@ For the owner running `westbound-server` on Coolify. The technical reference is 
 | `WB_SERVER__RESTART_NOTICE_SECS` | `60` (default) | The restart notice. Must be shorter than the stop timeout (below) |
 | `WB_LOG__FORMAT` | `json` (the image's default) | Structured logs |
 | `WB_BACKUP__UPLOAD_COMMAND` | optional | Off-site copy after each nightly backup (below) |
+| `WB_REPLAYS__WORKER_ENABLED` | `false` | N8.3: the verifier resource runs the replay queue, never the server (see "Replay verification") |
 
 ## Deploy, update, roll back
 
@@ -88,6 +90,73 @@ westbound-server admin replays                              # the replay verific
 - A ban ends the player's session at once with the admin token set, else within 30 s; the reason stays in the admin log and shows in `admin player`.
 - Board changes show at once with the admin token set, else within the board cache TTL (a minute).
 - `rooms`, `room-close`, `notice` and `kick` need the running server and the admin token.
+
+## Replay verification
+
+WP N8.3. A single-player run that makes a top 100 or a personal best uploads its replay and shows as **verifying** on the boards. The verifier re-simulates the run from the replay (the game's own simulation, headless) and settles it: **accepted** → verified; **rejected** → off the boards. Until the verifier runs, such runs simply stay "verifying" (the state before N8.3). Technical reference: SERVER.md → "Replays and verification"; how the image is built: DETERMINISM.md → Verifier deploy.
+
+| What | |
+| --- | --- |
+| Image | `ghcr.io/b3vet/westbound-verifier:edge`; rollback tags `claude-game-implementation-phases-asl5jz-<sha7>`. The **Verifier** workflow builds it on every push to the branch that changes the game or the server, tests it end to end (an honest replay verified, tampered ones rejected) and pushes it |
+| What is in it | `westbound-server verify-worker` + one headless game build per recent client build (the current one and up to two older; `/verifier/BUILDS.txt` lists them with their commit) + `verify-backlog` (a dry run) |
+| How it runs | Next to the server on the **same `/data` volume** (same host): one replay at a time, each under `nice 10`, the container capped at 1 CPU and 1 GB. It picks up new uploads within 10 s |
+| A build it does not have | The replay is set aside: its run stays "verifying", `admin replays` shows `failed run N ...: {"error":"no verifier for build 7 here ...","unverifiable":true}`. Every verifier start retries those, so a newer image that has the build picks them up. The same for replays it cannot verify (recorded before N8.2, no input stream; another simulation under the same build number) |
+
+### Before you switch it on (once)
+
+1. **Backup:** `westbound-server backup /data/backups/pre-verifier-$(date +%F).db` (with the `docker exec <server container>` prefix).
+2. **The backlog:** `westbound-server admin replays` shows how many replays wait (`pending`). They are verified oldest first once the verifier runs.
+3. **Dry run** (nothing is written): on the VPS host, with the server's volume name (Coolify → the server resource → Persistent Storage, or `docker volume ls`):
+
+   ```sh
+   docker run --rm -v <volume>:/data:ro --entrypoint verify-backlog ghcr.io/b3vet/westbound-verifier:edge
+   ```
+
+   One line per stored replay (`accepted` / `rejected` with the reason / `cannot verify` / `no verifier for this build`) and a total. `rejected` here means rejected for real when you switch on. If honest-looking runs come out `rejected` (replays recorded by an older web build whose simulation differs under the same build number), do not switch on yet: ask for a `client_build` bump, then run the Verifier workflow by hand (GitHub → Actions → Verifier → Run workflow) with **keep builds = 1**. That image holds only the new build, so the old replays are set aside (their runs stay "verifying") instead of judged; the dry run then shows them as `no verifier for this build`. A rejection cannot be undone from the admin CLI.
+
+### Set it up in Coolify (recommended: a second Docker Image resource)
+
+The server keeps its current resource and volume; the verifier is a second resource that mounts the same volume.
+
+0. **The image must be pullable:** after the Verifier workflow's first green run on the branch, GitHub → your profile → Packages → `westbound-verifier` → Package settings → Change visibility → **Public** (as `westbound-server` is), or give Coolify a GHCR login (a token with `read:packages`) for it.
+1. **Server resource** → Environment Variables: add `WB_REPLAYS__WORKER_ENABLED` = `false`. (Today the server has no verifier command, so its own worker never starts; this keeps it that way should anyone add one. Exactly one worker may run per database.) It takes effect at the next redeploy; no need to redeploy for it now.
+2. **The volume's name:** server resource → Persistent Storage: note the volume's **Name** (mounted at `/data`). On the host `docker inspect <server container> --format '{{range .Mounts}}{{.Name}} {{.Destination}}{{println}}{{end}}'` shows the same.
+3. **New resource:** the same project and **the same server (host)** → + New → **Docker Image** → `ghcr.io/b3vet/westbound-verifier:edge`. Name it `westbound-verifier`.
+   - **General:** no domain. Coolify asks for "Ports Exposes": leave its default (nothing listens; the verifier makes no connections at all). Health check: off (the image has none).
+   - **Environment Variables:** `WB_AUTH__JWT_SECRET` and `WB_AUTH__DEVICE_SECRET_PEPPER` with the **same values as the server** (the configuration loader requires them; the worker never uses them). Nothing else is needed: the image sets the database path, the verifier command, `nice 10`, the poll interval and JSON logs.
+   - **Persistent Storage** → + Add → **Volume Mount**: Name = the server's volume name from step 2, exactly; Destination Path = `/data`.
+   - **Resource Limits:** Number of CPUs `1`; Maximum Memory Limit `1g`; Maximum Swap Limit `1g`. (Or, in Advanced → Custom Docker Options: `--cpus=1 --memory=1g --memory-swap=1g`.)
+   - **Deploy.**
+4. **Check the volume is shared:** `docker inspect <verifier container> --format '{{range .Mounts}}{{.Name}} {{.Destination}}{{println}}{{end}}'` shows the same name as step 2. If it shows another name (your Coolify version prefixed it), see "If the volume cannot be shared" below.
+
+### Check it works
+
+- **Verifier logs** (Coolify → westbound-verifier → Logs): `replay verification worker started` with the command, then one `replay verified` line per replay with `verdict`, `reason`, the recomputed and claimed score and the seconds it took (5–60 s each). `replay cannot be verified by this verifier; set aside` names a build the image lacks.
+- **Queue:** `westbound-server admin replays` (on the server container): `pending` goes down, `done` up; set-aside replays are listed with their reason.
+- **Metrics** (the server's `/metrics`, it counts the shared database): `wb_replay_jobs{status="pending"}` drains to 0 and stays low; the `WestboundReplayBacklog` alert covers a stuck verifier.
+- **A test run:** play a Journey run on the web build with a new account (a first run is always a personal best, so it uploads a replay). Its board entry shows "verifying", and within about a minute it is verified: the verifier's log shows `replay verified run_id=<id> verdict="accepted"`.
+- **Which builds it verifies:** `docker exec <verifier container> cat /verifier/BUILDS.txt` (build, commit, export date); the Verifier workflow's run summary shows the same. The build players run is the web build's `client_build` (`data/tuning/net.tres`).
+
+### Updating
+
+- The Verifier workflow pushes a new `:edge` after each game change; then **Redeploy** the verifier resource. To make that automatic: Coolify → westbound-verifier → Webhooks: copy the **Deploy Webhook** URL, create an API token (Keys & Tokens → API tokens, with deploy permission), and add both as repository secrets `COOLIFY_VERIFIER_WEBHOOK` and `COOLIFY_TOKEN` (GitHub → Settings → Secrets and variables → Actions); the workflow calls the webhook after pushing.
+- A redeploy in the middle of a replay is harmless: that replay is retried (the interrupted attempt counts, three in all), and set-aside replays are retried with the new image.
+- **Build parity:** the verifier must run the same simulation as the players' build. The image keeps the three newest client builds; the web build and the verifier are built from the same commits. When the simulation changes, the game's `client_build` must be bumped; the workflow warns (`Verifier build parity`) when a build number's simulation changed without one.
+
+### Rollback
+
+- **Switch it off:** Coolify → westbound-verifier → **Stop**. Nothing else changes: uploads continue, runs stay "verifying", and the backlog is verified whenever it runs again. Leave the server's `WB_REPLAYS__WORKER_ENABLED=false`.
+- **An older image:** set the verifier resource's image tag to a `claude-game-implementation-phases-asl5jz-<sha7>` tag and redeploy.
+- **Verdicts stay.** An accepted run stays verified and a rejected one stays off the boards; `westbound-server admin replay-requeue <run_id>` re-verifies a run whose replay file is still there (verified top-100 runs keep theirs; rejected runs' files are deleted).
+
+### If the volume cannot be shared
+
+Symptoms: the verifier logs `requeueing running replay jobs failed (is the server's database on this volume?)` or `replay queue error ... no such table: replays` (it opened an empty database), or the two containers mount volumes with different names. Two ways out:
+
+1. **Directory mounts** on both resources (a host directory instead of a named volume): stop the server; on the host `mkdir -p /srv/westbound-data && cp -a /var/lib/docker/volumes/<volume>/_data/. /srv/westbound-data/ && chown -R 65532:65532 /srv/westbound-data`; server resource → Persistent Storage: replace the volume with a **Directory Mount** `/srv/westbound-data` → `/data`; start it and check `/api/v1/health` and `admin stats`; then give the verifier the same Directory Mount. The old volume stays as a copy until you delete it.
+2. **One Docker Compose resource** with both services: `westbound-server/verifier/docker-compose.coolify.yml` (server + verifier, the limits, the server's worker off). It gets a new volume: take a backup, deploy the new resource, stop its server, restore the backup into it ("Restore" below, with the new volume), start it, move the domain over and retire the old resource.
+
+The same container (the verifier inside the server image) is not offered: the server image is static and distroless (no glibc for the game build), and the 1 GB cap would then cover the server too (SERVER.md → Running the verifier).
 
 ## Backups
 
@@ -185,3 +254,6 @@ Everything is per client IP or per account and configurable (SERVER.md → "Rate
 | `nightly backup failed` | The log line's error; disk space on the volume; `verify-backup` the last good file |
 | Everyone gets `map_mismatch` | A client build with another map; see SERVER.md → "Map hashes" |
 | A player can't sign in after a restore | Their account was created after the backup: they get a new one |
+| Runs stay "verifying" | Is the verifier resource running (its logs: `replay verified` lines)? `admin replays`: a growing `pending` = no verifier or a stuck one; `failed ... "unverifiable":true` = a build the image lacks (a newer image, redeployed, takes them) |
+| The verifier logs `no such table: replays` | It does not see the server's database: "Replay verification → If the volume cannot be shared" |
+| `Verifier build parity` warning in the Verifier workflow | The simulation changed without a `client_build` bump: replays from players still on the previous web build fail verification. Bump `client_build` (`data/tuning/net.tres`) |

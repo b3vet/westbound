@@ -180,6 +180,24 @@ func test_a_replay_without_inputs_plays_kinematically() -> void:
 	check(bool(res.get("accepted", false)), describe(res))
 
 
+## N8.3: the production sidecar passes --require-inputs=1: a replay without inputs is
+## "cannot verify" (exit 3, set aside by the server's worker), never a kinematic verdict.
+func test_require_inputs_refuses_a_replay_without_inputs() -> void:
+	var main_script: GDScript = load("res://tools/verifier/verify_replay_main.gd")
+	var r := _copy(_weave)
+	r.input_count = 0
+	var back := NetReplayFile.decode(r.encode())
+	var on := {"require-inputs": "1"}
+	var why := String(main_script.call(&"inputs_error", back, on))
+	check(why.begins_with("no_inputs"), why)
+	eq(main_script.call(&"inputs_error", back, {}), "", "off by default: the kinematic playback")
+	eq(main_script.call(&"inputs_error", back, {"require-inputs": "0"}), "", "=0 is off")
+	eq(main_script.call(&"inputs_error", _copy(_weave), on), "", "a replay with inputs is verified")
+	for flag: String in ["--require-inputs=1", "--require-inputs"]:
+		var parsed: Dictionary = main_script.call(&"parse_args", PackedStringArray([flag, "--out=/tmp/x"]))
+		check(String(main_script.call(&"inputs_error", back, parsed)).begins_with("no_inputs"), flag)
+
+
 ## The path still runs into the traffic; the log and the claim say it never did.
 func test_removed_hit_is_rejected() -> void:
 	var r := _copy(_ram)
