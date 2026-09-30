@@ -297,6 +297,8 @@ Audio comes from CC0 packs (logged) until the owner supplies licensed or recorde
 | From Phase 5 | ART4 | Landmarks and biome props for biomes 2–6 |
 | Owner-led | ART5 | 8 in-house player cars (AI generators + Blender, done by the owner), then the cockpit camera once interiors exist |
 
+**Art production brief:** [`docs/ART_PRODUCTION.md`](ART_PRODUCTION.md) is the self-contained brief for the Blender agent (art direction and palette, the technical contract, 103 deliverables with budgets and markers, production order P0–P7, handoff protocol). The game-side prerequisites it lists (G1–G11: modular car import, `.glb` → mesh converters for props and traffic, interiors shown only in the cockpit view, the hood-camera marker, car-id save migration, LOD1, a colour calibration test) are WP-ART-G.
+
 ## 8. Risks
 
 | Risk | Mitigation |
