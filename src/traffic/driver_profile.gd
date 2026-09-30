@@ -46,6 +46,41 @@ extends Resource
 ## Motorbike: splits lanes in slow traffic (never during the player's lane change).
 @export var lane_split: bool = false
 
+@export_group("Weaving (plan D17, WP6.9)")
+## Racers weave harder (owner, D17). Every field below toward other TRAFFIC only: toward
+## the player a weaving driver keeps the values above (IDM's T, s0, b), the player's
+## b_safe (TrafficTuning.player_b_safe_mps2), no-ambush and rear-end prevention exactly
+## as every other profile. Defaults (< 0 / 0) switch all of it off, so profiles that do
+## not set them are bit-identical to before. See docs/TRAFFIC.md, "Racers weave harder".
+## IDM time headway T behind a traffic car (s); < 0 = idm_headway_s. The director's leg
+## scale and headway zones scale it like T.
+@export var idm_headway_vs_traffic_s: float = -1.0
+## IDM minimum gap s0 behind a traffic car (m); < 0 = idm_s0_m.
+@export var idm_s0_vs_traffic_m: float = -1.0
+## IDM comfortable deceleration b behind a traffic car (m/s^2); < 0 = idm_b_comfort_mps2.
+## Higher = it holds its speed longer before braking for a slower car (IDM's closing term).
+@export var idm_b_comfort_vs_traffic_mps2: float = -1.0
+## MOBIL b_safe when the new follower (or, for its own braking, the new leader) is a
+## traffic car (m/s^2); < 0 = mobil_b_safe_mps2. Never above TrafficTuning.max_decel_mps2;
+## keep it well below: the follower's braking can grow a little after the cut-in, and
+## it must never need the 6 m/s^2 clamp. The player as new follower keeps
+## player_b_safe_mps2, as new leader mobil_b_safe_mps2.
+@export var mobil_b_safe_vs_traffic_mps2: float = -1.0
+## Lookahead lane choice: MOBIL's incentive gains lookahead_gain_per_s x (the target
+## lane's pace - its own lane's pace), capped at +-lookahead_incentive_max_mps2, where a
+## lane's pace is the mean speed it could make there over this distance behind the
+## vehicles in it (its desired speed when clear): the lane that is moving, not just
+## its first car. 0 = off (only the immediate leader counts, as MOBIL).
+@export var lookahead_lane_choice_m: float = 0.0
+@export var lookahead_gain_per_s: float = 0.0
+@export var lookahead_incentive_max_mps2: float = 0.0
+## MOBIL cooldown after a lane change (s); < 0 = TrafficTuning.lane_change_cooldown_s.
+@export var lane_change_cooldown_s: float = -1.0
+## Readability cap: at most this many discretionary lane changes started in any
+## lane_change_cap_window_s (0 = no cap beyond the cooldown).
+@export var lane_change_cap_count: int = 0
+@export var lane_change_cap_window_s: float = 10.0
+
 @export_group("Director")
 ## First leg (1-based) on which this profile may spawn (Hesitant: 3).
 @export var min_leg: int = 1

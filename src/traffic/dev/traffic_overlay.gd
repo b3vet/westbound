@@ -611,7 +611,8 @@ func _draw_selected() -> void:
 		lines.append("  c %+.2f -> %+.2f  lead %s" % [r.a_c, r.a_c_new, _who(r.lead)])
 		lines.append("  n %+.2f -> %+.2f  foll %s  b_safe %.1f" % [r.a_n, r.a_n_new, _who(r.follower), r.b_safe])
 		lines.append("  o %+.2f -> %+.2f  old %s" % [r.a_o, r.a_o_new, _who(r.old_follower)])
-		lines.append("  inc %+.3f  th %+.3f (bias %.2f)  %s" % [r.incentive, r.threshold, r.bias,
+		lines.append("  inc %+.3f%s  th %+.3f (bias %.2f)  %s" % [r.incentive,
+			"" if r.lookahead == 0.0 else " (look %+.2f)" % r.lookahead, r.threshold, r.bias,
 			"GO" if r.accepts() else "stay"])
 	if _dec_id[i] == st.vehicle_id[i] and _dec_outcome[i] != Outcome.NONE:
 		lines.append(_decision_text(i))

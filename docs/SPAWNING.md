@@ -397,3 +397,43 @@ Per seed the cells move by chaos only (8 seeds each, before WP6.3: 3 lanes +0.9 
 **Rear-end prevention:** a 250 km/h racer in the player's lane 150, 300 or 560 m (the IDM lookahead) behind a 170 km/h player that brakes to 120 km/h at 6 m/s² at 0-14 s: no contact (closest bumper gap 108 m), the racer brakes at most at the 6 m/s² clamp. An arrival that comes up behind a 170-230 km/h player in its lane (2-lane road) and meets it braking to 120 km/h: no contact, within the clamp; coming up behind the player it brakes at most 1.7 m/s².
 
 **Metrics baseline** (`tests/baselines/traffic_metrics.json`, rewritten deliberately on the tree merged with WP6.3), against WP6.3's: lane changes per vehicle-minute 1.040 → **1.146** (+10 %: arrivals are racers and aggressive drivers, which change lanes twice as often, and they pull out to pass), mean speed lane 0/1/2 140.4 / 127.6 / 116.6 → **142.8 / 128.1 / 113.9** (fast arrivals in the left lanes), density 9.90 → 10.05, gaps per km 8.55 → 8.70, set pieces per leg 0.023 → **0.031** (3 → 4 pieces in 128 legs: the only metric beyond ±15 %; a count of a few pieces that any traffic change moves, see docs/SOAK.md). (On the tree before WP6.3 the same change was 4 → 7 pieces, lane changes +12 %.)
+
+## Racers weave harder (plan D17, WP6.9)
+
+Owner (D17), after WP6.7's finding above: *racers weave harder*, density unchanged. The driver side (the racer's new *Weaving* fields: T 0.5 s, s0 1.0 m and b_safe 4.5 m/s² toward traffic, a 300 m lookahead lane choice, at most 2 lane changes per 10 s; nothing relaxed toward the player) is in docs/TRAFFIC.md, *Racers weave harder*. Nothing in the director changed.
+
+### Measured: passes per km through full traffic
+
+`RacerPassSurvey` (`tests/soak/racer_pass_survey.gd`; `soak_main.gd -- --passes [--lanes=3] [--legs=4,8] [--speeds=170,200,230] [--seeds=8] [--set=...]`; soak tier `test_racer_weave.gd::soak_racers_pass_through_traffic`): WP6.7's harness, the density survey's observer held at 170 / 200 / 230 km/h off the carriageway (traffic neither follows nor yields to it) through full traffic at one fixed leg, 8 runs × 2 × 3.75 km per cell (~50 km after a 20 s warm-up), the rule checker on every tick. "Passes" are arrivals that got past the observer (WP6.7's number); "racers passed" counts every racer, from behind or from ahead, that came past it. Before = the WP6.7 tree (weaving off), after = this WP.
+
+| 3 lanes | | 170 km/h | 200 km/h | 230 km/h |
+| --- | --- | --- | --- | --- |
+| Leg 4 | passes / km, before → after | 0.00 → **0.10** | 0.02 → **0.00** | 0.00 → **0.00** |
+| | racers passed / km | 0.02 → 0.13 | 0.02 → 0.00 | 0 → 0 |
+| | racers the observer overtook / km | 0.46 → 0.53 | 0.65 → 0.70 | 1.23 → 1.41 |
+| | racer mean speed, km/h | 153 → 157 | 165 → 165 | 164 → 155 |
+| | racer lane moves (per ~50 km) | 108 → 210 | 133 → 174 | 111 → 190 |
+| Leg 8 | passes / km | 0.11 → **0.08** | 0.02 → **0.02** | 0.00 → **0.00** |
+| | racers passed / km | 0.13 → 0.08 | 0.02 → 0.02 | 0 → 0 |
+| | racers the observer overtook / km | 0.78 → 0.76 | 0.88 → 1.02 | 2.03 → 2.17 |
+| | racer mean speed, km/h | 154 → 155 | 167 → 169 | 147 → 157 |
+| | racer lane moves (per ~50 km) | 244 → 347 | 150 → 221 | 176 → 281 |
+
+4 lanes, leg 8 (170 / 200 km/h): passes 0.15 / 0.04 → 0.13 / 0.02 per km, racers passed 0.19 / 0.04 → 0.23 / 0.02, racer mean speed 159 / 165 → 161 / 166 km/h. Every cell: 0 violations, 0 collisions; the hardest raw IDM braking of a car a racer cut in front of −3.75 to −4.04 m/s² before, −4.19 to −5.56 after (never the 6 m/s² clamp); at most 2 lane changes by one racer in any 10 s. (WP6.7's 0.07 at leg 8 came from 4 × 3.5 km per cell; with 8 × 7.5 km the same tree measures 0.02–0.11, so single cells move by ±0.05 per km by chance.)
+
+**Target not met: 0.3–0.5 passes per km at leg 8 at 200 km/h is not reachable by weaving within the fairness rules.** Racers now change lanes 30–95 % more often, but their mean speed in leg-8 traffic stays at 155–169 km/h, well below a 200 km/h player, so they cannot come past it; passes stay at 0–0.1 per km (noise level). The limit is the lanes, not MOBIL: a racer is behind a slower car 70 % of the time, and then both neighbouring lanes are unsafe 78 % of the time, mostly because the gap beside it is too short for its *own* braking (a car 0–15 m ahead going 10–30 km/h slower). Even an extreme racer (T 0.25 s, s0 0.5 m, b_safe 6, b 6, a 4, cooldown 0.5 s, MOBIL at 8 Hz, a cap of 6) stays at 169–174 km/h with 0 passes at 200 km/h, and its cut-ins need the clamp (−6.03 m/s²). An arrival still needs a clear run in its own lane (`_arrival_fits`), which weaving does not change; they stay at 0–0.02 per km at 200–230 km/h.
+
+What would give passes at 170–230 km/h (owner / orchestrator decisions, beyond WP6.9's scope):
+1. **A passing lane:** the leftmost lane at a lower density with slow profiles out of it (costs leg-8 density; WP6.7's first option).
+2. **Arrivals in breathers** (70 % density, the waves' quiet phase; the brief keeps them free of arrivals) and near a clear stretch.
+3. **Racers as scripted "chases"** (a set piece: a racer that the director gives a lane, like the convoy), announced like other set pieces.
+
+### Density (D11 / D17)
+
+The leg-8 survey (`--density --lanes=3,4 --legs=8 --seeds=8 --run-legs=4`, scripted observer): 3 lanes 15.48 → **15.45** per km per lane (−0.2 %), 4 lanes 15.51 → **15.20** (−2.0 %); the chaos between otherwise identical runs is about ±1.5 % (three no-op perturbations of the racer: 15.00–15.38 on 3 lanes). The levers that cost density are off in the data (docs/TRAFFIC.md). `soak_density_with_weaving_racers` gates ±3 % (weaving on vs off, 8 × 14 km per cell; with 4 × 14 km the 4-lane cell read −3.04 %, within the chaos).
+
+### Soak and metrics baseline
+
+`tools/soak.sh --km=2000 --shards=4 --all-pieces` (2,016 km in 72 runs, 15.3 simulated hours, wall 4,554 s on a shared container): signal 0, unsignaled 0, no-ambush 0 (49,110 lane moves checked, 54,127 signals, 2,463 cancels), decel 0 (min −6.00 m/s²), brake flags 0, rear-ends of a normally driving player 0 (132 contact episodes, 115 from behind, all after the bot's own move or hard braking), off-road 0, closed areas 0; 103 player-induced impossible windows. **Not all zero:** 78 collision pairs in two canyon runs (1 and 17, 3 lanes) and 1 traffic impossible window (run 61). Both collisions are the known lane-drop pattern of docs/SET_PIECES.md (*Canyon runs*: 195 pairs in 3 runs before this WP): a truck stopped at the end of a dropping lane merges at 0–3 km/h and the checker's box, turned by its heading atan2(v_lat, v), lies across the lanes next to a car in lane 0 (d 3.5 vs the truck's centre at 8.9 / 10.5 m). No racer took part in run 1's collision (an aggressive driver and a truck); in run 17 the other car was a racer holding its lane. The same two runs with the racer's weaving off are clean, i.e. the traffic's chaos moved the pattern, not the weaving. WP6.8 (lane-drop safety, in progress in parallel) fixes this pattern; the gate is to be re-run on the merge with WP6.8. Every 2- and 4-lane run and every non-canyon 3-lane run: 0 collisions. Arrivals 0.36 per km, 98 % of them passed the bot; racers of any origin passed it 0.56 per km and it overtook them 0.27 per km.
+
+**Metrics baseline** (`tests/baselines/traffic_metrics.json`, rewritten deliberately), against WP6.7's: lane changes per vehicle-minute 1.146 → **1.336** (+16.6 %, beyond the ±15 % tolerance: racers change lanes more often, which is the point), density 10.05 → 10.33 (+2.8 %), gaps per km 8.70 → 8.70, mean speed lane 0/1/2 142.8 / 128.1 / 113.9 → 140.9 / 129.2 / 114.1, set pieces per leg 0.031 → 0.031.
