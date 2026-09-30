@@ -371,6 +371,37 @@ func test_signal_then_smoothstep_move() -> void:
 	eq(sc.checker.total_violations(), 0, sc.checker.summary())
 
 
+func test_scripted_signal_on_a_far_vehicle_lasts_the_full_signal_time() -> void:
+	# WP6.10: a set piece requests a lane change between ticks. A far vehicle (30 Hz
+	# model) may then already hold up to 3 ticks of accumulated dt from before the
+	# request; its next model tick must not count that time as blinker time. The soak
+	# found a truck that turned near mid-signal and moved after 0.983 s (< 1.0 s).
+	for pre in 4:
+		var sc := _scene(15 + pre, 3, 100.0, 2)
+		sc.bot.follow = false
+		sc.bot.state.s = 400.0
+		var car := sc.add(1000.0, 1, &"commuter", &"sedan", 100.0, 100.0)
+		# Let the vehicle's 30 Hz phase run so `pre` ticks accumulate before the request
+		# (every phase is covered over the four iterations).
+		for k in 8 + pre:
+			sc.tick()
+		check(sc.sim.state.has_flag(car, TrafficState.FLAG_FAR), "600 m ahead: far")
+		check(sc.sim.request_lane_change(car, 0), "free lane")
+		var t0 := sc.time
+		var d0 := sc.sim.state.d[car]
+		var moved_at := -1.0
+		while moved_at < 0.0 and sc.time < t0 + 5.0:
+			sc.tick()
+			if sc.time - t0 > 0.5 and sc.sim.state.has_flag(car, TrafficState.FLAG_FAR):
+				# The player closes in: the vehicle turns near mid-signal (120 Hz).
+				sc.bot.state.s = sc.sim.state.s[car] - 150.0
+			if sc.sim.state.d[car] != d0:
+				moved_at = sc.time
+		gt(moved_at, 0.0, "pre %d: the move happened" % pre)
+		ge(moved_at - t0, t.traffic.signal_time_s - 1e-9, "pre %d: a full 1.0 s of blinker first" % pre)
+		eq(sc.checker.signal_violations, 0, "pre %d: %s" % [pre, sc.checker.summary()])
+
+
 func test_cancels_when_player_enters_the_gap() -> void:
 	var sc := _scene(12, 3, 100.0, 0)
 	sc.bot.follow = false
