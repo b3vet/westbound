@@ -7,6 +7,9 @@
   "max_players": 8,
   "player_max_extrapolation_s": 0.5,
   "lane_split": false,
+  "look_through_leaving_leaders": true,
+  "predict_leader_braking": true,
+  "anticipate_leader_braking": true,
   "ramps": {
     "exit_share_base_frac": 0.15,
     "exit_share_gain": 4.0,

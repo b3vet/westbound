@@ -97,6 +97,10 @@ pub struct TuningParams {
     pub spawn_palette_fallback_count: i32,
     /// `LivesTuning.collision_inset_m` (the rule checker's collision boxes).
     pub collision_inset_m: f64,
+    /// `TrafficViewTuning`: how clients turn a traffic car for its lateral motion,
+    /// atan2(v_lat, max(v, yaw_min_speed)) within +-yaw_max (the rule checker's boxes).
+    pub view_yaw_min_speed_mps: f64,
+    pub view_yaw_max_rad: f64,
 }
 
 /// One `DriverProfile`, as `TrafficRegistry` caches it (SI; the signal floor applied to
@@ -249,6 +253,17 @@ pub struct MpTrafficRules {
     /// Motorbike lane splitting on the server (its boundary targets have no protocol
     /// encoding yet; see docs/SERVER.md → Traffic simulation).
     pub lane_split: bool,
+    /// Not in the GDScript model: a leader leaving the path does not hide what is ahead
+    /// of it (following and MOBIL's own safety look through it). See docs/SERVER.md →
+    /// Traffic simulation, deviations.
+    pub look_through_leaving_leaders: bool,
+    /// Not in the GDScript model: MOBIL's own safety also judges the new leader as it
+    /// will be when the car is in the lane (signal + half the minimum move time), with its
+    /// current deceleration. See docs/SERVER.md → Traffic simulation, deviations.
+    pub predict_leader_braking: bool,
+    /// Not in the GDScript model: a follower brakes for its leader's stopping point when
+    /// that needs more than its comfortable b. See docs/SERVER.md → Traffic simulation.
+    pub anticipate_leader_braking: bool,
     pub ramps: RampRules,
     pub fill: FillRules,
 }

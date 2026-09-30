@@ -39,6 +39,14 @@ pub struct CheckerCounts {
     pub intent_mismatches: u64,
     pub collision_ticks: u64,
     pub collision_pairs: u64,
+    /// Pairs whose un-yawed road-space bodies overlap (the sim's own geometry).
+    pub body_overlap_pairs: u64,
+    /// Reported, not gated: overlaps with the single-player checker's heading
+    /// (atan2(v_lat, max(v, 0)) within +-MAX_BOX_YAW_RAD) whose bodies and rendered boxes
+    /// do not overlap (a 12-16 m vehicle crawling through a lane change at a lane drop),
+    /// and the fastest car in one (m/s).
+    pub yaw_only_pairs: u64,
+    pub yaw_only_max_speed: f64,
     pub decel_violations: u64,
     pub brake_flag_violations: u64,
     pub offroad: u64,
@@ -51,6 +59,8 @@ pub struct RuleChecker {
     dt: f64,
     floor: f64,
     inset: f64,
+    view_yaw_min_v: f64,
+    view_yaw_max: f64,
     max_decel: f64,
     brake: f64,
     strong: f64,
@@ -85,6 +95,8 @@ impl RuleChecker {
             dt: sim.config.tick_dt,
             floor,
             inset: t.collision_inset_m,
+            view_yaw_min_v: t.view_yaw_min_speed_mps,
+            view_yaw_max: t.view_yaw_max_rad,
             max_decel: t.max_decel_mps2,
             brake: t.brake_light_decel_mps2,
             strong: t.brake_light_strong_decel_mps2,
@@ -292,25 +304,64 @@ impl RuleChecker {
                 if j == i {
                     break;
                 }
+                if j >= cap {
+                    continue; // a player (ghosted to each other; contacts are the room's)
+                }
                 let ds = sim.road.signed_delta(st.s[i], st.s[j]);
                 if ds >= (st.length[i] + self.max_len) * 0.5 || ds < 0.0 {
                     break;
                 }
-                if j >= cap || ds >= (st.length[i] + st.length[j]) * 0.5 {
+                if ds >= (st.length[i] + st.length[j]) * 0.5 {
                     continue;
                 }
-                if self.overlap(
+                let body = self.overlap(
                     0.0,
                     st.d[i],
                     st.length[i],
                     st.width[i],
-                    box_yaw(st.v_lat[i], st.v[i]),
+                    0.0,
                     ds,
                     st.d[j],
                     st.length[j],
                     st.width[j],
-                    box_yaw(st.v_lat[j], st.v[j]),
-                ) {
+                    0.0,
+                );
+                // As clients render them (TrafficViewTuning's yaw).
+                let seen = body
+                    || self.overlap(
+                        0.0,
+                        st.d[i],
+                        st.length[i],
+                        st.width[i],
+                        self.view_yaw(st.v_lat[i], st.v[i]),
+                        ds,
+                        st.d[j],
+                        st.length[j],
+                        st.width[j],
+                        self.view_yaw(st.v_lat[j], st.v[j]),
+                    );
+                if body {
+                    self.counts.body_overlap_pairs += 1;
+                }
+                if !seen
+                    && self.overlap(
+                        0.0,
+                        st.d[i],
+                        st.length[i],
+                        st.width[i],
+                        box_yaw(st.v_lat[i], st.v[i]),
+                        ds,
+                        st.d[j],
+                        st.length[j],
+                        st.width[j],
+                        box_yaw(st.v_lat[j], st.v[j]),
+                    )
+                {
+                    self.counts.yaw_only_pairs += 1;
+                    self.counts.yaw_only_max_speed =
+                        self.counts.yaw_only_max_speed.max(st.v[i].max(st.v[j]));
+                }
+                if seen {
                     self.counts.collision_pairs += 1;
                     hit_tick = true;
                     let text = format!(
@@ -361,7 +412,17 @@ impl RuleChecker {
     }
 }
 
-/// A traffic box's heading (`TrafficRuleChecker.box_yaw`).
+impl RuleChecker {
+    /// A traffic car's heading as clients render it (`TrafficView`: atan2(v_lat, max(v,
+    /// yaw_min_speed)) within +-yaw_max).
+    pub fn view_yaw(&self, v_lat: f64, v: f64) -> f64 {
+        v_lat
+            .atan2(maxf(v, self.view_yaw_min_v))
+            .clamp(-self.view_yaw_max, self.view_yaw_max)
+    }
+}
+
+/// A traffic box's heading in the single-player checker (`TrafficRuleChecker.box_yaw`).
 pub fn box_yaw(v_lat: f64, v: f64) -> f64 {
     v_lat
         .atan2(maxf(v, 0.0))

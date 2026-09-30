@@ -58,6 +58,8 @@ pub struct Population {
     p_a: Vec<f64>,
     p_b: Vec<f64>,
     p_s0: Vec<f64>,
+    /// IDM T x the loop leg's headway scale.
+    p_t: Vec<f64>,
     t_len: Vec<f64>,
     t_variants: Vec<i32>,
     aggressive: i32,
@@ -132,6 +134,7 @@ impl Population {
             p_a: pr.iter().map(|p| p.a_max_mps2).collect(),
             p_b: pr.iter().map(|p| p.b_comfort_mps2).collect(),
             p_s0: pr.iter().map(|p| p.s0_m).collect(),
+            p_t: pr.iter().map(|p| p.headway_s * lt.headway_scale).collect(),
             t_len: params.types.iter().map(|x| x.length_m).collect(),
             t_variants: params
                 .types
@@ -392,7 +395,10 @@ impl Population {
 
     // ------------------------------------------------------------ Fill
 
-    /// Fills the ring at the target density (a new room). Returns the vehicles placed.
+    /// Fills the ring at the target density (a new room): lane by lane at the density's
+    /// spacing (jittered), each car pushed back to IDM's s* behind the one before it, then
+    /// gap-filling passes until the target count. Returns the vehicles placed. Not a
+    /// per-tick path (it allocates).
     pub fn fill(&mut self, sim: &mut TrafficSim) -> usize {
         let length = sim.road.period();
         if length <= 0.0 {
@@ -405,55 +411,88 @@ impl Population {
         }
         let mut placed = 0;
         for lane in 0..max_lanes {
-            // (s, v, half length, profile) of the first and the previous car in this lane.
-            let mut first: Option<(f64, f64, f64, usize)> = None;
+            // (s, v, half length, profile) of the previous car in this lane.
             let mut prev: Option<(f64, f64, f64, usize)> = None;
             let mut s = self.rng.float_range(0.0, M_PER_KM / k);
-            while s < length {
-                let share = self.section_share(sim, s);
-                let spacing = M_PER_KM / (k * share)
-                    * (1.0 + self.fill.spacing_jitter_frac * (2.0 * self.rng.unit() - 1.0));
-                let here = s;
-                s += spacing;
-                let lanes = sim.road.lane_count(here);
-                if lane >= lanes || sim.state.is_full() {
+            while s < length && placed < self.target {
+                let lanes = sim.road.lane_count(s);
+                if lane >= lanes || sim.closure_ahead(lane, s) < self.merge_spawn_clear {
+                    s += TARGET_STEP_M;
                     continue;
                 }
-                let Some(mut rec) = self.draw(sim, lane, lanes, here, 0.0) else {
+                let Some(mut rec) = self.draw(sim, lane, lanes, s, 0.0) else {
+                    s += TARGET_STEP_M;
                     continue;
                 };
-                let hl = self.t_len[rec.type_id as usize] * 0.5;
-                if sim.closure_ahead(lane, here + hl) < self.merge_spawn_clear {
-                    continue;
-                }
-                let p = rec.profile_id as usize;
                 rec.v = rec.v.min(rec.v0);
+                let hl = self.t_len[rec.type_id as usize] * 0.5;
+                let p = rec.profile_id as usize;
                 if let Some((ps, pv, phl, pp)) = prev {
-                    // Both orders of IDM's s* with the closing speed, plus the bodies.
-                    let need = self.min_gap(pp, pv, p, rec.v) + phl + hl + self.fill.extra_gap_m;
-                    if sim.road.signed_delta(ps, here) < need {
+                    let need =
+                        ps + self.min_gap(pp, pv, p, rec.v) + phl + hl + self.fill.extra_gap_m;
+                    if s < need {
+                        s = need;
                         continue;
                     }
                 }
-                if let Some((fs, fv, fhl, fp)) = first {
-                    // The ring closes on the lane's first car.
-                    let need = self.min_gap(p, rec.v, fp, fv) + fhl + hl + self.fill.extra_gap_m;
-                    if sim.road.signed_delta(here, fs) < need
-                        && sim.road.signed_delta(here, fs) >= 0.0
+                if !self.fits_in_lane(sim, lane, s, hl, p, rec.v) || !self.clear_of_players(sim, s)
+                {
+                    s += TARGET_STEP_M;
+                    continue;
+                }
+                rec.s = s;
+                if sim.spawn(&rec).is_some() {
+                    placed += 1;
+                    prev = Some((s, rec.v, hl, p));
+                }
+                let share = self.section_share(sim, s);
+                s += M_PER_KM / (k * share)
+                    * (1.0 + self.fill.spacing_jitter_frac * (2.0 * self.rng.unit() - 1.0));
+            }
+        }
+        // Gap-filling passes: a car into the middle of any gap that holds it.
+        let mut progress = true;
+        while placed < self.target && progress {
+            progress = false;
+            for lane in 0..max_lanes {
+                let cars: Vec<usize> = sim
+                    .order()
+                    .iter()
+                    .copied()
+                    .filter(|&i| i < sim.state.capacity && sim.state.lane[i] == lane)
+                    .collect();
+                for w in 0..cars.len() {
+                    if placed >= self.target {
+                        break;
+                    }
+                    let a = cars[w];
+                    let b = cars[(w + 1) % cars.len()];
+                    let (sa, sb) = (sim.state.s[a], sim.state.s[b]);
+                    let mut gap = sim.road.signed_delta(sa, sb);
+                    if gap <= 0.0 {
+                        gap += length;
+                    }
+                    let mid = sim.road.wrap(sa + gap * 0.5);
+                    let lanes = sim.road.lane_count(mid);
+                    if lane >= lanes || sim.closure_ahead(lane, mid) < self.merge_spawn_clear {
+                        continue;
+                    }
+                    let Some(mut rec) = self.draw(sim, lane, lanes, mid, 0.0) else {
+                        continue;
+                    };
+                    rec.v = rec.v.min(rec.v0);
+                    let hl = self.t_len[rec.type_id as usize] * 0.5;
+                    let p = rec.profile_id as usize;
+                    if !self.fits_in_lane(sim, lane, mid, hl, p, rec.v)
+                        || !self.clear_of_players(sim, mid)
                     {
                         continue;
                     }
-                }
-                if !self.clear_of_players(sim, here) {
-                    continue;
-                }
-                if sim.spawn(&rec).is_some() {
-                    placed += 1;
-                    let e = (here, rec.v, hl, p);
-                    if first.is_none() {
-                        first = Some(e);
+                    rec.s = mid;
+                    if sim.spawn(&rec).is_some() {
+                        placed += 1;
+                        progress = true;
                     }
-                    prev = Some(e);
                 }
             }
         }
@@ -461,19 +500,48 @@ impl Population {
         placed
     }
 
+    /// A car of profile p at s in `lane` (speed v, half length hl) keeps IDM's s* (both
+    /// orders) to every vehicle in that lane or moving into it.
+    fn fits_in_lane(&self, sim: &TrafficSim, lane: i32, s: f64, hl: f64, p: usize, v: f64) -> bool {
+        let st = &sim.state;
+        for i in 0..st.capacity {
+            if st.active[i] == 0 || (st.lane[i] != lane && st.target_lane[i] != lane) {
+                continue;
+            }
+            let ds = sim.road.signed_delta(s, st.s[i]);
+            let q = st.profile_id[i] as usize;
+            let need = if ds >= 0.0 {
+                self.min_gap(p, v, q, st.v[i])
+            } else {
+                self.min_gap(q, st.v[i], p, v)
+            };
+            if ds.abs() < need + hl + st.length[i] * 0.5 + self.fill.extra_gap_m {
+                return false;
+            }
+        }
+        true
+    }
+
     /// IDM's s* between a follower (profile pf at vf) and a leader (pl at vl), whichever
     /// is faster closing: the larger of the two orders (SpawnSources' rule (b)).
     fn min_gap(&self, pf: usize, vf: f64, pl: usize, vl: f64) -> f64 {
-        let hf = self.headway_of(pf);
-        let hl = self.headway_of(pl);
-        let a = idm::desired_gap(vf, vf - vl, self.p_a[pf], self.p_b[pf], hf, self.p_s0[pf]);
-        let b = idm::desired_gap(vl, vl - vf, self.p_a[pl], self.p_b[pl], hl, self.p_s0[pl]);
+        let a = idm::desired_gap(
+            vf,
+            vf - vl,
+            self.p_a[pf],
+            self.p_b[pf],
+            self.p_t[pf],
+            self.p_s0[pf],
+        );
+        let b = idm::desired_gap(
+            vl,
+            vl - vf,
+            self.p_a[pl],
+            self.p_b[pl],
+            self.p_t[pl],
+            self.p_s0[pl],
+        );
         maxf(a, b)
-    }
-
-    fn headway_of(&self, _p: usize) -> f64 {
-        // The largest headway in use; spawns err on the long side.
-        2.0 * self.headway_scale
     }
 
     fn clear_of_players(&self, sim: &TrafficSim, s: f64) -> bool {
@@ -581,9 +649,17 @@ impl Population {
             return false;
         };
         let len = self.t_len[rec.type_id as usize];
+        let p = rec.profile_id as usize;
         let clear = self.ramp.spawn_clear_m;
-        let need_ahead = clear + idm::desired_gap(rec.v, 0.0, 2.0, 2.0, self.headway_of(0), 2.0);
-        if !sim.space_clear(s_on, len, lo, hi, clear, need_ahead) {
+        let need_ahead = idm::desired_gap(
+            rec.v,
+            0.0,
+            self.p_a[p],
+            self.p_b[p],
+            self.p_t[p],
+            self.p_s0[p],
+        );
+        if !sim.space_clear(s_on, len, lo, hi, clear, need_ahead.max(clear)) {
             return false;
         }
         rec.lane = ramp;

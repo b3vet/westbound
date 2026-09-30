@@ -284,6 +284,8 @@ func _params_text(tuning: Tuning, reg: TrafficRegistry) -> String:
 		"spawn_v0_jitter_frac": t.spawn_v0_jitter_frac(),
 		"spawn_palette_fallback_count": t.spawn_palette_fallback_count,
 		"collision_inset_m": tuning.lives.collision_inset_m,
+		"view_yaw_min_speed_mps": tuning.traffic_view.yaw_min_speed_mps(),
+		"view_yaw_max_rad": deg_to_rad(tuning.traffic_view.yaw_max_deg),
 	}
 	var profiles: Array = []
 	for p in reg.profile_count():
@@ -345,7 +347,8 @@ func _params_text(tuning: Tuning, reg: TrafficRegistry) -> String:
 		"generator": GENERATOR,
 		"godot": Engine.get_version_info()["string"],
 		"sources": ["data/tuning/traffic.tres", "data/driver_profiles/*.tres", "data/vehicle_types/*.tres",
-			"data/tuning/loop.tres", "data/tuning/director.tres", "data/tuning/lives.tres", "data/tuning/net.tres"],
+			"data/tuning/loop.tres", "data/tuning/director.tres", "data/tuning/lives.tres", "data/tuning/net.tres",
+			"data/tuning/traffic_view.tres"],
 		"tuning": tun,
 		"profiles": profiles,
 		"types": types,

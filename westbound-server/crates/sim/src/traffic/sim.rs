@@ -165,6 +165,18 @@ pub struct SimConfig {
     pub move_time_at_signal: bool,
     /// Motorbike lane splitting.
     pub lane_split: bool,
+    /// MP (not in the GDScript model): a leader that is signalling or moving out of the
+    /// path does not hide what is ahead of it. Following (IDM) and MOBIL's own-safety
+    /// check also judge the next vehicle on the path beyond it (`look_through_leader`).
+    pub look_through: bool,
+    /// MP (not in the GDScript model): MOBIL's own-safety check also judges each new
+    /// leader as it will be when the car is in the lane (signal time + half the minimum
+    /// move time on), with its current deceleration (`predicted_leader_safe`).
+    pub predict_leaders: bool,
+    /// MP (not in the GDScript model): when stopping behind the leader's own stopping
+    /// point (at its current deceleration) needs more than the profile's comfortable b,
+    /// the follower brakes for it now (`anticipation_accel`).
+    pub anticipate_braking: bool,
     /// MP: a player's reported state is extrapolated at most this far.
     pub player_max_extrapolation_s: f64,
     /// The fixed step (intents' move-start ticks, player extrapolation).
@@ -183,6 +195,9 @@ impl SimConfig {
             near_radius_m: t.near_radius_m,
             move_time_at_signal: false,
             lane_split: true,
+            look_through: false,
+            predict_leaders: false,
+            anticipate_braking: false,
             player_max_extrapolation_s: 0.0,
             tick_dt: 1.0 / f64::from(t.near_tick_hz),
             events_capacity: t.max_active_vehicles * 4 + 64,
@@ -198,6 +213,9 @@ impl SimConfig {
             near_radius_m: f64::INFINITY,
             move_time_at_signal: true,
             lane_split: mp.lane_split,
+            look_through: mp.look_through_leaving_leaders,
+            predict_leaders: mp.predict_leader_braking,
+            anticipate_braking: mp.anticipate_leader_braking,
             player_max_extrapolation_s: mp.player_max_extrapolation_s,
             tick_dt: 1.0 / p.net.tick_rate_hz,
             events_capacity: mp.capacity * 4 + 64,
@@ -2088,6 +2106,7 @@ impl TrafficSim {
             }
             kk = self.next_k(x);
         }
+        let lead_k = kk;
         let mut a: f64;
         let mut gap = f64::INFINITY;
         let hw_t = if self.hz_n == 0 {
@@ -2112,6 +2131,16 @@ impl TrafficSim {
             );
         } else {
             a = idm::free_accel(vi, v0, self.pa[p], self.pdl[p]);
+        }
+        if self.config.look_through && lead >= 0 {
+            // MP: past a leader leaving the path, the next one counts too.
+            a = minf(
+                a,
+                self.look_through_accel(i, lead as usize, lead_k, lo, hi, false, vi, v0, p, hw_t),
+            );
+        }
+        if self.config.anticipate_braking && lead >= 0 {
+            a = minf(a, self.anticipation_accel(lead as usize, gap, vi, p));
         }
         if self.cl_n > 0 {
             a = minf(a, self.closure_wall_accel(i, vi, v0, p));
@@ -2675,6 +2704,7 @@ impl TrafficSim {
             }
             kk = self.next_k(x);
         }
+        let lead_k = kk;
         let mut foll = NONE;
         let mut foll_left = self.n.saturating_sub(1);
         let mut k_foll = self.prev_k(k);
@@ -2720,6 +2750,20 @@ impl TrafficSim {
                 self.gap_floor,
             );
             if a_c_new < -bsafe {
+                self.q_player = self.is_player(l);
+                return f64::NEG_INFINITY;
+            }
+            if self.config.look_through {
+                // MP: a new leader leaving the target lane hides nothing.
+                let a2 = self.look_through_accel(i, l, lead_k, lo, hi, true, vi, v0, p, self.pt[p]);
+                if a2 < -bsafe {
+                    return f64::NEG_INFINITY;
+                }
+                a_c_new = minf(a_c_new, a2);
+            }
+            if self.config.predict_leaders
+                && !self.predicted_leaders_safe(i, l, lead_k, lo, hi, vi, v0, p, bsafe)
+            {
                 self.q_player = self.is_player(l);
                 return f64::NEG_INFINITY;
             }
@@ -2903,6 +2947,205 @@ impl TrafficSim {
             }
         }
         v
+    }
+
+    /// MP look-through: while the leader `l` (at order position `lk`) is signalling or
+    /// moving out of the path [lo, hi] (its target does not overlap it), the next vehicle
+    /// on the path beyond it counts too: the most restrictive IDM acceleration of those
+    /// (INF when `l` stays on the path; -INF when one of them already overlaps i). `claims`:
+    /// match paths by claims (MOBIL's target lane) instead of physical intervals.
+    #[allow(clippy::too_many_arguments)]
+    fn look_through_accel(
+        &self,
+        i: usize,
+        l: usize,
+        lk: Option<usize>,
+        lo: f64,
+        hi: f64,
+        claims: bool,
+        vi: f64,
+        v0: f64,
+        p: usize,
+        hw_t: f64,
+    ) -> f64 {
+        let si = self.ks[i];
+        let mut a = f64::INFINITY;
+        let mut cur = l;
+        let mut kk = lk.and_then(|x| self.next_k(x));
+        let mut left = self.n.saturating_sub(2);
+        while self.leaving_path(cur, lo, hi) {
+            let mut next = NONE;
+            while let Some(x) = kk {
+                if left == 0 {
+                    break;
+                }
+                left -= 1;
+                let j = self.ord[x];
+                kk = self.next_k(x);
+                if j == i {
+                    break;
+                }
+                if self.road.signed_delta(si, self.ks[j]) > self.look {
+                    break;
+                }
+                let (jlo, jhi) = if claims {
+                    (self.kclo[j], self.kchi[j])
+                } else {
+                    (self.klo[j], self.khi[j])
+                };
+                if jlo < hi && jhi > lo {
+                    next = j as i64;
+                    break;
+                }
+            }
+            if next < 0 {
+                break;
+            }
+            let j = next as usize;
+            let gap = self.road.signed_delta(si, self.ks[j]) - self.khl[j] - self.khl[i];
+            if gap <= 0.0 {
+                return f64::NEG_INFINITY;
+            }
+            a = minf(
+                a,
+                idm::accel(
+                    vi,
+                    v0,
+                    gap,
+                    vi - self.kv[j],
+                    self.pa[p],
+                    self.pb[p],
+                    hw_t,
+                    self.ps0[p],
+                    self.pdl[p],
+                    self.gap_floor,
+                ),
+            );
+            cur = j;
+        }
+        a
+    }
+
+    /// MP: the new leader `l` (and, with look-through, the ones beyond it while they leave
+    /// the path) extrapolated `signal + move_min / 2` seconds on with its current
+    /// acceleration (a player holds its speed), against vehicle i holding its speed: the
+    /// gap must stay open and IDM's acceleration there must not be below -b_safe.
+    #[allow(clippy::too_many_arguments)]
+    fn predicted_leaders_safe(
+        &self,
+        i: usize,
+        l: usize,
+        lk: Option<usize>,
+        lo: f64,
+        hi: f64,
+        vi: f64,
+        v0: f64,
+        p: usize,
+        bsafe: f64,
+    ) -> bool {
+        let tau = self.psig[p] + 0.5 * self.pmmin[p];
+        let si = self.ks[i];
+        let mut cur = l;
+        let mut kk = lk.and_then(|x| self.next_k(x));
+        let mut left = self.n.saturating_sub(2);
+        loop {
+            let vl = self.kv[cur];
+            let al = if self.is_player(cur) {
+                0.0
+            } else {
+                self.state.accel[cur]
+            };
+            let v_end = vl + al * tau;
+            let (vl_t, dl) = if v_end >= 0.0 {
+                (v_end, (vl + v_end) * 0.5 * tau)
+            } else {
+                (0.0, vl * vl / (-2.0 * al))
+            };
+            let gap = self.road.signed_delta(si, self.ks[cur]) - self.khl[cur] - self.khl[i] + dl
+                - vi * tau;
+            if gap <= 0.0 {
+                return false;
+            }
+            let a = idm::accel(
+                vi,
+                v0,
+                gap,
+                vi - vl_t,
+                self.pa[p],
+                self.pb[p],
+                self.pt[p],
+                self.ps0[p],
+                self.pdl[p],
+                self.gap_floor,
+            );
+            if a < -bsafe {
+                return false;
+            }
+            if !(self.config.look_through && self.leaving_path(cur, lo, hi)) {
+                return true;
+            }
+            let mut next = NONE;
+            while let Some(x) = kk {
+                if left == 0 {
+                    break;
+                }
+                left -= 1;
+                let j = self.ord[x];
+                kk = self.next_k(x);
+                if j == i || self.road.signed_delta(si, self.ks[j]) > self.look {
+                    break;
+                }
+                if self.kclo[j] < hi && self.kchi[j] > lo {
+                    next = j as i64;
+                    break;
+                }
+            }
+            if next < 0 {
+                return true;
+            }
+            cur = next as usize;
+        }
+    }
+
+    /// MP: the deceleration that stops a follower at vi (profile p) s0 behind where its
+    /// leader `l`, `gap` ahead, stops at its current deceleration; applied only when it
+    /// exceeds the comfortable b (an emergency IDM would react to too late: a racer
+    /// closing at 50 m/s on a car braking at the clamp into a queue). INF otherwise.
+    fn anticipation_accel(&self, l: usize, gap: f64, vi: f64, p: usize) -> f64 {
+        let vl = self.kv[l];
+        let al = if self.is_player(l) {
+            0.0
+        } else {
+            self.state.accel[l]
+        };
+        let stop_l = if al < 0.0 {
+            vl * vl / (-2.0 * al)
+        } else if vl <= 0.0 {
+            0.0
+        } else {
+            return f64::INFINITY;
+        };
+        let room = gap - self.ps0[p] + stop_l;
+        let a_stop = if room > 0.0 {
+            -(vi * vi) / (2.0 * room)
+        } else {
+            f64::NEG_INFINITY
+        };
+        if a_stop < -self.pb[p] {
+            a_stop
+        } else {
+            f64::INFINITY
+        }
+    }
+
+    /// A vehicle signalling or moving to a target whose body does not overlap [lo, hi].
+    fn leaving_path(&self, j: usize, lo: f64, hi: f64) -> bool {
+        if self.is_player(j) || self.state.lc_state[j] == LC_NONE {
+            return false;
+        }
+        let hw = self.state.width[j] * 0.5;
+        let t = self.lc_target_d[j];
+        !(t - hw < hi && t + hw > lo)
     }
 
     /// IDM acceleration of follower f (slot or a player) at this gap / closing speed.
