@@ -460,16 +460,10 @@ func _window_size() -> Vector2i:
 	return w.size if w != null else Vector2i(get_viewport().get_visible_rect().size)
 
 
-## Keep the panel inside the display safe area (notch, rounded corners).
+## Keep the panel inside the display safe area (notch, rounded corners, the phone's
+## minimum left inset on web: ScreenInsets, WP9.7).
 func _update_safe_area() -> void:
-	var inset := 0.0
-	if DisplayServer.get_name() != "headless":
-		var safe := DisplayServer.get_display_safe_area()
-		var win_pos := DisplayServer.window_get_position()
-		var win_size := DisplayServer.window_get_size()
-		var canvas_size := get_viewport().get_visible_rect().size
-		if safe.size.x > 0 and win_size.x > 0 and canvas_size.x > 0.0:
-			var px := maxf(0.0, float(safe.position.x - win_pos.x))
-			inset = px * canvas_size.x / float(win_size.x)
+	var full := get_viewport().get_visible_rect()
+	var inset := maxf(0.0, ScreenInsets.canvas_safe_rect(full).position.x - full.position.x)
 	_panel.offset_left = inset + EDGE_MARGIN
 	_panel.offset_right = _panel.offset_left
