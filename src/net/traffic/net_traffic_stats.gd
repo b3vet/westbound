@@ -185,6 +185,8 @@ const DEV_LATE_PER_MIN := &"net_traffic_late_per_min"
 const DEV_BYTES_PER_S := &"net_traffic_bytes_per_s"
 const DEV_TELEPORTS := &"net_traffic_teleports"
 const DEV_SNAPS := &"net_traffic_snaps"
+const DEV_RTT_MS := &"net_rtt_ms"
+const DEV_CLOCK_SLEW_MS := &"net_clock_slew_ms"
 
 
 ## Writes the dev HUD's numbers into DevStats (a Node adapter or the sandbox calls this a
@@ -198,6 +200,12 @@ func report_dev_stats() -> void:
 	DevStats.report(DEV_BYTES_PER_S, rate(Counter.BYTES))
 	DevStats.report(DEV_TELEPORTS, teleports)
 	DevStats.report(DEV_SNAPS, snaps)
+
+
+## The link's numbers for the dev HUD (NetClock: the best round trip, the slew still to go).
+static func report_link(clock: NetClock) -> void:
+	DevStats.report(DEV_RTT_MS, clock.best_rtt_s * NetClock.MS_PER_S)
+	DevStats.report(DEV_CLOCK_SLEW_MS, clock.slew_remaining_ms())
 
 
 ## One line for logs and soaks.

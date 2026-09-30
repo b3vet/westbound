@@ -39,11 +39,13 @@ var _blink_on := PackedFloat64Array()   # time the car's blinker came on (INF: o
 var _moving := PackedByteArray()
 
 
-## A rig on `road` (default: the loop), the bot `start_m` into lap 1 at `speed_kmh`.
+## A rig on the loop, the bot `start_m` into lap 1 at `speed_kmh` (`base`: a tuning to use,
+## e.g. a copy with other net numbers).
 static func on_loop(seed_value: int, start_m: float, speed_kmh: float, weave: bool,
-		mode: NetDelayLink.Mode = NetDelayLink.Mode.STREAM, with_loss: bool = true) -> NetTrafficRig:
+		mode: NetDelayLink.Mode = NetDelayLink.Mode.STREAM, with_loss: bool = true,
+		base: Tuning = null) -> NetTrafficRig:
 	var r := NetTrafficRig.new()
-	r.tuning = Tuning.load_default()
+	r.tuning = base if base != null else Tuning.load_default()
 	r.road = RunLoop.loop_road(r.tuning)
 	var s := r.road.period_m() + start_m
 	var bot_mode := TrafficBotPlayer.Mode.WEAVE

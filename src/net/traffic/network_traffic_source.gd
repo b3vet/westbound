@@ -88,6 +88,9 @@ var _v0e := PackedFloat64Array()      # estimated desired speed
 var _bias := PackedFloat64Array()     # estimated unexplained acceleration
 var _last_ct := PackedInt64Array()    # tick of the last applied correction (-1: none)
 var _last_cv := PackedFloat64Array()  # the server's v at it
+var _last_cs := PackedFloat64Array()  # ... its s (unwrapped) and d (overlays)
+var _last_cd := PackedFloat64Array()
+var _last_err := PackedFloat64Array() # ... and its size (m)
 var _heard := PackedFloat64Array()    # server time (ticks) the car was last heard of
 var _int_sum := PackedFloat64Array()  # |IDM interaction term| summed since the last correction
 var _int_n := PackedInt32Array()
@@ -118,6 +121,16 @@ var _pub_s := PackedFloat64Array()
 var _pub_d := PackedFloat64Array()
 var _pub_ok := PackedByteArray()
 var _pub_t: float = 0.0
+# Lane-drop harmonisation zones (the road's; TrafficSim's WP6.8 zones, mirrored).
+var zone_syncs: int = 0
+var _dz_n: int = 0
+var _dz_s0 := PackedFloat64Array()
+var _dz_s1 := PackedFloat64Array()
+var _dz_lane := PackedInt32Array()
+var _dz_lo: float = INF
+var _dz_hi: float = -INF
+var _dz_to: float = -INF
+var _match := PackedFloat64Array()     # per slot: the last speed-matching factor
 # Order by s (active slots + the player at _P) and the mirrors of the model tick.
 var _ord := PackedInt32Array()
 var _n: int = 0
@@ -153,6 +166,7 @@ var _q_vl: float = 0.0
 var _q_phase: int = 0
 var _q_timer: float = 0.0
 var _q_dur: float = 0.0
+var _q_v0: float = 0.0
 # Cached tuning.
 var _max_decel: float
 var _brake_decel: float
@@ -181,6 +195,17 @@ var _vis_behind: float
 var _vis_ahead: float
 var _unsig_m: float
 var _teleport_v: float
+var _drop_view: float
+var _drop_release: float
+var _drop_after: float
+var _drop_slow: float
+var _drop_narrow: float
+var _drop_onset: float
+var _v_through: float
+var _v_merge: float
+var _sync_lead: float
+var _sync_len: float
+var _sync_back: float
 
 
 func _init(net_tuning: NetTuning, traffic_tuning: TrafficTuning, road_path: RoadPath,
@@ -208,6 +233,9 @@ func _init(net_tuning: NetTuning, traffic_tuning: TrafficTuning, road_path: Road
 	_bias.resize(_cap)
 	_last_ct.resize(_cap)
 	_last_cv.resize(_cap)
+	_last_cs.resize(_cap)
+	_last_cd.resize(_cap)
+	_last_err.resize(_cap)
 	_heard.resize(_cap)
 	_int_sum.resize(_cap)
 	_int_n.resize(_cap)
@@ -233,6 +261,10 @@ func _init(net_tuning: NetTuning, traffic_tuning: TrafficTuning, road_path: Road
 	_pub_s.resize(_cap)
 	_pub_d.resize(_cap)
 	_pub_ok.resize(_cap)
+	_match.resize(_cap)
+	_dz_s0.resize(TrafficSim.MAX_DROP_ZONES)
+	_dz_s1.resize(TrafficSim.MAX_DROP_ZONES)
+	_dz_lane.resize(TrafficSim.MAX_DROP_ZONES)
 	_ord.resize(_cap + 1)
 	_ks.resize(_cap + 1)
 	_kv.resize(_cap + 1)
@@ -273,6 +305,10 @@ func clear() -> void:
 	_khi[_P] = NAN
 	_n_pend = 0
 	_pend.fill(0)
+	_dz_n = 0
+	_dz_to = -INF
+	_dz_lo = INF
+	_dz_hi = -INF
 
 
 ## The player's body (the CarDef's size), as TrafficSim.set_player_body.
@@ -347,9 +383,26 @@ func lane_change_end_tick(slot: int) -> float:
 	return maxf(_lc_move[slot] + _lc_dur[slot], _lc_hold[slot] + _lc_catch[slot])
 
 
-## Tick of the last applied correction of the slot (-1: none).
+## Tick of the last applied correction of the slot (-1: none), the server's state in it
+## and its size (overlays: the "last correction" ghost).
 func last_correction_tick(slot: int) -> int:
 	return _last_ct[slot]
+
+
+func last_correction_s(slot: int) -> float:
+	return _last_cs[slot]
+
+
+func last_correction_d(slot: int) -> float:
+	return _last_cd[slot]
+
+
+func last_correction_v(slot: int) -> float:
+	return _last_cv[slot]
+
+
+func last_correction_error(slot: int) -> float:
+	return _last_err[slot]
 
 
 ## Counts the protocol bytes of a received frame (dev HUD bytes/s).
@@ -402,6 +455,8 @@ func step(now: float, player: VehicleState, out_events: ScoreEventBuffer) -> voi
 	if model_tick < 0:
 		_start(now)
 	_read_player(player, now)
+	if _p_s + _sync_lead > _dz_to:
+		sync_road(_p_s - _sync_back, _p_s + _sync_len)   # lint: allow-alloc road features, every ~1 km of travel
 	if _n_pend > 0 and out_events != null:
 		_emit_pending(out_events)
 	var target := floori(now)
@@ -486,6 +541,12 @@ func _accel_pass(advance: bool, out: ScoreEventBuffer) -> void:
 		var vi := _kv[i]
 		var p := state.profile_id[i]
 		var v0 := _v0e[i]
+		var drop_a := INF
+		_match[i] = 0.0
+		var front := si + _khl[i]
+		if _dz_n > 0 and front > _dz_lo and front < _dz_hi:
+			drop_a = _drop_accel(i, front, vi, v0, p)
+			v0 = _q_v0
 		var lo := _klo[i] - _lat_m
 		var hi := _khi[i] + _lat_m
 		var lead := -1
@@ -509,6 +570,7 @@ func _accel_pass(advance: bool, out: ScoreEventBuffer) -> void:
 			else:
 				a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p],
 					_gap_floor)
+		a = minf(a, drop_a)
 		if advance:
 			_int_sum[i] += free - a
 			_int_n[i] += 1
@@ -575,6 +637,9 @@ func _spawn_from(f: NetServerFrame, k: int, frame_tick: int, player_s: float, no
 	_int_n[i] = 0
 	_last_ct[i] = -1
 	_last_cv[i] = v
+	_last_cs[i] = s
+	_last_cd[i] = d
+	_last_err[i] = 0.0
 	_heard[i] = now
 	_haz_until[i] = -INF
 	_brake_from[i] = INF
@@ -703,8 +768,14 @@ func _correct_from(f: NetServerFrame, k: int, player_s: float, now: float) -> bo
 	var e_s := s_srv - ps
 	var e_v := v_srv - pv
 	var e_d := d_srv - pd
-	stats.add_correction(sqrt(e_s * e_s + e_d * e_d), e_d, absf(s_srv - player_s) <= _near_m)
+	var err := sqrt(e_s * e_s + e_d * e_d)
+	if err > 0.5:
+		print("DBG err %.2f cid %d prof %d ds %.0f e_s %.2f e_v %.2f e_d %.2f dt %d plan %d bias %.2f v0e %.1f v %.1f lane %d n %d match %.1f zone %s s %.0f" % [err, _cid[i], state.profile_id[i], s_srv - player_s, e_s, e_v, e_d, n - _last_ct[i], _lc[i], _bias[i], _v0e[i], v_srv, state.lane[i], n, _match[i], str(_dz_n), fmod(s_srv, 25000.0)])
+	stats.add_correction(err, e_d, absf(s_srv - player_s) <= _near_m)
 	_estimate(i, n, v_srv, e_v)
+	_last_cs[i] = s_srv
+	_last_cd[i] = d_srv
+	_last_err[i] = err
 	# Carry the error to the model's tick; keep the published position where it was.
 	var before_s := _pos_at(i, now)
 	var before_d := _lat_at(i, now)
@@ -755,8 +826,13 @@ func _estimate(i: int, n: int, v_srv: float, e_v: float) -> void:
 			var a_obs := (v_srv - _last_cv[i]) / dtc
 			var v_mean := (v_srv + _last_cv[i]) * 0.5
 			var q := 1.0 - (a_obs - _bias[i]) / _pa[p]
-			if q > 0.0 and v_mean > 0.0:
-				var v0 := clampf(v_mean / sqrt(sqrt(q)), _v0lo[p], _v0hi[p])
+			var m := _match[i]
+			if q > 0.0 and v_mean > 0.0 and m < 1.0:
+				# The model's v0 is matched toward the drop zone's merge-lane speed (m);
+				# invert that too, so the estimate stays the car's own desired speed.
+				var v0m := v_mean / sqrt(sqrt(q))
+				var v0 := v0m if m <= 0.0 or v0m >= _v_merge else (v0m - _v_merge * m) / (1.0 - m)
+				v0 = clampf(v0, _v0lo[p], _v0hi[p])
 				_v0e[i] += (v0 - _v0e[i]) * _v0_gain
 				state.v0[i] = _v0e[i]
 		elif not braking:
@@ -1048,6 +1124,103 @@ func _emit_pending(out: ScoreEventBuffer) -> void:
 	_n_pend = 0
 
 
+# ---------------------------------------------------------------- Lane-drop zones (WP6.8, mirrored)
+
+## The road's lane-drop harmonisation zones over [s_from, s_to), as
+## TrafficSim.sync_road_closures adds them (from the lane_ends sign, or
+## lane_drop_slow_zone_m before the taper, through the narrowed section to
+## lane_drop_slow_after_m past the lanes coming back); zones behind s_from are forgotten.
+## `step` calls it every ~1 km of the player's travel. Director rate: allocates.
+func sync_road(s_from: float, s_to: float) -> void:
+	var k := 0
+	for z in _dz_n:
+		if _dz_s1[z] + _drop_release >= s_from:
+			_dz_s0[k] = _dz_s0[z]
+			_dz_s1[k] = _dz_s1[z]
+			_dz_lane[k] = _dz_lane[z]
+			k += 1
+	_dz_n = k
+	var lo := maxf(s_from, _dz_to)
+	if s_to > lo:
+		var found: Array[RoadFeature] = []
+		road.features_in(lo, s_to, found)
+		for f in found:
+			if f.kind != RoadFeature.Kind.LANE_COUNT_CHANGE or (f.s_start < lo and is_finite(_dz_to)):
+				continue
+			var before := road.lane_count(f.s_start - road.lane_width(f.s_start))
+			var after := int(f.value)
+			if after < before and _dz_n < TrafficSim.MAX_DROP_ZONES:
+				_dz_lane[_dz_n] = after
+				_dz_s0[_dz_n] = _lane_ends_sign_s(f.s_start)
+				_dz_s1[_dz_n] = _lanes_back_s(f.s_end, before) + _drop_after
+				_dz_n += 1
+		_dz_to = s_to
+	_dz_lo = INF
+	_dz_hi = -INF
+	for z in _dz_n:
+		_dz_lo = minf(_dz_lo, _dz_s0[z] - _drop_view)
+		_dz_hi = maxf(_dz_hi, _dz_s1[z] + _drop_release)
+	zone_syncs += 1
+
+
+func lane_drop_zone_count() -> int:
+	return _dz_n
+
+
+## TrafficSim._lanes_back_s. Allocates.
+func _lanes_back_s(s_taper_end: float, lanes: int) -> float:
+	var found: Array[RoadFeature] = []
+	road.features_in(s_taper_end, s_taper_end + _drop_narrow, found)
+	for f in found:
+		if f.kind == RoadFeature.Kind.LANE_COUNT_CHANGE and f.s_start >= s_taper_end and int(f.value) >= lanes:
+			return f.s_end
+	return s_taper_end
+
+
+## TrafficSim._lane_ends_sign_s. Allocates.
+func _lane_ends_sign_s(s_drop: float) -> float:
+	var signs: Array[RoadFeature] = []
+	road.features_in(s_drop - 2.0 * _drop_slow, s_drop, signs)
+	var best := s_drop - _drop_slow
+	for f in signs:
+		if f.kind == RoadFeature.Kind.SIGN and f.tag == ProceduralRoadPath.SIGN_LANE_ENDS and f.s_start <= s_drop \
+				and absf(f.s_start + f.value - s_drop) < 1.0:
+			best = f.s_start
+	return best
+
+
+## The harmonisation part of TrafficSim._drop_tick for car i (its lane, front, speed,
+## desired speed, profile): the zones' acceleration limit, the matched desired speed in
+## _q_v0 and the matching factor in _match. Merge zones, the zipper and the closure wall
+## are not mirrored (corrections and the bias cover them). Allocation-free.
+func _drop_accel(i: int, front: float, vi: float, v0: float, p: int) -> float:
+	var lane := state.lane[i]
+	var m := 0.0
+	var acc := INF
+	var lim := INF
+	for z in _dz_n:
+		var s1z := _dz_s1[z]
+		if front > s1z:
+			m = maxf(m, 1.0 - (front - s1z) / _drop_release)
+			continue
+		var vz := _v_merge if lane >= _dz_lane[z] else _v_through
+		var ahead := _dz_s0[z] - front
+		if ahead <= 0.0:
+			lim = minf(lim, vz)
+			m = 1.0
+		elif ahead < _drop_view:
+			lim = minf(lim, sqrt(vz * vz + 2.0 * _pb[p] * ahead))
+			if vi > vz:
+				var req := (vz * vz - vi * vi) / (2.0 * ahead)
+				acc = minf(acc, maxf(req * clampf((-req / _pb[p] - _drop_onset) / (1.0 - _drop_onset), 0.0, 1.0), -_pb[p]))
+	_match[i] = m
+	var v0e := v0 + (_v_merge - v0) * m if v0 < _v_merge else v0
+	_q_v0 = v0e
+	if lim < v0e:
+		acc = minf(acc, Idm.free_accel(vi, lim, _pa[p], _pdl[p]))
+	return acc
+
+
 # ---------------------------------------------------------------- Setup
 
 func _cache_tuning() -> void:
@@ -1080,6 +1253,17 @@ func _cache_tuning() -> void:
 	_vis_ahead = n.traffic_visible_ahead_m
 	_unsig_m = n.traffic_unsignaled_lateral_m
 	_teleport_v = n.traffic_teleport_speed_mps
+	_drop_view = t.lane_drop_view_m
+	_drop_release = t.lane_drop_release_m
+	_drop_after = t.lane_drop_slow_after_m
+	_drop_slow = t.lane_drop_slow_zone_m
+	_drop_narrow = t.lane_drop_narrow_max_m
+	_drop_onset = t.lane_drop_brake_onset_frac
+	_v_through = Units.kmh_to_mps(t.lane_drop_through_kmh)
+	_v_merge = Units.kmh_to_mps(t.lane_drop_merge_lane_kmh)
+	_sync_lead = n.traffic_aoi_ahead_m + _drop_view
+	_sync_len = _sync_lead + t.lane_drop_merge_zone_m
+	_sync_back = n.traffic_aoi_behind_m + _drop_release
 
 
 ## Per-profile IDM parameters as TrafficSim keeps them (_init, _init_weave).

@@ -94,6 +94,7 @@ var _rep_d: float = 0.0
 var _rep_sdot: float = 0.0
 var _rep_ddot: float = 0.0
 var _extrap_ticks: int
+var _synced_to: float = -INF
 # The frame being built.
 var _despawns: Array = []
 var _spawns: Array = []
@@ -204,6 +205,14 @@ func notify_hit(car_id: int) -> void:
 func step() -> PackedByteArray:
 	tick += 1
 	_extrapolate_player()
+	# The real server knows every lane drop on the ring; the director only syncs its own
+	# window. Give the sim the drops the client's area can see (area + the drop zones'
+	# view and merge distances), as the server would have them.
+	var t := tuning.traffic
+	var horizon := net.traffic_aoi_ahead_m + t.lane_drop_view_m + t.lane_drop_merge_zone_m
+	if player.s + horizon > _synced_to:
+		_synced_to = player.s + horizon + t.lane_drop_merge_zone_m
+		sim.sync_road_closures(player.s - t.despawn_behind_m, _synced_to)
 	if loop != null:
 		loop.tick(dt, player.s, events)
 	sim.step(dt, player, null, events)
