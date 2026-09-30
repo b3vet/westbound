@@ -201,6 +201,13 @@ fn within(a: u32, b: u32, ticks: u32) -> bool {
     tick_diff(a, b).unsigned_abs() <= u64::from(ticks)
 }
 
+/// A claimed completion `tick` matches the server's: within the timing window, and earlier
+/// by the pass's body slack (a client's shorter car completes first).
+fn matches_done(p: &ObservedPass, tick: u32, timing: u32) -> bool {
+    let d = tick_diff(tick, p.done_tick);
+    d >= -i64::from(timing) && d <= i64::from(timing + p.early_ticks)
+}
+
 fn right_of(p: &ObservedPass) -> bool {
     p.cross_dd >= 0.0
 }
@@ -247,7 +254,7 @@ fn pass(c: &Claim, tracker: &mut Tracker, ready: bool, r: &VerifyRules) -> Decis
     let (car, clr_mm) = c.cars[0];
     let mut best: Option<(usize, u64)> = None;
     for (k, p) in tracker.passes.iter().enumerate() {
-        if p.car_id != car || p.claimed || !within(p.done_tick, c.tick, r.timing_ticks) {
+        if p.car_id != car || p.claimed || !matches_done(p, c.tick, r.timing_ticks) {
             continue;
         }
         let off = tick_diff(p.done_tick, c.tick).unsigned_abs();
@@ -262,7 +269,7 @@ fn pass(c: &Claim, tracker: &mut Tracker, ready: bool, r: &VerifyRules) -> Decis
         let seen = tracker.passes.iter().filter(|p| p.car_id == car);
         let mut why = Reject::NoPass;
         for p in seen {
-            why = if p.claimed && within(p.done_tick, c.tick, r.timing_ticks) {
+            why = if p.claimed && matches_done(p, c.tick, r.timing_ticks) {
                 Reject::Duplicate
             } else if why == Reject::NoPass {
                 Reject::Timing
@@ -309,9 +316,9 @@ fn thread(c: &Claim, tracker: &mut Tracker, ready: bool, r: &VerifyRules) -> Dec
     let (first, first_mm) = c.cars[0];
     let (second, second_mm) = c.cars[1];
     let passes = &tracker.passes;
-    let k1 = passes.iter().position(|p| {
-        p.car_id == second && !p.threaded && within(p.done_tick, c.tick, r.timing_ticks)
-    });
+    let k1 = passes
+        .iter()
+        .position(|p| p.car_id == second && !p.threaded && matches_done(p, c.tick, r.timing_ticks));
     let k0 = k1.and_then(|k1| {
         let p1 = passes.get(k1)?;
         passes.iter().position(|p| {

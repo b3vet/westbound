@@ -141,6 +141,8 @@ impl ScoringRules {
                 overlap_m: c.hit_overlap_m,
                 overlap_ticks: c.hit_overlap_ticks.max(1),
                 confirm_m: c.hit_confirm_clearance_m,
+                body_slack_m: ((c.player_length_m - params.body.player_length_m) * 0.5).max(0.0),
+                tick_dt: 1.0 / rate,
             },
             claim_queue: c.claim_queue.max(1),
             lag_ticks: ticks(c.official_lag_ms),

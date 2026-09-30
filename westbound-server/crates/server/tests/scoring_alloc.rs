@@ -82,10 +82,10 @@ fn scoring_a_rush_room_allocates_nothing() {
     let mut s: Vec<f64> = (0..PLAYERS).map(|k| 1_000.0 + 2_500.0 * k as f64).collect();
     let mut detect: Vec<Scoring> = (0..PLAYERS).map(|_| Scoring::new(&rules)).collect();
     let mut buf = ScoreEventBuffer::new(64);
-    for p in 0..PLAYERS {
+    for (p, &s0) in s.iter().enumerate() {
         let id = p as u16 + 1;
         sc.add_player(id, (p % 2) as u8);
-        sc.start_run(id, 1, origin, (s[p] * 1_000.0) as u32);
+        sc.start_run(id, 1, origin, (s0 * 1_000.0) as u32);
     }
     let mut views: Vec<PlayerView> = Vec::with_capacity(PLAYERS);
     let mut frames: Vec<FrameBuilder> = (0..PLAYERS).map(|_| FrameBuilder::new()).collect();

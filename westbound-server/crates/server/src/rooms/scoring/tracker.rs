@@ -25,6 +25,17 @@ const BEHIND_MARGIN_M: f64 = 10.0;
 /// A first cut on the distance before anything else (m past `ahead_m`; longer than any
 /// vehicle's overlap window behind).
 const NEAR_SCAN_M: f64 = 40.0;
+/// The body slack's allowance is capped (a pass closing slower than this takes seconds).
+pub const MAX_EARLY_TICKS: u32 = 40;
+/// Closing speeds below this count as this (m/s).
+const MIN_CLOSING_MPS: f64 = 0.1;
+
+/// Ticks a shorter car completes a pass earlier at `closing` m/s.
+fn early_ticks(r: TrackRules, closing: f64) -> u32 {
+    let t = r.body_slack_m / closing.max(MIN_CLOSING_MPS) / r.tick_dt;
+    (t.ceil().max(0.0) as u32).min(MAX_EARLY_TICKS)
+}
+
 /// Cars tracked at once (rush hour has ~30 within the window).
 pub const MAX_TRACKS: usize = 64;
 /// Observed passes, contacts and near misses remembered (seconds of play).
@@ -64,6 +75,10 @@ pub struct TrackRules {
     pub overlap_ticks: u32,
     /// Near misses closer than this are remembered (a reported hit's confirmation).
     pub confirm_m: f64,
+    /// How much longer the server's player hull is than the shortest car's, halved (m):
+    /// a client in that car completes a pass this much (relative distance) earlier.
+    pub body_slack_m: f64,
+    pub tick_dt: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -91,6 +106,9 @@ pub struct ObservedPass {
     pub min_clear: f64,
     /// Car d − player d when the centres crossed (+: the car was on the right).
     pub cross_dd: f64,
+    /// A client with a shorter car completes this pass up to this many ticks before
+    /// `done_tick` (the body slack at the closing speed; at most `MAX_EARLY_TICKS`).
+    pub early_ticks: u32,
     /// Matched by an accepted pass / close-pass claim, or by a thread claim.
     pub claimed: bool,
     pub threaded: bool,
@@ -284,6 +302,7 @@ impl Tracker {
                         done_tick: st.tick,
                         min_clear: t.min_clear,
                         cross_dd: t.cross_dd,
+                        early_ticks: early_ticks(r, st.v - f64::from(c.v)),
                         claimed: false,
                         threaded: false,
                     });
@@ -317,6 +336,8 @@ mod tests {
             overlap_m: 0.3,
             overlap_ticks: 2,
             confirm_m: 1.0,
+            body_slack_m: 0.15,
+            tick_dt: 0.05,
         }
     }
 
