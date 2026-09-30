@@ -151,7 +151,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	match (event as InputEventKey).keycode:
 		KEY_C:
-			_rig.cycle_mode()
+			_rig.cycle_mode(true)   # dev: every mode, the hidden cockpit included
 		KEY_UP:
 			_step_speed(1)
 		KEY_DOWN:

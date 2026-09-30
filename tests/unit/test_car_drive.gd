@@ -1,8 +1,13 @@
 extends WBTest
 ## M2 integration scene smoke test: the physics car drives itself forward on auto
-## throttle through the full world stack, and the camera follows.
+## throttle through the full world stack, and the camera follows. Auto throttle is set
+## here: the default is manual since 2026-10-01 (plan D22).
 
 var _scene: Node3D
+
+
+func before_each() -> void:
+	Settings.set_value(&"throttle_mode", &"auto")
 
 
 func after_each() -> void:
@@ -10,6 +15,7 @@ func after_each() -> void:
 		_scene.queue_free()
 		await tree.process_frame
 		_scene = null
+	Settings.set_value(&"throttle_mode", Settings.DEFAULTS[&"throttle_mode"])
 
 
 func test_car_accelerates_and_camera_follows() -> void:

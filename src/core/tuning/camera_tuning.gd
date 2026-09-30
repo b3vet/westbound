@@ -12,6 +12,13 @@ extends Resource
 ## a rigid driver's-eye seat frame with the procedural cockpit around it, the car body
 ## hidden, and the look-ahead, head sway, shake and punch applied to the head (the
 ## Camera3D) so the dash moves in the view. Its numbers are the `cockpit_*` fields.
+##
+## Player modes (owner, 2026-10-01; plan D11): the cockpit is hidden from players until
+## further notice. `cockpit_player_enabled` (false) is the one switch: while it is off,
+## the cockpit is left out of player_modes() (the C key and HUD CAM cycle, the settings
+## CAMERA row) and a saved `cockpit` loads as `cockpit_fallback_mode` (player_mode(),
+## Settings). The mode itself, its code, assets and tests stay; CameraRig.set_mode and
+## cycle_mode(true) still reach it (tests, dev tools). true brings it back everywhere.
 
 @export var modes: PackedStringArray = ["chase", "far", "hood", "overhead", "cockpit"]
 @export var default_mode: String = "chase"
@@ -71,6 +78,12 @@ extends Resource
 @export var mode_heading_damping_ratio: PackedFloat64Array = [1.0, 1.0, 1.0, 1.0, 1.0]   # not in spec
 
 @export_group("Cockpit (plan D11)")
+## Offered to players (camera cycle, settings row, loading a saved choice). Off until
+## further notice (owner, 2026-10-01); true brings the cockpit back everywhere.
+@export var cockpit_player_enabled: bool = false
+## Where a saved cockpit choice goes while the cockpit is hidden (the nearest view: the
+## other mounted camera). Must be one of `modes` and not the cockpit.
+@export var cockpit_fallback_mode: String = "hood"
 ## The mode that gets the driver's-eye seat frame, the procedural cockpit and the hidden
 ## car body. Must be one of `modes`.
 @export var cockpit_mode: String = "cockpit"
@@ -192,7 +205,40 @@ func mode_arrays_error() -> String:
 		return "default_mode %s is not a mode" % default_mode
 	if not cockpit_mode.is_empty() and mode_index(StringName(cockpit_mode)) < 0:
 		return "cockpit_mode %s is not a mode" % cockpit_mode
+	var fb := mode_index(StringName(cockpit_fallback_mode))
+	if fb < 0 or fb == cockpit_index():
+		return "cockpit_fallback_mode %s is not a mode players can pick" % cockpit_fallback_mode
+	if not is_player_mode(StringName(default_mode)):
+		return "default_mode %s is not a mode players can pick" % default_mode
 	return ""
+
+
+## True when players can pick `mode`: one of `modes`, and not the cockpit while it is
+## hidden (cockpit_player_enabled).
+func is_player_mode(mode: StringName) -> bool:
+	var i := mode_index(mode)
+	return i >= 0 and (cockpit_player_enabled or i != cockpit_index())
+
+
+## The modes players can pick, in cycle order (the C key, the HUD CAM button, the
+## settings CAMERA row).
+func player_modes() -> PackedStringArray:
+	var out := PackedStringArray()
+	for m in modes:
+		if is_player_mode(StringName(m)):
+			out.append(m)
+	return out
+
+
+## `mode` when players can pick it; the hidden cockpit -> cockpit_fallback_mode; anything
+## else (unknown) -> default_mode. Settings loads a saved camera_mode through this.
+func player_mode(mode: StringName) -> StringName:
+	if is_player_mode(mode):
+		return mode
+	var i := mode_index(mode)
+	if i >= 0 and i == cockpit_index():
+		return StringName(cockpit_fallback_mode)
+	return StringName(default_mode)
 
 
 ## Index of the cockpit mode in `modes`, or -1 when there is none.

@@ -2,7 +2,8 @@ extends WBTest
 ## The controls overlay. Spec: Controls → Drag steering (Indicator); UI → HUD elements
 ## (controls overlay, "nothing animates when idle"); plan D9 (joined gas + boost, the
 ## controls_scale setting) and D10 (drag_visual = ring | wheel: a steering wheel that
-## turns with the drag, visual only). docs/CONTROLS.md → Overlay.
+## turns with the drag, visual only; the wheel is the default since 2026-10-01, owner).
+## docs/CONTROLS.md → Overlay.
 ##
 ## Screen: 1280x720 canvas at 40 px/cm (max_drag = 100 px); iOS-style touch ids.
 
@@ -64,9 +65,13 @@ func _frames(n: int) -> void:
 		await tree.process_frame
 
 
-func test_ring_is_the_default_and_unchanged() -> void:
+func test_wheel_is_the_default_and_the_ring_unchanged() -> void:
 	await _frames(FRAMES_SETTLE)
-	eq(hub.drag_visual, PlayerInput.RING, "default drag visual")
+	eq(hub.drag_visual, PlayerInput.WHEEL, "default drag visual (owner, 2026-10-01: plan D10)")
+	check(overlay.wheel_mode())
+	Settings.set_value(&"drag_visual", &"ring")
+	eq(hub.drag_visual, PlayerInput.RING, "the hub follows the setting")
+	await _frames(FRAMES_SETTLE)
 	check(not overlay.wheel_mode())
 	near(overlay.ring_radius_px(), t.controls.overlay_ring_radius_px, 1e-9, "ring radius as tuned at scale 1")
 	_touch(Vector2(600.0, 400.0), true, 0.0)
@@ -132,6 +137,8 @@ func test_wheel_and_ring_input_is_identical() -> void:
 
 
 func test_visual_switch_redraws_without_releasing_the_finger() -> void:
+	Settings.set_value(&"drag_visual", &"ring")
+	await _frames(FRAMES_SETTLE)
 	_touch(Vector2(600.0, 400.0), true, 0.0)
 	await _frames(FRAMES_SETTLE)
 	var n := overlay.redraw_count()

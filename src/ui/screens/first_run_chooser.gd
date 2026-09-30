@@ -5,7 +5,8 @@ extends Control
 ## Controls ("Steering (drag or gyro) and throttle (auto or manual) are two independent
 ## settings, giving four layouts"; mirroring; Settings and first run: "A one-screen
 ## chooser for steering and throttle (default: drag + auto) ... The chooser can be
-## revisited from settings"). WP8.1; docs/SCREENS.md → First run.
+## revisited from settings"). WP8.1; docs/SCREENS.md → First run. Plan D22 (owner,
+## 2026-10-01): the default layout is drag + manual with the wheel look (Settings.DEFAULTS).
 ##
 ## One widget, two hosts: FirstRunScreen (the first PLAY on a fresh save, with DRIVE and
 ## SKIP) and SettingsPanel's CONTROLS page (CHOOSE LAYOUT). A tap writes Settings at once
@@ -19,6 +20,8 @@ signal changed(key: StringName)
 const KEY_STEERING := &"steering_mode"
 const KEY_THROTTLE := &"throttle_mode"
 const KEY_HAND := &"left_handed"
+## The drag look (plan D10): not a chooser row, but part of the default layout SKIP gives.
+const KEY_DRAG_VISUAL := &"drag_visual"
 const TEXT_NA := "N/A"
 const TEXT_MIRRORED := "MIRRORED"
 ## Row labels, option captions and notes (index = option).
@@ -165,9 +168,10 @@ func _choose(row: int, i: int) -> void:
 	changed.emit(key)
 
 
-## Puts every choice back to the spec's default layout (drag + auto, right hand).
+## Puts every choice back to the default layout (Settings.DEFAULTS: drag + manual, the
+## wheel look, right hand; plan D22).
 static func apply_defaults() -> void:
-	for key: StringName in [KEY_STEERING, KEY_THROTTLE, KEY_HAND]:
+	for key: StringName in [KEY_STEERING, KEY_THROTTLE, KEY_HAND, KEY_DRAG_VISUAL]:
 		Settings.set_value(key, Settings.DEFAULTS[key])
 
 

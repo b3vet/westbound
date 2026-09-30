@@ -364,12 +364,15 @@ func test_cycle_mode_wraps_saves_and_emits() -> void:
 	var on_changed := func(m: StringName) -> void: seen.append(m)
 	Events.camera_mode_changed.connect(on_changed)
 	eq(rig.mode, &"chase")
-	for i in 5:
+	for i in 4:
 		rig.cycle_mode()
 		eq(Settings.get_value(&"camera_mode"), rig.mode, "saved")
+	for i in 5:
+		rig.cycle_mode(true)
 	Events.camera_mode_changed.disconnect(on_changed)
-	eq(seen, [&"far", &"hood", &"overhead", &"cockpit", &"chase"] as Array[StringName],
-			"wraps through the five modes (cockpit: WP4.7, tests/camera/test_cockpit_camera.gd)")
+	eq(seen, [&"far", &"hood", &"overhead", &"chase", &"far", &"hood", &"overhead", &"cockpit", &"chase"]
+			as Array[StringName], "the player cycle wraps through the four player modes (the cockpit is "
+			+ "hidden, plan D11); the dev cycle through all five (tests/camera/test_cockpit_camera.gd)")
 
 
 func test_saved_mode_restored_at_startup() -> void:

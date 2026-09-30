@@ -3,8 +3,9 @@ extends Node
 ## (steering and throttle mode, sensitivity, dead zone, curve, left-handed mirror,
 ## haptics, units); Cameras ("the choice is saved"; reduced motion); Performance budget
 ## (quality tier, battery saver); Audio (a volume per bus); Accessibility (text size);
-## UI → Screens → Settings. Plan D9 / D10 (controls size, drag visual). docs/SAVE.md →
-## Settings.
+## UI → Screens → Settings. Plan D9 / D10 (controls size, drag visual), D22 (defaults:
+## drag + manual, wheel look, owner 2026-10-01), D11 (the cockpit camera hidden from
+## players). docs/SAVE.md → Settings.
 ##
 ## A typed key/value store with defaults. set_value() emits Events.settings_changed,
 ## and every system applies its keys live from that signal (nobody polls). Persistence
@@ -13,25 +14,30 @@ extends Node
 ##
 ## Loading is defensive (from_dict): a value of the wrong type, an unknown choice or a
 ## non-finite number falls back to the default, so a damaged save never feeds a system
-## a value it cannot handle. Ranges (sensitivity, sizes, volumes) are clamped by the
-## systems that read them, from their tuning. Keys this build does not know are kept
+## a value it cannot handle. A camera mode players cannot pick (the hidden cockpit)
+## loads as its fallback (CameraTuning.player_mode). Ranges (sensitivity, sizes,
+## volumes) are clamped by the systems that read them, from their tuning. Keys this build does not know are kept
 ## and written back (a newer build's settings survive a downgrade and upgrade).
 
 const DEFAULTS := {
 	&"steering_mode": &"drag",      # &"drag" | &"gyro"
-	&"throttle_mode": &"auto",      # &"auto" | &"manual"
+	## Owner, 2026-10-01 (plan D22): drag + manual pedals by default (the spec's: auto).
+	&"throttle_mode": &"manual",    # &"auto" | &"manual"
 	&"left_handed": false,
 	## Steering feel multipliers (1.0 = the spec's tuned values; clamped 0.5-2 by PlayerInput).
 	&"steer_sensitivity": 1.0,
 	&"steer_dead_zone": 1.0,
 	&"steer_curve": 1.0,
-	## Drag-steering visual: &"ring" (anchor ring + thumb dot) | &"wheel" (steering wheel that turns).
-	&"drag_visual": &"ring",
+	## Drag-steering visual: &"ring" (anchor ring + thumb dot) | &"wheel" (steering wheel that
+	## turns). Owner, 2026-10-01 (plan D10): the wheel by default.
+	&"drag_visual": &"wheel",
 	## On-screen control size multiplier (touch pedals, buttons, anchor visuals).
 	&"controls_scale": 1.0,
 	&"haptics": true,
 	&"units": &"kmh",               # &"kmh" | &"mph"
-	## One of CameraTuning.modes (the rig ignores an unknown one).
+	## One of CameraTuning.modes (the rig ignores an unknown one). Loading keeps only the
+	## modes players can pick (CameraTuning.player_mode: a saved cockpit loads as hood while
+	## the cockpit is hidden, plan D11).
 	&"camera_mode": &"chase",
 	&"reduced_motion": false,
 	&"quality_tier": &"medium",     # &"low" | &"medium" | &"high"
@@ -55,6 +61,8 @@ const CHOICES := {
 	&"units": [&"kmh", &"mph"],
 	&"quality_tier": [&"low", &"medium", &"high"],
 }
+
+const KEY_CAMERA := &"camera_mode"
 
 var _values := {}
 ## Keys from a save this build does not know (written back unchanged).
@@ -148,5 +156,7 @@ static func sanitize(key: StringName, value: Variant) -> Variant:
 			var s := StringName(value)
 			if CHOICES.has(key) and not (CHOICES[key] as Array).has(s):
 				return d
+			if key == KEY_CAMERA:
+				return Tuning.load_default().camera.player_mode(s)
 			return s if not String(s).is_empty() else d
 	return d

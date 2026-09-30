@@ -174,10 +174,10 @@ WASD are physical keys (the same positions on AZERTY and similar layouts). The l
 
 `ControlsOverlay` draws the hub's `ControlsLayout`, so what you see is exactly what the touch zones are, mirroring and safe areas included.
 
-- **Drag, `drag_visual = ring` (default).**
+- **Drag, `drag_visual = ring`.**
   - A faint faceted (octagonal) anchor ring in the accent color, `overlay_ring_radius_px` wide, drawn with a 1.5 px antialiased edge.
   - A solid octagonal dot at the thumb. It turns hot (#ff5a4d) while the drag brakes.
-- **Drag, `drag_visual = wheel` (plan D10).** Visual only: the input math is the same as the ring's.
+- **Drag, `drag_visual = wheel` (plan D10; the default since 2026-10-01, owner).** Visual only: the input math is the same as the ring's.
   - A faceted low-poly steering wheel centred on the anchor, `wheel_visual_diameter_cm` (2.4) × `controls_scale` across: a `wheel_facets` (12)-sided rim, three spokes (left, right, bottom), an octagonal hub, and a solid rim facet at 12 o'clock so the rotation reads at a glance.
   - Rotation = `steer × wheel_visual_max_deg` (135°), clockwise for right. It follows the anchor (including anchor follow past max_drag) and appears and disappears with the touch, like the ring.
   - Subtle panel fill, accent edges at `wheel_edge_alpha_pct`; the edges and marker turn hot while the drag brakes (drag + auto). No thumb dot.

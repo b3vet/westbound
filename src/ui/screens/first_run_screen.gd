@@ -5,12 +5,14 @@ extends RunScreen
 ## first run ("First launch. A one-screen chooser for steering and throttle (default:
 ## drag + auto), then a 20-second empty-road warm-up so players feel it before traffic.
 ## The chooser can be revisited from settings"); Design system; Accessibility (text
-## size). WP8.1; docs/SCREENS.md → First run.
+## size). WP8.1; docs/SCREENS.md → First run. Plan D22 (owner, 2026-10-01): the default
+## layout is drag + manual with the wheel look, right hand.
 ##
 ## Over the title's attract drive, behind a dim: HOW DO YOU DRIVE? (speed-tilted) and a
 ## line under it top-left, the FirstRunChooser (steering, throttle, hand and the
 ## sketch), and at the bottom on the thumb side DRIVE (primary: keep these controls and
-## start) with SKIP beside it (the default layout, drag + auto, right hand, and start).
+## start) with SKIP beside it (the default layout, drag + manual, wheel look, right
+## hand, and start).
 ## Esc goes back to the title (the chooser stays pending); Enter drives. Emits intents
 ## only (done, back); TitleScreens records the choice (Save.mark_chooser_done) and starts
 ## the run.
@@ -25,7 +27,7 @@ const TEXT_TITLE := "HOW DO YOU DRIVE?"
 const TEXT_LINE := "PICK YOUR CONTROLS · CHANGE THEM ANY TIME IN SETTINGS"
 const TEXT_DRIVE := "DRIVE"
 const TEXT_SKIP := "SKIP"
-const TEXT_SKIP_NOTE := "DRAG + AUTO"
+const TEXT_SKIP_NOTE := "DRAG + MANUAL"
 
 var dim: ColorRect
 var title: ScreenText
@@ -103,7 +105,7 @@ func drive() -> void:
 	done.emit(false)
 
 
-## SKIP: the default layout (drag + auto, right hand).
+## SKIP: the default layout (drag + manual, wheel look, right hand; Settings.DEFAULTS).
 func skip() -> void:
 	if not is_open():
 		return

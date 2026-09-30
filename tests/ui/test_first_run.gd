@@ -1,7 +1,8 @@
 extends WBTest
 ## The first-run chooser (WP8.1): shown once, on a fresh save, when the title's PLAY (or
 ## DAILY DRIVE) is pressed; DRIVE keeps the choice and starts the run, SKIP puts the
-## default layout back (drag + auto, right hand) and starts, Esc goes back to the title;
+## default layout back (drag + manual, wheel look, right hand: plan D22, owner
+## 2026-10-01) and starts, Esc goes back to the title;
 ## it never shows again, and never when the first run is off (tests and tools); its taps
 ## write Settings; the thumb-side DRIVE mirrors; text fit at both text sizes on a 1280x720
 ## and a notched 1560x720 canvas for every layout; nothing drawn after it closes. Spec:
@@ -90,14 +91,16 @@ func test_play_on_a_fresh_save_shows_the_chooser_then_drives() -> void:
 	eq(_started.size(), 0, "the run waits")
 	check(not ts.title.visible, "the menu steps aside")
 	check(ts.is_open())
-	eq(fr.chooser.selected_index(0), 0, "DRAG preselected (the spec's default)")
-	eq(fr.chooser.selected_index(1), 0, "AUTO preselected")
-	_tap(fr.chooser.option(1, 1))
-	eq(Settings.get_value(&"throttle_mode"), &"manual", "MANUAL written at once")
+	eq(fr.chooser.selected_index(0), 0, "DRAG preselected (the default)")
+	eq(fr.chooser.selected_index(1), 1, "MANUAL preselected (owner, 2026-10-01: plan D22)")
+	eq(fr.chooser.selected_index(2), 0, "RIGHT preselected")
+	eq(fr.skip_button.note, "DRAG + MANUAL", "SKIP names the default layout")
+	_tap(fr.chooser.option(1, 0))
+	eq(Settings.get_value(&"throttle_mode"), &"auto", "AUTO written at once")
 	_tap(fr.drive_button)
 	eq(_started, [RunContext.MODE_JOURNEY] as Array[StringName], "DRIVE starts the Journey")
 	check(not Save.chooser_pending(), "answered: never again")
-	eq(Settings.get_value(&"throttle_mode"), &"manual", "the choice is kept")
+	eq(Settings.get_value(&"throttle_mode"), &"auto", "the choice is kept")
 	# The next PLAY goes straight to the run.
 	ts.show_state(Game.COUNTDOWN)
 	eq(ts.visible_item_count(), 0, "nothing drawn once the run starts")
@@ -111,12 +114,15 @@ func test_skip_keeps_the_default_layout() -> void:
 	var ts := _title()
 	var fr := _open_chooser(ts)
 	_tap(fr.chooser.option(0, 1))
+	_tap(fr.chooser.option(1, 0))
 	_tap(fr.chooser.option(2, 1))
 	eq(Settings.get_value(&"left_handed"), true)
+	Settings.set_value(&"drag_visual", &"ring")   # changed in the settings before
 	_tap(fr.skip_button)
 	eq(_started, [RunContext.MODE_JOURNEY] as Array[StringName], "SKIP starts too")
 	eq(Settings.get_value(&"steering_mode"), &"drag", "drag")
-	eq(Settings.get_value(&"throttle_mode"), &"auto", "auto")
+	eq(Settings.get_value(&"throttle_mode"), &"manual", "manual (owner, 2026-10-01: plan D22)")
+	eq(Settings.get_value(&"drag_visual"), &"wheel", "the wheel look (plan D10)")
 	eq(Settings.get_value(&"left_handed"), false, "right hand")
 	check(not Save.chooser_pending(), "skipping answers it")
 

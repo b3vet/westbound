@@ -81,7 +81,7 @@ WP8.1 (docs/SAVE.md → Settings has every setting, its key and what applies it)
 
 | Page | Row | Key | Choices |
 | --- | --- | --- | --- |
-| GAME | CAMERA (full width) | `camera_mode` | every `camera.modes`: CHASE / FAR CHASE / HOOD / OVERHEAD / COCKPIT |
+| GAME | CAMERA (full width) | `camera_mode` | `camera.player_modes()`: CHASE / FAR CHASE / HOOD / OVERHEAD (the cockpit is hidden from players, plan D11 / docs/COCKPIT.md; `camera.cockpit_player_enabled` brings it back) |
 | GAME | GRAPHICS | `quality_tier` | every `quality.tier_names`: LOW / MEDIUM / HIGH |
 | GAME | BATTERY SAVER | `battery_saver` | OFF / ON |
 | GAME | TEXT SIZE | `text_scale` | `text_scales` (100 / 125%) |
@@ -89,9 +89,9 @@ WP8.1 (docs/SAVE.md → Settings has every setting, its key and what applies it)
 | GAME | REDUCED MOTION | `reduced_motion` | OFF / ON |
 | GAME | HAPTICS | `haptics` | ON / OFF |
 | CONTROLS | STEERING | `steering_mode` | DRAG / TILT (TILT disabled, marked N/A, where `is_gyro_supported()` is false) |
-| CONTROLS | THROTTLE | `throttle_mode` | AUTO / MANUAL |
+| CONTROLS | THROTTLE | `throttle_mode` | AUTO / MANUAL (default MANUAL, D22) |
 | CONTROLS | HAND | `left_handed` | RIGHT / LEFT |
-| CONTROLS | DRAG LOOK | `drag_visual` | RING / WHEEL |
+| CONTROLS | DRAG LOOK | `drag_visual` | RING / WHEEL (default WHEEL, D10) |
 | CONTROLS | CONTROLS SIZE | `controls_scale` | `settings_controls_scales` (80 / 100 / 120%) |
 | CONTROLS | SENSITIVITY | `steer_sensitivity` | `settings_sensitivities` (75 / 100 / 135%) |
 | CONTROLS | DEAD ZONE | `steer_dead_zone` | `meta.settings_dead_zones`: SMALL / NORMAL / LARGE |
@@ -99,7 +99,7 @@ WP8.1 (docs/SAVE.md → Settings has every setting, its key and what applies it)
 | AUDIO | MASTER, MUSIC, EFFECTS, ENGINE, INTERFACE | `volume_*` | `audio.volume_steps` (OFF, then %) |
 | AUDIO | SOUND | `audio_muted` | ON / MUTED |
 
-**CHOOSE LAYOUT** (the right end of the tab row, CONTROLS only) swaps the rows for the first-run chooser (below; the spec: "The chooser can be revisited from settings"); the button reads BACK while it shows. A tab, BACK, or closing the settings brings the rows back.
+**CHOOSE LAYOUT** (the right end of the tab row, CONTROLS only) swaps the rows for the first-run chooser (below; the spec: "The chooser can be revisited from settings"); the button reads BACK while it shows. A tab, BACK, or closing the settings brings the rows back. **DEFAULTS** (left of it, CONTROLS only) puts every CONTROLS row back to `Settings.DEFAULTS` (drag + manual, right hand, wheel look, 100 % size, sensitivity, normal dead zone and curve); the other pages are untouched. It is how a player with an older save gets the new default layout (docs/SAVE.md → Settings).
 
 ## First run
 
@@ -113,8 +113,8 @@ WP8.1 (docs/SAVE.md → First run). Spec: Controls → Settings and first run.
 | `first_run_warmup.gd` | `FirstRunWarmupHint` | The warm-up's hint (a CanvasLayer at layer 6) |
 
 - **When.** On a fresh save (`Save.chooser_pending()`), the title's PLAY, DAILY DRIVE or the hub's LOOP PRACTICE opens the chooser instead of starting; the menu steps aside. Never again once answered, and never under the test runner or tools (docs/SAVE.md → Tests and tools).
-- **Layout.** HOW DO YOU DRIVE? (display face, speed-tilted) top-left and PICK YOUR CONTROLS · CHANGE THEM ANY TIME IN SETTINGS under it in the accent. The rows left-anchored: a label, then two big OPTION cards with a note each (DRAG "SLIDE A THUMB" / TILT "TILT THE PHONE", N/A without tilt; AUTO "GAS ALWAYS ON" / MANUAL "GAS + BRAKE PEDALS"; RIGHT / LEFT "MIRRORED"); the spec's default (drag + auto, right hand) preselected. Right of them the sketch and two lines naming the layout (ONE THUMB DOES IT ALL / DOWN BRAKES · FLICK UP BOOSTS, ...; the words LEFT and RIGHT swap when mirrored). DRIVE (primary, `primary_button_size_px`) in the thumb corner with SKIP (note DRAG + AUTO) beside it; both mirror at once when LEFT is chosen.
-- **Intents.** A card writes Settings at once (the settings rows follow). DRIVE keeps the choice; SKIP puts the defaults back; either records it (`Save.mark_chooser_done`) and `TitleScreens` starts the mode that asked. Enter drives; Esc goes back to the title (still pending).
+- **Layout.** HOW DO YOU DRIVE? (display face, speed-tilted) top-left and PICK YOUR CONTROLS · CHANGE THEM ANY TIME IN SETTINGS under it in the accent. The rows left-anchored: a label, then two big OPTION cards with a note each (DRAG "SLIDE A THUMB" / TILT "TILT THE PHONE", N/A without tilt; AUTO "GAS ALWAYS ON" / MANUAL "GAS + BRAKE PEDALS"; RIGHT / LEFT "MIRRORED"); on a fresh save the default (drag + manual, right hand; plan D22, owner 2026-10-01) preselected. Right of them the sketch and two lines naming the layout (ONE THUMB DOES IT ALL / DOWN BRAKES · FLICK UP BOOSTS, ...; the words LEFT and RIGHT swap when mirrored). DRIVE (primary, `primary_button_size_px`) in the thumb corner with SKIP (note DRAG + MANUAL) beside it; both mirror at once when LEFT is chosen.
+- **Intents.** A card writes Settings at once (the settings rows follow). DRIVE keeps the choice; SKIP puts the defaults back (drag + manual, the wheel look, right hand: `FirstRunChooser.apply_defaults`); either records it (`Save.mark_chooser_done`) and `TitleScreens` starts the mode that asked. Enter drives; Esc goes back to the title (still pending).
 - **Warm-up hint.** During the first Journey's empty-road warm-up: a panel right-aligned under the HUD's lives, pause, camera and high-beam slots (clear of the top-centre readouts, the leg toast and the dev rows): WARM-UP · EMPTY ROAD in the accent, TRAFFIC IN n S (tabular, changes once a second), SKIP (a touch target). At the end (or SKIP) the line reads TRAFFIC AHEAD, SKIP goes, and the panel hides after `meta.warmup_end_note_s`. Under the pause menu's dim while paused. Nothing exists outside the first run.
 
 Previews:

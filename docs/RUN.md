@@ -24,7 +24,7 @@ Related pages: [SCREENS.md](SCREENS.md) (countdown, pause, crash hint, results),
 Run (Node3D, run.gd; physics priority 50: after PlayerInput, before CameraRig)
 ├─ Sky              SkyRig (sky.tscn): pushes the wb_* globals each frame from sky_t
 ├─ PlayerInput      the input hub (physics priority -100: advances before the tick)
-├─ CameraRig        chase / far / hood / overhead / cockpit (physics priority 100)
+├─ CameraRig        chase / far / hood / overhead / cockpit (cockpit hidden from players, docs/COCKPIT.md; physics priority 100)
 ├─ Overlay/ControlsOverlay   the touch controls
 ├─ DevHud           the dev readouts (DevStats)
 ├─ TimeScale        slow motion

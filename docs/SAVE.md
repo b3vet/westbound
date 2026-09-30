@@ -19,7 +19,7 @@ The local save, every player setting, the first-run chooser and the empty-road w
 ```json
 {
 	"version": 2,
-	"settings": { "steering_mode": "drag", "throttle_mode": "auto", "left_handed": false, "...": "..." },
+	"settings": { "steering_mode": "drag", "throttle_mode": "manual", "left_handed": false, "...": "..." },
 	"first_run": { "chooser_done": true, "warmup_done": true },
 	"bests": { "journey": 2010000, "daily": 48200 },
 	"journeys": { "journey": { "count": 2, "best_time_s": 1843.25, "best_distance_m": 61234.5 } },
@@ -95,34 +95,37 @@ node tools/web_smoke/smoke.mjs --settle 8000 --query "server=off&save_probe=1" \
 
 ## Settings
 
-Every setting the spec names, where it lives, and how it applies (live, from `Events.settings_changed`; nothing polls). Choices come from tuning.
+Every setting the spec names, where it lives, its default (`Settings.DEFAULTS`), and how it applies (live, from `Events.settings_changed`; nothing polls). Choices come from tuning.
 
-| Spec | Key | Page · row | Choices | Applied by |
-| --- | --- | --- | --- | --- |
-| steering mode | `steering_mode` | CONTROLS · STEERING (+ the chooser) | DRAG / TILT (N/A without tilt) | `PlayerInput` |
-| throttle mode | `throttle_mode` | CONTROLS · THROTTLE (+ the chooser) | AUTO / MANUAL | `PlayerInput` |
-| left-handed mirror | `left_handed` | CONTROLS · HAND (+ the chooser) | RIGHT / LEFT | `PlayerInput`, HUD, screens |
-| sensitivity | `steer_sensitivity` | CONTROLS · SENSITIVITY | `hud.settings_sensitivities` 75 / 100 / 135 % | `PlayerInput` (clamped 0.5–2) |
-| dead zone | `steer_dead_zone` | CONTROLS · DEAD ZONE | `meta.settings_dead_zones` SMALL / NORMAL / LARGE (×0.5 / 1 / 2) | `PlayerInput` |
-| response curve | `steer_curve` | CONTROLS · CURVE | `meta.settings_curves` GENTLE / NORMAL / SHARP (exponent 1.0 / 1.6 / 2.2) | `PlayerInput` |
-| (D10) drag visual | `drag_visual` | CONTROLS · DRAG LOOK | RING / WHEEL | `ControlsOverlay` |
-| (D9) controls size | `controls_scale` | CONTROLS · CONTROLS SIZE | `hud.settings_controls_scales` 80 / 100 / 120 % | `PlayerInput` |
-| camera | `camera_mode` | GAME · CAMERA (full width) | every `camera.modes`: CHASE / FAR CHASE / HOOD / OVERHEAD / COCKPIT | `CameraRig` (also the C key and the HUD button) |
-| graphics tier | `quality_tier` | GAME · GRAPHICS | every `quality.tier_names`: LOW / MEDIUM / HIGH | `Quality` |
-| battery saver | `battery_saver` | GAME · BATTERY SAVER | OFF / ON (30 fps) | `Quality` |
-| text size | `text_scale` | GAME · TEXT SIZE | `hud.text_scales` 100 / 125 % | HUD, screens |
-| units | `units` | GAME · UNITS | KM/H / MPH | HUD, screens |
-| reduced motion | `reduced_motion` | GAME · REDUCED MOTION | OFF / ON | camera, juice, screens, time scale |
-| haptics | `haptics` | GAME · HAPTICS | ON / OFF | `Haptics` |
-| audio buses | `volume_master`, `volume_music`, `volume_sfx`, `volume_engine`, `volume_ui` | AUDIO · MASTER … INTERFACE | `audio.volume_steps` | `AudioBuses` |
-| (M key) mute | `audio_muted` | AUDIO · SOUND | ON / MUTED | `AudioBuses` |
-| the chooser, revisited | — | CONTROLS · CHOOSE LAYOUT | the first-run chooser in place of the rows | — |
+| Spec | Key | Page · row | Choices | Default | Applied by |
+| --- | --- | --- | --- | --- | --- |
+| steering mode | `steering_mode` | CONTROLS · STEERING (+ the chooser) | DRAG / TILT (N/A without tilt) | `drag` | `PlayerInput` |
+| throttle mode | `throttle_mode` | CONTROLS · THROTTLE (+ the chooser) | AUTO / MANUAL | `manual` (D22, owner 2026-10-01; was `auto`) | `PlayerInput` |
+| left-handed mirror | `left_handed` | CONTROLS · HAND (+ the chooser) | RIGHT / LEFT | `false` (right) | `PlayerInput`, HUD, screens |
+| sensitivity | `steer_sensitivity` | CONTROLS · SENSITIVITY | `hud.settings_sensitivities` 75 / 100 / 135 % | `1.0` | `PlayerInput` (clamped 0.5–2) |
+| dead zone | `steer_dead_zone` | CONTROLS · DEAD ZONE | `meta.settings_dead_zones` SMALL / NORMAL / LARGE (×0.5 / 1 / 2) | `1.0` | `PlayerInput` |
+| response curve | `steer_curve` | CONTROLS · CURVE | `meta.settings_curves` GENTLE / NORMAL / SHARP (exponent 1.0 / 1.6 / 2.2) | `1.0` | `PlayerInput` |
+| (D10) drag visual | `drag_visual` | CONTROLS · DRAG LOOK | RING / WHEEL | `wheel` (D10, owner 2026-10-01; was `ring`) | `ControlsOverlay` |
+| (D9) controls size | `controls_scale` | CONTROLS · CONTROLS SIZE | `hud.settings_controls_scales` 80 / 100 / 120 % | `1.0` | `PlayerInput` |
+| camera | `camera_mode` | GAME · CAMERA (full width) | `camera.player_modes()`: CHASE / FAR CHASE / HOOD / OVERHEAD (COCKPIT hidden, D11: `camera.cockpit_player_enabled`) | `chase` | `CameraRig` (also the C key and the HUD button) |
+| graphics tier | `quality_tier` | GAME · GRAPHICS | every `quality.tier_names`: LOW / MEDIUM / HIGH | `medium` | `Quality` |
+| battery saver | `battery_saver` | GAME · BATTERY SAVER | OFF / ON (30 fps) | `false` | `Quality` |
+| text size | `text_scale` | GAME · TEXT SIZE | `hud.text_scales` 100 / 125 % | `1.0` | HUD, screens |
+| units | `units` | GAME · UNITS | KM/H / MPH | `kmh` | HUD, screens |
+| reduced motion | `reduced_motion` | GAME · REDUCED MOTION | OFF / ON | `false` | camera, juice, screens, time scale |
+| haptics | `haptics` | GAME · HAPTICS | ON / OFF | `true` | `Haptics` |
+| audio buses | `volume_master`, `volume_music`, `volume_sfx`, `volume_engine`, `volume_ui` | AUDIO · MASTER … INTERFACE | `audio.volume_steps` | `1.0` | `AudioBuses` |
+| (M key) mute | `audio_muted` | AUDIO · SOUND | ON / MUTED | `false` | `AudioBuses` |
+| the chooser, revisited | — | CONTROLS · CHOOSE LAYOUT | the first-run chooser in place of the rows | — | — |
+| back to the defaults | — | CONTROLS · DEFAULTS | every CONTROLS row back to its default | — | — |
 
-**Loading is defensive** (`Settings.sanitize`): a value of the wrong type, an unknown choice (`CHOICES`) or a non-finite number loads as the default. Ranges are clamped by the systems that read them, from their own tuning. Loading announces every key whose value changed, so a system already running applies it.
+**Loading is defensive** (`Settings.sanitize`): a value of the wrong type, an unknown choice (`CHOICES`) or a non-finite number loads as the default. A camera mode players cannot pick loads through `CameraTuning.player_mode`: the hidden `cockpit` as `cockpit_fallback_mode` (`hood`), an unknown one as `default_mode`. This is a load-time rule, not a migration, so the saved choice comes back as `cockpit` once `cockpit_player_enabled` is on again (a save written in between holds `hood`). Ranges are clamped by the systems that read them, from their own tuning. Loading announces every key whose value changed, so a system already running applies it.
+
+**Changing a default** (D22 / D10, owner 2026-10-01: `throttle_mode` `auto` → `manual`, `drag_visual` `ring` → `wheel`) reaches fresh saves, SKIP in the chooser, `Settings.restore_defaults()` and CONTROLS · DEFAULTS. An existing save keeps its values: settings are stored whole, so a value that is the old default cannot be told from a choice, and nothing is migrated. Such a player gets the new layout from CONTROLS · DEFAULTS (or CHOOSE LAYOUT), or with a fresh save.
 
 ## First run
 
-- **Chooser.** On a fresh save (`Save.chooser_pending()`), the title's PLAY, DAILY DRIVE or LOOP PRACTICE opens the chooser first (`TitleScreens.open_first_run`). DRIVE keeps the choice, SKIP puts the spec's default back (drag + auto, right hand); either records `first_run.chooser_done` and starts the run. Esc goes back to the title and it stays pending. It can be revisited any time from SETTINGS → CONTROLS → CHOOSE LAYOUT.
+- **Chooser.** On a fresh save (`Save.chooser_pending()`), the title's PLAY, DAILY DRIVE or LOOP PRACTICE opens the chooser first (`TitleScreens.open_first_run`). DRIVE keeps the choice, SKIP puts the default layout back (`FirstRunChooser.apply_defaults`: drag + manual, the wheel look, right hand; D22, owner 2026-10-01; was drag + auto, right hand); either records `first_run.chooser_done` and starts the run. Esc goes back to the title and it stays pending. It can be revisited any time from SETTINGS → CONTROLS → CHOOSE LAYOUT.
 - **Warm-up.** The next Journey run started from the title while `first_run.warmup_done` is false (`Save.warmup_pending()`) begins with `meta.warmup_s` (20 s, the spec's) of empty road. `Run.start_mode` arms `RunWarmup`; `Run._start_run` begins it before the director's prefill:
     - the director's density scale is 0 (both carriageways, behind spawns) and racer arrivals are off, so the road is empty from the first frame;
     - only RUNNING ticks count (not the countdown or the pause); whole ticks of the fixed dt, no clock: deterministic;
