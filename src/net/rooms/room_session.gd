@@ -45,6 +45,17 @@ signal chat(player_id: int, text: String)
 signal notice(text: String)
 ## The connection dropped in a room and the client is reconnecting (true) or back (false).
 signal reconnecting(on: bool)
+## N9.3: the party or its invites changed (`party.version` moved).
+signal party_changed()
+## N9.3: a friend invited this player to their party (`party.invites` holds it).
+signal party_invited(invite: NetParty.Invite)
+## N9.3: out of the party: `reason` = party_left's (left, kicked, disbanded) or `lost` (the
+## connection stayed down longer than the server holds the place); `message` for the
+## player ("" after the player's own leave).
+signal party_left(reason: String, message: String)
+## N9.3: a refused lobby command outside a join (party commands, a party move that could
+## not follow): the protocol's error code and the player text.
+signal lobby_error(code: String, message: String)
 
 enum State { IDLE, CONNECTING, LOBBY, JOINING, IN_ROOM, RECONNECTING, FAILED }
 enum Request { NONE, QUICK_JOIN, CREATE, CODE, ID, BROWSE }
@@ -69,7 +80,16 @@ const _TEXT := {
 	"timed_out": "Lost the connection to the room.",
 	"seat_lost": "Lost the connection to the room.",
 	"rate_limited": "Too many requests. Please wait a moment and try again.",
+	"party_not_found": "No party with that code.",
+	"party_full": "That party is full.",
+	"not_party_leader": "Your party leader picks the room.",
+	"blocked": "You can't join this party.",
+	"party_kicked": "The party leader removed you from the party.",
+	"party_disbanded": "The party closed.",
+	"party_lost": "Lost the connection to your party.",
 }
+## Error codes that answer party commands, never a join in progress.
+const PARTY_ERRORS: Array[String] = ["party_not_found", "party_full", "blocked"]
 
 var tuning: NetTuning
 var client: NetClient
@@ -106,6 +126,20 @@ var demo_tick: float = -1.0
 var traffic_streamed: bool = false
 ## Bytes of the frame traffic_frame hands out.
 var last_frame_bytes: int = 0
+## N9.3: the party and the invites waiting for an answer.
+var party := NetParty.new()
+## N9.3: a room snapshot this client did not ask for while in the lobby is a party move
+## (the leader took the party to a room): taken as a join when true (the hub sets it while
+## it shows), else that seat is left again.
+var accept_follows: bool = false
+
+var _pending_lobby: Array[Dictionary] = []
+## Party place held by the server: a dropped lobby connection retries until this time
+## (0 = not retrying).
+var _lobby_retry_until_us: int = 0
+## A Welcome arrived: without a party_state in its frame the server no longer has us in a
+## party.
+var _party_check: bool = false
 
 var _request: Request = Request.NONE
 var _request_settings: Dictionary = {}
@@ -180,6 +214,88 @@ func browse() -> void:
 	_start_request(Request.BROWSE)
 
 
+# ---------------------------------------------------------------- Party (N9.3)
+
+## A new party led by this player (docs/SERVER.md → Parties). Connects first when needed.
+func party_create() -> void:
+	_party_cmd({"kind": "party_create"})
+
+
+## Joins the party with `code` (also how an invite is accepted).
+func party_join(code: String) -> void:
+	var c := normalize_code(code)
+	party.drop_invite(c)
+	_party_cmd({"kind": "party_join", "code": c})
+
+
+## Invites an online friend (a party is made for the leader-to-be when there is none).
+func party_invite(account_id: String) -> void:
+	_party_cmd({"kind": "party_invite", "account_id": account_id})
+
+
+func party_leave() -> void:
+	_party_cmd({"kind": "party_leave"})
+
+
+## Leader only.
+func party_kick(account_id: String) -> void:
+	_party_cmd({"kind": "party_kick", "account_id": account_id})
+
+
+## Declining an invite needs no message (PROTOCOL.md §12): it is forgotten here.
+func decline_invite(code: String) -> void:
+	var v := party.version
+	party.drop_invite(code)
+	if party.version != v:
+		party_changed.emit()
+
+
+## Opens the lobby connection without a request (the party panel, presence).
+func connect_lobby() -> void:
+	if client.is_ready() or state == State.CONNECTING:
+		return
+	if state == State.IDLE or state == State.FAILED:
+		_set_state(State.CONNECTING)
+		if _connect() != OK:
+			_set_state(State.FAILED)
+
+
+func _party_cmd(cmd: Dictionary) -> void:
+	cmd["type"] = "lobby_command"
+	if client.is_ready():
+		var err := client.send_messages([cmd])
+		if err != "":
+			lobby_error.emit(err, text_for(err))
+		return
+	_pending_lobby.append(cmd)
+	if state == State.IDLE or state == State.FAILED:
+		_set_state(State.CONNECTING)
+		if _connect() != OK:
+			_pending_lobby.clear()
+			_set_state(State.FAILED)
+			lobby_error.emit(NetClient.REASON_CONNECT_FAILED, NetClient.user_message(NetClient.REASON_CONNECT_FAILED))
+
+
+func _flush_lobby() -> void:
+	if _pending_lobby.is_empty() or not client.is_ready():
+		return
+	var cmds := _pending_lobby.duplicate()
+	_pending_lobby.clear()
+	var err := client.send_messages(cmds)
+	if err != "":
+		lobby_error.emit(err, text_for(err))
+
+
+## The invite link for `code` on the server `api_base` (`https://<domain>/r/<code>`, spec).
+static func invite_url(api_base: String, code: String, path: String) -> String:
+	var origin := api_base
+	var scheme_end := origin.find("//")
+	var slash := origin.find("/", scheme_end + 2) if scheme_end >= 0 else -1
+	if slash >= 0:
+		origin = origin.left(slash)
+	return origin + path + code
+
+
 ## Leaves the room (or a join in progress); the connection stays up for the hub.
 func leave() -> void:
 	var was := state
@@ -196,12 +312,16 @@ func leave() -> void:
 		_set_state(State.IDLE)
 
 
-## Leaves and closes the connection (back to the title).
+## Leaves and closes the connection (back to the title). The party goes too (the server
+## lets the place go after its hold).
 func close() -> void:
 	if state == State.IN_ROOM or state == State.JOINING:
 		leave()
 	client.close()
 	_clear_room()
+	_pending_lobby.clear()
+	_lobby_retry_until_us = 0
+	party.clear()
 	_set_state(State.IDLE)
 
 
@@ -343,11 +463,37 @@ func set_muted(player_id: int, on: bool) -> void:
 func poll() -> void:
 	client.poll()
 	var now := time.now_usec()
+	if _party_check:
+		# The Welcome's frame carried no party_state: the server has no party for us.
+		_party_check = false
+		if party.in_party():
+			party.clear()
+			party_changed.emit()
+			party_left.emit("lost", text_for("party_lost"))
 	var cs := client.get_state()
 	match state:
+		State.IDLE:
+			if _lobby_retry_until_us > 0:
+				if now >= _lobby_retry_until_us:
+					_lobby_retry_until_us = 0
+					_drop_party("lost")
+				elif now >= _next_retry_us:
+					_next_retry_us = now + roundi(tuning.party_reconnect_retry_s * USEC_PER_S)
+					_set_state(State.CONNECTING)
+					if _connect() != OK:
+						_set_state(State.IDLE)
 		State.CONNECTING:
 			if cs == NetClient.State.FAILED:
-				_fail_request(client.failure_reason, client.failure_message)
+				if _request != Request.NONE:
+					_fail_request(client.failure_reason, client.failure_message)
+				elif _lobby_retry_until_us > 0 and not NO_RETRY.has(client.failure_reason):
+					_set_state(State.IDLE)
+				else:
+					_pending_lobby.clear()
+					last_code = client.failure_reason
+					last_message = client.failure_message
+					_set_state(State.FAILED)
+					lobby_error.emit(client.failure_reason, client.failure_message)
 		State.LOBBY, State.IN_ROOM:
 			if cs == NetClient.State.FAILED:
 				_lost(now)
@@ -363,6 +509,7 @@ func poll() -> void:
 				_set_state(State.IDLE)
 				reconnecting.emit(false)
 				_left(REASON_SEAT_LOST)
+				_drop_party("lost")
 			elif cs == NetClient.State.FAILED or cs == NetClient.State.CLOSED or cs == NetClient.State.IDLE:
 				if NO_RETRY.has(client.failure_reason):
 					_clear_room()
@@ -388,6 +535,8 @@ func _start_request(kind: Request) -> void:
 	if client.is_ready():
 		_send_request()
 		return
+	if state == State.CONNECTING:
+		return   # the lobby connection is on its way (N9.3); Welcome sends the request
 	_set_state(State.CONNECTING)
 	if _connect() != OK:
 		_fail_request(NetClient.REASON_CONNECT_FAILED, NetClient.user_message(NetClient.REASON_CONNECT_FAILED))
@@ -398,13 +547,17 @@ func _connect() -> Error:
 	return client.start(url, client_build, map_hash, token)
 
 
-func _on_welcome(_w: Dictionary) -> void:
+func _on_welcome(w: Dictionary) -> void:
+	party.me = String(w.get("account_id", party.me))
+	_party_check = true
+	_lobby_retry_until_us = 0
 	if state == State.CONNECTING:
 		_set_state(State.LOBBY)
 		_send_request()
 	elif state == State.RECONNECTING:
 		_request_since_us = time.now_usec()
 		client.send_messages([{"type": "lobby_command", "kind": "room_join_code", "code": room.code}])
+	_flush_lobby()
 
 
 func _send_request() -> void:
@@ -457,7 +610,15 @@ func _lost(now: int) -> void:
 	last_code = client.failure_reason
 	last_message = client.failure_message
 	_clear_room()
-	_set_state(State.FAILED)
+	if party.in_party() and not NO_RETRY.has(client.failure_reason):
+		# N9.3: the server holds the party place for a while; reconnect for it.
+		_lobby_retry_until_us = now + roundi(tuning.party_reconnect_window_s * USEC_PER_S)
+		_next_retry_us = now
+		_set_state(State.IDLE)
+	else:
+		_set_state(State.FAILED)
+		if party.in_party():
+			_drop_party("lost")
 	if was_room:
 		left.emit(client.failure_reason, client.failure_message)
 
@@ -465,6 +626,10 @@ func _lost(now: int) -> void:
 func _on_server_error(code: String, fatal: bool, _detail: String) -> void:
 	if fatal:
 		return   # NetClient fails; poll() sees it
+	if PARTY_ERRORS.has(code) or (state != State.JOINING and state != State.RECONNECTING):
+		# N9.3: a party command's refusal, or a party move that could not follow.
+		lobby_error.emit(code, text_for(code))
+		return
 	if state == State.JOINING:
 		if code == "already_in_room" and not _left_for_retry:
 			# A seat the server still holds (a replaced login): leave it and try once more.
@@ -546,6 +711,20 @@ func _on_message(msg: Dictionary) -> void:
 						_clear_room()
 						_set_state(State.LOBBY)
 						_left(String(msg.get("reason", "left")))
+				"party_state":
+					_party_check = false
+					party.apply_state(msg)
+					party_changed.emit()
+				"party_left":
+					var reason := String(msg.get("reason", "left"))
+					party.clear()
+					party_changed.emit()
+					party_left.emit(reason, "" if reason == "left" else text_for("party_" + reason))
+				"party_invite":
+					var inv := party.add_invite(msg, float(time.now_usec()) / USEC_PER_S,
+						tuning.party_invites_max)
+					party_changed.emit()
+					party_invited.emit(inv)
 		"run_result":
 			if state == State.IN_ROOM:
 				run_result.emit(msg)
@@ -565,7 +744,8 @@ func _on_message(msg: Dictionary) -> void:
 
 
 func _on_snapshot(msg: Dictionary) -> void:
-	if state != State.JOINING and state != State.RECONNECTING and state != State.IN_ROOM:
+	var follow := state == State.LOBBY and accept_follows and party.in_party()
+	if state != State.JOINING and state != State.RECONNECTING and state != State.IN_ROOM and not follow:
 		# The answer to a join the player gave up on: leave that seat again.
 		client.send_messages([{"type": "lobby_command", "kind": "room_leave"}])
 		return
@@ -593,6 +773,14 @@ func _send_room(msg: Dictionary) -> bool:
 	if state != State.IN_ROOM or not client.is_ready():
 		return false
 	return client.send_messages([msg]) == ""
+
+
+func _drop_party(reason: String) -> void:
+	if not party.in_party():
+		return
+	party.clear()
+	party_changed.emit()
+	party_left.emit(reason, text_for("party_" + reason))
 
 
 func _left(reason: String) -> void:

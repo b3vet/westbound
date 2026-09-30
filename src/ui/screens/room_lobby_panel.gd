@@ -1,13 +1,16 @@
 class_name RoomLobbyPanel
 extends Control
 ## The online hub's room flows: PRIVATE ROOM (host options), JOIN BY CODE, the ROOM
-## BROWSER and the joining status (QUICK JOIN and every join). Spec:
+## BROWSER and the joining status (QUICK JOIN and every join); N9.3: the PARTY (create,
+## join by code, members, kick, invite friends, share the link, leave), a PARTY INVITE
+## (accept, decline) and invite links (a room or a party code). Spec:
 ## WESTBOUND_MULTIPLAYER_HANDOFF.md → Rooms, parties and matchmaking (Private rooms: "The
-## creator gets a code ... can change density or time mode"; Time of day: "the host can
-## pick the cycle, a fixed time of day, or permanent night"; Public rooms: Quick Join,
-## "The room browser lists public rooms with player count, density, day or night, and
-## your ping"); Client changes (Online hub). docs/SCREENS.md → Online hub → Rooms (N5.2).
-## WP N5.2.
+## creator gets a code and an invite link ... can change density or time mode"; Time of
+## day: "the host can pick the cycle, a fixed time of day, or permanent night"; Public
+## rooms: Quick Join, "The room browser lists public rooms with player count, density, day
+## or night, and your ping"; Parties: "Up to 8 players, led by one player. The leader
+## invites online friends, or shares a party code"); Client changes (Online hub; Party
+## panel). docs/SCREENS.md → Online hub → Rooms (N5.2), Party (N9.3). WP N5.2, N9.3.
 ##
 ## A panel over the hub, one view at a time. It calls the rooms service and shows where the
 ## join is; when the room's snapshot arrives it emits `joined(session)` (the hub hands it
@@ -15,8 +18,10 @@ extends Control
 
 signal joined(session: NetRoomSession)
 signal closed()
+## N9.3: INVITE FRIENDS (the hub opens the friends list).
+signal friends_requested()
 
-enum View { STATUS, CREATE, CODE, BROWSER }
+enum View { STATUS, CREATE, CODE, BROWSER, PARTY, INVITE }
 
 const TEXT_QUICK := "QUICK JOIN"
 const TEXT_PRIVATE := "PRIVATE ROOM"
@@ -51,10 +56,45 @@ const TEXT_ROW := "%d/%d  ·  %s  ·  %s  ·  %d MS"
 const TEXT_DAY := "DAY"
 const TEXT_NIGHT := "NIGHT ×2"
 const TEXT_CREATE_NOTE := "PRIVATE: ONLY PLAYERS WITH THE CODE CAN JOIN"
+# N9.3: party, invites, links.
+const TEXT_PARTY := "PARTY"
+const TEXT_PARTY_CODE := "PARTY  %s"
+const TEXT_CREATE_PARTY := "CREATE PARTY"
+const TEXT_JOIN_PARTY := "JOIN PARTY"
+const TEXT_INVITE_FRIENDS := "INVITE FRIENDS"
+const TEXT_SHARE_LINK := "SHARE LINK"
+const TEXT_COPY_LINK := "COPY LINK"
+const TEXT_LEAVE_PARTY := "LEAVE PARTY"
+const TEXT_PARTY_NONE := "PLAY TOGETHER: A PARTY MOVES BETWEEN ROOMS AS ONE CREW"
+const TEXT_PARTY_LEAD := "QUICK JOIN AND ROOMS YOU PICK TAKE THE WHOLE PARTY"
+const TEXT_PARTY_MEMBER := "%s PICKS THE ROOM  ·  YOU FOLLOW"
+const TEXT_PARTY_ALONE := "INVITE FRIENDS OR SHARE THE LINK"
+const TEXT_PARTY_CODE_PH := "PARTY CODE"
+const TEXT_PARTY_CODE_PROMPT := "Party code (6 characters)"
+const TEXT_PARTY_CODE_NOTE := "ASK THE PARTY LEADER FOR THE CODE OR THE LINK"
+const TEXT_CREATING_PARTY := "MAKING YOUR PARTY..."
+const TEXT_JOINING_PARTY := "JOINING PARTY %s..."
+const TEXT_LEADER := "LEADER"
+const TEXT_YOU := "YOU"
+const TEXT_KICK := "TAP AGAIN TO REMOVE"
+const TEXT_COPIED := "LINK COPIED"
+const TEXT_COPY_FAILED := "COULDN'T COPY  ·  CODE %s"
+const TEXT_SHARE_TITLE := "Westbound"
+const TEXT_SHARE_BODY := "Drive the Westbound loop with me: %s"
+const TEXT_INVITE := "PARTY INVITE"
+const TEXT_INVITE_FROM := "%s INVITES YOU"
+const TEXT_INVITE_NOTE := "JOIN THEIR PARTY: YOU MOVE BETWEEN ROOMS TOGETHER"
+const TEXT_ACCEPT := "ACCEPT"
+const TEXT_DECLINE := "DECLINE"
+const TEXT_LINK := "INVITE LINK"
+const TEXT_LINK_NONE := "No room or party with that code."
 ## Browser rows shown at most (the list is fullest first).
 const BROWSER_ROWS := 4
+## Party member rows: two columns.
+const PARTY_COLS := 2
 const MS_PER_MIN := 60000.0   # lint: allow-number unit conversion
 const MS_PER_S := 1000.0   # lint: allow-number unit conversion
+const USEC_PER_S := 1000000.0   # lint: allow-number unit conversion
 
 var style: HudStyle
 var tuning: HudTuning
@@ -66,6 +106,14 @@ var density: int = 1
 var time_choice: int = TIME_CYCLE
 ## The request the STATUS view shows (TRY AGAIN repeats it).
 var request_title: String = TEXT_QUICK
+## The CODE view asks for a party code (N9.3) instead of a room code.
+var code_for_party: bool = false
+## The invite the INVITE view shows (its code).
+var invite_code: String = ""
+## An invite link being followed: tried as a room code, then as a party code.
+var link_code: String = ""
+## Web glue for copy / share (tests swap in a mock).
+var bridge := NetJsBridge.new()
 
 ## Dims the hub behind the panel (the whole canvas).
 var backdrop: ColorRect
@@ -82,11 +130,22 @@ var time_buttons: Array[ScreenButton] = []
 var code_field: SocialField
 var row_buttons: Array[ScreenButton] = []
 var row_ids := PackedInt32Array()
+## N9.3: the party's members (account ids per button, "" = unused).
+var member_buttons: Array[ScreenButton] = []
+var member_ids: PackedStringArray = []
+var join_party_button: ScreenButton
+var invite_button: ScreenButton
+var share_button: ScreenButton
+var leave_party_button: ScreenButton
 
 var _retry: Callable
 var _area: Rect2 = Rect2(0.0, 0.0, 1280.0, 720.0)
 var _browse_left_s: float = 0.0
 var _session: NetRoomSession
+## The member a first tap armed for removal, and until when (usec).
+var _kick_armed: String = ""
+var _kick_until_us: int = 0
+var _party_version: int = -1
 
 
 func _init() -> void:
@@ -124,8 +183,18 @@ func _init() -> void:
 		row_buttons.append(b)
 	row_ids.resize(BROWSER_ROWS)
 	row_ids.fill(-1)
+	for i in NetCodec.MAX_ROOM_PLAYERS:
+		var k := i
+		var b := _button("", ScreenButton.Kind.OPTION, func() -> void: _tap_member(k))
+		b.name = "Member%d" % i
+		member_buttons.append(b)
+	member_ids.resize(NetCodec.MAX_ROOM_PLAYERS)
+	join_party_button = _button(TEXT_JOIN_PARTY, ScreenButton.Kind.NORMAL, open_party_code)
+	invite_button = _button(TEXT_INVITE_FRIENDS, ScreenButton.Kind.NORMAL, friends_requested.emit)
+	share_button = _button(TEXT_SHARE_LINK, ScreenButton.Kind.NORMAL, share_link)
+	leave_party_button = _button(TEXT_LEAVE_PARTY, ScreenButton.Kind.DANGER, leave_party)
 	action_button = _button(TEXT_JOIN, ScreenButton.Kind.PRIMARY, func() -> void: _action())
-	back_button = _button(TEXT_BACK, ScreenButton.Kind.NORMAL, close)
+	back_button = _button(TEXT_BACK, ScreenButton.Kind.NORMAL, _back)
 
 
 func _text(t: String, face: ScreenText.Face, px: int, ink: ScreenText.Ink) -> ScreenText:
@@ -156,6 +225,8 @@ func setup(s: HudStyle, t: HudTuning, net_tuning: NetTuning) -> void:
 			(c as ScreenButton).setup(s)
 		elif c is ScreenText:
 			(c as ScreenText).setup(s)
+	for b in member_buttons:
+		b.align = HORIZONTAL_ALIGNMENT_LEFT
 	SocialUi.style_edit(code_field, s, t)
 	code_field.net_tuning = net
 	code_field.hub = hub
@@ -183,13 +254,131 @@ func open_create() -> void:
 
 
 func open_code() -> void:
+	code_for_party = false
 	code_field.text = ""
+	code_field.placeholder_text = TEXT_CODE_PH
+	code_field.prompt_message = TEXT_CODE_PROMPT
 	_open(View.CODE, TEXT_CODE)
 
 
 func open_browser() -> void:
 	_open(View.BROWSER, TEXT_BROWSER)
 	_browse()
+
+
+## N9.3: a friend's JOIN (the friends list): straight to the joining status.
+func join_room(room_id: int, heading: String) -> void:
+	_start(heading, TEXT_JOINING_ROOM % room_id, func() -> void: rooms.join_id(room_id))
+
+
+## N9.3: an invite link's code: the room with that code, else the party with it.
+func follow_link(code: String) -> void:
+	link_code = code
+	_start(TEXT_LINK, TEXT_JOINING % code, func() -> void: rooms.join_code(code))
+
+
+# ---------------------------------------------------------------- Party (N9.3)
+
+## The PARTY view: the members and what you can do (CREATE / JOIN without a party).
+func open_party() -> void:
+	_kick_armed = ""
+	_open(View.PARTY, TEXT_PARTY)
+
+
+func open_party_code() -> void:
+	code_for_party = true
+	code_field.text = ""
+	code_field.placeholder_text = TEXT_PARTY_CODE_PH
+	code_field.prompt_message = TEXT_PARTY_CODE_PROMPT
+	_open(View.CODE, TEXT_JOIN_PARTY)
+
+
+## The INVITE view for the newest invite (or `code`'s).
+func open_invite(code: String = "") -> void:
+	var inv := _invite(code)
+	if inv == null:
+		return
+	invite_code = inv.code
+	_open(View.INVITE, TEXT_INVITE)
+
+
+func create_party() -> void:
+	status.text = TEXT_CREATING_PARTY
+	status.set_ink(ScreenText.Ink.ACCENT)
+	rooms.party_create()
+	_refresh()
+
+
+func leave_party() -> void:
+	if rooms == null or not _party().in_party():
+		return
+	rooms.party_leave()
+
+
+func accept_invite() -> void:
+	var c := invite_code
+	if c.is_empty():
+		return
+	invite_code = ""
+	_open(View.PARTY, TEXT_PARTY)
+	status.text = TEXT_JOINING_PARTY % c
+	status.set_ink(ScreenText.Ink.ACCENT)
+	rooms.party_join(c)
+	_refresh()
+
+
+func decline_invite() -> void:
+	if not invite_code.is_empty() and rooms != null:
+		rooms.session.decline_invite(invite_code)
+	invite_code = ""
+	close()
+
+
+## SHARE LINK: the system share sheet where the browser has one, else the clipboard.
+func share_link() -> void:
+	var p := _party()
+	if not p.in_party():
+		return
+	var url := rooms.invite_url(p.code) if rooms != null else ""
+	if url.is_empty():
+		url = p.code
+	if SocialUi.share(bridge, TEXT_SHARE_TITLE, TEXT_SHARE_BODY % url):
+		return
+	var ok := SocialUi.copy_text(bridge, url)
+	status.text = TEXT_COPIED if ok else TEXT_COPY_FAILED % p.code
+	status.set_ink(ScreenText.Ink.ACCENT if ok else ScreenText.Ink.HOT)
+	_refresh()
+
+
+func _tap_member(k: int) -> void:
+	var id := member_ids[k] if k < member_ids.size() else ""
+	var p := _party()
+	if id.is_empty() or not p.is_leader() or id == p.me:
+		return
+	var now := Time.get_ticks_usec()
+	if _kick_armed == id and now < _kick_until_us:
+		_kick_armed = ""
+		rooms.party_kick(id)
+	else:
+		_kick_armed = id
+		_kick_until_us = now + roundi(net.confirm_tap_s * USEC_PER_S)
+	_refresh()
+
+
+func _party() -> NetParty:
+	if rooms != null and rooms.session != null:
+		return rooms.session.party
+	return NetParty.new()
+
+
+func _invite(code: String) -> NetParty.Invite:
+	var p := _party()
+	if code.is_empty():
+		return p.newest_invite()
+	for inv in p.invites:
+		if inv.code == code:
+			return inv
+	return null
 
 
 func create() -> void:
@@ -214,14 +403,24 @@ func close() -> void:
 	_bind(false)
 	if rooms != null and rooms.session != null:
 		var st := rooms.session.state
-		if st == NetRoomSession.State.JOINING or st == NetRoomSession.State.CONNECTING:
+		if st == NetRoomSession.State.JOINING or (st == NetRoomSession.State.CONNECTING
+				and view == View.STATUS):
 			rooms.session.leave()
+	link_code = ""
 	visible = false
 	closed.emit()
 
 
 func is_open() -> bool:
 	return visible
+
+
+## BACK: from JOIN PARTY back to the party view; otherwise closes.
+func _back() -> void:
+	if view == View.CODE and code_for_party:
+		open_party()
+		return
+	close()
 
 
 func _open(v: View, heading: String) -> void:
@@ -258,6 +457,11 @@ func _action() -> void:
 		View.STATUS:
 			if _retry.is_valid():
 				_start(request_title, status_for(request_title), _retry)
+		View.PARTY:
+			if not _party().in_party():
+				create_party()
+		View.INVITE:
+			accept_invite()
 
 
 static func status_for(heading: String) -> String:
@@ -270,6 +474,13 @@ func _join_code() -> void:
 		status.text = TEXT_CODE_BAD
 		status.set_ink(ScreenText.Ink.HOT)
 		_layout()
+		return
+	if code_for_party:
+		_open(View.PARTY, TEXT_PARTY)
+		status.text = TEXT_JOINING_PARTY % code
+		status.set_ink(ScreenText.Ink.ACCENT)
+		rooms.party_join(code)
+		_refresh()
 		return
 	_start(TEXT_CODE, TEXT_JOINING % code, func() -> void: rooms.join_code(code))
 
@@ -300,7 +511,12 @@ func _pick_time(k: int) -> void:
 
 
 func _process(delta: float) -> void:
-	if not visible or view != View.BROWSER or rooms == null:
+	if not visible or rooms == null:
+		return
+	if view == View.PARTY and not _kick_armed.is_empty() and Time.get_ticks_usec() >= _kick_until_us:
+		_kick_armed = ""
+		_refresh()
+	if view != View.BROWSER:
 		return
 	_browse_left_s -= delta
 	if _browse_left_s <= 0.0:
@@ -323,7 +539,8 @@ func _connect(s: NetRoomSession, on: bool) -> void:
 	if s == null:
 		return
 	var pairs: Array = [[s.joined, _on_joined], [s.join_failed, _on_failed], [s.room_list, _on_list],
-		[s.state_changed, _on_state]]
+		[s.state_changed, _on_state], [s.party_changed, _on_party], [s.lobby_error, _on_lobby_error],
+		[s.party_left, _on_party_left]]
 	for p: Array in pairs:
 		var sig: Signal = p[0]
 		var c: Callable = p[1]
@@ -335,6 +552,7 @@ func _connect(s: NetRoomSession, on: bool) -> void:
 
 func _on_joined(_r: NetRoomState) -> void:
 	var s := _session
+	link_code = ""
 	_bind(false)
 	visible = false
 	joined.emit(s)
@@ -345,7 +563,17 @@ func show_error(message: String) -> void:
 	_on_failed("", message)
 
 
-func _on_failed(_code: String, message: String) -> void:
+func _on_failed(code: String, message: String) -> void:
+	if not link_code.is_empty() and code == "room_not_found":
+		# An invite link's code that is no room's: a party's then (N9.3).
+		var c := link_code
+		_open(View.PARTY, TEXT_PARTY)
+		link_code = c
+		status.text = TEXT_JOINING_PARTY % c
+		status.set_ink(ScreenText.Ink.ACCENT)
+		rooms.party_join(c)
+		_refresh()
+		return
 	if view != View.STATUS:
 		view = View.STATUS
 	status.text = message
@@ -365,6 +593,39 @@ func _on_state(st: NetRoomSession.State) -> void:
 		_layout()
 
 
+func _on_party() -> void:
+	var p := _party()
+	if view == View.PARTY and p.in_party():
+		if status.ink != ScreenText.Ink.HOT:
+			status.text = ""
+		link_code = ""
+	elif view == View.INVITE and _invite(invite_code) == null:
+		invite_code = ""
+		open_party()
+		return
+	if view == View.PARTY:
+		_refresh()
+
+
+func _on_party_left(_reason: String, message: String) -> void:
+	if view == View.PARTY:
+		status.text = message
+		status.set_ink(ScreenText.Ink.HOT)
+		_refresh()
+
+
+func _on_lobby_error(code: String, message: String) -> void:
+	if not visible:
+		return
+	if not link_code.is_empty() and code == "party_not_found":
+		link_code = ""
+		message = TEXT_LINK_NONE
+	if view == View.PARTY or view == View.STATUS or view == View.CODE:
+		status.text = message
+		status.set_ink(ScreenText.Ink.HOT)
+		_refresh()
+
+
 # ---------------------------------------------------------------- Look
 
 func _refresh() -> void:
@@ -378,12 +639,17 @@ func _refresh() -> void:
 	time_label.visible = view == View.CREATE
 	code_field.visible = view == View.CODE
 	note.visible = true
+	var p := _party()
+	var in_party := p.in_party()
+	join_party_button.visible = view == View.PARTY and not in_party
+	for b: ScreenButton in [invite_button, share_button, leave_party_button]:
+		b.visible = view == View.PARTY and in_party
 	match view:
 		View.CREATE:
 			note.text = TEXT_CREATE_NOTE
 			action_button.text = TEXT_CREATE
 		View.CODE:
-			note.text = TEXT_CODE_NOTE
+			note.text = TEXT_PARTY_CODE_NOTE if code_for_party else TEXT_CODE_NOTE
 			action_button.text = TEXT_JOIN
 		View.BROWSER:
 			action_button.text = TEXT_REFRESH
@@ -391,10 +657,31 @@ func _refresh() -> void:
 		View.STATUS:
 			note.text = ""
 			action_button.text = TEXT_RETRY
+		View.PARTY:
+			title.text = TEXT_PARTY_CODE % p.code if in_party else TEXT_PARTY
+			action_button.text = TEXT_CREATE_PARTY
+			if not in_party:
+				note.text = TEXT_PARTY_NONE
+			elif not p.is_group():
+				note.text = TEXT_PARTY_ALONE
+			elif p.is_leader():
+				note.text = TEXT_PARTY_LEAD
+			else:
+				note.text = TEXT_PARTY_MEMBER % p.leader_name()
+			var url := rooms.invite_url(p.code) if rooms != null and in_party else ""
+			share_button.text = TEXT_SHARE_LINK if SocialUi.can_share(bridge) or url.is_empty() else TEXT_COPY_LINK
+		View.INVITE:
+			var inv := _invite(invite_code)
+			status.text = TEXT_INVITE_FROM % (inv.from_name if inv != null else "")
+			status.set_ink(ScreenText.Ink.GOLD)
+			note.text = TEXT_INVITE_NOTE
+			action_button.text = TEXT_ACCEPT
 	var failed := view == View.STATUS and status.ink == ScreenText.Ink.HOT
-	action_button.visible = view != View.STATUS or failed
-	back_button.text = TEXT_CANCEL if view == View.STATUS and not failed else TEXT_BACK
+	action_button.visible = (view != View.STATUS or failed) and not (view == View.PARTY and in_party)
+	back_button.text = TEXT_CANCEL if view == View.STATUS and not failed else (
+			TEXT_DECLINE if view == View.INVITE else TEXT_BACK)
 	_fill_rows()
+	_fill_members()
 	_layout()
 
 
@@ -415,6 +702,34 @@ func _fill_rows() -> void:
 		b.disabled = full
 	if view == View.BROWSER and list.is_empty() and status.text.is_empty():
 		note.text = TEXT_EMPTY
+
+
+## The party's members on the PARTY view: `name#1234`, LEADER / YOU; the leader's first tap
+## on a member arms the removal (TAP AGAIN TO REMOVE), the second removes.
+func _fill_members() -> void:
+	var p := _party()
+	_party_version = p.version
+	for i in member_buttons.size():
+		var b := member_buttons[i]
+		var shown := view == View.PARTY and i < p.members.size()
+		b.visible = shown
+		member_ids[i] = ""
+		if not shown:
+			continue
+		var m := p.members[i]
+		member_ids[i] = m.account_id
+		b.text = m.full_name()
+		var notes: Array[String] = []
+		if m.account_id == p.leader:
+			notes.append(TEXT_LEADER)
+		if m.account_id == p.me:
+			notes.append(TEXT_YOU)
+		var armed := m.account_id == _kick_armed
+		if armed:
+			notes = [TEXT_KICK]
+		b.note = "  ·  ".join(notes)
+		b.selected = armed
+		b.disabled = not p.is_leader() or m.account_id == p.me
 
 
 func _layout() -> void:
@@ -445,13 +760,44 @@ func _layout() -> void:
 				b.position = Vector2(pad, y)
 				b.size = Vector2(inner, th)
 				y += th + g
+	elif view == View.PARTY:
+		var cw := (inner - g * float(PARTY_COLS - 1)) / float(PARTY_COLS)
+		var k := 0
+		for b in member_buttons:
+			if not b.visible:
+				continue
+			@warning_ignore("integer_division")
+			var row := k / PARTY_COLS
+			b.position = Vector2(pad + float(k % PARTY_COLS) * (cw + g), y + float(row) * (th + g))
+			b.size = Vector2(cw, th)
+			k += 1
+		if k > 0:
+			@warning_ignore("integer_division")
+			y += float((k + PARTY_COLS - 1) / PARTY_COLS) * (th + g)
 	if not note.text.is_empty():
 		y = _put(note, pad, y, g)
+	if view == View.PARTY and _party().in_party():
+		var tw := (inner - g * 2.0) / 3.0
+		invite_button.position = Vector2(pad, y)
+		invite_button.size = Vector2(tw, th)
+		share_button.position = Vector2(pad + tw + g, y)
+		share_button.size = Vector2(tw, th)
+		leave_party_button.position = Vector2(pad + (tw + g) * 2.0, y)
+		leave_party_button.size = Vector2(tw, th)
+		y += th + g
 	var bw := (inner - g) * 0.5
 	back_button.size = Vector2(bw, th)
 	back_button.position = Vector2(pad, y)
 	action_button.size = Vector2(bw, th)
 	action_button.position = Vector2(pad + bw + g, y)
+	if join_party_button.visible:
+		# Without a party: BACK, JOIN PARTY, CREATE PARTY in one row.
+		var tw := (inner - g * 2.0) / 3.0
+		back_button.size = Vector2(tw, th)
+		join_party_button.position = Vector2(pad + tw + g, y)
+		join_party_button.size = Vector2(tw, th)
+		action_button.position = Vector2(pad + (tw + g) * 2.0, y)
+		action_button.size = Vector2(tw, th)
 	y += th + pad
 	panel.size = Vector2(w, y)
 	panel.position = _area.position + (_area.size - panel.size) * 0.5
@@ -476,7 +822,7 @@ static func _row(buttons: Array[ScreenButton], x: float, y: float, inner: float,
 func _unhandled_input(event: InputEvent) -> void:
 	if visible and event.is_action_pressed(&"ui_cancel"):
 		get_viewport().set_input_as_handled()
-		close()
+		_back()
 
 
 ## The panel's width against the room menu's (room_panel_width_px).

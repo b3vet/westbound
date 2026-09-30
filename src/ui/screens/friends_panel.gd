@@ -9,7 +9,8 @@ extends Control
 ## Left: the list, paged (PREV / NEXT in the header row): requests waiting for you
 ## (ACCEPT, MORE), your friends by presence (a dot and ONLINE / IN A ROOM / OFFLINE; JOIN
 ## for a room with space, disabled as SOON until N5 sets NetSocialClient.join_handler;
-## MORE), then your requests (CANCEL). BLOCKED switches the list to blocked players
+## N9.3: INVITE (to your party) for other online friends while the online hub sets
+## NetSocialClient.invite_handler; MORE), then your requests (CANCEL). BLOCKED switches the list to blocked players
 ## (UNBLOCK). Right: ADD FRIEND (the code field and SEND, the server's answer inline),
 ## your own code with COPY, and the list switch; or, after MORE, the player's sheet:
 ## REMOVE FRIEND / DECLINE and BLOCK (each with a confirm step), REPORT (the report
@@ -46,6 +47,10 @@ const TEXT_BLOCKED_DONE := "Blocked."
 const TEXT_UNBLOCKED := "Unblocked."
 const TEXT_DECLINED := "Request declined."
 const TEXT_CANCELLED := "Request cancelled."
+## N9.3: a party invite went out.
+const TEXT_INVITED := "Invite sent to %s."
+const LABEL_INVITE := "INVITE"
+const A_INVITE := &"invite"
 const TEXT_PAGE := "%d/%d"
 const TEXT_PREV := "PREV"
 const TEXT_NEXT := "NEXT"
@@ -316,6 +321,13 @@ func act(p: NetSocialPlayer, kind: StringName, action: StringName) -> void:
 			if NetSocialClient.join_handler.is_valid():
 				NetSocialClient.join_handler.call(p)
 			return
+		A_INVITE:
+			# N9.3: a party invite (the online hub's seam).
+			if NetSocialClient.invite_handler.is_valid():
+				NetSocialClient.invite_handler.call(p)
+				_note(TEXT_INVITED % p.display_name, ScreenText.Ink.ACCENT)
+				_note_left = client.tuning.social_note_s
+			return
 	var r: NetApiResult
 	var ok_text := ""
 	busy = true
@@ -537,6 +549,9 @@ func _fill_row(row: SocialRow, p: NetSocialPlayer, kind: StringName) -> void:
 				if not NetSocialClient.join_handler.is_valid():
 					join.disabled = true
 					join.note = LABEL_SOON
+			elif p.status != NetSocialPlayer.OFFLINE and NetSocialClient.invite_handler.is_valid():
+				# N9.3: an online friend can be invited to your party.
+				row.set_buttons([LABEL_MORE, LABEL_INVITE], [A_MORE, A_INVITE])
 			else:
 				row.set_buttons([LABEL_MORE], [A_MORE])
 	for b in row.buttons:
