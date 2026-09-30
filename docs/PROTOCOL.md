@@ -70,7 +70,7 @@ Physical values are converted once at the edge (`crates/protocol/src/quant.rs`, 
 | --- | --- | --- | --- | --- |
 | Tick | u32 | 20 Hz room ticks since room start | 0..=4,294,967,295 | — |
 | `s` (along the loop) | u32 | 1 mm | 0..=4,294,967,295 (4,294 km) | **reject**: wrap into [0, L) first |
-| `d` (lateral, + = left) | i16 | 1 cm | ±10,000 (±100 m) | clamp |
+| `d` (lateral, + = right of travel, as CONTRACTS §3) | i16 | 1 cm | ±10,000 (±100 m) | clamp |
 | Speed | u16 | 1 cm/s | 0..=20,000 (200 m/s) | clamp |
 | Heading vs road | i16 | 1e-4 rad | ±31,416 (±π) | wrap by whole turns beyond ±3.14165, then clamp |
 | Lateral velocity | i16 | 1 cm/s | ±32,767 (±327.67 m/s) | clamp |
@@ -166,7 +166,7 @@ Chat item kinds: 0 `phrase` {`phrase` enum}, 1 `horn` {}, 2 `emote` {`emote` u8,
 | Message | Fields | Size |
 | --- | --- | --- |
 | `welcome` | `protocol_version` u16 · `server_build` u32 · `account_id` · `tick_rate_hz` u8 (1–120) · `ping_interval_ms` u16 · `timeout_ms` u16 · `max_frame_bytes` u16 | 21 |
-| `pong` | `client_time_ms` u32 (echo) · `server_tick` u32 (0 outside a room) · `tick_fraction` u16 (1/65536 tick) | 10 |
+| `pong` | `client_time_ms` u32 (echo) · `server_tick` u32 (the room tick while seated, else the server-wide tick) · `tick_fraction` u16 (1/65536 tick) | 10 |
 | `error` | `code` enum `error_code` · `fatal` bool (the server closes after a fatal error) · `detail` text | 3 + text |
 | `lobby_event` | union, see below | 1 + body |
 | `room_snapshot` | `room_id` u32 · `code` · `settings` RoomSettings · `tick` u32 · `clock` RoomClock (at `tick`) · `you` u16 (your player id) · `members` list 1–16 of Member · `crews` list 0–16 of RoomCrew | 39 + lists |
@@ -311,3 +311,9 @@ Both stay under the 10 KB/s downstream budget. A typical tick is `player_states`
 - **Map hash** is a 32-byte SHA-256, checked in `Hello` (before auth) rather than on each room join: one server, one map.
 - **Clock sync** uses the room tick plus a 1/65536 fraction instead of wall time.
 - **Protocol sanity bounds** (|d| ≤ 100 m, speed ≤ 200 m/s, heading ±π, lanes 0–7, lists and strings capped) are rejected by the decoder; real plausibility checks stay in the server.
+- **Clarifications after the freeze (2026-09-30, orchestrator; no wire change).**
+  - **`d` sign:** the codecs pass `d` unchanged. Its sign is the CONTRACTS convention (+ = right of travel); earlier wording here said "+ = left".
+  - **Lane numbering** in `lane`, `lc_target_lane` and `target_lane`: 0 = rightmost on the wire. The server converts from the sim's median-first lanes at encode, and the client converts back at decode. Value 7 is a ramp (MP-D6).
+  - **`car_id`:** the server allocates it and never reuses one within 30 s of its despawn (MP-D6).
+  - **Placement:** there is no spawn message. When the server places a player (join, respawn, rejoin), it puts that player's own id in `player_states` with `run_state = protected` and the placement tick. It repeats this every tick until the client reports a state near it. The client teleports there, applies each placement tick once, and starts 3 s of protection. States the client sent before the placement are dropped for 2 s.
+  - **`pong.server_tick` outside a room** is the server-wide tick, not 0.
