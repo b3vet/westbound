@@ -66,8 +66,8 @@ jobs:
       - name: Stale page reloads once
         run: node tools/web_smoke/smoke.mjs --timeout 90000 --stale --screenshot build/web_smoke_stale.png
 
-      - name: Daily Drive determinism (native vs wasm, 15 s)
-        run: tools/determinism/compare.sh --seconds=15 --no-export
+      - name: Daily Drive determinism (native vs wasm, 180 s)
+        run: tools/determinism/compare.sh --seconds=180 --no-export
 
       - name: Upload smoke screenshot
         if: always()

@@ -1,7 +1,7 @@
 class_name DailyTraceNode
 extends Node
 ## The web build's side of the cross-platform determinism check (WP8.4; docs/DAILY.md →
-## Determinism check): `?determinism=daily&date=YYYY-MM-DD&seconds=N[&detail=S][&view_m=M]`
+## Determinism check): `?determinism=daily&date=YYYY-MM-DD&seconds=N[&detail=S][&view_m=M][&replay=1]`
 ## (Run._ready switches to this scene) runs DailyTrace's scripted Daily run a slice per
 ## frame and prints its lines to the console, ending with "DT done". The native side is
 ## tools/determinism/daily_trace.gd; tools/determinism/compare.sh runs both and diffs them.
@@ -30,6 +30,7 @@ func _ready() -> void:
 	var drv := Run.boot_param("driver")
 	if not drv.is_empty():
 		trace.driver_kind = StringName(drv)
+	trace.record_replay = Run.boot_param("replay") == "1"
 	var view := Run.boot_param("view_m")
 	trace.start(self, date, n, view.to_float() if view.is_valid_float() else -1.0)
 	_flush()

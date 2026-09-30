@@ -63,6 +63,9 @@ const HUD_SCENE_PATH := "res://src/ui/hud/hud.tscn"
 const SCREENS_SCENE := preload("res://src/ui/screens/run_screens.tscn")
 const DRIVE_SCENE := "res://src/dev/car_drive.tscn"
 const SANDBOX_SCENE := "res://src/traffic/dev/traffic_sandbox.tscn"
+## N8.2: the exported verifier's hand-over (`--verifier=1`) and its command line.
+const VERIFIER_BOOT_PARAM := "verifier"
+const VERIFIER_MAIN := "res://tools/verifier/verify_replay_main.gd"
 ## The journey bonus kind (paid on the crossing that reaches the coast).
 const BONUS_JOURNEY := &"journey"
 ## Sims sharing the run's event buffer: traffic, lives, scoring, sun clock, legs, the
@@ -248,6 +251,15 @@ class CrashController:
 
 
 func _ready() -> void:
+	# N8.2: the exported replay verifier (tools/verifier/export_verifier.sh) runs through the
+	# main scene (export templates ignore `--script`): `-- --verifier=1 --replay=...` hands
+	# over to the verifier's command line; the verification builds its own Run.
+	if boot_param(VERIFIER_BOOT_PARAM) == "1" and get_tree().current_scene == self:
+		set_physics_process(false)
+		set_process(false)
+		get_tree().root.add_child.call_deferred((load(VERIFIER_MAIN) as GDScript).new() as Node)
+		queue_free.call_deferred()
+		return
 	# Web: `?scene=drive` opens the M3 drive scene, `?scene=sandbox` the traffic
 	# sandbox (browsers can't pass scene paths on the command line).
 	if OS.has_feature("web"):
@@ -1168,7 +1180,7 @@ func _start_run() -> void:
 			hits = HitDetection.new(tuning.lives, _hits_cap)
 		director = TrafficDirector.new(ctx, road, sim, registry.profiles, registry.types,
 			car_def.length_m, car_def.width_m)
-		director.set_fog_end(builder.view_distance_m())
+		director.set_fog_end(sim_horizon_m())   # N8.2: never the quality tier's view distance
 		director.events = events
 		director.set_biome(biome_director.current())
 		if loop == null:
@@ -1463,8 +1475,17 @@ func _build_headlight_lut() -> void:
 		_headlight_lut[i] = 1 if is_finite(ramp) and ramp > on_above else 0
 
 
+## How far ahead the road is generated: the simulation's horizon (the same on every
+## device, N8.2), or further when a dev override draws further.
 func _view_ahead(s: float) -> float:
-	return s + builder.view_distance_m() + tuning.road.chunk_length_m * 2.0
+	return s + maxf(sim_horizon_m(), builder.view_distance_m()) + tuning.road.chunk_length_m * 2.0
+
+
+## The simulation's view of the road ahead (RoadTuning.sim_horizon_m): the director's spawn
+## distance, the leg planner's horizon and the fork candidates' "near" read this, never the
+## quality tier's view distance (WP9.1's audit, docs/QUALITY.md → Simulation safety).
+func sim_horizon_m() -> float:
+	return tuning.road.sim_horizon_m
 
 
 ## Night lighting nodes (WP5.4, docs/NIGHT.md): visual only, fed by the sky's ramps.
@@ -1494,7 +1515,7 @@ func _update_night_lights(s: float) -> void:
 ## Legs are planned a whole leg past the view, so the next checkpoint (the HUD's sun
 ## bar distance) is always queued. Director rate: allocates only when the road grows.
 func _plan_ahead_to(s: float) -> float:
-	return _view_ahead(s) + tuning.legs.leg_length_m()
+	return s + sim_horizon_m() + tuning.road.chunk_length_m * 2.0 + tuning.legs.leg_length_m()
 
 
 # ---------------------------------------------------------------- Determinism

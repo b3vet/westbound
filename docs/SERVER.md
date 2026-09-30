@@ -64,7 +64,7 @@ N4.4 + N10.1 add the netcode and load acceptance (see "Load test, shadow collisi
 
 - the `bots` crate's full delay layer (per-direction delay, jitter and loss; TCP or datagram), the client's traffic model on bots (correction sizes, late intents) and the `loadtest` binary;
 - shadow collision logging: contacts between players (with the disagreement of their views) to `shadow_contacts` and the metrics, sampled logs of those and of unreported / refused traffic contacts;
-- `GET /admin/stats` on the metrics listener, and the process's CPU and memory on `/metrics`;
+- the admin stats view: `GET /admin/stats` on the metrics listener, and `GET /admin/v1/stats/full` behind the admin token (N10.2's admin API); the peak memory on `/metrics`;
 - 20 rooms × 8 bots in Docker at 1 vCPU: 38 % of the core, tick p99 ≤ 3 ms, 100 MB, 5.1 KB/s per player.
 
 N5.1 adds rooms and players behind the gateway (see "Rooms"):
@@ -83,6 +83,14 @@ N4.1 adds the server's traffic simulation in the pure `sim` crate (not wired int
 - `TrafficWorld`, one room's traffic behind one call per 20 Hz tick.
 
 See "Traffic simulation (N4.1)".
+
+N10.2 adds operations (see "Operations (N10.2)" and the owner's runbook [`OPERATIONS.md`](OPERATIONS.md)):
+
+- the admin API (loopback, token) and the full admin CLI: player lookup by `name#tag`, ban reasons, player deletion, live rooms and room close, notices, kicks, board recompute, stats, the admin log;
+- the planned restart: a 60 s `server_notice{restart}`, draining, the room handover (runs end with their banked score, rooms come back by code on the next instance), close 1012, and the client's countdown and rejoin;
+- backups verified after writing, `restore` and `verify-backup`, an optional off-site hook;
+- a rate-limit review (per IP on every route and upgrade, `room_create` per account) with the full table;
+- request ids, JSON logs in the image, and metrics for the database, queues, backups, restarts, errors and the process.
 
 | Path | What |
 | --- | --- |
@@ -106,7 +114,7 @@ See "Traffic simulation (N4.1)".
 
 | Route | Listener | What |
 | --- | --- | --- |
-| `GET /api/v1/health` | public `:8080` | `{"status":"ok","version":"0.1.0","build":"<sha>","db":"ok"}`. Returns 503 with `"status":"degraded"` when the database does not answer |
+| `GET /api/v1/health` | public `:8080` | `{"status":"ok","version":"0.1.0","build":"<sha>","db":"ok"}`. Returns 503 with `"status":"degraded"` when the database does not answer, and (N10.2) with `"status":"draining"` during a planned restart's notice |
 | `GET /ws` | public | The realtime gateway: binary protocol frames (docs/PROTOCOL.md), `Hello` first. See "Realtime gateway". Limits: 16 KB max inbound message (close 1009), a 64-frame outbound queue (a slow client is dropped), a ping every 2 s, and a close after 8 s of silence. Past 400 connections, the upgrade gets HTTP 503 |
 | `GET /ws/echo` | public | Ops echo of text and binary frames, same limits and connection cap. `gateway.echo_enabled = false` turns it off (404) |
 | `GET /api/v1/echo-check` | public | A small HTML page, used to check a phone (see "Verify a phone connects"): runs the echo on `/ws/echo`, then sends a token-less `Hello` to `/ws` and shows the gateway's `Error` (`map_mismatch` or `auth_failed`) |
@@ -116,8 +124,9 @@ See "Traffic simulation (N4.1)".
 | `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
 | `POST /api/v1/runs/{run_id}/replay` | public | The replay upload (binary body): see "Replays and verification" |
 | `/api/v1/friends*`, `/api/v1/blocks*`, `/api/v1/presence`, `/api/v1/crews*`, `/api/v1/reports` | public | Friends, blocks, presence, crews, reports: see "Social API" |
-| `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info`, N10.1: `process_cpu_seconds_total`, `process_resident_memory_bytes` / `_peak_bytes`; the rooms' (see "Rooms → Metrics") |
-| `GET /admin/stats` | **localhost only** (the metrics listener) | N10.1: the admin stats view, JSON (see "Load test, shadow collisions and admin stats") |
+| `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info`; the rooms' metrics; N10.2's database, queue, backup, restart, admin, log and process metrics (see "Operations (N10.2) → Metrics added"); N10.1: `process_resident_memory_peak_bytes`, the shadow contacts (see "Rooms → Metrics") |
+| `/admin/v1/*` | **localhost only** `127.0.0.1:9091`, only with `WB_ADMIN__TOKEN` | N10.2: the admin API (bearer token): stats, live rooms, room close, notices, kicks. See "Operations (N10.2) → Admin API" |
+| `GET /admin/stats` | **localhost only** (the metrics listener) | N10.1: the admin stats view, JSON (see "Load test, shadow collisions and admin stats"); the same as `GET /admin/v1/stats/full` on the admin API |
 
 ## Local development
 
@@ -241,7 +250,7 @@ WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban 
 6. **Replies.** Everything one inbound frame causes goes out as one outbound frame.
 7. **Fatal errors.** The gateway sends the `Error`, then waits for the client to close, up to `gateway.fatal_close_delay_ms` (1 s), and then sends a close frame (1008 with the error code as the reason; 1011 for `internal`). Without the wait, a client that reads the error and the close in the same socket read can lose the error. Godot's `WebSocketPeer` does: it goes straight to `STATE_CLOSED` with no packet available, so the player would see "connection closed" instead of "please update". `NetClient` closes as soon as it reads a fatal error, so it never waits.
 8. **Keepalive.** The protocol crate's `Keepalive`: the server sends a WebSocket ping every `limits.ping_interval_ms` (keeps proxies and NATs open; clients answer on their own) and closes with 1001 after `limits.dead_after_ms` without receiving anything. Clients send protocol `Ping`s every 2 s (`Welcome.ping_interval_ms`).
-9. **Shutdown.** Every socket gets close 1001 and the session is removed.
+9. **Shutdown.** After a planned restart's notice and handover (N10.2, see "Operations (N10.2) → The planned restart") every socket gets its queued frames and then close **1012** (service restart: reconnect); a shutdown without the restart sequence (tests) closes with 1001.
 
 ### Map hashes
 
@@ -532,7 +541,7 @@ Rate limits use `tower_governor`. Each bucket refills evenly over its window, wi
 
 ### Admin CLI
 
-Admin commands run inside the container against the live database, from Coolify's **Terminal** or `docker exec`. Each prints one line, exits non-zero on failure, and is logged to `admin_log` with actor `cli`.
+Admin commands run inside the container against the live database, from Coolify's **Terminal** or `docker exec`. Each prints one line, exits non-zero on failure, and is logged to `admin_log` with actor `cli`. N10.2 accepts `name#1234` wherever an account id is taken, adds `--reason` to `ban` and many more commands: see "Operations (N10.2) → Admin CLI (full)".
 
 ```sh
 westbound-server admin ban 42 7d           # 30m, 12h, 7d, 2w, or perm
@@ -549,7 +558,7 @@ westbound-server admin remove-entry journey 2026-W40 42
 - **`remove-run` / `remove-entry`:** logged as `remove_run` (target: the run id; detail: the account and the entries rebuilt) and `remove_entry` (target: `board/period/account`). A removed entry is not rebuilt from older runs; it comes back only with a new run. The running server's cached board tops catch up within `leaderboards.cache_ttl_secs`.
 - **Bans:**
   - A ban applies from the next request: HTTP routes return `403 banned`, and the WebSocket `Hello` gets `banned`.
-  - Open WebSocket sessions are dropped within `gateway.ban_recheck_ms` (30 s): the gateway re-checks every live session against the database and sends a fatal `banned` (see "Realtime gateway → Bans").
+  - Open WebSocket sessions are dropped within `gateway.ban_recheck_ms` (30 s): the gateway re-checks every live session against the database and sends a fatal `banned` (see "Realtime gateway → Bans"). N10.2: with the admin API on, `admin ban` ends the session at once.
 
 ### Local runs
 
@@ -782,7 +791,7 @@ The file is written to a temporary name and renamed into place under the databas
 
 An upload wakes the worker at once; otherwise it looks every `poll_interval_secs` (30 s). On start, jobs a stopped worker left `running` go back to `pending` (the lost attempt counts). Exactly one worker may run against a database: either the in-server one or one `verify-worker`.
 
-**No verifier configured** (`verifier_command = []`, the default and today's production): the worker is not started (the log says so once at startup), uploads are stored, jobs stay `pending` and their runs stay `pending` ("verifying") on the boards. Configure a verifier later and the backlog is verified oldest first. Do not configure one in production before the determinism audit (N8.2): today honest replays of more than a few tens of seconds of dense traffic are rejected (REPLAY_FORMAT.md → Honest replays today).
+**No verifier configured** (`verifier_command = []`, the default and today's production): the worker is not started (the log says so once at startup), uploads are stored, jobs stay `pending` and their runs stay `pending` ("verifying") on the boards. Configure a verifier later and the backlog is verified oldest first. N8.2 made honest replays verifiable (the verifier re-simulates from the recorded inputs: 6 of 6 honest 11-minute runs accepted, REPLAY_FORMAT.md → Honest replays); the sidecar below is built but not deployed. Replays from N8.1 clients (no input stream) still get the kinematic playback, which rejects long honest runs: restrict `runs.supported_builds` to N8.2 builds before enabling it.
 
 ### Retention
 
@@ -825,7 +834,7 @@ Index `replays_queue (status, not_before, created_at, run_id)` serves the worker
 
 ### Running the verifier (build parity, the 1 GB cap, Coolify)
 
-The verifier is a headless build of the **same game build** as the client whose runs it checks (spec: build parity): `tools/verifier/verify_replay.gd` run by that build's Godot binary and pack. It checks the replay's tuning hash against its own and answers "cannot verify" (exit 3, a failed attempt, never a verdict) when they differ. With several builds accepted (`runs.supported_builds`), keep one pack per build and let the command pick it: `--main-pack /verifier/{build}.pck`.
+The verifier is a headless build of the **same game build** as the client whose runs it checks (spec: build parity): `tools/verifier/verify_replay.gd` run by that build's Godot binary and pack. It checks the replay's tuning hash against its own and answers "cannot verify" (exit 3, a failed attempt, never a verdict) when they differ. With several builds accepted (`runs.supported_builds`), keep one exported verifier per build and let the command pick it: `/verifier/{build}/westbound` (N8.2).
 
 Locally (from `westbound-server/`, with the editor binary):
 
@@ -835,9 +844,9 @@ WB_REPLAYS__VERIFIER_COMMAND='nice,-n,10,../tools/godot.sh,--headless,--path,..,
 cargo test -p server --test replays -- --ignored end_to_end   # records a run with Godot, verifies it through a real server
 ```
 
-The server image is distroless and static (no shell, no `nice`, no glibc), and a Godot export needs glibc, so the verifier cannot run inside today's image. Options for Coolify (MP-D1), none built yet:
+The server image is distroless and static (no shell, no `nice`, no glibc), and a Godot export needs glibc, so the verifier cannot run inside today's image. **N8.2 built option 1** (DETERMINISM.md → Verifier deploy): `tools/verifier/export_verifier.sh` (the `Verifier (Linux headless)` export preset, requested in the N8.2 handoff; a smoke test that verifies a fresh replay with the exported binary exactly as the worker will), `westbound-server/verifier/Dockerfile` (the image) and `westbound-server/verifier/docker-compose.verifier.yml` (the sidecar service with `mem_limit: 1g`, `cpus: 1`, the server's worker off). Not enabled in production. The options as N8.1 described them:
 
-1. **Sidecar (recommended).** A second image, `westbound-verifier:<build>`: `debian:bookworm-slim` + the Godot Linux export template + the game's `.pck` per supported build + the `westbound-server` binary. In the Coolify compose it runs `westbound-server verify-worker` on the **same `/data` volume** (SQLite in WAL mode works across containers on one host), with `mem_limit: 1g` (the cgroup `memory.max`, the spec's systemd `MemoryMax`) and `cpus: 1`, and `WB_REPLAYS__VERIFIER_COMMAND=nice,-n,10,/verifier/westbound,--headless,--main-pack,/verifier/{build}.pck,--script,res://tools/verifier/verify_replay.gd,--,--server=off,--replay={replay},--out={out},--seed={seed},--claimed-score={claimed_score},--claimed-hits={claimed_hits}`. The server gets `WB_REPLAYS__WORKER_ENABLED=false`. The cap covers only the verifier; an OOM kill is a failed attempt, retried. Board caches in the server pick up verdicts within `leaderboards.cache_ttl_secs` (60 s), as with the admin CLI.
+1. **Sidecar (recommended, built in N8.2).** A second image, `westbound-verifier:<build>`: `debian:bookworm-slim` + the Godot Linux export template + the game's `.pck` per supported build + the `westbound-server` binary. In the Coolify compose it runs `westbound-server verify-worker` on the **same `/data` volume** (SQLite in WAL mode works across containers on one host), with `mem_limit: 1g` (the cgroup `memory.max`, the spec's systemd `MemoryMax`) and `cpus: 1`, and `WB_REPLAYS__VERIFIER_COMMAND=nice,-n,10,/verifier/{build}/westbound,--headless,--,--verifier=1,--server=off,--replay={replay},--out={out},--seed={seed},--claimed-score={claimed_score},--claimed-hits={claimed_hits}` (N8.2: export templates ignore `--script` and `--main-pack`, so the pack sits next to the binary and `--verifier=1` hands the main scene over to the verifier; the debug template, the 4.7 release template crashes booting the project headless). The server gets `WB_REPLAYS__WORKER_ENABLED=false`. The cap covers only the verifier; an OOM kill is a failed attempt, retried. Board caches in the server pick up verdicts within `leaderboards.cache_ttl_secs` (60 s), as with the admin CLI.
 2. **Same container.** Rebase the server image on `debian:bookworm-slim` with the template and packs, and let the in-server worker run `nice -n 10 prlimit --data=1073741824 ...`. One container to deploy, but the image grows from about 4 MB to about 100 MB, and the memory cap is either the whole container's (server and verifier together) or an rlimit (`--data`; `--as` would break Godot's address-space reservations).
 
 Measured on this dev box: a 4-minute replay verifies in 10–20 s and peaks at about 225 MB resident, so a 10-minute run takes under a minute and the 1 GB cap leaves room.
@@ -1150,6 +1159,8 @@ tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_d
 
 ### Parity (≤ 1e-9; bit-exact in practice)
 
+N8.2: the sim crate's transcendentals are `sim::detmath`, the port of the client's `DetMath` (DETERMINISM.md): the player's velocity (`PlayerInput::from_vehicle`), the hull clearance (`hull::clearance`, new `clearance_cs`, `penetration`) and the scoring rules (the player's heading once per tick, a traffic car's heading as its velocity direction, as `src/scoring/` does now). The scoring vectors were regenerated; all traces stay tick-identical.
+
 `crates/sim/tests/parity.rs`, vectors in `crates/sim/vectors/`:
 
 | Vectors | Result |
@@ -1158,7 +1169,8 @@ tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_d
 | `idm.json`: 1,200 cases × `accel`, `free_accel`, `interaction_accel`, `desired_gap`, `equilibrium_gap`, `pow_int` | 7,200 / 7,200 bit-exact |
 | `mobil.json`: 600 cases, `incentive`, `threshold`, `accepts`, `is_safe`, `b_safe_for` | bit-exact |
 | `no_ambush.json`: 1,500 cases (287 violations) | identical |
-| `player_velocity.json`: 300 cases of `_read_player`'s road velocity | within 1e-9 (libm) |
+| `player_velocity.json`: 300 cases of `_read_player`'s road velocity | bit-exact (N8.2: DetMath's `sin_cos` on both sides; was within 1e-9 with libm) |
+| `detmath.json` (N8.2): 3,504 cases of `DetMath` (`sin`, `cos`, `tan`, `atan`, `atan2`, `asin`, `exp`, `log`, `pow`; edge cases, branch boundaries, seeded inputs) against `sim::detmath` (`tests/detmath.rs`) | 3,504 / 3,504 bit-exact (a NaN matches any NaN) |
 | `loop_closures.json`: the client's closures and drop zones on loop_v1, per lane every 50 m | within 1e-8 m |
 | `trace_*.json`: the whole sim, per-tick state hash and every event (since WP6.11 with the MP-D5 extensions on: the traces first differ from the old ones at ticks 119 / 9 / 22 / 1336) | **tick-identical**: `sp_weave_120hz` 4,800 / 4,800 ticks (single-player rules, near / far ticks, hits, close passes), `sp_closure_120hz` 3,600 / 3,600 (set-piece closure), `mp_weave_20hz` 2,400 / 2,400 (20 Hz, all near, 1.0 s floor, 4 lanes, headway scale), `mp_lane_drop_20hz` 1,800 / 1,800 (a WP6.8 road drop with its zone) |
 
@@ -1333,7 +1345,7 @@ On `/metrics`, after the gateway's:
 | `wb_room_shadow_contact_disagreement_meters`, `wb_room_shadow_contact_speed_kmh` (histograms) | N10.1: contacts between players by the disagreement of the two views (0.1 … 16 m) and the pair's speed (50 … 300 km/h); `_count` = contacts |
 | `wb_room_shadow_rows_written_total`, `_dropped_total` | N10.1: `shadow_contacts` rows |
 
-Logs at INFO: `room created` (id, code, settings), `room seat taken` / `taken back` / `held` / `released`, `run ended` (reason, verified, distance), `implausible player state; run unverified` (once per kind per run), `joined room` (gateway), `room closed (empty)`.
+Logs at INFO: `room created` (id, code, settings), `room seat taken` / `taken back` / `held` / `released`, `run ended` (reason, verified, distance), `implausible player state; run unverified` (once per kind per run), `joined room` (gateway), `room closed (empty)`; N10.2: `room closed` (mode `Admin` / `Restart`), `handed-over room restored`.
 
 ### Configuration
 
@@ -1545,7 +1557,7 @@ Multiplayer additions, none of which changes what the port computes when unused:
 
 | Vectors | Result |
 | --- | --- |
-| `scoring_hull.json`: 2,000 box pairs | 2,000 / 2,000 bit-exact |
+| `scoring_hull.json`: 2,000 box pairs | 2,000 / 2,000 bit-exact (N8.2: DetMath's `sin_cos` on both sides; asserted) |
 | `scoring_weave_120hz.json` (3 lanes, 75 s at 120 Hz), `scoring_weave_20hz.json` (4 lanes, 150 s at 20 Hz), `scoring_edges_120hz.json` (shoulders, dips, 60 s) | **tick-identical**: 9,000 / 3,000 / 7,200 ticks, every event (kind, tag, points, multiplier, clearance, slot, value: 102 / 191 / 84 events) and `take_boost_fill()` bit-exact, `Scoring.trace_hash()` equal every tick. Every event kind and loss reason occurs |
 
 **When `src/scoring/` changes:** apply the same change to `rules.rs`, re-export (`tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_data.gd -- --only=scoring`), run `cargo test -p sim --test scoring_parity`. The traces fail at the first tick that differs.
@@ -1719,7 +1731,7 @@ At rush (300 s): 42.8 % of the core, tick p99 ≤ 2 ms, 100.9 MB, 5.61 KB/s wors
 
 ### Admin stats
 
-`GET /admin/stats` on the metrics listener (localhost only, like `/metrics`: there is no admin HTTP auth, the listener's address is the gate). The distroless image has no curl, so read it from a process sharing the container's network (a sidecar, `docker run --network container:<name> curlimages/curl …`, or the host with `--network host`). One JSON document:
+`GET /admin/stats` on the metrics listener (localhost only, like `/metrics`: the listener's address is the gate; the load test reads it there), and the same document at `GET /admin/v1/stats/full` on N10.2's admin API (its bearer token; `/admin/v1/stats` stays the short live counts the CLI prints). The distroless image has no curl, so read it from a process sharing the container's network (a sidecar, `docker run --network container:<name> curlimages/curl …`, or the host with `--network host`). One JSON document:
 
 | Key | What |
 | --- | --- |
@@ -1729,7 +1741,7 @@ At rush (300 s): 42.8 % of the core, tick p99 ≤ 2 ms, 100.9 MB, 5.61 KB/s wors
 | `netcode` | claims accepted / rejected and the acceptance, offences by kind, hits confirmed / refused / unreported (and per player-hour), placements, crash-outs |
 | `shadow` | player-hours covered, contacts and contacts per player-hour, pair-ticks, the disagreement and speed histograms (`[bound, count]`, the last bound `null`), rows written / dropped, and `last_day` / `last_week` from `shadow_contacts` (contacts, pairs, mean speed km/h, mean and max disagreement, contacts over 1 m, mean length in ticks) |
 
-The admin CLI (N10.2) can print it; the load test prints it at the end of a run.
+The load test prints it at the end of a run; `westbound-server admin stats` could print it with a `--full` flag (not added: the CLI is N10.2's).
 
 ### Tests
 
@@ -1741,6 +1753,137 @@ The admin CLI (N10.2) can print it; the load test prints it at the end of a run.
 | `tests/admin_stats.rs` | `/admin/stats` on the metrics listener only (404 on the public one); the process metrics on `/metrics`; rows written, ordered and summarised; the sink |
 | `tests/netcode.rs`, `bots::{link, predict, load}::tests` | See [LOADTEST.md](LOADTEST.md) → Tests |
 | `tests/config.rs` | The two new `[scoring]` keys in the example file |
+## Operations (N10.2)
+
+WP N10.2 hardens the server for running it: the admin API and the full admin CLI, the planned restart (notice, drain, room handover, close 1012), backups with verification, restore and an off-site hook, a rate-limit review, request ids, and the operational metrics. The owner's runbook (deploy, restart, backup and restore, bans, logs, metrics, alerts) is [`OPERATIONS.md`](OPERATIONS.md). Code: `shutdown.rs` (drain and restart), `handover.rs`, `admin_api.rs`, `admin_client.rs`, `admin.rs` + `main.rs` (CLI), `backup.rs`, `ops.rs` (probes), `account_limits.rs`, `ratelimit.rs`, `http.rs` (request ids, draining health), `telemetry.rs`. Tests: `tests/ops.rs`, `tests/cli.rs` (the N10.2 part: `serve` on SIGTERM with a connected player), `tests/config.rs`, unit tests in the modules. Against a built image: run the container with `WB_GATEWAY__MAP_HASHES=abab…ab` (64 hex) and `WB_SERVER__RESTART_NOTICE_SECS=3`, then `WB_CONTAINER=<name> WB_CONTAINER_ADDR=127.0.0.1:<port> cargo test -p server --test ops -- --ignored container` (joins a room, `docker kill --signal TERM`, expects the notice, `run_result{room_closed}` and close 1012; measured on the N10.2 image: notice at once, handover and exit 0 after 3.05 s; an idle `docker stop` exits in 0.3 s).
+
+### The planned restart
+
+Spec: "the server broadcasts a notice 60 seconds before a planned restart. Clients reconnect automatically and rejoin the same private room by code, or Quick Join again". Room state lives in memory, so a restart ends it; the rule we implement (proposed as MP-D13):
+
+1. **SIGTERM** (a Coolify redeploy or stop, `docker stop`) starts the drain:
+   - `server_notice{kind: restart, seconds: 60, text}` goes to every live session, reminders at 30 and 10 s left (`server.restart_notice_reminders_secs`), and a session that signs in during the drain gets it right after its `Welcome` with the seconds left;
+   - no new rooms and no new seats: `room_create`, Quick Join and joins answer a non-fatal `server_full` ("The server is restarting. Try again in a minute."); a **held** seat can still be taken back (a player whose connection blipped);
+   - `/api/v1/health` answers **503 `{"status":"draining"}`**, so a proxy that watches health (and Docker's `HEALTHCHECK`) stops sending new players here;
+   - the notice ends early once nobody is connected (an idle server exits at once), or on a second SIGTERM / Ctrl-C.
+2. **Handover.** Every room closes at its next tick: each active run ends as `run_result{end_reason: room_closed}` with its official banked score (verified runs are written to the boards, and `Server::run` waits for those writes); the result goes out in that tick's frame; the seats end **without** `room_left` (that would send the client to the hub). The rooms' codes and settings are written to `room-handover.json` beside the database (on the volume), valid for `server.handover_ttl_secs` (600).
+3. **Close.** Every socket gets its queued frames, then close **1012** (service restart). The WAL is checkpointed and the process exits 0.
+4. **The next instance** recreates a handed-over room when a player sends `room_join_code` with its code (read from the file when the join arrives, so it works whether the new container starts after the old one exits or alongside it). The first player back becomes the host of a private room; everyone gets a fresh seat and a fresh run (3 s protection) where the room places them.
+
+What does not survive a restart: seats and runs (a run ends with its banked score kept, as after a reconnect past the 15 s hold), the host, the kick list, and parties (in memory; members rejoin the room by code without the party). Public rooms come back the same way (the client rejoins by the code it has); a player whose room is gone gets `room_not_found` and goes back to the hub, where Quick Join works as usual.
+
+**The client** (N10.2, `src/net/rooms/room_session.gd`, `src/ui/hud/room_hud.gd`, `src/run/run_room.gd`): a `server_notice{restart}` shows a **SERVER RESTART · n S** countdown in the room banner; when the socket drops, the reconnect window is `NetTuning.room_restart_rejoin_window_s` (90 s) instead of 15 s; the rejoin by code lands in the recreated room and its placement starts a fresh run; the `room_closed` result shows as a RUN ENDED toast with the score. A hub (lobby) connection dropped by a restart reconnects quietly. Other notices (`info`, `maintenance`) show their text in the banner.
+
+**Stop timeout.** The container must be given longer than the notice to stop: `docker-compose.yml` sets `stop_grace_period: 75s` (notice 60 s + handover + `server.shutdown_grace_ms` 5 s). If the platform stops containers with a shorter timeout (see OPERATIONS.md → Coolify stop timeout), set `WB_SERVER__RESTART_NOTICE_SECS` below it; a SIGKILL mid-notice loses the handover (players go back to the hub) and the runs in progress (unrecorded).
+
+### Admin API
+
+A second loopback listener, `admin.bind` (`127.0.0.1:9091`), **on only when `admin.token` is set** (`WB_ADMIN__TOKEN`, 32+ bytes; the CLI inside the container reads the same variable). Every request needs `Authorization: Bearer <token>` (constant-time check); refusals are counted (`wb_admin_denied_total`) and logged without the token.
+
+| Route | What |
+| --- | --- |
+| `GET /admin/v1/stats` | `{"version","build","uptime_secs","draining","restart_in_secs","sessions","connections","rooms","seats","public_rooms","private_rooms"}` |
+| `GET /admin/v1/rooms` | `[{"room_id","code","visibility","players","max_players","density","night","accounts":[...]}]` |
+| `POST /admin/v1/rooms/{code or id}/close` `{"message"}` | Closes the room at its next tick: runs end `room_closed` (scores kept), the message goes out as `server_notice{info}`, then `room_left{closed}`. 404 for an unknown room. Logged to `admin_log` (actor `api`, `room_close`) |
+| `POST /admin/v1/notice` `{"kind":"info|maintenance|restart","seconds","text"}` | A `server_notice` to every live session; `{"sessions": n}`. Logged (`notice`) |
+| `POST /admin/v1/kick/{account_id}` `{"reason":"banned|revoked|closed"}` | Ends the account's session now (a fatal `banned` / `auth_failed`, or a close); `{"kicked": bool}` |
+| `POST /admin/v1/boards/invalidate` | Drops the cached board tops (the CLI calls it after board changes) |
+
+### Admin CLI (full)
+
+`westbound-server admin <command>` inside the container (Coolify **Terminal**, or `docker exec <container> westbound-server admin ...`). PLAYER is an account id or `name#1234` (case-insensitive). Every change is logged to `admin_log` (actor `cli`); `admin log` shows it. Commands marked *live* need the admin API (the running server); the rest work on the database alone (also with the server stopped).
+
+| Command | What |
+| --- | --- |
+| `player PLAYER` | Account, name, created / last seen, linked providers, ban (and the last ban's reason), crew, friends, runs, reports against / by, leaderboard entries |
+| `ban PLAYER 7d [--reason "..."]` | `30m`, `12h`, `7d`, `2w` or `perm`; the live session ends at once when the API is on (else within `gateway.ban_recheck_ms`) |
+| `unban PLAYER`, `rename PLAYER "Name"` | As before (N1.1) |
+| `delete-player PLAYER --yes` | Deletes the account and all its data, like the in-game deletion; ends the live session |
+| `kick PLAYER` | *live*: ends the session now (they can sign in again unless banned) |
+| `reports [--unhandled] [--limit N]`, `report-handle ID` (alias `report-resolve`) | The reports queue (N9.1) |
+| `crew-rename`, `crew-disband` | As before (N9.1) |
+| `remove-run RUN`, `remove-entry BOARD PERIOD ID` | As before (N7.1); the running server's cached tops are dropped at once when the API is on |
+| `recompute BOARD PERIOD` | Rebuilds a board period from the runs (each player's best eligible run; on `loop_crew` each crew's sum), in one transaction |
+| `replays`, `replay-requeue [RUN]` | The replay queue (N8.1) |
+| `rooms` | *live*: one line per room: id, code, visibility, players, density, night, accounts |
+| `room-close CODE [-m "message"]` | *live*: closes a room with a message |
+| `notice "text" [--kind maintenance] [--seconds 600]` | *live*: a notice to every connected player |
+| `stats` | Database stats (accounts, new / seen in 24 h and 7 d, bans, runs by mode, entries, crews, friendships, reports, replay queue, DB size, the last backup) plus the live ones when the server answers |
+| `log [--limit N]` | The admin log, newest first |
+| `backups` | The dated backups in `backup.dir` with sizes |
+
+Top-level: `backup PATH` (now verified), `verify-backup PATH` (integrity check and the migrations it holds), `restore BACKUP [--force]` (below).
+
+### Rate limits: every route and message type
+
+The review found the public pages, the health route and the WebSocket upgrades without any limit, and `room_create` limited only per connection (a client reconnecting in a loop could create a room every few hundred milliseconds, and empty rooms live 60 s, so one account could fill the 40-room cap). Both are fixed; every limit is in the config.
+
+**HTTP** (`tower_governor`; IPv6 keyed by /64; the client IP behind the proxy as in "Client IPs behind the proxy"; `429 rate_limited` with `Retry-After`):
+
+| Routes | Key | Default | Config | Test |
+| --- | --- | --- | --- | --- |
+| **every route** (API, upgrades, health, `/.well-known/*`, `/r/*`, 404s), on top of the rows below | IP | 600 / min, burst 200 | `rate_limits.ip_per_minute`, `ip_burst` | `ops.rs` `every_route_is_limited_per_ip_and_upgrades_too` |
+| `GET /ws`, `GET /ws/echo` (upgrades) | IP | 60 / min, burst 30 | `rate_limits.ws_connect_*` | same |
+| `POST /auth/device` | IP | 5 / h, burst 5 | `rate_limits.device_create_*` | `tests/ratelimit.rs` |
+| other `/auth/*` | IP | 30 / min, burst 10 | `rate_limits.auth_*` | `tests/ratelimit.rs` |
+| `/me`, `/account`, `/boards/*`, `/runs*`, `/runs/{id}/replay`, friends, blocks, presence, crews, reports | account (IP without a valid token) | 120 / min, burst 30 | `rate_limits.account_*` | `tests/ratelimit.rs` |
+| `POST /runs`, `/runs/legacy`, `/runs/{id}/replay` (also) | account | 30 / h, burst 10 | `rate_limits.runs_*` | `tests/runs.rs` |
+| `POST /friends/requests`, `/blocks`, `/crews`, `/crews/join`, `/reports` (also) | account | 60 / h, burst 20 | `rate_limits.social_*` | `tests/social.rs` |
+| `POST /reports` (also) | account, counted in the DB | 10 per rolling 24 h | `social.reports_per_day` | `tests/social.rs` |
+| `/metrics`, `/admin/v1/*` | loopback listeners (token for admin) | none: not reachable from outside | `metrics.bind`, `admin.bind` | `tests/config.rs` (loopback only), `tests/ops.rs` (token) |
+
+Also: JSON bodies are capped at `http.max_body_bytes` (4 KB; replay uploads at `replays.max_bytes`), and connections at 400 (`limits.max_connections`, HTTP 503 past it).
+
+**WebSocket, per connection** (token buckets, `ws_rate_limits.*`; an over-limit message is dropped and counted, a non-fatal `rate_limited` at most once a second, and a flood that empties the violation bucket gets a fatal `rate_limited`):
+
+| Message type | Per second | Burst | Test |
+| --- | --- | --- | --- |
+| `hello` | not limited: a second one is a fatal `malformed` | | `tests/gateway.rs` |
+| `ping` | 2 | 5 | every type: `msg_limits.rs` `every_type_has_its_configured_bucket` (own bucket, burst, refill, independent); over real sockets: `tests/gateway.rs` `rate_limits_drop_then_disconnect` |
+| `lobby_command` (rooms, parties, presence, browse) | 5 | 10 | as above |
+| `player_state` | 25 | 40 | as above |
+| `score_claim` | 10 | 20 | as above |
+| `hit_report` | 5 | 10 | as above |
+| `run_event` | 2 | 5 | as above |
+| `quick_chat` | 1 | 3 | as above |
+| `room_host_command` | 2 | 5 | as above |
+| violation bucket | 5 | 100 | `msg_limits.rs` `drops_then_disconnects`, `tests/gateway.rs` (flood → fatal) |
+| **`room_create`, per account** (survives reconnects) | 30 / h | 5 | `ops.rs` `room_create_is_limited_per_account_across_reconnects` |
+
+Plus the per-message size cap (16 KB, close 1009), the 64-frame outbound queue (a slow client is dropped), and the room cap (40, `server_full`).
+
+### Backups
+
+- **Nightly** (as before): `VACUUM INTO` a `.tmp` file, then (N10.2, `backup.verify`) the copy is opened read-only and `PRAGMA integrity_check` must say `ok`, then it is renamed to `westbound-YYYY-MM-DD.db`; files older than `backup.retention_days` go. A copy that fails the check is deleted and the run counts as failed (`wb_backups_failed_total`, `wb_backup_verify_failed_total`).
+- **Metrics:** `wb_backup_last_success_timestamp_seconds`, `wb_backup_last_size_bytes`, `wb_backup_last_duration_seconds` (since the process started).
+- **Off-site hook** (optional, `backup.upload_command`): after each good backup the server runs this argv, `{file}` replaced by the backup's path, no shell, killed after `backup.upload_timeout_secs`; exit 0 counts in `wb_backup_uploads_ok_total`, anything else in `_failed_total` and an ERROR log. The runtime image has no shell or tools, so the command must be a static binary on the volume (for example `rclone`); OPERATIONS.md has the recipe. No cloud credentials are in the repository.
+- **Restore** (`westbound-server restore BACKUP`): refuses while anything answers on `server.bind` (stop the server first; `--force` overrides), verifies the backup, moves the current database and its `-wal` / `-shm` aside to `<db>.before-restore-<unix secs>` (nothing is deleted), copies the backup into place, applies newer migrations and logs `restore` to `admin_log`. Tested: `backup.rs` (backup → change → restore brings the old rows back), `ops.rs` `a_backup_restores_into_a_fresh_server` (a device account signs in on a fresh server restored from the backup), `cli.rs` (refusals).
+
+### Logs
+
+- **Format:** JSON lines on stderr in the image (`WB_LOG__FORMAT=json` is set in the Dockerfile; `text` for a terminal): `timestamp`, `level`, `target`, the event's fields flattened, and the current span.
+- **Request ids:** every HTTP request gets an id (`X-Request-Id` from the client when it is 1–64 characters of `[A-Za-z0-9._-]`, else a new `<8 hex>-<12 hex>`); it is in the request's span (`req_id`) and echoed in the response's `X-Request-Id`. WebSocket lines carry `client` (a keyed IP hash), `account` and `session`.
+- **Never logged:** tokens, secrets, IPs (only keyed hashes), request bodies, query strings.
+- **New lines:** `restart: draining`, `restart notice sent`, `restart reminder sent`, `rooms handed over`, `handed-over room restored`, `room closed` (mode), `admin API request` (method, path, status), `admin API request refused (token)`, `backup copied off-site`, `off-site backup hook failed`.
+
+### Metrics added
+
+| Metric | What |
+| --- | --- |
+| `wb_server_draining` | 1 during a restart's notice |
+| `wb_server_notices_total` | Notice broadcasts (restart notices, reminders, admin notices) |
+| `wb_rooms_handed_over_total`, `wb_rooms_restored_total` | Rooms handed to the next instance; recreated by a rejoin |
+| `wb_room_create_limited_total` | `room_create` refused by the per-account limit |
+| `wb_admin_requests_total`, `wb_admin_denied_total` | Admin API requests served / refused |
+| `wb_backup_last_success_timestamp_seconds`, `wb_backup_last_size_bytes`, `wb_backup_last_duration_seconds`, `wb_backup_verify_failed_total`, `wb_backup_uploads_ok_total`, `wb_backup_uploads_failed_total` | Backups |
+| `wb_db_probe_seconds`, `wb_db_probe_failures_total` | A timed query through the pool every `metrics.db_probe_interval_secs` (15 s): database latency |
+| `wb_db_file_bytes`, `wb_db_wal_bytes`, `wb_db_pool_connections`, `wb_db_pool_idle` | Database sizes and pool |
+| `wb_replay_jobs{status}` | Replay queue depth (`pending`) and the other states |
+| `wb_reports_unhandled` | The moderation queue |
+| `wb_log_events_total{level}` | Every WARN and ERROR logged (one alert covers every logged failure) |
+| `process_cpu_seconds_total`, `process_resident_memory_bytes`, `process_threads`, `process_open_fds`, `process_start_time_seconds` | The process (from `/proc`) |
+
+Coverage by area: rooms (`wb_rooms`, `wb_room_seats`, joins, reconnects, placements), ticks (`wb_room_tick_seconds` histogram), bytes (`wb_ws_bytes_in_total` / `_out_total`, frames), claims (`wb_room_claims_total{verdict,reason}`), offences (`wb_room_offences_total{kind}`), DB latency (above), queue depths (replays, reports, `wb_room_dropped_total{reason="queue_full"}`), errors (`wb_log_events_total`, `wb_http_requests_total{class="5xx"}`, `wb_ws_handshakes_total{result="internal"}`).
 
 ## Configuration reference
 
@@ -1753,9 +1896,11 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `server.public_origin` | `WB_SERVER__PUBLIC_ORIGIN` | `https://westbound.sipsakrandevu.com` | Public https origin behind the proxy (invite links from N9) |
 | `server.worker_threads` | `WB_SERVER__WORKER_THREADS` | `2` | tokio workers (spec: 2) |
 | `server.shutdown_grace_ms` | `WB_SERVER__SHUTDOWN_GRACE_MS` | `5000` | On SIGTERM, time for in-flight requests and close frames |
-| `server.restart_notice_secs` | `WB_SERVER__RESTART_NOTICE_SECS` | `0` | N10 hook: wait this long after SIGTERM before closing (the 60 s notice) |
+| `server.restart_notice_secs` | `WB_SERVER__RESTART_NOTICE_SECS` | `60` | N10.2: on SIGTERM, seconds of `server_notice{restart}` before the room handover and close 1012 (ends early when nobody is connected). 0 = no notice. Keep it below the platform's stop timeout |
+| `server.restart_notice_reminders_secs` | `WB_SERVER__RESTART_NOTICE_REMINDERS_SECS` | `30,10` | Reminders, as seconds left |
+| `server.handover_ttl_secs` | `WB_SERVER__HANDOVER_TTL_SECS` | `600` | The next instance recreates a handed-over room on a rejoin by code within this long |
 | `log.level` | `WB_LOG__LEVEL` | `info` | tracing filter (`info,westbound_server=debug`) |
-| `log.format` | `WB_LOG__FORMAT` | `text` | `text` or `json` (use `json` in Coolify) |
+| `log.format` | `WB_LOG__FORMAT` | `text` (image: `json`) | `text` or `json` |
 | `db.path` | `WB_DB__PATH` | `/data/westbound.db` | SQLite file (on the volume) |
 | `db.max_connections` | `WB_DB__MAX_CONNECTIONS` | `4` | Pool size |
 | `db.busy_timeout_ms` | `WB_DB__BUSY_TIMEOUT_MS` | `5000` | SQLite busy timeout |
@@ -1768,10 +1913,18 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `limits.max_connections` | `WB_LIMITS__MAX_CONNECTIONS` | `400` | WebSocket cap (spec) |
 | `metrics.enabled` | `WB_METRICS__ENABLED` | `true` | Serve `/metrics` |
 | `metrics.bind` | `WB_METRICS__BIND` | `127.0.0.1:9090` | Must be a loopback address |
+| `metrics.db_probe_interval_secs` | `WB_METRICS__DB_PROBE_INTERVAL_SECS` | `15` | N10.2: the database probe (latency, sizes, pool, queue depths) |
+| `admin.enabled` | `WB_ADMIN__ENABLED` | `true` | N10.2: serve the admin API (it also needs a token) |
+| `admin.bind` | `WB_ADMIN__BIND` | `127.0.0.1:9091` | Must be a loopback address |
+| `admin.token` | `WB_ADMIN__TOKEN` | empty | N10.2: bearer token (32+ bytes, environment only, redacted). Empty: the admin API is off and the live admin commands are unavailable |
+| `admin.request_timeout_ms` | `WB_ADMIN__REQUEST_TIMEOUT_MS` | `10000` | How long an `admin` command waits for the server |
 | `backup.enabled` | `WB_BACKUP__ENABLED` | `true` | Nightly backup task |
 | `backup.dir` | `WB_BACKUP__DIR` | `/data/backups` | Where dated backups go |
 | `backup.time_utc` | `WB_BACKUP__TIME_UTC` | `03:17` | Nightly run time, UTC `HH:MM` |
 | `backup.retention_days` | `WB_BACKUP__RETENTION_DAYS` | `7` | Dated files kept |
+| `backup.verify` | `WB_BACKUP__VERIFY` | `true` | N10.2: integrity check of each backup before it replaces anything |
+| `backup.upload_command` | `WB_BACKUP__UPLOAD_COMMAND` | empty | N10.2: off-site hook after each good backup: argv (comma-separated in the env), `{file}` = the backup |
+| `backup.upload_timeout_secs` | `WB_BACKUP__UPLOAD_TIMEOUT_SECS` | `600` | The hook is killed after this long |
 | `auth.jwt_secret` | `WB_AUTH__JWT_SECRET` | empty | **Required** outside dev. HS256 access-token secret, at least 32 bytes. Environment only, never logged. Changing it signs everyone out of their access tokens (clients refresh) |
 | `auth.device_secret_pepper` | `WB_AUTH__DEVICE_SECRET_PEPPER` | empty | **Required** outside dev. HMAC key for device-secret hashes, at least 32 bytes, different from the JWT secret. Environment only. **Never change it** once accounts exist: their device secrets would stop verifying |
 | `auth.access_token_ttl_secs` | `WB_AUTH__ACCESS_TOKEN_TTL_SECS` | `3600` | Access-token lifetime (spec: 1 h) |
@@ -1785,6 +1938,8 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `rate_limits.auth_per_minute` / `_burst` | `WB_RATE_LIMITS__AUTH_PER_MINUTE` / `__AUTH_BURST` | `30` / `10` | The other `/auth/*` routes per client IP |
 | `rate_limits.account_per_minute` / `_burst` | `WB_RATE_LIMITS__ACCOUNT_PER_MINUTE` / `__ACCOUNT_BURST` | `120` / `30` | Authenticated routes per account |
 | `rate_limits.runs_per_hour` / `_burst` | `WB_RATE_LIMITS__RUNS_PER_HOUR` / `__RUNS_BURST` | `30` / `10` | Run submissions per account, on top of the account limit |
+| `rate_limits.ip_per_minute` / `_burst` | `WB_RATE_LIMITS__IP_PER_MINUTE` / `__IP_BURST` | `600` / `200` | N10.2: every route per client IP, on top of the route's own limit |
+| `rate_limits.ws_connect_per_minute` / `_burst` | `WB_RATE_LIMITS__WS_CONNECT_PER_MINUTE` / `__WS_CONNECT_BURST` | `60` / `30` | N10.2: WebSocket upgrades per client IP |
 | `gateway.hello_timeout_ms` | `WB_GATEWAY__HELLO_TIMEOUT_MS` | `5000` | `Hello` must arrive within this (else `handshake_required`) |
 | `gateway.tick_rate_hz` | `WB_GATEWAY__TICK_RATE_HZ` | `20` | Tick rate in `Welcome` and of the `Pong` clock (spec: 20 Hz) |
 | `gateway.min_client_build` | `WB_GATEWAY__MIN_CLIENT_BUILD` | `0` | Older `Hello.client_build` gets `update_required` |
@@ -1805,9 +1960,10 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `rate_limits.social_per_hour` / `_burst` | `WB_RATE_LIMITS__SOCIAL_PER_HOUR` / `__SOCIAL_BURST` | `60` / `20` | Social writes per account, on top of the account limit (see "Social API") |
 | `social.*` | `WB_SOCIAL__…` | see "Social API → Configuration" | Friend, request and block caps; crew size and invite codes; the report limit |
 | `rooms.*` | `WB_ROOMS__…` | see "Rooms → Configuration" | Seats, holds and delays, spawns, the room clock, room queues, plausibility limits, room traffic |
+| `rooms.create_per_hour` / `create_burst` | `WB_ROOMS__CREATE_PER_HOUR` / `__CREATE_BURST` | `30` / `5` | N10.2: `room_create` per account (survives reconnects) |
 | `scoring.*` | `WB_SCORING__…` | see "Scoring (N6.1) → Configuration" | Claim tolerances, the official lag, score syncs, crew proximity, trains, hit detection, verification |
 
-The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLINKS__DIR` to the values above. It needs no config file.
+The image sets `WB_SERVER__BIND`, `WB_DB__PATH`, `WB_BACKUP__DIR` and `WB_DEEPLINKS__DIR` to the values above, and `WB_LOG__FORMAT=json` (N10.2). It needs no config file.
 
 ## Docker image
 
@@ -1863,11 +2019,10 @@ Coolify already has a GHCR registry token for the owner's other projects, so pri
 7. **Health check.** The image's own `HEALTHCHECK` (`westbound-server healthcheck`, a GET of `/api/v1/health` on port 8080) is what Docker and Coolify report, and the proxy starts routing once it is healthy.
    - Coolify's UI health check runs `curl`/`wget` inside the container, and this image has neither. Leave Coolify's own health check **disabled**. If you enable it, the settings are: path `/api/v1/health`, port `8080`, scheme `http`, expected status `200`.
    - If the container shows *unhealthy* with `curl: not found` in the health log, turn Coolify's check back off.
-8. **Stop grace.** Coolify stops containers with SIGTERM. The server closes every socket with a close frame (1001), checkpoints the WAL and exits well within Docker's default 10 s.
-   - N10's 60 s restart notice will need a longer stop timeout.
-   - The compose file already sets `stop_grace_period: 30s`.
-9. **Deploy.** Check the logs for a `listening` line with the version and build. Open `https://westbound.sipsakrandevu.com/api/v1/health`.
-10. **Updates.** Each CI push moves the `edge` tag. Redeploy in Coolify, or enable its webhook / auto-update, to pull the new image. Roll back by deploying a `claude-game-implementation-phases-asl5jz-<sha7>` tag.
+8. **Stop grace.** Coolify stops containers with SIGTERM. N10.2: the server then sends players the 60 s restart notice (ends at once when nobody is connected), hands the rooms over, closes every socket with 1012, checkpoints the WAL and exits. The stop timeout must be longer than the notice: the compose file sets `stop_grace_period: 75s`. For a "Docker Image" resource see OPERATIONS.md → "Coolify stop timeout" (lower `WB_SERVER__RESTART_NOTICE_SECS` if Coolify's timeout is shorter).
+9. **Admin token.** Set `WB_ADMIN__TOKEN=<openssl rand -hex 32>` (a secret) to turn on the admin API for the live admin commands (rooms, notices, kicks, immediate ban kicks).
+10. **Deploy.** Check the logs for a `listening` line with the version and build. Open `https://westbound.sipsakrandevu.com/api/v1/health`.
+11. **Updates.** Each CI push moves the `edge` tag. Redeploy in Coolify, or enable its webhook / auto-update, to pull the new image. Roll back by deploying a `claude-game-implementation-phases-asl5jz-<sha7>` tag.
 
 Deploying with Docker Compose works too: create the resource from `westbound-server/docker-compose.yml` (service `westbound-server`, same domain and port). The compose file carries the volume, environment, health check and stop grace. Its `caddy` service is in the `local-tls` profile and is not started.
 
@@ -1877,10 +2032,21 @@ Deploying with Docker Compose works too: create the resource from `westbound-ser
   - The copy is taken online with `VACUUM INTO`, written to a `.tmp` file and then renamed.
   - Dated files older than `backup.retention_days` (7) are deleted.
   - Each run is logged, recorded in `admin_log` and counted in `wb_backups_ok_total` / `wb_backups_failed_total`.
-- **Off the machine:** add Coolify's volume backups (Persistent Storage, then Backups) or copy `/data/backups` elsewhere.
-- **Manual:** `docker exec <container> westbound-server backup /data/backups/manual-$(date +%F).db` (from Coolify: the resource's **Terminal**, or the host shell).
+- **Verified** (N10.2): each copy passes `PRAGMA integrity_check` before it replaces anything.
+- **Off the machine:** add Coolify's volume backups (Persistent Storage, then Backups), copy `/data/backups` elsewhere, or (N10.2) set the off-site hook `WB_BACKUP__UPLOAD_COMMAND` (OPERATIONS.md → Off-site copies).
+- **Manual:** `docker exec <container> westbound-server backup /data/backups/manual-$(date +%F).db` (from Coolify: the resource's **Terminal**, or the host shell). `westbound-server verify-backup <file>` checks one; `westbound-server admin backups` lists them.
 
-To restore:
+To restore (N10.2: the `restore` command; OPERATIONS.md → Restore has the full procedure):
+
+1. Stop the resource in Coolify.
+2. Run the image's `restore` against the volume (it keeps the current database as `westbound.db.before-restore-<time>`, verifies the backup, applies newer migrations):
+
+   ```sh
+   docker run --rm -v <volume>:/data ghcr.io/b3vet/westbound-server:edge restore /data/backups/westbound-2026-09-28.db
+   ```
+3. Start the resource and check `/api/v1/health`.
+
+By hand (the pre-N10.2 way, still valid):
 
 1. Stop the resource in Coolify.
 2. Replace the database from a backup. Coolify volumes are named `<resource-uuid>_westbound-data` or similar: `docker volume ls`.

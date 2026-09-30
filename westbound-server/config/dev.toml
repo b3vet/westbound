@@ -6,6 +6,9 @@
 env = "dev"
 bind = "127.0.0.1:8080"
 public_origin = "https://localhost:8443"
+# N10.2: a short restart notice for local runs (a second Ctrl-C skips it).
+restart_notice_secs = 5
+restart_notice_reminders_secs = []
 
 [log]
 level = "info,westbound_server=debug"
@@ -23,6 +26,11 @@ cors_allowed_origins = ["*"]
 # Local clients create many accounts while testing.
 device_create_per_hour = 1000
 device_create_burst = 100
+# N10.2: local bots (load tests) all come from 127.0.0.1.
+ip_per_minute = 100000
+ip_burst = 10000
+ws_connect_per_minute = 100000
+ws_connect_burst = 10000
 
 [deeplinks]
 # Invite links on a local run open a web build served on :8000 against this server

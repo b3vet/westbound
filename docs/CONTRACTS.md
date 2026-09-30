@@ -119,7 +119,7 @@ The generator must keep radius ≥ 1,200 m, grade ≤ 5%, C1 continuity, and the
 - **Params:** `VehicleParams.build(tuning, car, vtype = null)` runs once at load. It solves engine power and drag from the car's specs and precomputes the **lane-change capability curve** through `step` itself: `lane_change_time(v)`, `move_time(v, distance)`, `max_lateral_offset(v, t)`, `predicted_brake_time(v0, v1)`. Passability must use these.
 - Details are in `docs/PHYSICS.md`.
 
-**`VehicleInput`** (`src/vehicle/vehicle_input.gd`): `steer` (−1..1, + right), `throttle` (0..1), `brake` (0..1) and `boost` (bool, edge-triggered: true for the one tick a boost is requested). It has `clear()`, `copy_from()` and `hash_into()`. Every control layout produces exactly this, and physics and scoring can't tell layouts apart.
+**`VehicleInput`** (`src/vehicle/vehicle_input.gd`): `steer` (−1..1, + right), `throttle` (0..1), `brake` (0..1) and `boost` (bool, edge-triggered: true for the one tick a boost is requested). It has `clear()`, `copy_from()`, `hash_into()` and `quantize()` (analog values to multiples of 1/`QUANTUM` = 1e-4; `PlayerCar.tick` quantizes after `controller.update` and before physics, N8.2). Every control layout produces exactly this, and physics and scoring can't tell layouts apart.
 
 **`VehicleController`** (`src/vehicle/vehicle_controller.gd`) is the base:
 
@@ -275,6 +275,8 @@ func sun_height() -> float                             # 0..1 for the HUD bar (1
 
 A system that needs more streams derives them from its own stream, e.g. `ctx.rng_traffic.derive(&"passability")`. It never uses global RNG, `Time` or frame timing.
 
+- **Deterministic math (N8.2):** simulation code uses `DetMath` (`src/core/det_math.gd`, Rust `crates/sim/src/detmath.rs`) for every transcendental, never the platform libm (lint WB105; escape `# lint: allow-libm <reason>` for rendering-only uses). Simulation reads `RoadTuning.sim_horizon_m`, never the quality tier's view distance. See docs/DETERMINISM.md.
+
 - **Trace hashing:** `TraceHash` (`src/core/trace_hash.gd`) provides `mix_int`, `mix_float` (exact IEEE bits), `mix_bool` and `mix_f64_array`. It is 32-bit FNV-style and allocation-free. `VehicleState`, `VehicleInput`, `TrafficState` and `ScoreEventBuffer` expose `hash_into(h)`. Determinism tests hash the state every `traffic.trace_hash_interval_s` (1 s) and compare runs.
 - **Music clock:** `MusicClock` (`src/audio/music_clock.gd`) exposes `beat_phase()`, `bar()`, `beat_in_bar()`, `bpm()` and `is_running()`. All return 0/false in v1; it is the Tempo Highway hook.
 
@@ -393,6 +395,7 @@ Added by the orchestrator before Phase 1. Owned by WP1.3 afterwards, except `pro
 | 2026-09-29 | §6 Flow shaper / lane guard, SetPieceSource + Controller API, set-piece events via the run buffer, TrafficSim lane-closure API (`add_lane_closure`, `remove_lane_closures`, `closure_ahead`, `sync_road_closures`), `TrafficDirector.events` (WP6.2; see docs/SET_PIECES.md) | Orchestrator merge review |
 | 2026-09-29 | §3 sun side per leg (`BiomeRoadRules.sun_side_for_leg`, `WaterDef.road_sun_side`: the sun sets over the sea at the coast), `SIGN lane_ends` rendered; §13 `SkyRig.horizon_material()`, one horizon shader with the biome extensions, `RoadBuilder.set_ground_drop` (WP6.4c) | Orchestrator merge review |
 | 2026-09-29 | §3 biome plan, any-order lane scheduling, tapered edges, TUNNEL/lane_ends features; §10 BiomeDef look/road fields (cliffs, horizon layers, heat shimmer, rock colours, bend sight clearance); SkyRig `set_fog_tint_offset` / `set_horizon_blend` / `set_heat_shimmer` (WP6.4a) | Orchestrator merge review |
+| 2026-09-30 | §4 `VehicleInput.quantize()`; §9 DetMath and the tier-independent sim horizon (N8.2) | Orchestrator merge review |
 | 2026-09-30 | §5 passability copies only the relevant vehicles, not a full `copy_from` (WP6.1) | Orchestrator merge review |
 | 2026-09-29 | Cap 90; camera-independent behind-spawn view check (WP4.8, D11) | Orchestrator merge review |
 | 2026-09-29 | §14 Run, HudFeed, Hud, theme path, screens, CrashSequence (Phase 4) | Orchestrator, pre-Phase 4 |

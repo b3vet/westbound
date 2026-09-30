@@ -56,13 +56,18 @@ func _sample_file() -> NetReplayFile:
 	r.add_sample(5, 151.1, 7.05, -0.012345, 33.4, -0.25, -0.5, 0.75, 0.2, NetReplayFile.FLAG_BOOST_REQUEST)
 	r.add_sample(9, 152.2, -3.5, 0.2, 34.0, 1.5, 1.0, 0.0, 1.0,
 			NetReplayFile.FLAG_BOOST_ACTIVE | NetReplayFile.FLAG_FORK_SWAP)
-	r.add_sample(13, 4_000_000.123456, 12.0, -3.14159, 99.9999, -2.0, -1.0, 1.0, 0.0, NetReplayFile.FLAG_FINAL)
+	r.add_sample(13, 4_000_000.123456, 12.0, -3.14159, 99.9999, -2.0, -1.0, 1.0, 1.0, NetReplayFile.FLAG_FINAL)
 	r.add_event(5, NetReplayFile.Kind.SCORED, "close_pass", 3450, 23500, 0.431)
 	r.add_event(6, NetReplayFile.Kind.BOOST_ON, "", 0, 0)
 	r.add_event(9, NetReplayFile.Kind.FORK_SWAP, "", 0, -1_234_567)
 	r.add_event(12, NetReplayFile.Kind.HIT, "traffic", 0, 1)
 	r.add_event(12, NetReplayFile.Kind.CHAIN_LOST, "hit", 9_007_199_254_740_991, 0)
 	r.add_event(13, NetReplayFile.Kind.SCORED, "close_pass", 30, 1000, 0.0)
+	r.add_input(1, 0, 10000, 0, false)
+	r.add_input(5, -5000, 7500, 2000, true)
+	r.add_input(6, -5000, 7500, 2000, false)
+	r.add_input(9, 10000, 0, 10000, false)
+	r.add_input(13, -10000, 10000, 0, false)
 	return r
 
 
@@ -80,6 +85,9 @@ func test_round_trip_keeps_every_field() -> void:
 		eq((b.get(f) as PackedInt64Array).slice(0, b.sample_count), (a.get(f) as PackedInt64Array).slice(0, a.sample_count), f)
 	for f: String in ["ev_tick", "ev_kind", "ev_points", "ev_clearance", "ev_value"]:
 		eq((b.get(f) as PackedInt64Array).slice(0, b.event_count), (a.get(f) as PackedInt64Array).slice(0, a.event_count), f)
+	eq(b.input_count, 5, "N8.2: the input stream")
+	for f: String in ["in_tick", "in_steer", "in_throttle", "in_brake", "in_boost"]:
+		eq((b.get(f) as PackedInt64Array).slice(0, b.input_count), (a.get(f) as PackedInt64Array).slice(0, a.input_count), f)
 	for i in a.event_count:
 		eq(b.tag_of(i), a.tag_of(i), "tag %d" % i)
 	near(b.s_at(3), 4_000_000.123456, 1.0 / NetReplayFile.Q_POS, "s to 10 µm")
@@ -88,6 +96,41 @@ func test_round_trip_keeps_every_field() -> void:
 	eq(b.ev_clearance[0], 431, "clearance in mm")
 	eq(b.ev_clearance[1], -1, "no clearance")
 	eq(b.encode(), bytes, "re-encoding is byte-identical")
+
+
+## N8.2: a file without inputs is the N8.1 body (no trailing section); with inputs the
+## samples' input columns are derived from the stream (written as zeros, rebuilt on decode:
+## the round trip above checks they come back).
+func test_the_input_stream_is_an_optional_trailing_section() -> void:
+	var with_inputs := _sample_file()
+	var without := _sample_file()
+	without.input_count = 0
+	var a := without.encode()
+	var b := with_inputs.encode()
+	var ra := a.slice(a.decode_u16(6)).decompress(a.decode_u32(68), FileAccess.COMPRESSION_GZIP)
+	var rb := b.slice(b.decode_u16(6)).decompress(b.decode_u32(68), FileAccess.COMPRESSION_GZIP)
+	gt(rb.size(), ra.size(), "the inputs add bytes")
+	eq(a.decode_u16(4), 1, "the header version stays 1 (the server's reader takes both)")
+	eq(b.decode_u16(4), 1)
+	var back := NetReplayFile.decode(a)
+	check(back != null and back.input_count == 0 and not back.has_inputs(), "no inputs: none decoded")
+
+
+## N8.2: what the car's physics takes is on the 1e-4 grid, the replay's input scale.
+func test_inputs_are_quantized_before_physics() -> void:
+	eq(VehicleInput.QUANTUM, NetReplayFile.Q_INPUT, "one scale")
+	var inp := VehicleInput.new()
+	inp.steer = 0.123456789
+	inp.throttle = 1.7
+	inp.brake = -0.2
+	inp.quantize()
+	eq(inp.steer, 1235.0 / VehicleInput.QUANTUM)
+	eq(inp.throttle, 1.0)
+	eq(inp.brake, 0.0)
+	var again := inp.steer
+	inp.quantize()
+	eq(inp.steer, again, "idempotent")
+	eq(roundi(inp.steer * NetReplayFile.Q_INPUT), 1235, "the wire integer, exactly")
 
 
 func test_header_layout_is_the_documented_one() -> void:
@@ -136,10 +179,12 @@ func test_bad_files_are_refused() -> void:
 	check(NetReplayFile.decode(corrupt) == null, "corrupt payload")
 
 
-## Ten minutes of a weaving, boosting drive (VehiclePhysics at 120 Hz, a steering
-## controller that changes every tick) plus an event every 1.5 s and the traffic
-## fingerprints: under the spec's ~100 KB.
-func test_ten_minutes_fit_the_budget() -> void:
+## Ten minutes of a weaving drive (VehiclePhysics at 120 Hz) plus an event every 1.5 s
+## and the traffic fingerprints. N8.2: with the input stream. `raw_noise` false: tilt
+## steering as GyroControl makes it (a noisy reading per 60 Hz frame, smoothed every
+## tick by the gyro filter: a new input row every tick, the stream's realistic worst
+## case). true: fresh noise on every tick with no filter (no control produces that).
+func _ten_minutes(raw_noise: bool) -> PackedByteArray:
 	var def := load(Run.CAR_PATHS[0]) as CarDef
 	var params := VehicleParams.build(t, def)
 	var st := VehicleState.new()
@@ -152,12 +197,24 @@ func test_ten_minutes_fit_the_budget() -> void:
 	var ticks := roundi(TEN_MINUTES_S * hz)
 	var every := net.replay_sample_ticks
 	var event_every := roundi(EVENT_EVERY_S * hz)
+	var alpha := 1.0 - exp(-dt / t.controls.gyro_smoothing_s())
+	var noise := 0.0
+	var filtered := 0.0
 	for k in range(1, ticks + 1):
 		var time_s := float(k) / hz
 		var target := SYNTH_LANE_M * signf(sin(TAU * time_s / SYNTH_WEAVE_S))
-		inp.steer = clampf(0.3 * (target - st.d) - 2.0 * st.yaw + STEER_WOBBLE * (rng.unit() - 0.5), -1.0, 1.0)
+		if raw_noise or k % TICKS_PER_FRAME == 0:
+			noise = STEER_WOBBLE * (rng.unit() - 0.5)
+		var want := clampf(0.3 * (target - st.d) - 2.0 * st.yaw + noise, -1.0, 1.0)
+		filtered = want if raw_noise else filtered + (want - filtered) * alpha
+		inp.steer = filtered
 		inp.throttle = clampf(0.5 + 0.1 * (SYNTH_V - st.v), 0.0, 1.0)
 		inp.brake = 0.0
+		inp.quantize()
+		var sq := roundi(inp.steer * NetReplayFile.Q_INPUT)
+		var tq := roundi(inp.throttle * NetReplayFile.Q_INPUT)
+		if r.input_count == 0 or sq != r.in_steer[r.input_count - 1] or tq != r.in_throttle[r.input_count - 1]:
+			r.add_input(k, sq, tq, 0, false)
 		VehiclePhysics.step(st, inp, dt, params, null)
 		if (k - 1) % every == 0:
 			r.add_sample(k, st.s, st.d, st.yaw, st.v, st.v_lat, inp.steer, inp.throttle, inp.brake,
@@ -167,11 +224,25 @@ func test_ten_minutes_fit_the_budget() -> void:
 		if (k - 1) % net.replay_fingerprint_ticks == 0:
 			r.add_event(k, NetReplayFile.Kind.TRAFFIC, "", 0, int(rng.unit() * float(0x7FFFFFFF)))
 	var bytes := r.encode()
-	print("      10 min: %d samples, %d events, %d bytes (%.1f KB)" % [r.sample_count, r.event_count,
+	print("      10 min%s: %d samples, %d events, %d input rows, %d bytes (%.1f KB)" % [
+		" (raw noise every tick)" if raw_noise else "", r.sample_count, r.event_count, r.input_count,
 		bytes.size(), float(bytes.size()) / 1024.0])
-	lt(bytes.size(), BUDGET_BYTES, "about 100 KB per 10 minutes")
 	eq(r.sample_count, ceili(float(ticks) / float(every)), "30 Hz")
-	check(NetReplayFile.decode(bytes) != null, "and it reads back")
+	var back := NetReplayFile.decode(bytes)
+	if check(back != null, "and it reads back"):
+		eq(back.steer_q.slice(0, back.sample_count), r.steer_q.slice(0, r.sample_count),
+			"the samples' steering, rebuilt from the input stream")
+	return bytes
+
+
+func test_ten_minutes_fit_the_budget() -> void:
+	lt(_ten_minutes(false).size(), BUDGET_BYTES, "about 100 KB per 10 minutes")
+
+
+## The adversarial case, for docs/REPLAY_FORMAT.md → Sizes (not a budget: no control
+## produces unfiltered noise on every tick).
+func soak_ten_minutes_of_raw_noise() -> void:
+	_ten_minutes(true)
 
 
 # ---------------------------------------------------------------- Recorder on a run

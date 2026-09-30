@@ -12,7 +12,8 @@ extends Node3D
 ##
 ## Per physics tick (_physics_process, or the owner calls tick(dt) when self_tick is
 ## off so run.gd can keep the contract's tick order):
-##   1. controller.update(dt, state, input)   (null controller = zero input: coasting)
+##   1. controller.update(dt, state, input)   (null controller = zero input: coasting),
+##      then input.quantize() (N8.2: multiples of 1e-4, what a replay records)
 ##   2. VehiclePhysics.step(state, input, dt, params, road)
 ##   3. place the node from road space: RoadSample.local_point(d) relative to the
 ##      floating origin (the flat cross-section puts the surface at the reference
@@ -110,6 +111,7 @@ func tick(dt: float) -> void:
 		controller.update(dt, state, input)
 	else:
 		input.clear()
+	input.quantize()   # N8.2: what physics takes is exactly what a replay records
 	VehiclePhysics.step(state, input, dt, params, road)
 	_place()
 	visual.tick(dt, state, input)

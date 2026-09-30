@@ -438,3 +438,71 @@ fn scoring_defaults_and_validation() {
     let errs = c.validate().unwrap_err().0;
     assert_eq!(errs.len(), 5, "{errs:#?}");
 }
+
+/// N10.2: the restart notice, the admin API, backups' hook and the new rate limits.
+#[test]
+fn ops_config_defaults_env_validation_and_redaction() {
+    let mut c = Config::default();
+    // Spec: a notice 60 s before a planned restart.
+    assert_eq!(c.server.restart_notice_secs, 60);
+    assert_eq!(c.server.restart_notice_reminders_secs, vec![30, 10]);
+    assert!(c.admin.enabled && c.admin.token.is_empty());
+    assert_eq!(c.admin.bind, "127.0.0.1:9091");
+    assert!(c.admin_addr().is_none(), "no token: the admin API is off");
+    assert!(c.backup.verify && c.backup.upload_command.is_empty());
+    with_secrets(&mut c);
+    c.validate().unwrap();
+
+    let token = "admin-token-0123456789abcdef0123456789";
+    let c = Config::from_toml_and_env(
+        "",
+        env(&[
+            ("WB_AUTH__JWT_SECRET", JWT),
+            ("WB_AUTH__DEVICE_SECRET_PEPPER", PEPPER),
+            ("WB_ADMIN__TOKEN", token),
+            ("WB_SERVER__RESTART_NOTICE_REMINDERS_SECS", "45, 5"),
+            (
+                "WB_BACKUP__UPLOAD_COMMAND",
+                "/data/bin/rclone,copy,{file},offsite:wb",
+            ),
+            ("WB_RATE_LIMITS__WS_CONNECT_BURST", "7"),
+        ]),
+    )
+    .unwrap();
+    c.validate().unwrap();
+    assert_eq!(c.server.restart_notice_reminders_secs, vec![45, 5]);
+    assert_eq!(c.backup.upload_command[2], "{file}");
+    assert_eq!(c.rate_limits.ws_connect_burst, 7);
+    assert_eq!(c.admin_addr().unwrap().to_string(), "127.0.0.1:9091");
+    assert!(
+        !c.to_redacted_toml().contains(token),
+        "the admin token is redacted"
+    );
+    assert!(Config::from_toml_and_env(
+        "",
+        env(&[("WB_SERVER__RESTART_NOTICE_REMINDERS_SECS", "soon")])
+    )
+    .is_err());
+    // A shorter notice alone (reminders above it are skipped) stays valid.
+    let mut short = Config::default();
+    with_secrets(&mut short);
+    short.server.restart_notice_secs = 20;
+    short.validate().unwrap();
+
+    for bad in [
+        |c: &mut Config| c.admin.bind = "0.0.0.0:9091".into(),
+        |c: &mut Config| c.admin.token = Secret::new("short"),
+        |c: &mut Config| c.server.restart_notice_reminders_secs = vec![0],
+        |c: &mut Config| c.server.restart_notice_secs = 70_000,
+        |c: &mut Config| c.server.handover_ttl_secs = 0,
+        |c: &mut Config| c.backup.upload_command = vec![String::new()],
+        |c: &mut Config| c.rate_limits.ip_burst = 0,
+        |c: &mut Config| c.rooms.create_per_hour = 0,
+        |c: &mut Config| c.metrics.db_probe_interval_secs = 0,
+    ] {
+        let mut c = Config::default();
+        with_secrets(&mut c);
+        bad(&mut c);
+        assert!(c.validate().is_err(), "{c:?}");
+    }
+}

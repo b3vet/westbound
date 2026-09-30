@@ -44,6 +44,8 @@ pub enum CloseReason {
     SlowClient,
     Timeout,
     Shutdown,
+    /// N10.2: the planned restart's close (1012): the client reconnects and rejoins.
+    Restart,
     Error,
     /// The gateway sent this fatal protocol `Error` (handshake failure, kick, flood).
     Fatal(ErrorCode),
@@ -55,6 +57,7 @@ impl CloseReason {
             CloseReason::Oversize => (close_code::SIZE, "message too big"),
             CloseReason::Timeout => (close_code::AWAY, "keepalive timeout"),
             CloseReason::Shutdown => (close_code::AWAY, "server shutting down"),
+            CloseReason::Restart => (close_code::RESTART, "server restarting"),
             CloseReason::Error => (close_code::PROTOCOL, "protocol error"),
             CloseReason::Fatal(ErrorCode::Internal) => (close_code::ERROR, "internal"),
             CloseReason::Fatal(code) => (close_code::POLICY, error_label(code)),
@@ -226,8 +229,9 @@ impl Outbound {
         let reason = match reason {
             CloseReason::SlowClient => reason,
             CloseReason::Error if self.writer.is_finished() => return reason,
-            // In order, behind the fatal `Error` already queued.
-            CloseReason::Fatal(_) => {
+            // In order, behind the fatal `Error` already queued (N10.2: a restart's close
+            // goes behind the rooms' last frames, the run results).
+            CloseReason::Fatal(_) | CloseReason::Restart => {
                 if self.send(Message::Close(reason.frame())) {
                     reason
                 } else {

@@ -109,6 +109,35 @@ pub enum Cmd {
     Release {
         account: AccountId,
     },
+    /// N10.2: close the room at its next tick (an operator's `room-close`, or the restart
+    /// handover). Active runs end as `room_closed` (verified ones go to the boards), the
+    /// notice and the run results go out in that tick's frame, then the seats go:
+    /// `room_left{closed}` for [`CloseMode::Admin`], nothing for [`CloseMode::Restart`]
+    /// (the sockets close with 1012 and the clients rejoin the next instance by code).
+    /// `reply` gets the room's settings at the end (the handover saves them).
+    Close {
+        mode: CloseMode,
+        notice: Option<ServerMsg>,
+        reply: oneshot::Sender<RoomSettings>,
+    },
+}
+
+/// How a room closes (N10.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseMode {
+    /// An operator closed it: everyone gets `room_left{closed}`.
+    Admin,
+    /// The planned-restart handover: seats end quietly.
+    Restart,
+}
+
+/// A close waiting for the room's next tick.
+#[derive(Debug)]
+struct Closing {
+    mode: CloseMode,
+    notice: Option<ServerMsg>,
+    reply: Option<oneshot::Sender<RoomSettings>>,
+    begun: bool,
 }
 
 /// A request for a seat.
@@ -172,6 +201,8 @@ enum Removal {
     TimedOut,
     Kicked,
     Closed,
+    /// N10.2: the restart handover (no message: the socket closes with 1012).
+    Handover,
 }
 
 #[derive(Debug, Default)]
@@ -264,6 +295,8 @@ pub struct Room {
     /// N6.1: claims, the official score, trains, crew totals.
     scoring: RoomScoring,
     closed: bool,
+    /// N10.2: a close waiting for the next tick.
+    closing: Option<Closing>,
 }
 
 impl Room {
@@ -304,6 +337,7 @@ impl Room {
             relay: Vec::with_capacity(cap),
             views: Vec::with_capacity(cap),
             closed: false,
+            closing: None,
         }
     }
 
@@ -446,7 +480,64 @@ impl Room {
                     self.remove(i, Removal::Left);
                 }
             }
+            Cmd::Close {
+                mode,
+                notice,
+                reply,
+            } => {
+                if self.closing.is_some() {
+                    // Already closing: this caller gets the settings now.
+                    let _ = reply.send(self.settings.clone());
+                } else {
+                    self.closing = Some(Closing {
+                        mode,
+                        notice,
+                        reply: Some(reply),
+                        begun: false,
+                    });
+                }
+            }
         }
+    }
+
+    /// N10.2: the start of a close tick: every active run ends (`room_closed`) and the
+    /// notice joins the tick's events.
+    fn begin_close(&mut self, now: u32) {
+        let notice = match &mut self.closing {
+            Some(c) if !c.begun => {
+                c.begun = true;
+                c.notice.take()
+            }
+            _ => return,
+        };
+        for i in 0..self.seats.len() {
+            self.end_run(i, RunEndReason::RoomClosed, now);
+        }
+        if let Some(n) = notice {
+            self.events.push((n, 0));
+        }
+    }
+
+    /// N10.2: the end of a close tick (its frame is out): the seats go and the waiting
+    /// caller gets the settings. Returns false (the room is done) when a close ran.
+    fn finish_close(&mut self) -> bool {
+        let Some(c) = self.closing.take() else {
+            return true;
+        };
+        match c.mode {
+            CloseMode::Admin => self.close(),
+            CloseMode::Restart => {
+                self.closed = true;
+                while !self.seats.is_empty() {
+                    self.remove(0, Removal::Handover);
+                }
+            }
+        }
+        tracing::info!(room = self.id, mode = ?c.mode, "room closed");
+        if let Some(r) = c.reply {
+            let _ = r.send(self.settings.clone());
+        }
+        false
     }
 
     fn join(
@@ -629,7 +720,7 @@ impl Room {
             Removal::Left => Some(RoomLeftReason::Left),
             Removal::Kicked => Some(RoomLeftReason::Kicked),
             Removal::Closed => Some(RoomLeftReason::Closed),
-            Removal::TimedOut => None,
+            Removal::TimedOut | Removal::Handover => None,
         };
         if let (Some(reason), Some(s)) = (reason, &seat.session) {
             let msg = ServerMsg::LobbyEvent(LobbyEvent::RoomLeft(RoomLeft { reason }));
@@ -649,7 +740,7 @@ impl Room {
             Removal::Kicked => Some(RoomEvent::Kick(PlayerRef {
                 player_id: seat.player_id,
             })),
-            Removal::Closed => None,
+            Removal::Closed | Removal::Handover => None,
         };
         if let Some(e) = event {
             self.events.push((ServerMsg::RoomEvent(e), 0));
@@ -1037,6 +1128,7 @@ impl Room {
         }
         self.ticked = true;
         self.tick = now;
+        self.begin_close(now);
         self.expire_seats(now);
         self.respawns(now);
         let night = self.time.is_night(&self.settings, now);
@@ -1074,10 +1166,14 @@ impl Room {
         self.shadow_contacts();
         self.send_frames(now);
         self.events.clear();
+        if !self.finish_close() {
+            return false;
+        }
         if self.seats.is_empty() {
             let since = *self.empty_since.get_or_insert(now);
             if tick_diff(since, now) >= i64::from(self.ticks(self.shared.params.empty_close_ms)) {
                 self.closed = true;
+                tracing::info!(room = self.id, "room closed (empty)");
                 return false;
             }
         }

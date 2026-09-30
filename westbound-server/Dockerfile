@@ -48,16 +48,22 @@ COPY --from=builder /out/westbound-server /usr/local/bin/westbound-server
 COPY --from=builder --chown=65532:65532 /out/data /data
 # The runtime image has no libc or shell: this only runs if the binary is static.
 RUN ["/usr/local/bin/westbound-server", "--version"]
+# N10.2: JSON logs by default in the image (structured, one object per line, with the
+# request id in HTTP spans); WB_LOG__FORMAT=text for a local terminal.
 ENV WB_SERVER__BIND=0.0.0.0:8080 \
     WB_DB__PATH=/data/westbound.db \
     WB_BACKUP__DIR=/data/backups \
-    WB_DEEPLINKS__DIR=/data/well-known
+    WB_DEEPLINKS__DIR=/data/well-known \
+    WB_LOG__FORMAT=json
 USER 65532:65532
 VOLUME ["/data"]
 EXPOSE 8080
 # No curl in the image: the binary probes its own /api/v1/health.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
   CMD ["/usr/local/bin/westbound-server", "healthcheck"]
+# SIGTERM starts the planned restart: a 60 s notice to players (WB_SERVER__RESTART_NOTICE_SECS),
+# the room handover, close 1012. Give the container a stop timeout above it (compose
+# stop_grace_period: 75s; docs/OPERATIONS.md → Restarts).
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/westbound-server"]
 CMD ["serve"]

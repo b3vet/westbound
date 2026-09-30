@@ -90,7 +90,7 @@ jobs:
           cache-to: type=gha,scope=westbound-server,mode=max
       - name: Smoke test the image
         run: |
-          docker run -d --name wb -p 127.0.0.1:8080:8080 -e WB_AUTH__JWT_SECRET="$(openssl rand -hex 32)" -e WB_AUTH__DEVICE_SECRET_PEPPER="$(openssl rand -hex 32)" westbound-server:ci
+          docker run -d --name wb -p 127.0.0.1:8080:8080 -e WB_AUTH__JWT_SECRET="$(openssl rand -hex 32)" -e WB_AUTH__DEVICE_SECRET_PEPPER="$(openssl rand -hex 32)" -e WB_SERVER__RESTART_NOTICE_SECS=3 westbound-server:ci
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8080/api/v1/health; then echo; break; fi
             sleep 1

@@ -57,10 +57,11 @@ extends Resource
 ## only while a thermal step is part of the offset, so a device that sits one rung down for
 ## frame time alone does not show a hot-phone icon all the time.
 @export var cooling_icon_any_reason: bool = false   # deviation switch, see docs/QUALITY.md
-## The view-distance rung is held from a run's start to its end and applied between runs,
-## because the view distance still feeds the simulation (docs/QUALITY.md → Simulation
-## safety; N8.2). Set false once nothing in the sim reads the view distance.
-@export var governor_view_distance_between_runs: bool = true   # not in spec: sim safety
+## true: the view-distance rung is held from a run's start to its end and applied between
+## runs (WP9.1, while the view distance fed the simulation). false since N8.2: the
+## simulation reads RoadTuning.sim_horizon_m, never the view distance, so the rung applies
+## live (docs/QUALITY.md → Simulation safety).
+@export var governor_view_distance_between_runs: bool = false   # not in spec: sim safety switch
 ## Native thermal plugins (src/platform/thermal.gd): how often the state is polled (the
 ## plugins also signal changes), and each platform's raw states mapped to the four levels
 ## (0 nominal, 1 fair, 2 serious, 3 critical). iOS ProcessInfo.ThermalState: nominal, fair,

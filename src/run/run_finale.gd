@@ -186,7 +186,7 @@ class FinaleController:
 		var d_t := road.lane_center_d(clampi(lane, 0, lanes - 1), state.s)
 		var v := maxf(state.v, 1.0)
 		var vlat := legs.finale_hold_lateral_gain * (d_t - state.d)
-		var yaw_goal := asin(clampf(vlat / v, -1.0, 1.0))
+		var yaw_goal := DetMath.asin(clampf(vlat / v, -1.0, 1.0))
 		out_input.steer = clampf(legs.finale_hold_steer_gain * (yaw_goal - state.yaw)
 			- legs.finale_hold_rate_gain * state.yaw_rate, -1.0, 1.0)
 		var dv := v_hold - state.v

@@ -21,6 +21,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::{DefaultOnFailure, TraceLayer};
 
+use crate::account_limits::AccountBuckets;
 use crate::auth::{self, AuthKeys};
 use crate::clock::{Clock, SystemClock};
 use crate::config::Config;
@@ -34,6 +35,7 @@ use crate::presence::PresenceHub;
 use crate::ratelimit::{RateLimiters, CLEANUP_INTERVAL};
 use crate::rooms::Rooms;
 use crate::sessions::Sessions;
+use crate::shutdown::Drain;
 use crate::social::parties::{Parties, PartyParams};
 use crate::tick::{MonotonicTickClock, TickClock};
 use crate::{accounts, leaderboards, profile, runs, ws};
@@ -76,6 +78,15 @@ pub struct AppState {
     pub rooms: Arc<Rooms>,
     /// Parties (N9.3): in memory; the gateway's party commands and the party moves.
     pub parties: Arc<Parties>,
+    /// N10.2: the planned-restart drain (notice, handover, close 1012).
+    pub drain: Arc<Drain>,
+    /// N10.2: background writes that must finish before the database closes (the rooms'
+    /// finished runs). `Server::run` waits for them at shutdown.
+    pub background: TaskTracker,
+    /// N10.2: `room_create` per account (`rooms.create_per_hour`).
+    pub room_creates: Arc<AccountBuckets>,
+    /// When the state was built (uptime in the admin stats).
+    pub started: std::time::Instant,
 }
 
 impl AppState {
@@ -132,11 +143,22 @@ impl AppState {
             config.leaderboards.clone(),
             clock.clone(),
         ));
-        // N6.1: finished, verified multiplayer runs go to the boards.
-        rooms.set_run_sink(crate::leaderboards::mp_runs::run_sink(
+        // N6.1: finished, verified multiplayer runs go to the boards. N10.2: the writes are
+        // tracked so a shutdown waits for them before the database closes.
+        let background = TaskTracker::new();
+        rooms.set_run_sink(tracked_run_sink(
             boards.clone(),
             db.clone(),
             map.map.map_id.clone(),
+            background.clone(),
+        ));
+        Metrics::set(
+            &metrics.started_unix,
+            u64::try_from(crate::clock::unix_now_secs()).unwrap_or(0),
+        );
+        let room_creates = Arc::new(AccountBuckets::per_hour(
+            config.rooms.create_per_hour,
+            config.rooms.create_burst,
         ));
         // N10.1: shadow contacts between players go to `shadow_contacts`.
         rooms.set_shadow_sink(crate::rooms::shadow_log::db_sink(
@@ -162,6 +184,10 @@ impl AppState {
             replay_jobs: Arc::new(Notify::new()),
             parties,
             rooms,
+            drain: Arc::new(Drain::default()),
+            background,
+            room_creates,
+            started: std::time::Instant::now(),
         })
     }
 
@@ -175,6 +201,27 @@ impl AppState {
             wake: self.replay_jobs.clone(),
         }
     }
+}
+
+/// The rooms' run sink (`leaderboards::mp_runs`), with each write on `tracker`.
+fn tracked_run_sink(
+    boards: Arc<Leaderboards>,
+    db: SqlitePool,
+    map_id: String,
+    tracker: TaskTracker,
+) -> crate::rooms::RunSink {
+    Arc::new(move |run: crate::rooms::FinishedRun| {
+        let (boards, db, map_id) = (boards.clone(), db.clone(), map_id.clone());
+        if tokio::runtime::Handle::try_current().is_err() {
+            tracing::warn!("no runtime to record a multiplayer run");
+            return;
+        }
+        tracker.spawn(async move {
+            if let Err(e) = crate::leaderboards::mp_runs::record(&boards, &db, map_id, &run).await {
+                tracing::warn!(error = %e, account = run.account.0, "multiplayer run not recorded");
+            }
+        });
+    })
 }
 
 /// `/api/v1/auth/*` and the authenticated account routes, each class behind its
@@ -330,10 +377,18 @@ pub fn router(state: AppState) -> Router {
         .method_not_allowed_fallback(method_not_allowed)
         .layer(cors_layer(&state.config))
         .layer(CompressionLayer::new());
-    Router::new()
+    let rl = &state.rate_limiters;
+    let upgrade = |m: MethodRouter<AppState>| {
+        if rl.enabled {
+            m.layer(rl.layer(&rl.ws_connect))
+        } else {
+            m
+        }
+    };
+    let routes = Router::new()
         .merge(api)
-        .route("/ws", get(ws::upgrade))
-        .route("/ws/echo", get(ws::upgrade_echo))
+        .route("/ws", upgrade(get(ws::upgrade)))
+        .route("/ws/echo", upgrade(get(ws::upgrade_echo)))
         .route(
             "/.well-known/apple-app-site-association",
             get(http::apple_app_site_association),
@@ -341,19 +396,32 @@ pub fn router(state: AppState) -> Router {
         .route("/.well-known/assetlinks.json", get(http::assetlinks))
         // N9.3: invite links (room and party codes).
         .route("/r/{code}", get(http::invite))
-        .fallback(http::not_found)
+        .fallback(http::not_found);
+    // N10.2: every route per client IP (on top of each route's own limit).
+    let routes = if rl.enabled {
+        routes.layer(rl.layer(&rl.ip))
+    } else {
+        routes
+    };
+    routes
         .layer(middleware::from_fn_with_state(state.clone(), count_requests))
         .layer(
-            // Spans carry method + path only: query strings and headers can hold
-            // tokens, and tokens are never logged.
+            // Spans carry method, path and the request id only: query strings and headers
+            // can hold tokens, and tokens are never logged.
             TraceLayer::new_for_http()
                 .make_span_with(|req: &Request| {
-                    tracing::info_span!("http", method = %req.method(), path = %req.uri().path())
+                    let id = req
+                        .extensions()
+                        .get::<http::RequestId>()
+                        .map(|r| r.0.as_str())
+                        .unwrap_or("");
+                    tracing::info_span!("http", method = %req.method(), path = %req.uri().path(), req_id = %id)
                 })
                 // 5xx at WARN: the provider stubs answer 501 by design, and real
                 // internal errors are already logged at ERROR where they happen.
                 .on_failure(DefaultOnFailure::new().level(tracing::Level::WARN)),
         )
+        .layer(middleware::from_fn(http::request_id))
         .with_state(state)
 }
 
@@ -403,6 +471,7 @@ async fn maintenance(state: AppState) {
             _ = tick.tick() => {}
         }
         state.rate_limiters.cleanup();
+        state.room_creates.cleanup();
         if n.is_multiple_of(prune_every) {
             match accounts::prune_refresh_tokens(&state.db, state.clock.now()).await {
                 Ok(0) => {}
@@ -435,6 +504,8 @@ fn metrics_router(state: AppState) -> Router {
 pub struct Server {
     listener: TcpListener,
     metrics_listener: Option<TcpListener>,
+    /// N10.2: the admin API (when enabled with a token).
+    admin_listener: Option<TcpListener>,
     state: AppState,
 }
 
@@ -457,9 +528,18 @@ impl Server {
             ),
             None => None,
         };
+        let admin_listener = match state.config.admin_addr() {
+            Some(addr) => Some(
+                TcpListener::bind(addr)
+                    .await
+                    .with_context(|| format!("binding admin API {addr}"))?,
+            ),
+            None => None,
+        };
         Ok(Self {
             listener,
             metrics_listener,
+            admin_listener,
             state,
         })
     }
@@ -470,6 +550,13 @@ impl Server {
 
     pub fn metrics_addr(&self) -> Option<SocketAddr> {
         self.metrics_listener
+            .as_ref()
+            .map(|l| l.local_addr().expect("bound listener"))
+    }
+
+    /// The admin API's address (None: off).
+    pub fn admin_addr(&self) -> Option<SocketAddr> {
+        self.admin_listener
             .as_ref()
             .map(|l| l.local_addr().expect("bound listener"))
     }
@@ -485,6 +572,7 @@ impl Server {
         let Server {
             listener,
             metrics_listener,
+            admin_listener,
             state,
         } = self;
         let cancel = state.shutdown.clone();
@@ -520,6 +608,20 @@ impl Server {
             state.clock.clone(),
             cancel.clone(),
         ));
+        let probe_task = tokio::spawn(crate::ops::db_probe(state.clone()));
+        let admin_task = admin_listener.map(|l| {
+            let app = crate::admin_api::router(state.clone());
+            let cancel = cancel.clone();
+            tracing::info!(addr = %l.local_addr().map(|a| a.to_string()).unwrap_or_default(), "admin API listening");
+            tokio::spawn(async move {
+                let _ = axum::serve(l, app)
+                    .with_graceful_shutdown(cancel.cancelled_owned())
+                    .await;
+            })
+        });
+        if state.config.admin.enabled && state.config.admin.token.is_empty() {
+            tracing::info!("admin API off (no admin.token): live admin commands are unavailable");
+        }
         let metrics_task = metrics_listener.map(|l| {
             let app = metrics_router(state.clone());
             let cancel = cancel.clone();
@@ -556,9 +658,24 @@ impl Server {
                 "websocket tasks still open at the shutdown deadline"
             );
         }
+        // N10.2: the rooms' last run writes, before the caller closes the database.
+        state.background.close();
+        if tokio::time::timeout(grace, state.background.wait())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                remaining = state.background.len(),
+                "background writes still running at the shutdown deadline"
+            );
+        }
         if let Some(t) = metrics_task {
             t.abort();
         }
+        if let Some(t) = admin_task {
+            t.abort();
+        }
+        probe_task.abort();
         maintenance_task.abort();
         ban_sweep_task.abort();
         retention_task.abort();

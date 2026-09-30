@@ -27,6 +27,11 @@ const MET_CONTRAST_SHARE := 0.53
 const BUILD_CONTRAST_SHARE := 0.67
 ## The leg of the set-piece rule tests: the WP6.2 kinds only (truck wall, roadblock).
 const PIECE_LEG := 2
+## N8.2: the spawn distance is RoadTuning.sim_horizon_m (800 m) on every tier. The
+## fast-player set-piece check below pins a count tuned (WP6.2) at the medium tier's 700 m
+## fog end, where the director spawned before; it runs there (at 800 m the 190 km/h player
+## meets 1 piece instead of 2 on this seed; docs/SOAK.md → N8.2).
+const TUNED_FOG_END_M := 700.0
 
 var reg: SpawnFixtureRegistry
 var tuning: Tuning
@@ -53,12 +58,15 @@ func _waves(seed_value: int, on_road: RoadPath, to_m: float) -> IntensityWaves:
 	return w
 
 
-func _rig(seed_value: int, on_road: RoadPath, v_kmh: float, leg: int, t: Tuning = null) -> void:
+func _rig(seed_value: int, on_road: RoadPath, v_kmh: float, leg: int, t: Tuning = null,
+		fog_end_m: float = -1.0) -> void:
 	var tun := t if t != null else tuning
 	var run := RunContext.new(seed_value, RunContext.MODE_JOURNEY, tun)
 	road = on_road
 	sim = FakeTrafficSim.new(tun.traffic.max_active_vehicles, road, reg.types)
 	dir = TrafficDirector.new(run, road, sim, reg.profiles, reg.types, PLAYER_LEN, PLAYER_WIDTH)
+	if fog_end_m > 0.0:
+		dir.set_fog_end(fog_end_m)
 	player = VehicleState.new()
 	player.s = 0.0
 	player.d = road.lane_center_d(1, 0.0)
@@ -452,7 +460,7 @@ func test_no_set_piece_the_player_would_not_meet() -> void:
 
 ## [spawned, peaks missed, ended unmet, started, still live] over 6 km of a straight road.
 func _drive_pieces(v_kmh: float) -> Array[int]:
-	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), v_kmh, PIECE_LEG, _every_peak())
+	_rig(SEED, StraightRoadPath.new(LANES, tuning.road), v_kmh, PIECE_LEG, _every_peak(), TUNED_FOG_END_M)
 	while player.s < 6000.0:
 		_step(COARSE_DT)
 	var sp := dir.set_pieces

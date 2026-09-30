@@ -1,7 +1,9 @@
 extends WBTest
 ## The governor through a real Run (M9 gate: "the governor steps down and back up under a
 ## forced thermal state"), and simulation safety: a governor stepping mid-run through all
-## four rungs and back changes nothing in the run's trace. Spec: Performance budget →
+## four rungs and back changes nothing in the run's trace. Since N8.2 the view-distance
+## rung applies live (the simulation reads RoadTuning.sim_horizon_m, never the view
+## distance); the WP9.1 hold (governor_view_distance_between_runs) still works when on. Spec: Performance budget →
 ## Adaptive governor; Architecture rule 2 (same seed + same inputs = same run). WP9.1,
 ## docs/QUALITY.md → Simulation safety.
 ##
@@ -22,6 +24,7 @@ static var _base_ticks: int = 0
 ## The leg planner's horizon (LegTracker._planned_to) per second of the base run: how far
 ## ahead checkpoints are queued (the queue is part of the trace hash).
 static var _base_planned: PackedFloat64Array = PackedFloat64Array()
+static var _hold_default: bool = false
 
 var _host: Node
 var _trace: DailyTrace
@@ -29,6 +32,7 @@ var _rungs: Array[int] = []
 
 
 func before_all() -> void:
+	_hold_default = (Quality.tuning as QualityTuning).governor_view_distance_between_runs
 	_base_ticks = Engine.physics_ticks_per_second
 	Settings.reset_to_defaults()
 	_restore_quality()
@@ -39,7 +43,7 @@ func before_all() -> void:
 
 func after_each() -> void:
 	_restore_quality()
-	(Quality.tuning as QualityTuning).governor_view_distance_between_runs = true
+	(Quality.tuning as QualityTuning).governor_view_distance_between_runs = _hold_default
 	if _trace != null:
 		_trace.finish()
 		_trace = null
@@ -128,7 +132,11 @@ func _watch(run: Run) -> void:
 	_cooling_seen = _cooling_seen or Quality.is_cooling()
 
 
+## N8.2 (the default: no hold): the view-distance rung applies mid-run (the builder
+## follows it), and the run's trace and its leg planner horizon are exactly an ungoverned
+## run's.
 func test_forced_thermal_steps_down_and_back_up_without_changing_the_run() -> void:
+	(Quality.tuning as QualityTuning).governor_view_distance_between_runs = false
 	_views.clear()
 	_builder_views.clear()
 	_cooling_seen = false
@@ -136,12 +144,22 @@ func test_forced_thermal_steps_down_and_back_up_without_changing_the_run() -> vo
 	eq(_rungs, [1, 2, 3, 4, 3, 2, 1, 0] as Array[int], "all four rungs down, then back to the tier")
 	check(_cooling_seen, "the cooling icon showed")
 	eq(Quality.governor_rung, 0)
-	eq(governed.size(), _base.size())
-	for i in _base.size():
-		if governed[i] != _base[i]:
-			fail("the run's trace changed at second %d (a governor step reached the simulation)" % (i + 1))
-			break
-	eq(_planned, _base_planned, "the leg planner looked exactly as far ahead")
+	_check_same_run(governed)
+	var lo := _builder_views[0]
+	for v in _builder_views:
+		lo = minf(lo, v)
+	near(lo, _builder_views[0] - (Quality.tuning as QualityTuning).governor_view_distance_step_m, 1e-9,
+		"the builder followed the rung mid-run (rendering only)")
+
+
+## The WP9.1 hold, switched on: the view distance stays put through the run, and the run
+## is again the ungoverned one.
+func test_the_hold_still_holds_the_view_through_a_run() -> void:
+	(Quality.tuning as QualityTuning).governor_view_distance_between_runs = true
+	_views.clear()
+	_builder_views.clear()
+	var governed := _drive(true)
+	_check_same_run(governed)
 	near(_views[_views.size() - 1], _views[0], 1e-9, "Quality's view distance held through the run")
 	for v in _builder_views:
 		if not is_equal_approx(v, _builder_views[0]):
@@ -149,18 +167,10 @@ func test_forced_thermal_steps_down_and_back_up_without_changing_the_run() -> vo
 			break
 
 
-## Without the hold, the view-distance rung reaches the run: the builder's view distance
-## changes mid-run, and with it how far ahead the leg planner queues checkpoints (a queue in
-## the trace hash; docs/QUALITY.md → Simulation safety). When this stops being true (N8.2),
-## the hold can go.
-func test_without_the_hold_the_view_rung_reaches_the_run() -> void:
-	(Quality.tuning as QualityTuning).governor_view_distance_between_runs = false
-	_views.clear()
-	_builder_views.clear()
-	_drive(true)
-	var lo := _builder_views[0]
-	for v in _builder_views:
-		lo = minf(lo, v)
-	near(lo, _builder_views[0] - (Quality.tuning as QualityTuning).governor_view_distance_step_m, 1e-9,
-		"the builder followed the rung mid-run")
-	ne(_planned, _base_planned, "and the simulation's leg planner horizon moved with it")
+func _check_same_run(governed: PackedInt64Array) -> void:
+	eq(governed.size(), _base.size())
+	for i in _base.size():
+		if governed[i] != _base[i]:
+			fail("the run's trace changed at second %d (a governor step reached the simulation)" % (i + 1))
+			break
+	eq(_planned, _base_planned, "the leg planner looked exactly as far ahead")

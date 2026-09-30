@@ -16,8 +16,15 @@ public_origin = "https://westbound.sipsakrandevu.com"
 worker_threads = 2
 # On SIGTERM, time for close frames and in-flight requests before exit.
 shutdown_grace_ms = 5000
-# N10: seconds of restart notice before shutting down. 0 = off.
-restart_notice_secs = 0
+# N10.2: on SIGTERM, seconds of server_notice{restart} before the rooms are handed over
+# and the sockets close (spec: 60; it ends early once nobody is connected). The stop
+# timeout must be longer: compose stop_grace_period 75s (docs/OPERATIONS.md). 0 = none.
+restart_notice_secs = 60
+# Reminders during the notice, as seconds left.
+restart_notice_reminders_secs = [30, 10]
+# The next instance recreates a handed-over room when a player rejoins it by code within
+# this long.
+handover_ttl_secs = 600
 
 [log]
 # tracing filter, e.g. "info" or "info,westbound_server=debug". RUST_LOG wins when set.
@@ -46,6 +53,8 @@ max_connections = 400
 # Prometheus text at /metrics on its own listener. Loopback addresses only.
 enabled = true
 bind = "127.0.0.1:9090"
+# N10.2: how often a database probe is timed (wb_db_*) and the queue depths are read.
+db_probe_interval_secs = 15
 
 [backup]
 # Nightly online backup (VACUUM INTO) to <dir>/westbound-YYYY-MM-DD.db.
@@ -54,6 +63,13 @@ dir = "/data/backups"
 # UTC, HH:MM.
 time_utc = "03:17"
 retention_days = 7
+# N10.2: open each backup read-only and run PRAGMA integrity_check.
+verify = true
+# N10.2: optional off-site hook after each good backup: argv, "{file}" = the backup path,
+# no shell. Empty = off. Example (a static rclone mounted on the volume):
+# upload_command = ["/data/bin/rclone", "copy", "{file}", "offsite:westbound-backups"]
+upload_command = []
+upload_timeout_secs = 600
 
 [auth]
 # Access-token (JWT HS256) signing secret. Required outside dev, at least 32 bytes.
@@ -100,6 +116,13 @@ runs_burst = 10
 # the account limit.
 social_per_hour = 60
 social_burst = 20
+# N10.2: every HTTP route per client IP, on top of the route's own limit (generous:
+# players behind one carrier NAT share it).
+ip_per_minute = 600
+ip_burst = 200
+# N10.2: WebSocket upgrades (/ws, /ws/echo) per client IP.
+ws_connect_per_minute = 60
+ws_connect_burst = 30
 
 [deeplinks]
 # Invite links https://<domain>/r/<code> and the deep-link association files
@@ -345,6 +368,9 @@ stale_state_ms = 2000
 # dropped as in flight for this long; a state within this radius acknowledges it.
 placement_grace_ms = 2000
 placement_radius_m = 30.0
+# N10.2: room_create per account (survives reconnects): per hour, and at once.
+create_per_hour = 30
+create_burst = 5
 
 [scoring]
 # Multiplayer scoring (docs/SERVER.md -> "Scoring (N6.1)"). The rules themselves are the
@@ -397,3 +423,13 @@ crew_total_interval_ms = 1000
 # wb::shadow), the first always.
 shadow_view_delay_ms = 100
 shadow_log_every = 10
+
+[admin]
+# N10.2: the admin API the `admin` CLI talks to (live rooms, notices, kicks, stats), on its
+# own listener. Loopback addresses only.
+enabled = true
+bind = "127.0.0.1:9091"
+# Bearer token, at least 32 bytes. Environment only (WB_ADMIN__TOKEN). Empty: API off.
+token = ""
+# How long an `admin` command waits for the running server.
+request_timeout_ms = 10000

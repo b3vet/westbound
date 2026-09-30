@@ -5,6 +5,7 @@ extends SceneTree
 ##   tools/test.sh --tier=soak          # soak tier only
 ##   tools/test.sh --tier=all
 ##   tools/test.sh --filter=traffic     # substring of script path or method name
+##   tools/test.sh --filter=a,b         # any of several substrings
 ##   tools/test.sh --list
 ##
 ## Equivalent raw call (after `godot --headless --import`):
@@ -194,7 +195,7 @@ func _test_methods(script: Script, prefixes: PackedStringArray, path: String) ->
 				match_prefix = true
 		if not match_prefix or out.has(n):
 			continue
-		if _filter.is_empty() or path.contains(_filter) or n.contains(_filter):
+		if _matches(path, n):
 			out.append(n)
 	return out
 
@@ -209,3 +210,13 @@ func _discover(dir_path: String, out: PackedStringArray) -> void:
 	for f in dir.get_files():
 		if f.begins_with("test_") and f.ends_with(".gd"):
 			out.append(dir_path.path_join(f))
+
+
+## The filter: empty, or any of its comma-separated substrings in the path or the method.
+func _matches(path: String, method: String) -> bool:
+	if _filter.is_empty():
+		return true
+	for f in _filter.split(",", false):
+		if path.contains(f) or method.contains(f):
+			return true
+	return false

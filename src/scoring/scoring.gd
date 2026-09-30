@@ -178,6 +178,10 @@ func step(dt: float, player: VehicleState, traffic: TrafficState, road: RoadPath
 	var lane := road.lane_index_at(pd, ps)
 	var slip := false
 	var slip_ok := not _ghost and lane >= 0 and v >= _slip_v
+	# Headings as (cos, sin) for the hulls (N8.2: DetMath for the player's, a traffic
+	# car's from its velocity direction, no transcendentals).
+	var pn := DetMath.sin_cos(player.yaw)
+	var pc := DetMath.cos_out
 	for i in traffic.capacity:
 		if traffic.active[i] == 0:
 			_vid[i] = 0
@@ -198,8 +202,11 @@ func step(dt: float, player: VehicleState, traffic: TrafficState, road: RoadPath
 			_crossed[i] = 0
 			_taint[i] = 0
 		if ph == _OVERLAP:
-			var clr := RoadHull.clearance(ps, pd, player.yaw, _p_hl, _p_hw,
-				traffic.s[i], traffic.d[i], atan2(traffic.v_lat[i], traffic.v[i]),
+			var tv := traffic.v[i]
+			var tvl := traffic.v_lat[i]
+			var th := sqrt(tv * tv + tvl * tvl)
+			var clr := RoadHull.clearance_cs(ps, pd, pc, pn, _p_hl, _p_hw,
+				traffic.s[i], traffic.d[i], tv / th if th > 0.0 else 1.0, tvl / th if th > 0.0 else 0.0,
 				traffic.length[i] * 0.5 - _inset, traffic.width[i] * 0.5 - _inset)
 			_min_clear[i] = minf(_min_clear[i], clr)
 			if _ghost:

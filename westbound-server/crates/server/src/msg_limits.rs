@@ -188,6 +188,49 @@ mod tests {
         assert_eq!(client_type_index(type_id::WELCOME), None);
     }
 
+    /// N10.2 rate-limit review: every client type has its own bucket with the configured
+    /// burst and rate (the production defaults, docs/SERVER.md → "Rate limits: every route
+    /// and message type").
+    #[test]
+    fn every_type_has_its_configured_bucket() {
+        let cfg = WsRateLimitsConfig {
+            violation_burst: 10_000,
+            ..WsRateLimitsConfig::default()
+        };
+        let types: Vec<_> = cfg
+            .entries()
+            .into_iter()
+            .filter(|(name, _, _)| *name != "violation")
+            .collect();
+        assert_eq!(types.len(), CLIENT_TYPES - 1, "every type but hello");
+        for (name, per_sec, burst) in types {
+            let i = CLIENT_TYPE_NAMES
+                .iter()
+                .position(|n| *n == name)
+                .unwrap_or_else(|| panic!("{name} is a client type"));
+            let tid = type_id::HELLO + u8::try_from(i).unwrap();
+            let mut l = MessageLimits::new(&cfg, 0);
+            for k in 0..burst {
+                assert_eq!(l.check(tid, 0), Verdict::Allow, "{name} #{k}");
+            }
+            assert_eq!(l.check(tid, 0), Verdict::Drop, "{name} past its burst");
+            // Other types are untouched by this one's flood.
+            for other in type_id::PING..=type_id::ROOM_HOST_COMMAND {
+                if other != tid {
+                    assert_eq!(l.check(other, 0), Verdict::Allow, "{name} vs {other}");
+                }
+            }
+            // One token back after 1 / rate seconds.
+            let refill_ms = (1_000.0 / per_sec).ceil() as u64;
+            assert_eq!(l.check(tid, refill_ms), Verdict::Allow, "{name} refilled");
+            assert_eq!(
+                l.check(tid, refill_ms),
+                Verdict::Drop,
+                "{name} one at a time"
+            );
+        }
+    }
+
     #[test]
     fn drops_then_disconnects() {
         let cfg = WsRateLimitsConfig {

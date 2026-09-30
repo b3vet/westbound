@@ -44,7 +44,8 @@ func _init(vehicle_params: VehicleParams, net_tuning: NetTuning, dt: float) -> v
 				st.v = v0
 				VehiclePhysics.step(st, inp, dt, params, null)
 				st.v = v0
-				var dd := st.v * sin(st.yaw) + st.v_lat * cos(st.yaw)
+				var sy := DetMath.sin_cos(st.yaw)
+				var dd := st.v * sy + st.v_lat * DetMath.cos_out
 				max_ls = maxf(max_ls, absf(dd))
 				max_la = maxf(max_la, absf(dd - prev_dd) / dt)
 				max_yr = maxf(max_yr, absf(st.yaw_rate))

@@ -1,5 +1,5 @@
 //! HTTP rate limits (`tower_governor`): per client IP on the auth routes, per account
-//! on authenticated routes. 429 responses use the API error format and carry
+//! on authenticated routes; N10.2: per client IP on every route and on WebSocket upgrades. 429 responses use the API error format and carry
 //! `Retry-After`. Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Accounts and
 //! authentication" (security: rate limits per IP and per account).
 //!
@@ -236,6 +236,10 @@ pub struct RateLimiters {
     /// Social writes per account (N9.1: friend requests, blocks, crew create / join,
     /// reports), on top of `account`.
     pub social: Arc<LimiterConfig<AccountKey>>,
+    /// N10.2: every route per client IP (`rate_limits.ip_*`).
+    pub ip: Arc<LimiterConfig<IpKey>>,
+    /// N10.2: WebSocket upgrades per client IP (`rate_limits.ws_connect_*`).
+    pub ws_connect: Arc<LimiterConfig<IpKey>>,
     metrics: Arc<Metrics>,
 }
 
@@ -283,6 +287,8 @@ impl RateLimiters {
                 r.device_create_burst,
             ),
             auth: build_ip(r.auth_per_minute, SECS_PER_MINUTE, r.auth_burst),
+            ip: build_ip(r.ip_per_minute, SECS_PER_MINUTE, r.ip_burst),
+            ws_connect: build_ip(r.ws_connect_per_minute, SECS_PER_MINUTE, r.ws_connect_burst),
             account,
             runs,
             social,
@@ -312,7 +318,12 @@ impl RateLimiters {
 
     /// Drops idle buckets (called every `CLEANUP_INTERVAL`).
     pub fn cleanup(&self) {
-        for l in [self.device_create.limiter(), self.auth.limiter()] {
+        for l in [
+            self.device_create.limiter(),
+            self.auth.limiter(),
+            self.ip.limiter(),
+            self.ws_connect.limiter(),
+        ] {
             l.retain_recent();
             l.shrink_to_fit();
         }

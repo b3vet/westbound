@@ -2091,8 +2091,8 @@ func _lane_d(lane: int) -> float:
 
 
 func _read_player(player: VehicleState) -> void:
-	var cy := cos(player.yaw)
-	var sy := sin(player.yaw)
+	var sy := DetMath.sin_cos(player.yaw)
+	var cy := DetMath.cos_out
 	var kappa := road.curvature_at(player.s)
 	_ps = player.s
 	_pd = player.d

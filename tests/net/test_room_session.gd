@@ -4,7 +4,9 @@ extends WBTest
 ## refusals, room events, run results, quick chat and mute, the reconnect state machine
 ## (seat kept within 15 s, lost after), and the room clock. Spec: multiplayer handoff →
 ## Players, Rooms, parties and matchmaking, Time of day in multiplayer; docs/PROTOCOL.md
-## §12 (placement); docs/SERVER.md → Rooms → For the client. WP N5.2.
+## §12 (placement); docs/SERVER.md → Rooms → For the client. WP N5.2. N10.2: the planned
+## restart (server_notice restart: the longer rejoin window, a fresh run after it, the
+## lobby reconnecting quietly; other notices shown as text).
 
 const FakeRoomServer := preload("res://tests/net/fake_room_server.gd")
 const MAP_HASH := "0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186"
@@ -307,6 +309,59 @@ func test_reconnect_gives_up_after_the_hold() -> void:
 	eq(seen_log.back(), "left seat_lost")
 	eq(rs.last_message, "Lost the connection to the room.")
 	check(not rs.has_room())
+
+
+func test_a_restart_notice_holds_the_rejoin_longer_and_starts_a_fresh_run() -> void:
+	var notices: Array[String] = []
+	rs.notice.connect(func(text: String) -> void: notices.append(text))
+	_join()
+	rs.take_placement()
+	_send([{"type": "server_notice", "kind": "maintenance", "seconds": 600, "text": "Maintenance at 20:00"}])
+	_send([{"type": "server_notice", "kind": "restart", "seconds": 5, "text": "Server restart soon."}])
+	_run(0.2)
+	eq(notices, ["Maintenance at 20:00"] as Array[String], "a restart is counted down, not shown as text")
+	near(rs.restart_left_s(), 4.8, 0.1)
+	_run(5.0)
+	eq(rs.restart_left_s(), 0.0, "due")
+	# The server closes the socket at the restart; the next instance takes a while to start.
+	link.refuse = true
+	server.call("drop")
+	_run(0.2)
+	eq(rs.state, NetRoomSession.State.RECONNECTING)
+	check(rs.reconnect_left_s() > tuning.room_reconnect_window_s + 1.0, "the restart's window")
+	_run(tuning.room_reconnect_window_s + 5.0)
+	eq(rs.state, NetRoomSession.State.RECONNECTING, "still trying past the 15 s hold")
+	link.refuse = false
+	_run(2.0)
+	eq(rs.state, NetRoomSession.State.IN_ROOM, "back in the room")
+	var joins: Array[Dictionary] = server.get("joins")
+	eq(joins.back()["kind"], "room_join_code", "rejoined by code")
+	eq(joins.back()["code"], "ABC234")
+	check(rs.take_restart_rejoin(), "the next placement starts a fresh run")
+	check(not rs.take_restart_rejoin(), "once")
+	# A drop after that is an ordinary one again (15 s).
+	server.call("drop")
+	_run(0.2)
+	check(rs.reconnect_left_s() <= tuning.room_reconnect_window_s, "the normal hold")
+
+
+func test_a_restart_drops_the_lobby_quietly_and_it_reconnects() -> void:
+	var errors: Array[String] = []
+	rs.lobby_error.connect(func(c: String, _m: String) -> void: errors.append(c))
+	rs.browse()
+	_run(0.5)
+	eq(rs.state, NetRoomSession.State.LOBBY)
+	_send([{"type": "server_notice", "kind": "restart", "seconds": 1, "text": "Server restart soon."}])
+	_run(1.2)
+	link.refuse = true
+	server.call("drop")
+	_run(0.5)
+	eq(rs.state, NetRoomSession.State.IDLE, "not FAILED: waiting for the next instance")
+	eq(errors.size(), 0, "no error for a planned restart")
+	link.refuse = false
+	_run(3.0)
+	eq(rs.state, NetRoomSession.State.LOBBY, "reconnected on its own")
+	eq(errors.size(), 0)
 
 
 func test_a_ban_is_not_retried() -> void:
