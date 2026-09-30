@@ -2200,14 +2200,24 @@ impl TrafficSim {
         } else {
             a = idm::free_accel(vi, v0, self.pa[p], self.pdl[p]);
         }
-        if self.config.look_through && lead >= 0 {
-            // MP: past a leader leaving the path, the next one counts too.
+        // MP-D5: past a leader leaving the path, the next one counts too; and the leader's
+        // own stopping point. The guards skip the calls (INF) for the common case, as the
+        // GDScript does (its calls are the cost there).
+        if self.config.look_through
+            && lead >= 0
+            && !self.is_player(lead as usize)
+            && self.state.lc_state[lead as usize] != LC_NONE
+        {
             a = minf(
                 a,
                 self.look_through_accel(i, lead as usize, lead_k, lo, hi, false, vi, v0, p, hw_t),
             );
         }
-        if self.config.anticipate_braking && lead >= 0 {
+        if self.config.anticipate_braking
+            && lead >= 0
+            && ((!self.is_player(lead as usize) && self.state.accel[lead as usize] < 0.0)
+                || self.kv[lead as usize] <= 0.0)
+        {
             a = minf(a, self.anticipation_accel(lead as usize, gap, vi, p));
         }
         if self.cl_n > 0 {
@@ -2866,8 +2876,8 @@ impl TrafficSim {
                 self.q_player = self.is_player(l);
                 return f64::NEG_INFINITY;
             }
-            if self.config.look_through {
-                // MP: a new leader leaving the target lane hides nothing.
+            if self.config.look_through && !self.is_player(l) && self.state.lc_state[l] != LC_NONE {
+                // MP-D5: a new leader leaving the target lane hides nothing.
                 let a2 = self.look_through_accel(i, l, lead_k, lo, hi, true, vi, v0, p, self.pt[p]);
                 if a2 < -bsafe {
                     return f64::NEG_INFINITY;

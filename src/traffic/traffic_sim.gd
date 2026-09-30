@@ -1449,11 +1449,13 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 			a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor)
 	else:
 		a = Idm.free_accel(vi, v0, _pa[p], _pdl[p])
-	if _look_through and lead >= 0:
-		# MP-D5: past a leader leaving the path, the next one counts too.
+	# MP-D5: past a leader leaving the path, the next one counts too; and the leader's own
+	# stopping point. The guards skip the calls (INF) for the common case: a leader in
+	# lane, not braking (GDScript calls are the cost here).
+	if _look_through and lead >= 0 and lead != _P and state.lc_state[lead] != _NONE:
 		a = minf(a, _look_through_accel(i, lead, lead_k, lo, hi, false, vi, v0, p, hw_t))
-	if _anticipate and lead >= 0:
-		a = minf(a, _anticipation_accel(lead, gap, vi, p))   # MP-D5
+	if _anticipate and lead >= 0 and ((lead != _P and state.accel[lead] < 0.0) or _kv[lead] <= 0.0):
+		a = minf(a, _anticipation_accel(lead, gap, vi, p))
 	if _cl_n > 0:
 		a = minf(a, _closure_wall_accel(i, vi, v0, p))
 	if _sz_n > 0:
@@ -1853,7 +1855,7 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool 
 		if a_c_new < -(bsafe if lead != _P else _pbsafe[p]):
 			_q_player = lead == _P
 			return -INF
-		if _look_through:
+		if _look_through and lead != _P and state.lc_state[lead] != _NONE:
 			# MP-D5: a new leader leaving the target lane hides nothing.
 			var a2 := _look_through_accel(i, lead, lead_k, lo, hi, true, vi, v0, p, _pT[p])
 			if a2 < -bsafe:

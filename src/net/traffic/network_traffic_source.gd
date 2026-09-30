@@ -582,9 +582,10 @@ func _accel_pass(advance: bool, out: ScoreEventBuffer) -> void:
 					_gap_floor)
 			# MP-D5 (TrafficSim._step_accel's order): past a leader leaving the path, the
 			# next one counts too; and the leader's own stopping point.
-			if _look_through:
+			# (The guards skip the calls for a leader in lane and not braking.)
+			if _look_through and lead != _P and _lc[lead] == 1:
 				a = minf(a, _look_through_accel(i, lead, lead_k, lo, hi, vi, v0, p, tk))
-			if _anticipate:
+			if _anticipate and ((lead != _P and _ma_held[lead] < 0.0) or _kv[lead] <= 0.0):
 				a = minf(a, _anticipation_accel(lead, gap, vi, p))
 		a = minf(a, drop_a)
 		if advance:

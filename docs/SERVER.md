@@ -1028,13 +1028,13 @@ world.set_density(Density::Rush); world.set_road_works(zone, true); world.notify
 | --- | --- | --- |
 | `idm.rs`, `mobil.rs`, `no_ambush.rs` | `idm.gd`, `mobil.gd`, `no_ambush.gd` | Function for function; `gd.rs` has Godot's exact `maxf` / `minf` / `clampf` |
 | `state.rs` | `traffic_state.gd` | Same fields, slot order and `hash_into` |
-| `sim.rs` (`TrafficSim`) | `traffic_sim.gd` at the integration branch's `4b33c6c` (WP6.8 lane drops `aac617e`, WP6.9 weaving racers) | Same fields without the `_`, same functions in the same order: `spawn`, `despawn`, `notify_hit`, `honk`, `notify_close_pass`, `set_headlights`, `request_lane_change`, the set-piece hooks, closures (`add_lane_closure`, `merge_zone_frac`, `closure_ahead`, `_closure_wall_accel`, `_consider_merge`), lane-drop zones (`add_lane_drop_zone`, `lane_drop_limit_at`, `_drop_brake`, `_drop_tick`, `_update_drop_reach`, `_yield_accel`, `_zone_held`, `_collect_yield_candidates`, `_merge_gap_accel`), set-piece zones, `step`, `_step_accel`, `_step_lateral`, `_tick_signaling`, `_tick_moving`, `_tick_hit`, `_tick_reactions`, `_consider_lane_change`, `_consider_split`, `_consider_split_exit`, `_start_signal`, `_cancel`, `_eval_target`, `_eval_move`, `_follower_accel`, the weaving block (`_init_weave`, `_cooldown_of`, `_weave_bonus`, `_weave_pace`, `_weave_cap_ok`, `_weave_note_change`), `_read_player`, `_sort`, `_refresh_interval`, `_emit_pending`. Not ported: WP6.1's passability (single-player only) |
+| `sim.rs` (`TrafficSim`) | `traffic_sim.gd` at the integration branch's `4b33c6c` (WP6.8 lane drops `aac617e`, WP6.9 weaving racers), plus WP6.10's `_sig_pre` and WP6.11's MP-D5 extensions (synced at WP6.11) | Same fields without the `_`, same functions in the same order: `spawn`, `despawn`, `notify_hit`, `honk`, `notify_close_pass`, `set_headlights`, `request_lane_change`, the set-piece hooks, closures (`add_lane_closure`, `merge_zone_frac`, `closure_ahead`, `_closure_wall_accel`, `_consider_merge`), lane-drop zones (`add_lane_drop_zone`, `lane_drop_limit_at`, `_drop_brake`, `_drop_tick`, `_update_drop_reach`, `_yield_accel`, `_zone_held`, `_collect_yield_candidates`, `_merge_gap_accel`), set-piece zones, `step`, `_step_accel`, `_step_lateral`, `_tick_signaling`, `_tick_moving`, `_tick_hit`, `_tick_reactions`, `_consider_lane_change`, `_consider_split`, `_consider_split_exit`, `_start_signal`, `_cancel`, `_eval_target`, `_eval_move`, the MP-D5 block (`_look_through_accel`, `_predicted_leaders_safe`, `_anticipation_accel`, `_leaving_path`), `_follower_accel`, the weaving block (`_init_weave`, `_cooldown_of`, `_weave_bonus`, `_weave_pace`, `_weave_cap_ok`, `_weave_note_change`), `_read_player`, `_sort`, `_refresh_interval`, `_emit_pending`. Not ported: WP6.1's passability (single-player only) |
 | `population.rs` | `SpawnSources.Flow.draw_into` / `_eligible` / `_pick` | The server's own fill, ramps and density upkeep |
 | `checker.rs` | `tests/fixtures/traffic/traffic_rule_checker.gd` (the rules) | Plus the intents |
 | `rng.rs`, `trace_hash.rs` | `src/core/rng.gd` (Godot's PCG32 `RandomNumberGenerator`), `src/core/trace_hash.gd` | Bit-exact |
 | `road.rs` | the `RoadPath` subset | Open road (parity) and the loop (wrap) |
 
-**When `traffic_sim.gd` changes** (WP6.10 and later): diff it from `4b33c6c`, apply the same change to the same function in `sim.rs` (mind the MP generalisations below: `self.is_player(j)` for `== _P`, `road.signed_delta(a, b)` for `b - a` between positions, the `next_k` / `prev_k` walks for `kk += 1` / `kk -= 1`), export new parameters in `tools/server_data/export_sim_data.gd` (and `TuningParams` / `ProfileParams`), re-run the exporter, then `cargo test -p sim --test parity`. The traces fail at the first tick where the two models differ.
+**When `traffic_sim.gd` changes** (after WP6.11): diff it from the WP6.11 merge (the last sync: WP6.10's `_sig_pre` and the MP-D5 extensions are in both), apply the same change to the same function in `sim.rs` (mind the MP generalisations below: `self.is_player(j)` for `== _P`, `road.signed_delta(a, b)` for `b - a` between positions, the `next_k` / `prev_k` walks for `kk += 1` / `kk -= 1`), export new parameters in `tools/server_data/export_sim_data.gd` (and `TuningParams` / `ProfileParams`), re-run the exporter, then `cargo test -p sim --test parity`. The traces fail at the first tick where the two models differ.
 
 ### The server's rules
 
@@ -1055,7 +1055,7 @@ world.set_density(Density::Rush); world.set_road_works(zone, true); world.notify
 
 **Not on the server:** motorbike lane splitting (`lane_split: false`): a split's move targets a lane boundary, which `TrafficIntent.target_lane` cannot express. Motorbikes still spawn and drive. Turn it on once the protocol can name a boundary target.
 
-### Server-only safety extensions (deviation: needs an orchestrator row, MP-D5)
+### The MP-D5 safety extensions (in both models since WP6.11)
 
 At rush-hour density the loop's lane drops (desert and city 4 → 3, canyon 3 → 2) queue up, and the client model then collides: over one simulated hour at rush, **11,622 ticks with traffic-to-traffic contacts** (33,162 pair-ticks, all real body overlaps; `soak_hour_rush_without_mp_extensions`). Light and normal hours were clean without them. Three mechanisms, each traced to a contact:
 
@@ -1063,7 +1063,7 @@ At rush-hour density the loop's lane drops (desert and city 4 → 3, canyon 3 �
 2. **Stale lane-change decision.** MOBIL judges the new leader as if it holds its speed; by the time the car is in the lane (1.0 s signal on the server, 0.6 s for racers in single-player, plus the move) the leader, braking into the queue, has slowed too much.
 3. **Late IDM reaction.** A racer at 180 km/h follows a car braking at the clamp into the queue; stock IDM ignores the leader's deceleration and reacts too late for 6 m/s².
 
-The fixes (`mp_traffic.json`, each on / off; off in the parity config, so the client model's parity is untouched):
+The fixes (MP-D5). N4.1 built them here; WP6.11 ported them to `traffic_sim.gd` (`TrafficTuning.look_through_leaving_leaders`, `predict_leader_braking`, `anticipate_leader_braking`, all on; docs/TRAFFIC.md, *Lane-drop queue safety*), so the parity config (`SimConfig::single_player`, from `traffic_params.json`) runs them too and the traces check them. The server's own switches stay in `mp_traffic.json` (on):
 
 | Flag | What |
 | --- | --- |
@@ -1071,7 +1071,7 @@ The fixes (`mp_traffic.json`, each on / off; off in the parity config, so the cl
 | `predict_leader_braking` | MOBIL's own safety also judges each new leader extrapolated with its current deceleration to when the car is in the lane (signal time + half the minimum move time), against the car holding its speed (`predicted_leaders_safe`) |
 | `anticipate_leader_braking` | When stopping s0 behind the leader's own stopping point (at its current deceleration) needs more than the profile's comfortable b, the follower brakes for it now (`anticipation_accel`); never beyond the clamp |
 
-With them: **0 contacts at every density** and 0 clamp violations. Recommended follow-up: port the three into `traffic_sim.gd` (the single-player game has the same exposure at high density, and N4.3's client-side IDM should follow the same model as the server), then turn them on in the parity config and re-export.
+With them: **0 contacts at every density** and 0 clamp violations (re-run at WP6.11: `soak_hour_rush` 0 contacts, 0 violations, the same counts as N4.1; `soak_hour_rush_without_mp_extensions`, which clears the three `MpTrafficRules` switches explicitly, still 11,622 contact ticks). The client's network model mirrors the look-through and the anticipation (docs/NET_TRAFFIC.md).
 
 **Collision criterion.** The soak counts a contact when two cars' boxes overlap as clients render them: `TrafficView`'s heading atan2(v_lat, max(v, 20 km/h)) within ±20° (`view_yaw_*`, exported), and the sim's own un-yawed bodies. The single-player checker's heading (atan2(v_lat, max(v, 0)) within ±0.28 rad) is reported, not gated: it turns a 16 m semi or 12 m coach crawling through a lane change in a lane-drop queue far enough to touch a car two lanes over (365 pair-ticks in the rush hour, all with the long vehicle below 1 m/s; no body overlap). Clients never draw that.
 
@@ -1099,9 +1099,9 @@ tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_d
 | `no_ambush.json`: 1,500 cases (287 violations) | identical |
 | `player_velocity.json`: 300 cases of `_read_player`'s road velocity | within 1e-9 (libm) |
 | `loop_closures.json`: the client's closures and drop zones on loop_v1, per lane every 50 m | within 1e-8 m |
-| `trace_*.json`: the whole sim, per-tick state hash and every event | **tick-identical**: `sp_weave_120hz` 4,800 / 4,800 ticks (single-player rules, near / far ticks, hits, close passes), `sp_closure_120hz` 3,600 / 3,600 (set-piece closure), `mp_weave_20hz` 2,400 / 2,400 (20 Hz, all near, 1.0 s floor, 4 lanes, headway scale), `mp_lane_drop_20hz` 1,800 / 1,800 (a WP6.8 road drop with its zone) |
+| `trace_*.json`: the whole sim, per-tick state hash and every event (since WP6.11 with the MP-D5 extensions on: the traces first differ from the old ones at ticks 119 / 9 / 2 / 1336) | **tick-identical**: `sp_weave_120hz` 4,800 / 4,800 ticks (single-player rules, near / far ticks, hits, close passes), `sp_closure_120hz` 3,600 / 3,600 (set-piece closure), `mp_weave_20hz` 2,400 / 2,400 (20 Hz, all near, 1.0 s floor, 4 lanes, headway scale), `mp_lane_drop_20hz` 1,800 / 1,800 (a WP6.8 road drop with its zone) |
 
-The traces run the GDScript `TrafficSim` on the `StraightRoadPath` fixture with a scripted player and a tool-local spawner; the Rust replay applies the same ops. They exercise every profile including WP6.9's weaving racers, lane changes and cancels (player, hesitant, unsafe), mandatory merges, the zipper and harmonisation, hits and horns. The server config differs from them only in the MP flags (move time at the signal, the safety extensions, no lane splitting).
+The traces run the GDScript `TrafficSim` on the `StraightRoadPath` fixture with a scripted player and a tool-local spawner; the Rust replay applies the same ops. They exercise every profile including WP6.9's weaving racers, lane changes and cancels (player, hesitant, unsafe), mandatory merges, the zipper and harmonisation, hits and horns. The server config differs from them only in the MP flags (move time at the signal, no lane splitting).
 
 ### Tests and numbers
 
@@ -1136,7 +1136,6 @@ The N10 target (20 rooms × 8 players ≤ 50 % of 1 vCPU, room tick p99 < 5 ms) 
 ### Open questions
 
 - **Protocol:** lane-splitting boundary targets (see "For N4.2"). Ramp exits and entries: decided (MP-D6, lane 7; "Traffic streaming (N4.2)").
-- **The three safety extensions** (MP-D5): approve, and schedule their port to `traffic_sim.gd` so the client's network IDM (N4.3) matches the server.
 - **Ramps:** no ramp geometry on the client yet (docs/LOOP_MAP.md): an exiting car moves one lane right onto the shoulder and is gone; an entering car appears on the shoulder at the on-ramp. N4.3 should fade them.
 
 ## Rooms (N5.1)
