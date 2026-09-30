@@ -30,6 +30,11 @@ const MS_PER_S: f64 = 1_000.0;
 const MM_PER_M: f64 = 1_000.0;
 const CM_PER_M: f64 = 100.0;
 const FRACTION_ONE: f64 = 65_536.0;
+/// N10.1: a clock estimate that moves back is slewed at this share of the time passing
+/// (the client's MP-D4 cap), so the car's states never cover more road than their ticks
+/// allow (a backward step made the next accepted state a `distance` offence); forward
+/// steps apply at once.
+const CLOCK_SLEW: f64 = 0.05;
 /// Lateral speed of the traffic driver's lane changes and wandering (m/s).
 const LATERAL_MPS: f64 = 3.0;
 /// The game's lives, ghost period (2 s) and spawn protection (3 s) at 20 Hz, the default
@@ -133,8 +138,10 @@ pub struct RoomBot {
     pub room_id: Option<u32>,
     pub code: Option<Code>,
     pub player_id: Option<u16>,
-    /// Server tick = local ms × rate / 1000 + offset.
+    /// Server tick = local ms × rate / 1000 + offset; the best estimate `offset` moves
+    /// toward (N10.1: slewed back, see `CLOCK_SLEW`).
     offset: Option<f64>,
+    target_offset: Option<f64>,
     best_rtt_ms: Option<f64>,
     /// Local ms of the snapshot (pongs for earlier pings carry another clock).
     joined_ms: Option<u64>,
@@ -177,6 +184,7 @@ impl RoomBot {
             code: None,
             player_id: None,
             offset: None,
+            target_offset: None,
             best_rtt_ms: None,
             joined_ms: None,
             s_m: 0.0,
@@ -220,6 +228,7 @@ impl RoomBot {
         self.room_id = None;
         self.player_id = None;
         self.offset = None;
+        self.target_offset = None;
         self.best_rtt_ms = None;
         self.joined_ms = None;
         self.last_sent = None;
@@ -369,6 +378,7 @@ impl RoomBot {
                 self.player_id = Some(s.you);
                 // Sent in the middle of its tick; the one-way delay is unknown here.
                 self.offset = Some(f64::from(s.tick) + 0.5 - now_ms as f64 * self.rate_per_ms());
+                self.target_offset = self.offset;
                 self.best_rtt_ms = None;
                 self.joined_ms = Some(now_ms);
                 self.seen.snapshots += 1;
@@ -404,7 +414,12 @@ impl RoomBot {
                     let server =
                         f64::from(p.server_tick) + f64::from(p.tick_fraction) / FRACTION_ONE;
                     let at_receive = server + rtt * 0.5 * self.rate_per_ms();
-                    self.offset = Some(at_receive - now_ms as f64 * self.rate_per_ms());
+                    let target = at_receive - now_ms as f64 * self.rate_per_ms();
+                    self.target_offset = Some(target);
+                    // Forward at once: the next state's tick skips ahead.
+                    if self.offset.is_none_or(|o| target > o) {
+                        self.offset = Some(target);
+                    }
                 }
             }
             ServerMsg::RoomEvent(e) => {
@@ -523,6 +538,11 @@ impl RoomBot {
         if self.last_placement.is_none() || !self.in_room() {
             return None;
         }
+        // The clock estimate slews back (see `CLOCK_SLEW`).
+        if let (Some(o), Some(t)) = (self.offset, self.target_offset) {
+            let max = CLOCK_SLEW * dt * self.cfg.tick_rate_hz;
+            self.offset = Some(o + (t - o).clamp(-max, max));
+        }
         let now_tick = self.server_now(now_ms)?;
         let v0 = self.speed_mps;
         match self.cfg.drive {
@@ -574,6 +594,14 @@ impl RoomBot {
         }
         self.last_sent = Some(tick);
         let s_at = self.map.wrap_m(self.s_m - self.speed_mps * back_s);
+        // The speed at the tick too (N10.1: a state sent late in its tick carried today's
+        // speed, and two such states read as more than the car's acceleration).
+        let accel = if dt > 0.0 {
+            (self.speed_mps - v0) / dt
+        } else {
+            0.0
+        };
+        let v_at = (self.speed_mps - accel * back_s).max(0.0);
         let d_at = self.d_m - self.lat_vel * back_s;
         let s_mm = ((s_at * MM_PER_M).round() as u32) % self.map.length_mm();
         let tick_dt = 1.0 / self.cfg.tick_rate_hz;
@@ -604,7 +632,7 @@ impl RoomBot {
             tick,
             s_mm,
             d_cm: (d_at * CM_PER_M).round() as i16,
-            speed_cms: (self.speed_mps * CM_PER_M).round() as u16,
+            speed_cms: (v_at * CM_PER_M).round() as u16,
             lat_vel_cms: (self.lat_vel * CM_PER_M).round() as i16,
             flags: PlayerFlags::default(),
             run_state: if self.lives == 0 {

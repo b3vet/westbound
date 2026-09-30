@@ -355,7 +355,7 @@ impl RoomScoring {
     /// `log_every`).
     pub fn log_sample(&mut self) -> bool {
         self.shadow_records += 1;
-        self.shadow_records == 1 || self.shadow_records % self.rules.log_every == 0
+        self.shadow_records == 1 || self.shadow_records.is_multiple_of(self.rules.log_every)
     }
 
     pub fn rules(&self) -> &ScoringRules {
@@ -612,7 +612,7 @@ impl RoomScoring {
                     // nothing for), sampled.
                     self.shadow_records += 1;
                     let n = self.shadow_records;
-                    if n == 1 || n % self.rules.log_every == 0 {
+                    if n == 1 || n.is_multiple_of(self.rules.log_every) {
                         tracing::info!(
                             target: SHADOW_LOG,
                             kind = "refused_hit",
@@ -777,7 +777,7 @@ impl RoomScoring {
                 // N10.1: every one counted, a sample logged with its numbers.
                 self.shadow_records += 1;
                 let n = self.shadow_records;
-                if n == 1 || n % r.log_every == 0 {
+                if n == 1 || n.is_multiple_of(r.log_every) {
                     tracing::info!(
                         target: SHADOW_LOG,
                         kind = "unreported_contact",

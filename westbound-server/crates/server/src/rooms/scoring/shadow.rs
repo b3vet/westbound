@@ -162,7 +162,17 @@ impl Shadow {
                 continue;
             };
             self.samples.push(s);
-            self.prev.push(sample(p, back, loop_m));
+            // Across a placement (a respawn, a rejoin) the old state says nothing about
+            // where the car is: no extrapolation error from it.
+            let placed = p
+                .states
+                .iter()
+                .any(|st| st.reset && tick_diff(back, st.tick) > 0 && tick_diff(st.tick, t) >= 0);
+            self.prev.push(if placed {
+                None
+            } else {
+                sample(p, back, loop_m)
+            });
         }
         RoomMetrics::add(&metrics.shadow_player_ticks, self.samples.len() as u64);
         let (hl, hw) = (self.rules.p_hl, self.rules.p_hw);

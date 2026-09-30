@@ -5,7 +5,8 @@
 //!   clock estimate, and records what it saw.
 //! - `client` (N5.1): [`client::BotClient`], a `RoomBot` on a real WebSocket (handshake,
 //!   room commands, a 20 Hz drive loop, disconnect / reconnect).
-//! - `http`: device accounts for bots.
+//! - `http`: device accounts for bots; plain GETs (the load test's scrapes).
+//! - `load` (N10.1): `/metrics` scrapes, windows between them, `/proc/<pid>` samples.
 //! - `traffic` (N4.2): [`traffic::TrafficMirror`], the traffic a bot has been streamed,
 //!   with the checks a client relies on (ids, same-frame corrections, intent leads, gaps).
 //!
@@ -24,6 +25,7 @@ pub mod client;
 pub mod driver;
 pub mod http;
 pub mod link;
+pub mod load;
 pub mod predict;
 pub mod traffic;
 

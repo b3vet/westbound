@@ -12,5 +12,5 @@ anyhow.workspace = true
 serde_json.workspace = true
 # The WebSocket driver (`client`): the versions the server already uses.
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
-tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "time"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = "0.29.0"

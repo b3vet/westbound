@@ -17,8 +17,14 @@
 //!   into a fading per-car bias (NetTuning's `traffic_v0_*`, `traffic_bias_*`);
 //! - lane changes come only from intents, on the server's curve.
 //!
-//! Not ported (docs/NET_TRAFFIC.md: corrections cover them): the lane-drop harmonisation
-//! zones, the player's cut-in brake tap. So its error is an upper bound on the client's.
+//! - the lane-drop harmonisation zones (WP6.8), as the client mirrors them: each drop's
+//!   zone from `lane_drop_slow_zone_m` before its taper to `lane_drop_slow_after_m` past
+//!   the lanes coming back, the eased braking into it, the speed cap and the matching of
+//!   slow desired speeds toward the merge-lane speed (inverted in the estimate).
+//!
+//! Not ported (docs/NET_TRAFFIC.md: corrections cover them): the merge zones, the zipper,
+//! the closure wall, the player's cut-in brake tap. So its error is an upper bound on the
+//! client's.
 //!
 //! **Measured per correction** (the client's `add_correction`): the error between the
 //! correction and the model at the correction's tick, `hypot(e_s, e_d)`, for every car and
@@ -35,7 +41,7 @@ use protocol::{
 use sim::map::LoopMap;
 use sim::scoring::LoopRoad;
 use sim::traffic::idm;
-use sim::traffic::TrafficParams;
+use sim::traffic::{RoadSpace, TrafficParams};
 
 const MM_PER_M: f64 = 1_000.0;
 const CM_PER_M: f64 = 100.0;
@@ -119,6 +125,15 @@ pub struct ModelParams {
     lat_m: f64,
     antic_s: f64,
     hit_decel: f64,
+    // The lane-drop zones (WP6.8).
+    drop_slow: f64,
+    drop_after: f64,
+    drop_narrow: f64,
+    drop_view: f64,
+    drop_release: f64,
+    drop_onset: f64,
+    v_through: f64,
+    v_merge: f64,
     player_len: f64,
     player_width: f64,
     pub net: NetRules,
@@ -180,6 +195,14 @@ impl ModelParams {
             lat_m: t.lateral_margin_m,
             antic_s: t.player_lateral_anticipation_s,
             hit_decel: t.hit_brake_decel_mps2,
+            drop_slow: t.lane_drop_slow_zone_m,
+            drop_after: t.lane_drop_slow_after_m,
+            drop_narrow: t.lane_drop_narrow_max_m,
+            drop_view: t.lane_drop_view_m,
+            drop_release: t.lane_drop_release_m,
+            drop_onset: t.lane_drop_brake_onset_frac,
+            v_through: t.lane_drop_through_mps,
+            v_merge,
             player_len: t.player_length_m,
             player_width: t.player_width_m,
             net,
@@ -237,6 +260,8 @@ struct Car {
     d_base: f64,
     plan: Option<Plan>,
     v0e: f64,
+    /// The drop zones' matching factor at the last evaluation (0: none).
+    matchf: f64,
     bias: f64,
     last_ct: Option<u32>,
     last_cv: f64,
@@ -380,6 +405,8 @@ pub struct TrafficPredictor {
     klo: Vec<f64>,
     khi: Vec<f64>,
     players: Vec<Participant>,
+    /// The loop's lane-drop zones (first merge lane, s0, s1), built at the first frame.
+    zones: Option<Vec<(i32, f64, f64)>>,
     pub stats: NetStats,
 }
 
@@ -399,6 +426,7 @@ impl TrafficPredictor {
             klo: Vec::with_capacity(170),
             khi: Vec::with_capacity(170),
             players: Vec::with_capacity(8),
+            zones: None,
             stats: NetStats::default(),
         }
     }
@@ -422,6 +450,9 @@ impl TrafficPredictor {
     /// `players[0]` is the bot itself (the near and view distances are from it).
     pub fn advance_to(&mut self, tick: u32, map: &LoopMap, players: &[Participant]) {
         self.stats.frames += 1;
+        if self.zones.is_none() {
+            self.zones = Some(drop_zones(&self.params, map));
+        }
         self.players.clear();
         self.players.extend_from_slice(players);
         let Some(t0) = self.tick else {
@@ -566,7 +597,8 @@ impl TrafficPredictor {
             }
             let c = &self.cars[i];
             let p = c.profile;
-            let (si, vi, v0) = (self.ks[i], self.kv[i], c.v0e);
+            let (si, vi) = (self.ks[i], self.kv[i]);
+            let (drop_a, v0, matchf) = self.drop_accel(c, map, vi);
             let lo = self.klo[i] - lat_m;
             let hi = self.khi[i] + lat_m;
             let mut lead = None;
@@ -606,7 +638,9 @@ impl TrafficPredictor {
                     }
                 }
             }
+            a = a.min(drop_a);
             let c = &mut self.cars[i];
+            c.matchf = matchf;
             if advance {
                 c.int_sum += free - a;
                 c.int_n += 1;
@@ -617,6 +651,52 @@ impl TrafficPredictor {
             }
             c.a = a.max(-self.params.max_decel);
         }
+    }
+
+    /// The harmonisation zones for car `c` (`_drop_accel`): their acceleration limit, the
+    /// matched desired speed and the matching factor.
+    fn drop_accel(&self, c: &Car, map: &LoopMap, vi: f64) -> (f64, f64, f64) {
+        let pr = &self.params;
+        let p = c.profile;
+        let front = map.wrap_m(c.s + c.hl);
+        let road = LoopRoad::new(map);
+        let lane = sim::scoring::ScoringRoad::lane_index_at(&road, c.d_base, c.s);
+        let (mut m, mut acc, mut lim) = (0.0f64, f64::INFINITY, f64::INFINITY);
+        for &(first, s0, s1) in self.zones.as_deref().unwrap_or(&[]) {
+            let past = map.signed_delta_m(s1, front);
+            if past > 0.0 {
+                m = m.max(1.0 - past / pr.drop_release);
+                continue;
+            }
+            let vz = if lane >= first {
+                pr.v_merge
+            } else {
+                pr.v_through
+            };
+            let ahead = map.signed_delta_m(front, s0);
+            if ahead <= 0.0 {
+                lim = lim.min(vz);
+                m = 1.0;
+            } else if ahead < pr.drop_view {
+                lim = lim.min((vz * vz + 2.0 * p.b * ahead).sqrt());
+                if vi > vz {
+                    let req = (vz * vz - vi * vi) / (2.0 * ahead);
+                    let ease =
+                        ((-req / p.b - pr.drop_onset) / (1.0 - pr.drop_onset)).clamp(0.0, 1.0);
+                    acc = acc.min((req * ease).max(-p.b));
+                }
+            }
+        }
+        let v0 = c.v0e;
+        let v0e = if v0 < pr.v_merge {
+            v0 + (pr.v_merge - v0) * m
+        } else {
+            v0
+        };
+        if lim < v0e {
+            acc = acc.min(idm::free_accel(vi, lim, p.a, p.delta));
+        }
+        (acc, v0e, m)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -769,6 +849,7 @@ impl TrafficPredictor {
             d_base: plan.map_or(d, |p| p.from),
             plan,
             v0e,
+            matchf: 0.0,
             bias: 0.0,
             last_ct: None,
             last_cv: v,
@@ -890,8 +971,18 @@ impl TrafficPredictor {
                     let a_obs = (v_srv - c.last_cv) / dtc;
                     let v_mean = (v_srv + c.last_cv) * 0.5;
                     let q = 1.0 - (a_obs - c.bias) / p.a;
-                    if q > 0.0 && v_mean > 0.0 {
-                        let v0 = (v_mean / q.sqrt().sqrt()).clamp(p.v0_lo, p.v0_hi);
+                    let m = c.matchf;
+                    let v_merge = self.params.v_merge;
+                    if q > 0.0 && v_mean > 0.0 && m < 1.0 {
+                        // The model's v0 is matched toward the zones' merge-lane speed:
+                        // invert that too.
+                        let v0m = v_mean / q.sqrt().sqrt();
+                        let v0 = if m <= 0.0 || v0m >= v_merge {
+                            v0m
+                        } else {
+                            (v0m - v_merge * m) / (1.0 - m)
+                        };
+                        let v0 = v0.clamp(p.v0_lo, p.v0_hi);
                         c.v0e += (v0 - c.v0e) * net.v0_gain;
                     }
                 } else if !braking {
@@ -922,6 +1013,36 @@ impl TrafficPredictor {
             }
         }
     }
+}
+
+/// The loop's lane-drop harmonisation zones as the server's sim makes them
+/// (`TrafficSim::add_road_closures`): (first merge lane, s0, s1), wrapped.
+fn drop_zones(pr: &ModelParams, map: &LoopMap) -> Vec<(i32, f64, f64)> {
+    let road = RoadSpace::from_loop(map);
+    let changes = &road.lane_changes;
+    let lanes_back = |s_end: f64, lanes: i32| {
+        let mut best = f64::INFINITY;
+        let mut out = s_end;
+        for f in changes {
+            let ahead = road.signed_delta(s_end, f.s_start);
+            if ahead >= 0.0 && ahead <= pr.drop_narrow && f.after >= lanes && ahead < best {
+                best = ahead;
+                out = s_end + ahead + (f.s_end - f.s_start);
+            }
+        }
+        out
+    };
+    changes
+        .iter()
+        .filter(|f| f.after < f.before)
+        .map(|f| {
+            (
+                f.after,
+                road.wrap(f.s_start - pr.drop_slow),
+                road.wrap(lanes_back(f.s_end, f.before) + pr.drop_after),
+            )
+        })
+        .collect()
 }
 
 fn smooth(u: f64) -> f64 {
@@ -1068,6 +1189,34 @@ mod tests {
         assert_eq!(p.stats.intents, 3);
         assert_eq!(p.stats.late_intents, 2);
         assert_eq!(p.stats.very_late_intents, 1);
+    }
+
+    #[test]
+    fn the_loops_lane_drops_are_zones_and_slow_a_car_down() {
+        let m = map();
+        let pr = ModelParams::builtin();
+        let zones = drop_zones(&pr, &m);
+        assert!(!zones.is_empty(), "loop_v1 has lane drops");
+        for &(first, s0, s1) in &zones {
+            assert!(first >= 1);
+            assert!((0.0..m.length_m()).contains(&s0) && (0.0..m.length_m()).contains(&s1));
+            let len = m.signed_delta_m(s0, s1);
+            assert!(len > 0.0 && len < 5_000.0, "{s0} → {s1}");
+        }
+        // A fast car in the merge lane 200 m before a zone brakes into it.
+        let (first, s0, _) = zones[0];
+        let mut p = TrafficPredictor::new(ModelParams::builtin());
+        let at = m.wrap_m(s0 - 200.0);
+        p.advance_to(0, &m, &me(m.wrap_m(at - 50.0)));
+        let road = LoopRoad::new(&m);
+        let d = road.lanes_left_edge_d() + (f64::from(first) + 0.5) * road.lane_width(at);
+        p.spawn(
+            &spawn(3, (at * 1_000.0) as u32, (d * 100.0) as i16, 3_500),
+            &m,
+        );
+        p.end_frame(&m);
+        let c = &p.cars[0];
+        assert!(c.a < -0.5, "brakes for the zone: {}", c.a);
     }
 
     #[test]

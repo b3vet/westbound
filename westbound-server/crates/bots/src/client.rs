@@ -42,6 +42,8 @@ pub struct BotClient {
     /// N4.4: the simulated link (`bot.cfg.link`): client → server and back.
     up: Option<DelayLine<Vec<u8>>>,
     down: Option<DelayLine<Vec<u8>>>,
+    /// Payload bytes of every frame the bot sent (upstream, N10.1).
+    pub sent_bytes: u64,
 }
 
 impl BotClient {
@@ -66,6 +68,7 @@ impl BotClient {
             last_ping: None,
             up: link.map(|l| DelayLine::new(l, true, seed ^ UP_SEED)),
             down: link.map(|l| DelayLine::new(l, false, seed ^ DOWN_SEED)),
+            sent_bytes: 0,
         };
         let hello = ClientMsg::Hello(Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -101,6 +104,7 @@ impl BotClient {
 
     pub async fn send(&mut self, msgs: &[ClientMsg]) -> anyhow::Result<()> {
         let frame = encode_frame(msgs).context("encoding")?;
+        self.sent_bytes += frame.len() as u64;
         self.ws
             .send(Message::Binary(frame.to_vec().into()))
             .await
@@ -243,6 +247,7 @@ impl BotClient {
                             Some(line) => {
                                 let frame = encode_frame(&out).context("encoding")?;
                                 let n = frame.len();
+                                self.sent_bytes += n as u64;
                                 line.push_sized(now, frame.to_vec(), n);
                             }
                             None => self.send(&out).await?,
@@ -271,12 +276,15 @@ impl BotClient {
                 },
             }
         }
-        // Nothing sent is lost when the drive ends: the frames still on the link go now.
-        self.flush_link(u64::MAX).await
+        // Frames still on the link stay there: the next drive delivers them on time
+        // (N4.4: a drive in steps must not bunch them up at each step's end).
+        Ok(())
     }
 
-    /// Closes the socket (a drop from the room's point of view: the seat is held).
+    /// Closes the socket (a drop from the room's point of view: the seat is held). Nothing
+    /// sent is lost: the frames still on the link go first.
     pub async fn close(mut self) -> RoomBot {
+        let _ = self.flush_link(u64::MAX).await;
         let _ = self.ws.close(None).await;
         self.bot
     }
