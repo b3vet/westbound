@@ -771,7 +771,7 @@ The file is written to a temporary name and renamed into place under the databas
 
 An upload wakes the worker at once; otherwise it looks every `poll_interval_secs` (30 s). On start, jobs a stopped worker left `running` go back to `pending` (the lost attempt counts). Exactly one worker may run against a database: either the in-server one or one `verify-worker`.
 
-**No verifier configured** (`verifier_command = []`, the default and today's production): the worker is not started (the log says so once at startup), uploads are stored, jobs stay `pending` and their runs stay `pending` ("verifying") on the boards. Configure a verifier later and the backlog is verified oldest first. Do not configure one in production before the determinism audit (N8.2): today honest replays of more than a few tens of seconds of dense traffic are rejected (REPLAY_FORMAT.md → Honest replays today).
+**No verifier configured** (`verifier_command = []`, the default and today's production): the worker is not started (the log says so once at startup), uploads are stored, jobs stay `pending` and their runs stay `pending` ("verifying") on the boards. Configure a verifier later and the backlog is verified oldest first. N8.2 made honest replays verifiable (the verifier re-simulates from the recorded inputs: 6 of 6 honest 11-minute runs accepted, REPLAY_FORMAT.md → Honest replays); the sidecar below is built but not deployed. Replays from N8.1 clients (no input stream) still get the kinematic playback, which rejects long honest runs: restrict `runs.supported_builds` to N8.2 builds before enabling it.
 
 ### Retention
 
@@ -824,9 +824,9 @@ WB_REPLAYS__VERIFIER_COMMAND='nice,-n,10,../tools/godot.sh,--headless,--path,..,
 cargo test -p server --test replays -- --ignored end_to_end   # records a run with Godot, verifies it through a real server
 ```
 
-The server image is distroless and static (no shell, no `nice`, no glibc), and a Godot export needs glibc, so the verifier cannot run inside today's image. Options for Coolify (MP-D1), none built yet:
+The server image is distroless and static (no shell, no `nice`, no glibc), and a Godot export needs glibc, so the verifier cannot run inside today's image. **N8.2 built option 1** (DETERMINISM.md → Verifier deploy): `tools/verifier/export_verifier.sh` (the `Verifier (Linux headless)` export preset, requested in the N8.2 handoff; a smoke test that verifies a fresh replay with the exported binary exactly as the worker will), `westbound-server/verifier/Dockerfile` (the image) and `westbound-server/verifier/docker-compose.verifier.yml` (the sidecar service with `mem_limit: 1g`, `cpus: 1`, the server's worker off). Not enabled in production. The options as N8.1 described them:
 
-1. **Sidecar (recommended).** A second image, `westbound-verifier:<build>`: `debian:bookworm-slim` + the Godot Linux export template + the game's `.pck` per supported build + the `westbound-server` binary. In the Coolify compose it runs `westbound-server verify-worker` on the **same `/data` volume** (SQLite in WAL mode works across containers on one host), with `mem_limit: 1g` (the cgroup `memory.max`, the spec's systemd `MemoryMax`) and `cpus: 1`, and `WB_REPLAYS__VERIFIER_COMMAND=nice,-n,10,/verifier/westbound,--headless,--main-pack,/verifier/{build}.pck,--script,res://tools/verifier/verify_replay.gd,--,--server=off,--replay={replay},--out={out},--seed={seed},--claimed-score={claimed_score},--claimed-hits={claimed_hits}`. The server gets `WB_REPLAYS__WORKER_ENABLED=false`. The cap covers only the verifier; an OOM kill is a failed attempt, retried. Board caches in the server pick up verdicts within `leaderboards.cache_ttl_secs` (60 s), as with the admin CLI.
+1. **Sidecar (recommended, built in N8.2).** A second image, `westbound-verifier:<build>`: `debian:bookworm-slim` + the Godot Linux export template + the game's `.pck` per supported build + the `westbound-server` binary. In the Coolify compose it runs `westbound-server verify-worker` on the **same `/data` volume** (SQLite in WAL mode works across containers on one host), with `mem_limit: 1g` (the cgroup `memory.max`, the spec's systemd `MemoryMax`) and `cpus: 1`, and `WB_REPLAYS__VERIFIER_COMMAND=nice,-n,10,/verifier/westbound,--headless,--main-pack,/verifier/{build}.pck,--script,res://tools/verifier/verify_replay.gd,--,--server=off,--replay={replay},--out={out},--seed={seed},--claimed-score={claimed_score},--claimed-hits={claimed_hits}`. The server gets `WB_REPLAYS__WORKER_ENABLED=false`. The cap covers only the verifier; an OOM kill is a failed attempt, retried. Board caches in the server pick up verdicts within `leaderboards.cache_ttl_secs` (60 s), as with the admin CLI.
 2. **Same container.** Rebase the server image on `debian:bookworm-slim` with the template and packs, and let the in-server worker run `nice -n 10 prlimit --data=1073741824 ...`. One container to deploy, but the image grows from about 4 MB to about 100 MB, and the memory cap is either the whole container's (server and verifier together) or an rlimit (`--data`; `--as` would break Godot's address-space reservations).
 
 Measured on this dev box: a 4-minute replay verifies in 10–20 s and peaks at about 225 MB resident, so a 10-minute run takes under a minute and the 1 GB cap leaves room.
@@ -1091,6 +1091,8 @@ tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_d
 
 ### Parity (≤ 1e-9; bit-exact in practice)
 
+N8.2: the sim crate's transcendentals are `sim::detmath`, the port of the client's `DetMath` (DETERMINISM.md): the player's velocity (`PlayerInput::from_vehicle`), the hull clearance (`hull::clearance`, new `clearance_cs`, `penetration`) and the scoring rules (the player's heading once per tick, a traffic car's heading as its velocity direction, as `src/scoring/` does now). The scoring vectors were regenerated; all traces stay tick-identical.
+
 `crates/sim/tests/parity.rs`, vectors in `crates/sim/vectors/`:
 
 | Vectors | Result |
@@ -1099,7 +1101,8 @@ tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_d
 | `idm.json`: 1,200 cases × `accel`, `free_accel`, `interaction_accel`, `desired_gap`, `equilibrium_gap`, `pow_int` | 7,200 / 7,200 bit-exact |
 | `mobil.json`: 600 cases, `incentive`, `threshold`, `accepts`, `is_safe`, `b_safe_for` | bit-exact |
 | `no_ambush.json`: 1,500 cases (287 violations) | identical |
-| `player_velocity.json`: 300 cases of `_read_player`'s road velocity | within 1e-9 (libm) |
+| `player_velocity.json`: 300 cases of `_read_player`'s road velocity | bit-exact (N8.2: DetMath's `sin_cos` on both sides; was within 1e-9 with libm) |
+| `detmath.json` (N8.2): 3,504 cases of `DetMath` (`sin`, `cos`, `tan`, `atan`, `atan2`, `asin`, `exp`, `log`, `pow`; edge cases, branch boundaries, seeded inputs) against `sim::detmath` (`tests/detmath.rs`) | 3,504 / 3,504 bit-exact (a NaN matches any NaN) |
 | `loop_closures.json`: the client's closures and drop zones on loop_v1, per lane every 50 m | within 1e-8 m |
 | `trace_*.json`: the whole sim, per-tick state hash and every event (since WP6.11 with the MP-D5 extensions on: the traces first differ from the old ones at ticks 119 / 9 / 22 / 1336) | **tick-identical**: `sp_weave_120hz` 4,800 / 4,800 ticks (single-player rules, near / far ticks, hits, close passes), `sp_closure_120hz` 3,600 / 3,600 (set-piece closure), `mp_weave_20hz` 2,400 / 2,400 (20 Hz, all near, 1.0 s floor, 4 lanes, headway scale), `mp_lane_drop_20hz` 1,800 / 1,800 (a WP6.8 road drop with its zone) |
 
@@ -1482,7 +1485,7 @@ Multiplayer additions, none of which changes what the port computes when unused:
 
 | Vectors | Result |
 | --- | --- |
-| `scoring_hull.json`: 2,000 box pairs | 2,000 / 2,000 bit-exact |
+| `scoring_hull.json`: 2,000 box pairs | 2,000 / 2,000 bit-exact (N8.2: DetMath's `sin_cos` on both sides; asserted) |
 | `scoring_weave_120hz.json` (3 lanes, 75 s at 120 Hz), `scoring_weave_20hz.json` (4 lanes, 150 s at 20 Hz), `scoring_edges_120hz.json` (shoulders, dips, 60 s) | **tick-identical**: 9,000 / 3,000 / 7,200 ticks, every event (kind, tag, points, multiplier, clearance, slot, value: 102 / 191 / 84 events) and `take_boost_fill()` bit-exact, `Scoring.trace_hash()` equal every tick. Every event kind and loss reason occurs |
 
 **When `src/scoring/` changes:** apply the same change to `rules.rs`, re-export (`tools/godot.sh --headless --path . --script res://tools/server_data/export_sim_data.gd -- --only=scoring`), run `cargo test -p sim --test scoring_parity`. The traces fail at the first tick that differs.

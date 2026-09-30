@@ -66,21 +66,21 @@ static func _wide(rng: Rng) -> float:
 
 
 func test_sin_cos_tan_accuracy() -> void:
-	var small := func(rng: Rng) -> float: return rng.float_range(-4.0, 4.0)
+	var small := func(g: Rng) -> float: return g.float_range(-4.0, 4.0)
 	_check_ulps("sin [-4, 4]", DetMath.sin, func(x: float) -> float: return sin(x), small, 1)
 	_check_ulps("cos [-4, 4]", DetMath.cos, func(x: float) -> float: return cos(x), small, 1)
 	_check_ulps("sin wide", DetMath.sin, func(x: float) -> float: return sin(x), _wide, 1)
 	_check_ulps("cos wide", DetMath.cos, func(x: float) -> float: return cos(x), _wide, 1)
 	_check_ulps("tan [-1.5, 1.5]", DetMath.tan, func(x: float) -> float: return tan(x),
-		func(rng: Rng) -> float: return rng.float_range(-1.5, 1.5), 2)
+		func(g: Rng) -> float: return g.float_range(-1.5, 1.5), 2)
 	_check_ulps("tan wide", DetMath.tan, func(x: float) -> float: return tan(x), _wide, 2)
 
 
 func test_atan_asin_accuracy() -> void:
 	_check_ulps("atan wide", DetMath.atan, func(x: float) -> float: return atan(x),
-		func(rng: Rng) -> float: return rng.float_range(-1.0, 1.0) * pow(10.0, rng.float_range(-8.0, 8.0)), 1)
+		func(g: Rng) -> float: return g.float_range(-1.0, 1.0) * pow(10.0, g.float_range(-8.0, 8.0)), 1)
 	_check_ulps("asin", DetMath.asin, func(x: float) -> float: return asin(x),
-		func(rng: Rng) -> float: return rng.float_range(-1.0, 1.0), 2)
+		func(g: Rng) -> float: return g.float_range(-1.0, 1.0), 2)
 	var rng := Rng.new(SEED)
 	var worst := 0
 	for i in ACCURACY_N:
@@ -93,15 +93,15 @@ func test_atan_asin_accuracy() -> void:
 
 func test_exp_log_pow_accuracy() -> void:
 	_check_ulps("exp [-30, 30]", DetMath.exp, func(x: float) -> float: return exp(x),
-		func(rng: Rng) -> float: return rng.float_range(-30.0, 30.0), 1)
+		func(g: Rng) -> float: return g.float_range(-30.0, 30.0), 1)
 	_check_ulps("exp small", DetMath.exp, func(x: float) -> float: return exp(x),
-		func(rng: Rng) -> float: return rng.float_range(-0.5, 0.0), 1)
+		func(g: Rng) -> float: return g.float_range(-0.5, 0.0), 1)
 	_check_ulps("exp [-740, 705]", DetMath.exp, func(x: float) -> float: return exp(x),
-		func(rng: Rng) -> float: return rng.float_range(-740.0, 705.0), 1)
+		func(g: Rng) -> float: return g.float_range(-740.0, 705.0), 1)
 	_check_ulps("log", DetMath.log, func(x: float) -> float: return log(x),
-		func(rng: Rng) -> float: return pow(10.0, rng.float_range(-300.0, 300.0)), 1)
+		func(g: Rng) -> float: return pow(10.0, g.float_range(-300.0, 300.0)), 1)
 	_check_ulps("log near 1", DetMath.log, func(x: float) -> float: return log(x),
-		func(rng: Rng) -> float: return rng.float_range(0.5, 2.0), 1)
+		func(g: Rng) -> float: return g.float_range(0.5, 2.0), 1)
 	var rng := Rng.new(SEED)
 	var worst := 0
 	for i in ACCURACY_N:

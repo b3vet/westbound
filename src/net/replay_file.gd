@@ -161,14 +161,14 @@ func add_sample(t: int, s: float, d: float, yaw: float, v: float, v_lat: float, 
 
 ## Appends an input row (wire integers: the car's inputs are already multiples of
 ## 1 / Q_INPUT, VehicleInput.quantize). The recorder appends only when one changed.
-func add_input(t: int, steer_q: int, throttle_q: int, brake_q: int, boost: bool) -> void:
+func add_input(t: int, steer_wire: int, throttle_wire: int, brake_wire: int, boost: bool) -> void:
 	if input_count >= in_tick.size():
 		_resize_inputs(maxi(in_tick.size() * 2, 1))
 	var i := input_count
 	in_tick[i] = t
-	in_steer[i] = steer_q
-	in_throttle[i] = throttle_q
-	in_brake[i] = brake_q
+	in_steer[i] = steer_wire
+	in_throttle[i] = throttle_wire
+	in_brake[i] = brake_wire
 	in_boost[i] = 1 if boost else 0
 	input_count += 1
 

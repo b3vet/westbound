@@ -55,7 +55,7 @@ func _once(date: String, secs: int, driver: String) -> void:
 	for x in times:
 		total += x
 	var line := "tick_cost date=%s driver=%s seconds=%d mean=%.1f p50=%d p99=%d max=%d usec" % [date, driver, secs,
-		float(total) / float(n), sorted[n / 2], sorted[int(n * 0.99)], sorted[n - 1]]
+		float(total) / float(n), sorted[n >> 1], sorted[int(n * 0.99)], sorted[n - 1]]
 	print(line)
 	trace.call(&"finish")
 	host.queue_free()

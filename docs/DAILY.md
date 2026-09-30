@@ -93,13 +93,25 @@ Other measurements (same machine, native only):
 
 Time: the native 60 s run takes ~5 s; the web run ~60–75 s for 60 s of driving (boot 15–45 s on a loaded machine, SwiftShader); `compare.sh --seconds=60` about 2.5 min with the export.
 
-### Findings (for N8.2)
+### N8.2: identical (2026-09-30)
+
+Everything in the Findings below is fixed (DETERMINISM.md): the simulation's transcendentals are DetMath's (bit-identical everywhere), the view distance no longer reaches the simulation (`RoadTuning.sim_horizon_m`), the car's inputs are quantized before physics. The check prints a second probe line, `DT detmath` (the same fixed inputs on DetMath); compare.mjs shows both tables. `compare.sh --replay` also records each side's replay (with the run's real lives) and has the native verifier re-simulate both.
+
+| Driver | Seconds | Result | Wall (no export) |
+| --- | --- | --- | --- |
+| `script` | 300 | **IDENTICAL 300 / 300 s** (score 17,088, 64 hits, 27 cars; `DT libm` differs on 8 functions, `DT detmath` identical, `VehicleParams` 46 / 46) | 4 min 8 s |
+| `bot` | 300 | **IDENTICAL 300 / 300 s** (score 12,856, 1 hit, 49 cars at 12.1 km) | 3 min 30 s |
+| `bot --replay` | 300 | REPLAY_RESULT | REPLAY_WALL |
+
+(Linux x86-64 headless debug build vs the web release build in headless Chromium, on a shared 4-core box at load 7–8.) **Gate M8 is met bit for bit** for native vs wasm; phones are expected to match (no FMA contraction in the official iOS / Android templates; DETERMINISM.md) but were not measured.
+
+### Findings (WP8.4, before N8.2)
 
 1. **Gate M8 is not met bit for bit:** native and wasm give the same Daily Drive for 18–19 s, then the player car's state differs in the last bit. With identical inputs (the determinism contract) that difference stays in the car's float bits for at least 5 minutes: route, forks, traffic, hits and the score are the same, so a Daily Drive played with the same inputs *plays* the same on both platforms today. With a player (any closed loop) the difference is amplified within seconds and the traffic is another traffic after ~26 s, as N8.1 found between client and verifier.
 2. **The causes are the platform math libraries**, not iteration order or timing: glibc and Emscripten's musl round `sin`, `cos`, `tan`, `exp`, `pow`, `asin`, `atan`, `atan2` differently in the last bit (`sqrt`, `log` and plain arithmetic agree). The first two sites hit are `Lives._wobble_offset` (`sin`) and `VehiclePhysics.step`'s yaw lag (`exp(-dt / yaw_lag_s(v))`); the others waiting in the same path: `cos`/`sin(yaw)` and `exp(-dt · lateral_grip_rate)` in `VehiclePhysics.step`, `tan(steer_angle)` in `steer_yaw_rate`, `atan2` in `Lives.apply_hit_response`, `HitDetection` (`cos`/`sin`/`atan2`), `TrafficSim` (`cos`/`sin(player.yaw)`), `Scoring` (`atan2`), `RoadHull`, and at load time `VehicleParams` (`tan`, `pow`, `atan`: `cap_time_s` already differs). The road table is safe by design (its s/d math never depends on trig results). For N8.2: replace these with our own deterministic approximations (polynomial `sin`/`cos`/`atan`, `exp` via a fixed series or a per-speed table built from exact operations), or precompute the speed-dependent factors (the yaw lag blend) as tuning tables; the check's `DT libm` line and `lwob`/`lexp`/… per-tick fields show whether a fix took.
 3. **The quality tier changes the Daily Drive** (independent of floats): `Run._start_run` gives the director `builder.view_distance_m()` as its fog end, which is where traffic spawns (`TrafficDirector.set_fog_end`), and the road is generated to the view distance. LOW (500 m) and MEDIUM (700 m) runs of the same date and inputs differ from second 10. Two devices on different tiers (or a governor rung that lowered the view distance) play different traffic on the same day. Fix (N8.2 or the director's owner): spawn at a fixed, tier-independent distance (the HIGH tier's fog end + margin, or a tuning value) and let far cars stay hidden by fog on lower tiers; the check pins 700 m meanwhile (`view_m_device` in `DT info` shows what the device would have used).
 4. **Closed-loop amplification is the N8.1 knife-edge problem** seen from another angle: once the car's state differs by an ulp, anything that thresholds on it (the bot's lane choice here; the director's density controller and spawn guards per REPLAY_FORMAT.md) flips. Fixing the libm sites removes the seed of the divergence; N8.1's items 1–2 (coarse director inputs, no exact-boundary spawn checks) remove the amplifier.
-5. **CI:** reliable and under 3 minutes for `--seconds=15` (`IDENTICAL`, 51 s here including the export; inside the identical window: it guards against new platform divergence before second 15, such as a trig call at run start or a params difference that matters). A 60 s identical gate needs the N8.2 fixes first. See the handoff for the requested `ci.yml` step.
+5. **CI (N8.2: see the handoff; the step can now run `--seconds=120`):** reliable and under 3 minutes for `--seconds=15` (`IDENTICAL`, 51 s here including the export; inside the identical window: it guards against new platform divergence before second 15, such as a trig call at run start or a params difference that matters). A 60 s identical gate needs the N8.2 fixes first. See the handoff for the requested `ci.yml` step.
 
 ## Tests
 
