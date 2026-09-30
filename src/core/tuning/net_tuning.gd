@@ -5,7 +5,9 @@ extends Resource
 ## and the replay verifier (N8.1). Spec: multiplayer handoff → Networking protocol
 ## (Connection, Clock sync), Accounts and authentication, Tuning reference;
 ## docs/PROTOCOL.md §1; docs/SERVER.md → Accounts API. Saved as data/tuning/net.tres.
-## WP N2.2, N1.2, N7.2 (runs and leaderboards), N9.2 (social), N8.1 (replays).
+## WP N2.2, N1.2, N7.2 (runs and leaderboards), N9.2 (social), N8.1 (replays), N4.3 (network
+## traffic: Traffic → Client network traffic, the correction and area-of-interest numbers of
+## the Tuning reference; the netcode test link of Testing → Netcode harness).
 ## Until the orchestrator adds `Tuning.net`, load it with NetTuning.load_default().
 ##
 ## Protocol constants (frame cap, message cap, protocol version) are not tuning: they live
@@ -199,6 +201,92 @@ const PATH := "res://data/tuning/net.tres"
 @export var verify_calibration_step_mps: float = 5.0   # not in spec
 @export var verify_calibration_s: float = 2.5   # not in spec
 
+
+@export_group("Network traffic")
+## N4.3 (docs/NET_TRAFFIC.md): the client's copy of the server's traffic. Area of interest:
+## the server sends the cars from this far behind to this far ahead of the player.
+@export var traffic_aoi_behind_m: float = 300.0
+@export var traffic_aoi_ahead_m: float = 900.0
+## A car leaves the area only this far beyond its edge (no spawn / despawn flicker for a
+## car riding the edge). Server behaviour: the fake authority uses it (N4.2 checklist).
+@export var traffic_aoi_hysteresis_m: float = 20.0   # not in spec
+## Correction schedule: cars within this far of the player at this rate, every other car
+## in the area at least at the far rate (round robin).
+@export var traffic_correction_near_m: float = 100.0
+@export var traffic_correction_near_hz: float = 5.0
+@export var traffic_correction_far_hz: float = 1.0
+## Multiplayer signal time (every profile): the fake authority's blinker floor.
+@export var traffic_signal_floor_s: float = 1.0
+## MP-D6: a car id is not handed out again within this long of its despawn.
+@export var traffic_car_id_reuse_s: float = 30.0
+## Correction blending (spec): an error under blend_small_m is eased out over
+## blend_small_s, one under blend_medium_m over blend_medium_s; anything larger snaps
+## (and is logged) while the car is out of view.
+@export var traffic_blend_small_m: float = 0.5
+@export var traffic_blend_small_s: float = 0.3
+@export var traffic_blend_medium_m: float = 5.0
+@export var traffic_blend_medium_s: float = 0.15
+## A larger error on a car in view never snaps: it slides out at most this fast (on top of
+## the car's own motion), so nothing teleports where the player can see it.
+@export var traffic_blend_max_speed_mps: float = 30.0   # not in spec
+## "In view": from this far behind the player to this far ahead (the highest quality
+## tier's view distance).
+@export var traffic_visible_behind_m: float = 60.0   # not in spec
+@export var traffic_visible_ahead_m: float = 800.0   # not in spec
+## Late intents: a lane change whose intent arrives too late still shows its blinker for
+## at least this long before the car moves sideways, then catches up with the server's
+## move curve over late_catchup_s (spec: "within 0.2 s").
+@export var traffic_late_min_blinker_s: float = 0.25   # not in spec
+@export var traffic_late_catchup_s: float = 0.2
+## A lateral correction this large that no intent explains (a lost intent, a cancel that
+## came too late) is shown like a lane change: blinker first (late_min_blinker_s), then the
+## slide, blinker on until it is done.
+@export var traffic_unsignaled_lateral_m: float = 0.6   # not in spec
+## Predicted states kept per car, to compare a correction against the prediction at its
+## tick (covers round trips up to about this long).
+@export var traffic_history_s: float = 3.2   # not in spec
+## A car nothing has been heard about for this long is dropped (every car in the area is
+## corrected at least once a second; a lost despawn).
+@export var traffic_stale_car_s: float = 3.0   # not in spec
+## The client does not know each car's desired speed (not on the wire): it estimates it
+## from successive corrections while the car drives free (IDM's interaction term below
+## v0_free_accel_mps2 on average), easing toward each estimate by v0_gain.
+@export var traffic_v0_gain: float = 0.5   # not in spec
+@export var traffic_v0_free_accel_mps2: float = 0.15   # not in spec
+## Estimates stay within the profile's desired-speed range widened by this fraction on both
+## sides (the server's lane-drop speed matching lifts slow profiles above their range).
+@export var traffic_v0_margin_frac: float = 0.5   # not in spec
+## Otherwise the unexplained acceleration (zipper, lane-drop harmonisation, remote players,
+## server-only rules) becomes a per-car bias: gain per correction, limit, and the time it
+## fades with when corrections stop explaining it.
+@export var traffic_bias_gain: float = 0.5   # not in spec
+@export var traffic_bias_max_mps2: float = 2.0   # not in spec
+@export var traffic_bias_fade_s: float = 3.0   # not in spec
+## The model catches up at most this many server ticks per client tick (after a stall).
+@export var traffic_max_catchup_ticks: int = 40   # not in spec
+## Metric: a car in view whose published position moves this much faster than its own
+## motion within one client tick counts as a visible teleport (the soak gates 0).
+@export var traffic_teleport_speed_mps: float = 45.0   # not in spec
+## Rates in the dev HUD are averaged over this long.
+@export var traffic_metrics_window_s: float = 10.0   # not in spec
+
+@export_group("Netcode test link")
+## The spec's acceptance link (bots, the fake traffic authority, the sandbox's network
+## mode): round trip, jitter (the round trip varies by +-this), loss per frame.
+@export var test_link_rtt_ms: float = 150.0
+@export var test_link_jitter_ms: float = 30.0
+@export var test_link_loss: float = 0.02
+## The WebSocket runs over TCP, so a lost segment is retransmitted: the frame (and every
+## frame behind it) arrives this much later (a typical minimum RTO).
+@export var test_link_rto_ms: float = 200.0   # not in spec
+## The fake authority's own window: the director keeps traffic this far beyond both edges
+## of the area of interest, so cars enter and leave it by driving.
+@export var test_authority_margin_m: float = 200.0   # not in spec
+## Its traffic capacity (the window is wider than the client's area).
+@export var test_authority_capacity: int = 200   # not in spec
+## It extrapolates the player's latest report at most this long (the server's
+## player_max_extrapolation_s, mp_traffic.json).
+@export var test_authority_extrapolation_s: float = 0.5   # not in spec
 
 func ping_interval_usec() -> int:
 	return roundi(ping_interval_s * 1.0e6)   # lint: allow-number s -> usec
