@@ -19,12 +19,21 @@ extends TrafficBotPlayer
 ## Without a path (the prediction and the live traffic diverged, or it started in a
 ## hopeless spot) it settles in the lane holding its center (aborting a lane change) and
 ## follows the vehicle ahead with IDM, and counts it (no_path_checks). It only reads the published TrafficState.
+##
+## WP6.10 (the M6 gate soak's toll windows): it reads a toll's booth lanes as closed
+## (BoothClosures) and leaves a lane that ends, closes or turns into a booth lane early
+## (a check pinned one step into the move toward the open lane, at that lane's pace).
 
 ## Replan every this many decision steps (0.5 s at step_s 0.25).
 const REPLAN_STEPS := 2
 ## Time headway kept behind what is ahead on the path (a sensible player; the search
 ## itself allows the clearance alone, since any speed down to the minimum is allowed).
 const HEADWAY_S := 1.0
+## Leaving a lane that ends: the pace of the open lane is its nearest vehicle this far ahead.
+const PACE_AHEAD_M := 150.0
+## ... and with a vehicle beside it in the open lane (or ahead closer than HEADWAY_S), it
+## drops back this much slower than that vehicle.
+const PACE_DROP_BACK_MPS := 3.0
 ## Fallback following (no path): a pushy player's IDM, the car's braking.
 const IDM_A := 3.0
 const IDM_B := 4.0
@@ -32,7 +41,79 @@ const IDM_T := 0.8
 const IDM_S0 := 2.0
 const BRAKE := 9.0
 
+## WP6.10: the sim's closures and zones as the bot's passability reads them, plus the
+## booth lanes of a toll (a speed zone below the minimum speed) closed from BOOTH_LEAD_M
+## before their traffic drops below the minimum speed: like a player reading the TOLL
+## legends, the bot plans its way into the express lanes early instead of driving a booth
+## lane until the search's braking relaxation has it brake to the minimum at the booths
+## (gate soak, runs 36, 44 and 64: three windows behind 50 km/h booth traffic).
+class BoothClosures extends RefCounted:
+	var sim: Object
+	var a := PackedFloat64Array()   # per lane: booth closure start (INF: none)
+	var b := PackedFloat64Array()
+	var n := 0
+
+	func _init() -> void:
+		a.resize(MAX_LANES)
+		b.resize(MAX_LANES)
+		a.fill(INF)
+
+	## Re-reads the booth lanes over [s_from, s_to] for `lanes` lanes. The closure of the
+	## bot's own lane never starts behind `s_from + escape_m`: a bot that could not leave
+	## in time still gets a path out as soon as a gap opens (instead of being inside a
+	## closure, without any path, until the booths). Allocation-free.
+	func refresh(lanes: int, s_from: float, s_to: float, v_min: float, own_lane: int, escape_m: float) -> void:
+		n = 0
+		a.fill(INF)
+		if sim == null or int(sim.call(&"speed_zone_count")) == 0:
+			return
+		for lane in mini(lanes, MAX_LANES):
+			var x := s_from
+			while x <= s_to:
+				var slow := float(sim.call(&"speed_limit_at", lane, x, 0)) < v_min
+				if slow and is_inf(a[lane]):
+					a[lane] = x - BOOTH_LEAD_M
+					n += 1
+				if slow:
+					b[lane] = x
+				elif is_finite(a[lane]):
+					break
+				x += BOOTH_SAMPLE_M
+		if own_lane >= 0 and own_lane < MAX_LANES and is_finite(a[own_lane]):
+			a[own_lane] = maxf(a[own_lane], s_from + escape_m)
+			if a[own_lane] > b[own_lane]:
+				a[own_lane] = INF
+				n -= 1
+
+	func lane_closure_count() -> int:
+		return n + (int(sim.call(&"lane_closure_count")) if sim != null else 0)
+
+	func closure_ahead(lane: int, s: float) -> float:
+		var d := float(sim.call(&"closure_ahead", lane, s)) if sim != null else INF
+		if lane < MAX_LANES and is_finite(a[lane]) and b[lane] >= s:
+			d = minf(d, maxf(a[lane] - s, 0.0))
+		return d
+
+	func speed_zone_count() -> int:
+		return int(sim.call(&"speed_zone_count")) if sim != null else 0
+
+	func speed_limit_at(lane: int, front: float, p: int) -> float:
+		return float(sim.call(&"speed_limit_at", lane, front, p)) if sim != null else INF
+
+
+## Booth lanes (BoothClosures): lanes read, sampling step, how far before the booth
+## traffic drops below the minimum speed the bot treats the lane as closed, and how far
+## ahead it looks.
+const MAX_LANES := 8
+const BOOTH_SAMPLE_M := 10.0
+const BOOTH_LEAD_M := 250.0
+const BOOTH_LOOK_M := 900.0
+## A bot still in a booth lane: its closure starts at least this far beyond its body.
+const BOOTH_ESCAPE_M := 10.0
+
 var params: VehicleParams
+var booths := BoothClosures.new()
+var _v_min := 0.0
 var passability: Passability
 var result := Passability.Result.new()
 var target_lane: int
@@ -63,6 +144,7 @@ func _init(road_path: RoadPath, reg: TrafficRegistry, tuning: Tuning, car: CarDe
 		start_lane: int, speed_mps: float, seed_value: int, start_s: float = 0.0) -> void:
 	super(road_path, start_lane, speed_mps, Mode.WEAVE, seed_value, start_s)
 	params = car_params
+	_v_min = tuning.scoring.min_speed_mps()
 	length_m = car.length_m
 	width_m = car.width_m
 	passability = Passability.new(tuning, reg, road)
@@ -177,11 +259,34 @@ func _replan(traffic: TrafficState) -> void:
 		if pos < 0:
 			pair = passability.state_pair(_x)
 			stage = passability.state_stage(_x)
-	passability.zones = closures
-	var ok := passability.check_player(traffic, state, params, road, result, pos, pair, stage)
-	var d_pref := road.lane_center_d(_open_lane_near(target_lane), state.s)
+	booths.sim = closures
+	booths.refresh(road.lane_count(state.s), state.s, state.s + BOOTH_LOOK_M, _v_min, lane,
+		length_m + BOOTH_ESCAPE_M)
+	passability.zones = booths
+	var open := _open_lane_near(target_lane)
+	var d_pref := road.lane_center_d(open, state.s)
+	# WP6.10: leaving a lane that ends, closes or turns into a booth lane, the bot first
+	# tries to start the move now (the check pinned one step into the half-lane move
+	# toward the open lane: a one-step lateral head start). The path is extracted
+	# greedily and a lane change costs as much as it gains at first, so the path
+	# otherwise stays in the lane to the last feasible step (on an empty road the bot
+	# left a booth lane 40 m before its closure, braking to the minimum speed).
+	var ok := false
+	var early := false
+	if pos >= 0 and pair < 0 and open != lane and _lane_ends_ahead(lane) and passability.move_steps() > 1:
+		var ep := pos if open > lane else pos - 1
+		if ep >= 0 and ep < passability.position_count() - 1:
+			early = passability.check_player(traffic, state, params, road, result, -1, ep, 1)
+			ok = early
+	if not early:
+		ok = passability.check_player(traffic, state, params, road, result, pos, pair, stage)
+	# ... and it prefers the open lane's pace (dropping back behind a car beside it there),
+	# so its own target speed does not keep the path in the lane it is leaving.
+	var v_pref := v_target
+	if open != lane and _lane_ends_ahead(lane):
+		v_pref = minf(v_target, _pace_into(traffic, open))
 	if ok:
-		ok = passability.extract_path(result, result.path_state[0], state.s, v_target, d_pref, state.v, HEADWAY_S)
+		ok = passability.extract_path(result, result.path_state[0], state.s, v_pref, d_pref, state.v, HEADWAY_S)
 	check_usec += Time.get_ticks_usec() - t0
 	_plan_k = 0
 	if not ok or result.path_n < 2:
@@ -216,6 +321,26 @@ func _follow(dt: float, traffic: TrafficState) -> void:
 	a = clampf(a, -BRAKE, IDM_A)
 	state.v = maxf(0.0, state.v + a * dt)
 	state.s += state.v * dt
+
+
+## The pace to take into lane t: a vehicle in it beside the bot or ahead closer than
+## HEADWAY_S means dropping back behind it (PACE_DROP_BACK_MPS slower than it); else the
+## speed of the nearest vehicle ahead in it within PACE_AHEAD_M (INF: none).
+func _pace_into(traffic: TrafficState, t: int) -> float:
+	var best := INF
+	var v := INF
+	var back := INF
+	for i in traffic.capacity:
+		if traffic.active[i] == 0 or not _lane_hit(traffic, i, t):
+			continue
+		var g := traffic.s[i] - state.s
+		var gap := absf(g) - (traffic.length[i] + length_m) * 0.5
+		if gap < SIDE_CLEAR_M or (g > 0.0 and gap < HEADWAY_S * traffic.v[i]):
+			back = minf(back, traffic.v[i] - PACE_DROP_BACK_MPS)
+		elif g > 0.0 and g < PACE_AHEAD_M and g < best:
+			best = g
+			v = traffic.v[i]
+	return minf(v, maxf(back, 0.0))
 
 
 ## The lane nearest `t` (itself first, then left before right) that neither ends nor

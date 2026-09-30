@@ -198,3 +198,161 @@ func test_a_player_below_minimum_speed_may_hold_its_speed() -> void:
 	_add(ts, road, 0.0, 1, 95.0, &"coach", &"bus")
 	check(_check(ts, road, _player(road, 2, 86.0)), "at 86 km/h it may hold 86 km/h")
 	check(not _check(ts, road, _player(road, 2, 100.0)), "at 100 km/h (the minimum) it is a wall")
+
+
+# ---------------------------------------------------------------- WP6.10: lane ends, closures, acceleration
+
+## Lane drops: the procedural road's seed and where lane 2 ends (3 -> 2 lanes), as in
+## test_passability.gd.
+const DROP_SEED := 620411
+const DROP_S := 20.0
+
+
+func _drop_road(drop: bool) -> ProceduralRoadPath:
+	var r := ProceduralRoadPath.new(RunContext.new(DROP_SEED, RunContext.MODE_JOURNEY, t))
+	if drop:
+		r.schedule_lane_count(DROP_S, 2, t.road.lane_taper_length_m)
+	r.ensure_generated_to(DROP_S + 2000.0)
+	return r
+
+
+func _zone_sim(road: RoadPath) -> TrafficSim:
+	return TrafficSim.new(RunContext.new(DROP_SEED, RunContext.MODE_JOURNEY, t), road, reg)
+
+
+func test_the_only_open_lane_ending_is_impossible() -> void:
+	# Trucks side by side in lanes 0 and 1 below the minimum speed; lane 2 is the way
+	# past them. Without the drop it passes; when lane 2 ends before the trucks are
+	# passed it does not (before WP6.10 the grid kept lane 2 for the whole horizon).
+	for drop: bool in [false, true]:
+		var road := _drop_road(drop)
+		eq(road.lane_count(0.0), 3)
+		var ts := TrafficState.new(60)
+		_add(ts, road, 35.0, 0, 80.0)
+		_add(ts, road, 35.0, 1, 80.0)
+		var iw := ImpossibleWindowChecker.new(t, reg, car)
+		eq(iw.is_passable(ts, _player(road, 2, 110.0), road), not drop,
+			"lane 2 ends before the trucks are passed" if drop else "lane 2 open all along")
+		check(not iw.started_in_contact, "the player starts clear of the lane end")
+		if drop:
+			gt(iw.road_obstacles, 0, "the lane end is a road obstacle")
+
+
+func test_an_ending_lane_with_room_beside_it_is_passable() -> void:
+	var road := _drop_road(true)
+	check(_check(TrafficState.new(60), road, _player(road, 2, 110.0)), "the player leaves lane 2 in time")
+
+
+func test_a_lane_that_opens_ahead_is_on_the_grid() -> void:
+	# 2 lanes widening to 3 ahead: trucks side by side in lanes 0 and 1 far enough ahead
+	# for the new lane 2 to exist before the player reaches them.
+	var taper := t.road.lane_taper_length_m
+	var road := ProceduralRoadPath.new(RunContext.new(DROP_SEED, RunContext.MODE_JOURNEY, t))
+	road.schedule_lane_count(0.0, 2, taper)
+	var s_p := taper + 50.0
+	road.schedule_lane_count(s_p + DROP_S, 3, taper)
+	road.ensure_generated_to(s_p + 2000.0)
+	eq(road.lane_count(s_p), 2)
+	var ts := TrafficState.new(60)
+	var at := s_p + DROP_S + taper + 40.0
+	_add(ts, road, at, 0, 80.0)
+	_add(ts, road, at, 1, 80.0)
+	var p := _player(road, 1, 150.0)
+	p.s = s_p
+	var iw := ImpossibleWindowChecker.new(t, reg, car)
+	check(iw.is_passable(ts, p, road), "the new lane 2 is the way past")
+	eq(iw.positions, 5, "3 lanes on the grid")
+
+
+func test_a_lane_the_sim_closes_is_not_a_path() -> void:
+	# Road works close lane 2 from 60 m (the sim's closures): lane 2 was the way past
+	# slow trucks side by side in lanes 0 and 1.
+	for closed: bool in [false, true]:
+		var road := _road(3)
+		var sim := _zone_sim(road)
+		if closed:
+			sim.add_lane_closure(2, 60.0, 600.0, 1)
+		var ts := TrafficState.new(60)
+		_add(ts, road, 35.0, 0, 80.0)
+		_add(ts, road, 35.0, 1, 80.0)
+		var iw := ImpossibleWindowChecker.new(t, reg, car)
+		iw.zones = sim
+		eq(iw.is_passable(ts, _player(road, 2, 110.0), road), not closed,
+			"lane 2 closed ahead of the trucks" if closed else "lane 2 open")
+
+
+func test_a_closure_blocks_its_lane_and_half_lanes_only() -> void:
+	# Lane 1 closed ahead with slow trucks ahead in lanes 0 and 2 beyond the closure's
+	# start: the half-lanes beside lane 1 are closed too, so the player can't squeeze
+	# between the trucks along the lane lines; with lane 0 free it passes.
+	var road := _road(3)
+	var sim := _zone_sim(road)
+	sim.add_lane_closure(1, 80.0, 600.0, 1)
+	var iw := ImpossibleWindowChecker.new(t, reg, car)
+	iw.zones = sim
+	check(iw.is_passable(TrafficState.new(60), _player(road, 1, 110.0), road), "a closed lane with open neighbours")
+	var ts := TrafficState.new(60)
+	_add(ts, road, 30.0, 0, 80.0, &"motorbike", &"motorbike")
+	_add(ts, road, 30.0, 2, 80.0, &"motorbike", &"motorbike")
+	check(not iw.is_passable(ts, _player(road, 1, 110.0), road),
+		"slow bikes in lanes 0 and 2, lane 1 closed: the lane lines beside it are closed too")
+	sim.remove_lane_closures(1)
+	check(iw.is_passable(ts, _player(road, 1, 110.0), road), "lane 1 open again: passable")
+
+
+func test_a_player_already_in_a_closed_lane_is_flagged() -> void:
+	var road := _road(3)
+	var sim := _zone_sim(road)
+	sim.add_lane_closure(2, -50.0, 600.0, 1)
+	var iw := ImpossibleWindowChecker.new(t, reg, car)
+	iw.zones = sim
+	iw.is_passable(TrafficState.new(60), _player(road, 2, 110.0), road)
+	check(iw.started_in_closure and iw.started_in_contact, "inside the closure at t0: the player's own doing")
+	iw.is_passable(TrafficState.new(60), _player(road, 1, 110.0), road)
+	check(not iw.started_in_closure, "lane 1 is open")
+
+
+func test_speed_zones_slow_the_predicted_traffic() -> void:
+	# A car ahead in lane 2 at 110 km/h is the way past slow trucks in lanes 0 and 1; a
+	# 60 km/h zone on lane 2 (a toll's booth lane) turns it into a wall.
+	for zone: bool in [false, true]:
+		var road := _road(3)
+		var sim := _zone_sim(road)
+		if zone:
+			sim.add_speed_zone(2, 90.0, 800.0, _kmh(60.0), 1)
+		var ts := TrafficState.new(60)
+		_add(ts, road, 45.0, 0, 80.0)
+		_add(ts, road, 45.0, 1, 80.0)
+		_add(ts, road, 30.0, 2, 110.0, &"sedan", &"commuter")
+		var iw := ImpossibleWindowChecker.new(t, reg, car)
+		iw.zones = sim
+		eq(iw.is_passable(ts, _player(road, 2, 100.0), road), not zone,
+			"the car slows to 60 km/h in the zone" if zone else "following the car past the trucks")
+
+
+func test_traffic_accelerates_toward_its_desired_speed() -> void:
+	# The WP6.1 soak's 4-lane false positive (run 247): the player at 100 km/h 13 m
+	# behind a motorbike at 91 km/h whose platoon was accelerating (desired >= 140 km/h),
+	# the other lanes busy. Constant speeds made it a wall; bounded acceleration toward
+	# the desired speed lets it pull away. At its desired speed it stays a wall.
+	var road := _road(3)
+	for v0_kmh: float in [140.0, 91.0]:
+		var ts := TrafficState.new(60)
+		for l: int in [1, 2]:
+			for k in 8:
+				_add(ts, road, 6.0 + 20.0 * float(k), l, 85.0)
+		var b := _add(ts, road, 13.0 + (2.2 + car.length_m) * 0.5, 0, 91.0, &"motorbike", &"motorbike")
+		ts.v0[b] = _kmh(v0_kmh)
+		eq(_check(ts, road, _player(road, 0, 100.0)), v0_kmh > 100.0, "bike desiring %.0f km/h" % v0_kmh)
+
+
+func test_a_follower_never_drives_through_its_leader() -> void:
+	# A fast car (desired 200 km/h) right behind a slow truck in lane 1, a slow truck in
+	# lane 0: the fast car queues behind the truck, both lanes stay walls.
+	var road := _road(2)
+	var ts := TrafficState.new(60)
+	_add(ts, road, 40.0, 0, 85.0)
+	_add(ts, road, 40.0, 1, 85.0)
+	var c := _add(ts, road, 40.0 - 16.0 * 0.5 - 4.8 * 0.5 - 4.0, 1, 85.0, &"sedan", &"aggressive")
+	ts.v0[c] = _kmh(200.0)
+	check(not _check(ts, road, _player(road, 0, 150.0)), "the queue stays behind the truck")

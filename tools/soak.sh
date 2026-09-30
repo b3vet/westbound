@@ -119,6 +119,11 @@ COUNTERS = GATES + ["collision_ticks", "collisions_at_pieces", "impossible_windo
                     "set_pieces_unmet", "set_pieces_ended_zone", "set_pieces_ended_duration", "set_pieces_ended_empty",
                     "peaks_seen", "peaks_no_chance", "peaks_no_kind", "peaks_missed", "peaks_unfit", "peaks_busy",
                     "prop_hits",
+                    # WP6.10: reported counters that were only in the per-run JSON.
+                    "standstill_beside_fast", "impossible_player_cut_in", "impossible_in_closure",
+                    "player_offroad_ticks", "bot_checks", "bot_no_path_checks", "bot_check_usec",
+                    "pass_batches", "pass_scripted_batches", "pass_checks", "pass_failed", "pass_rerolls",
+                    "pass_removed", "pass_unresolved", "pass_probes", "window_usec",
                     "sim_moves", "sim_completed", "sim_cancel_player", "sim_cancel_hesitant", "sim_cancel_unsafe",
                     "ticks"]
 
@@ -129,6 +134,9 @@ def summed(rs):
     d["sim_hours"] = round(sum(r["sim_s"] for r in rs) / 3600.0, 3)
     d["unfinished_runs"] = sum(1 for r in rs if not r["finished"])
     d["peak_active"] = max(r["peak_active"] for r in rs)
+    d["pass_ticks_max"] = max(int(r.get("pass_ticks_max", 0)) for r in rs)
+    d["bot_check_ms"] = round(d["bot_check_usec"] / 1000.0 / max(1, d["bot_checks"]), 2)
+    d["window_check_ms"] = round(d["window_usec"] / 1000.0 / max(1, d["window_checks"]), 2)
     d["min_accel_mps2"] = min(r["min_accel"] for r in rs)
     d["sim_usec_per_tick"] = round(sum(r["sim_usec_per_tick"] * r["ticks"] for r in rs) / max(1, d["ticks"]), 1)
     d["mean_active"] = round(sum(r["mean_active"] * r["ticks"] for r in rs) / max(1, d["ticks"]), 2)
@@ -194,9 +202,19 @@ print("TRAFFIC SOAK  %.1f km in %d runs, %d shards, %.1f simulated hours, wall %
     summary["sim_speedup_per_process"]))
 for k in GATES:
     print("  %-24s %d" % (k, total[k]))
-print("  impossible windows: %d total, %d player-induced (the player's own cut-in), %d traffic; %d / %d checks failed" % (
-    total["impossible_windows"], total["impossible_player_induced"], total["impossible_traffic"],
-    total["impossible_checks"], total["window_checks"]))
+print("  impossible windows: %d total = %d traffic + %d player-induced (in contact at t0; %d of them in a closed lane) "
+      "+ %d player cut-in (pre-registered rule); %d / %d checks failed" % (
+    total["impossible_windows"], total["impossible_traffic"], total["impossible_player_induced"],
+    total["impossible_in_closure"], total["impossible_player_cut_in"], total["impossible_checks"], total["window_checks"]))
+print("  standstill_beside_fast %d, player_offroad_ticks %d, oracle %.2f ms per check" % (
+    total["standstill_beside_fast"], total["player_offroad_ticks"], total["window_check_ms"]))
+print("  bot: %d passability checks (%.2f ms each), %d without a path" % (
+    total["bot_checks"], total["bot_check_ms"], total["bot_no_path_checks"]))
+print("  director passability: %d batches (%d scripted), %d checks, %d probes, %d failed, %d re-rolls, %d removals, "
+      "%d unresolved, longest check %d ticks" % (
+    total["pass_batches"], total["pass_scripted_batches"], total["pass_checks"], total["pass_probes"],
+    total["pass_failed"], total["pass_rerolls"], total["pass_removed"], total["pass_unresolved"],
+    total["pass_ticks_max"]))
 print("  contacts with the player: %d episodes (%d rear-end, %d of a normally driving player)" % (
     total["contact_episodes"], total["rear_end_episodes"], total["rear_end_normal"]))
 print("  lane moves checked %d, signals %d, cancels %d, peak active %d, min accel %.2f m/s^2" % (
@@ -211,9 +229,20 @@ print("  set pieces per leg %.3f, by kind: %s; prop hits (the bot) %d; collision
     total["set_pieces_per_leg"], json.dumps(total["set_pieces_by_kind"], sort_keys=True), total["prop_hits"],
     total["collisions_at_pieces"]))
 for name, g in by_lanes.items():
-    print("  %s: %.0f km, impossible (traffic) %d, collisions %d, violations %d | %s" % (
-        name, g["km"], g["impossible_traffic"], g["collision_pairs"],
+    print("  %s: %.0f km in %d runs, impossible (traffic) %d, collisions %d, violations %d | %s" % (
+        name, g["km"], g["runs"], g["impossible_traffic"], g["collision_pairs"],
         sum(g[k] for k in GATES if k not in ("collision_pairs", "impossible_traffic")), json.dumps(g["metrics"])))
+    print("      gates %s" % " ".join("%s=%d" % (k, g[k]) for k in GATES))
+    print("      windows %d (player-induced %d, in a closed lane %d, cut-in %d), contacts %d (rear-end %d), "
+          "standstill_beside_fast %d, player_offroad_ticks %d, unfinished %d" % (
+        g["impossible_windows"], g["impossible_player_induced"], g["impossible_in_closure"],
+        g["impossible_player_cut_in"], g["contact_episodes"], g["rear_end_episodes"], g["standstill_beside_fast"],
+        g["player_offroad_ticks"], g["unfinished_runs"]))
+    print("      bot checks %d (%.2f ms, %d without a path) | director: checks %d, failed %d, re-rolls %d, "
+          "removals %d, unresolved %d | set pieces %d spawned, %d passed | merges %d, peak active %d" % (
+        g["bot_checks"], g["bot_check_ms"], g["bot_no_path_checks"], g["pass_checks"], g["pass_failed"],
+        g["pass_rerolls"], g["pass_removed"], g["pass_unresolved"], g["set_pieces"], g["set_pieces_passed"],
+        g["merges"], g["peak_active"]))
 if summary["engine_errors"]:
     print("  ENGINE ERRORS: %s" % summary["engine_errors"][:5])
 if "trace_compare" in summary:

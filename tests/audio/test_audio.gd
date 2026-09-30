@@ -8,6 +8,13 @@ extends WBTest
 
 const RUN_SCENE := preload("res://src/run/run.tscn")
 const DT := 1.0 / 60.0
+## test_no_new_nodes_or_objects_per_event: bursts in the first block (the second is 4x),
+## events per burst (_burst), and when the object count counts as settled.
+const NO_GROWTH_BURSTS := 100
+const EVENTS_PER_BURST := 6
+const SETTLE_STABLE_FRAMES := 20
+const SETTLE_STABLE_MS := 150
+const SETTLE_MAX_MS := 3000
 const EPS := 1e-6
 const IOS_ID := 1_893_457_201
 
@@ -567,22 +574,50 @@ func test_no_new_nodes_or_objects_per_event() -> void:
 	await tree.process_frame
 	_traffic(a, [[-4.6, -3.5, _sedan], [10.0, 3.5, _semi]])
 	# Warm up once. Each play() makes an engine-side stream playback (a RefCounted the
-	# player drops when the sound ends or is stopped): compare with the voices stopped.
+	# player drops when the sound ends or is stopped). The audio thread lets go of stopped
+	# playbacks in batches a few frames later (measured: 50-300 objects still alive one
+	# frame after stop_all, all gone within ~10 frames), so every count is taken with the
+	# voices stopped and the count settled (WP6.10: one frame was not enough, the test
+	# was flaky alone and under load).
 	for i in 20:
 		_burst()
 		a.step(DT)
-	a.pool.stop_all()
-	await tree.process_frame
 	var nodes := Performance.get_monitor(Performance.OBJECT_NODE_COUNT)
-	var objects := Performance.get_monitor(Performance.OBJECT_COUNT)
-	for i in 200:
-		_burst()
-		a.step(DT)
-		le(a.pool.active_count(), t.max_voices)
-	eq(Performance.get_monitor(Performance.OBJECT_NODE_COUNT), nodes, "no new nodes per event")
+	var base := await _settled_objects(a)
+	# Two blocks of different sizes: per-event growth shows in both, and grows with the
+	# block (EVENTS_PER_BURST events per burst).
+	var counts: Array[float] = []
+	for bursts: int in [NO_GROWTH_BURSTS, NO_GROWTH_BURSTS * 4]:
+		for i in bursts:
+			_burst()
+			a.step(DT)
+			le(a.pool.active_count(), t.max_voices)
+		eq(Performance.get_monitor(Performance.OBJECT_NODE_COUNT), nodes, "no new nodes per event")
+		counts.append(await _settled_objects(a))
+	le(counts[0], base, "no objects left behind after %d events" % (NO_GROWTH_BURSTS * EVENTS_PER_BURST))
+	le(counts[1], base, "no objects left behind after %d more events" % (NO_GROWTH_BURSTS * 4 * EVENTS_PER_BURST))
+
+
+## Stops every voice and waits until the object count has not changed for
+## SETTLE_STABLE_FRAMES frames and SETTLE_STABLE_MS (at most SETTLE_MAX_MS); returns it.
+func _settled_objects(a: GameAudio) -> float:
 	a.pool.stop_all()
-	await tree.process_frame
-	le(Performance.get_monitor(Performance.OBJECT_COUNT), objects, "no objects left behind per event")
+	var n := Performance.get_monitor(Performance.OBJECT_COUNT)
+	var same := 0
+	var since := Time.get_ticks_msec()
+	var t0 := since
+	while Time.get_ticks_msec() - t0 < SETTLE_MAX_MS:
+		await tree.process_frame
+		var m := Performance.get_monitor(Performance.OBJECT_COUNT)
+		if m != n:
+			n = m
+			same = 0
+			since = Time.get_ticks_msec()
+			continue
+		same += 1
+		if same >= SETTLE_STABLE_FRAMES and Time.get_ticks_msec() - since >= SETTLE_STABLE_MS:
+			break
+	return n
 
 
 func _burst() -> void:
