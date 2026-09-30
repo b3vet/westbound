@@ -30,6 +30,9 @@ extends RefCounted
 ##     `all_pieces` (soak.sh --all-pieces): every set piece unlocked from leg 1, every
 ##     other checkpoint a toll gantry, and every 4th run (index % 4 == 1, a 3-lane run) on
 ##     the canyon's road (tunnels: the tunnel squeeze).
+##   - WP6.8: `standstill_beside_fast` (reported) samples, once per window-check
+##     interval, vehicles nearly stopped with a fast vehicle in the next lane beside them
+##     (the lane drops' "no standstill queues next to fast lanes").
 ##
 ##   var r := TrafficSoakRun.new(index, base_seed)
 ##   r.run_to_end()                 # or r.advance(seconds)
@@ -51,6 +54,12 @@ const PIECE_MARGIN_M := 300.0
 ## The owner's usual speeds (plan D17, WP6.7): the soak reports the bot's time there.
 const FAST_BOT_MIN_KMH := 170.0
 const FAST_BOT_MAX_KMH := 230.0
+## WP6.8 (lane drops, "no standstill queues next to fast lanes"): a vehicle slower than
+## STANDSTILL_KMH with one faster than FAST_BESIDE_KMH in the next lane within
+## BESIDE_M along the road counts once per sample (standstill_beside_fast, reported).
+const STANDSTILL_KMH := 15.0
+const FAST_BESIDE_KMH := 60.0
+const BESIDE_M := 40.0
 
 var index: int
 var seed_value: int
@@ -102,6 +111,8 @@ var closed_area_violations := 0
 var prop_hits := 0
 ## WP6.3: collision pairs within PIECE_MARGIN_M of a live set piece (_at_set_piece).
 var collisions_at_pieces := 0
+## WP6.8: vehicle samples (one per soak_window_check_interval_s) stopped beside a fast lane.
+var standstill_beside_fast := 0
 var _pairs_seen := 0
 var _hits: HitDetection
 var _contact := HitDetection.Contact.new()
@@ -242,9 +253,11 @@ func tick() -> void:
 		trace = sim.state.hash_into(trace)
 		trace = director.opposite.state.hash_into(trace)
 		trace = bot.state.hash_into(trace)
-	if check_windows and time >= _next_window:
+	if time >= _next_window:
 		_next_window += tuning.traffic.soak_window_check_interval_s
-		_check_window()
+		_check_standstill()
+		if check_windows:
+			_check_window()
 	if bot.state.s >= float(leg) * leg_length_m:
 		if leg >= legs:
 			_count_set_pieces()
@@ -306,6 +319,21 @@ func _check_closed_areas() -> void:
 					or w.in_closed_area(inst, ts.s[i], ts.d[i] - hw, ts.d[i] + hw) \
 					or w.in_closed_area(inst, ts.s[i] + hl, ts.d[i] - hw, ts.d[i] + hw):
 				closed_area_violations += 1
+
+
+## WP6.8: vehicles nearly stopped with a fast vehicle beside them (standstill_beside_fast).
+func _check_standstill() -> void:
+	var ts := sim.state
+	var slow := Units.kmh_to_mps(STANDSTILL_KMH)
+	var fast := Units.kmh_to_mps(FAST_BESIDE_KMH)
+	for i in ts.capacity:
+		if ts.active[i] == 0 or ts.v[i] >= slow:
+			continue
+		for j in ts.capacity:
+			if ts.active[j] == 1 and ts.v[j] > fast and absi(ts.lane[j] - ts.lane[i]) == 1 \
+					and absf(ts.s[j] - ts.s[i]) < BESIDE_M:
+				standstill_beside_fast += 1
+				break
 
 
 ## Set pieces spawned since the last call go to the metrics (set_pieces_per_leg).
@@ -387,6 +415,7 @@ func result() -> Dictionary:
 		"decel_violations": c.decel_violations, "brake_flag_violations": c.brake_flag_violations,
 		"offroad_violations": c.offroad_violations, "merges": sim.stat_merges,
 		"closed_area_violations": closed_area_violations, "prop_hits": prop_hits,
+		"standstill_beside_fast": standstill_beside_fast,
 		"min_accel": c.min_accel,
 		"player_contact_ticks": c.player_contacts, "contact_episodes": c.contact_episodes,
 		"rear_end_episodes": c.rear_end_episodes, "rear_end_normal": c.rear_end_normal,

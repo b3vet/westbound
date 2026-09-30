@@ -56,6 +56,8 @@ const ROAD_CLOSURE_TAG := -1
 ## (tunnel squeeze), live at once.
 const MAX_SPEED_ZONES := 8
 const MAX_HEADWAY_ZONES := 4
+## Lane-drop harmonisation zones (WP6.8): one per road lane drop in the synced range.
+const MAX_DROP_ZONES := 8
 
 const _PEND_HAZARD_ON := 1
 const _PEND_HORN := 2
@@ -202,16 +204,57 @@ var _lc_split := PackedInt32Array()    # the move enters a lane split (-1 left /
 var _split := PackedInt32Array()       # riding the lane boundary on this side of `lane` (motorbikes), 0 = no
 var _hard_ok := PackedByteArray()      # set pieces: may brake beyond the clamp (announced >= 300 m ahead)
 var _hold := PackedByteArray()         # set pieces (WP6.3): held out of the mandatory merge
+# WP6.8, per slot, from its last model tick (_drop_tick): merge-zone fractions of its
+# own lane and the lanes left / right of it, its own closure's base urgency and distance,
+# and the speed-matching factor.
+var _cf_own := PackedFloat64Array()
+var _cf_left := PackedFloat64Array()
+var _cf_right := PackedFloat64Array()
+var _cf_base := PackedFloat64Array()
+var _cf_dist := PackedFloat64Array()
+var _match := PackedFloat64Array()
+# WP6.8: this step's zipper candidates (vehicles still in a closing lane, in the last
+# lane_drop_yield_frac of its merge zone), in road order.
+var _cand := PackedInt32Array()
+var _cand_n := 0
 # Lane closures (WP6.2): lane, [s0, s1], tag
 var _cl_lane := PackedInt32Array()
 var _cl_s0 := PackedFloat64Array()
 var _cl_s1 := PackedFloat64Array()
 var _cl_tag := PackedInt32Array()
+var _cl_zone := PackedFloat64Array()   # WP6.8: this closure's merge zone (m)
+var _cl_base := PackedFloat64Array()   # WP6.8: merge urgency at the start of that zone (m/s^2)
 var _cl_n := 0
 var _cl_road_to := -INF
 var _merge_zone: float
 var _merge_urg: float
 var _merge_stop: float
+# Lane drops (WP6.8): harmonisation zones [s0, s1]; lanes >= first lane are the dropping ones.
+var _dz_s0 := PackedFloat64Array()
+var _dz_s1 := PackedFloat64Array()
+var _dz_lane := PackedInt32Array()
+var _dz_n := 0
+var _drop_zone: float
+var _drop_urg_min: float
+var _drop_slow: float
+var _drop_after: float
+var _drop_v_through: float
+var _drop_v_merge: float
+var _yield_range: float
+var _yield_frac: float
+var _yield_decel: float
+var _foll_horizon: float
+var _drop_onset: float
+var _drop_view: float
+var _drop_release: float
+var _drop_floor: float
+var _drop_floor_until: float
+var _drop_narrow_max: float
+var _vmax := 0.0                   # fastest vehicle this step (bounds MOBIL's follower scan)
+var _cl_lo := INF                  # this step: no closure's merge zone starts before here ...
+var _cl_hi := -INF                 # ... and none ends after here
+var _dz_lo := INF                  # this step: no drop zone is in view before here ...
+var _dz_hi := -INF                 # ... or matters after here (release)
 # Set-piece zones (WP6.3): speed limits per lane over [s0, s1], headway scales over [s0, s1].
 var _sz_lane := PackedInt32Array()
 var _sz_s0 := PackedFloat64Array()
@@ -232,6 +275,7 @@ var _n_pending := 0
 
 # Neighbor query results (avoid allocating return tuples)
 var _q_player := false
+var _q_v0 := 0.0                   # _drop_tick: the matched desired speed
 
 
 func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
@@ -300,10 +344,22 @@ func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
 	_split.resize(_cap)
 	_hard_ok.resize(_cap)
 	_hold.resize(_cap)
+	_cf_own.resize(_cap)
+	_cf_left.resize(_cap)
+	_cf_right.resize(_cap)
+	_cf_base.resize(_cap)
+	_cf_dist.resize(_cap)
+	_match.resize(_cap)
+	_cand.resize(_cap)
 	_cl_lane.resize(MAX_LANE_CLOSURES)
 	_cl_s0.resize(MAX_LANE_CLOSURES)
 	_cl_s1.resize(MAX_LANE_CLOSURES)
 	_cl_tag.resize(MAX_LANE_CLOSURES)
+	_cl_zone.resize(MAX_LANE_CLOSURES)
+	_cl_base.resize(MAX_LANE_CLOSURES)
+	_dz_s0.resize(MAX_DROP_ZONES)
+	_dz_s1.resize(MAX_DROP_ZONES)
+	_dz_lane.resize(MAX_DROP_ZONES)
 	_sz_lane.resize(MAX_SPEED_ZONES)
 	_sz_s0.resize(MAX_SPEED_ZONES)
 	_sz_s1.resize(MAX_SPEED_ZONES)
@@ -448,6 +504,12 @@ func spawn(rec: SpawnSource.Record) -> int:
 	_split[i] = 0
 	_hard_ok[i] = 0
 	_hold[i] = 0
+	_cf_own[i] = INF
+	_cf_left[i] = INF
+	_cf_right[i] = INF
+	_cf_base[i] = 0.0
+	_cf_dist[i] = INF
+	_match[i] = 0.0
 
 	_ks[i] = rec.s
 	_kv[i] = rec.v
@@ -641,16 +703,36 @@ func release_scripted(slot: int, v0: float) -> void:
 #   - Nobody changes into (or lane-splits next to) a lane that closes within merge_zone_m.
 # The director feeds the road's closures (sync_road_closures, director rate); Flow keeps
 # spawns out of lanes that close within merge_spawn_clear_m (closure_ahead).
+#
+# Road lane drops (WP6.8, docs/TRAFFIC.md "Lane drops"): the way real traffic takes a
+# lane drop, so that nobody merges from a standstill into fast lanes.
+#   - Early, graded merging: a road drop's merge zone is lane_drop_merge_zone_m (1 km)
+#     long and its urgency starts at lane_drop_urgency_min_mps2; far from the drop the
+#     merge is evaluated at the profile's MOBIL interval, within merge_zone_m every tick.
+#   - Harmonisation: a drop zone caps every lane from the lane_ends sign through the
+#     narrowed section (through lanes lane_drop_through_kmh, the dropping lane
+#     lane_drop_merge_lane_kmh); vehicles brake into it at their comfortable
+#     deceleration, and slower ones speed up to it (speed matching).
+#   - Zipper: a vehicle beside a dropping lane eases off (at most
+#     lane_drop_yield_decel_mps2) for the nearest car still in that lane ahead of it, so
+#     the gap opens (_yield_accel).
+#   - MOBIL's safety check covers every faster follower that could reach the gap
+#     (_eval_move), not just the nearest one.
 
 ## Adds a closure of `lane` over [s0, s1] (`tag` groups closures for removal; the road's
-## use ROAD_CLOSURE_TAG). False when MAX_LANE_CLOSURES are live. Director rate.
-func add_lane_closure(lane: int, s0: float, s1: float, tag: int = 0) -> bool:
+## use ROAD_CLOSURE_TAG). `zone_m` > 0: its merge zone (default merge_zone_m); `base`:
+## the merge urgency where that zone starts (m/s^2). False when MAX_LANE_CLOSURES are
+## live. Director rate.
+func add_lane_closure(lane: int, s0: float, s1: float, tag: int = 0, zone_m: float = 0.0,
+		base: float = 0.0) -> bool:
 	if _cl_n >= MAX_LANE_CLOSURES:
 		return false
 	_cl_lane[_cl_n] = lane
 	_cl_s0[_cl_n] = s0
 	_cl_s1[_cl_n] = s1
 	_cl_tag[_cl_n] = tag
+	_cl_zone[_cl_n] = zone_m if zone_m > 0.0 else _merge_zone
+	_cl_base[_cl_n] = base
 	_cl_n += 1
 	return true
 
@@ -665,7 +747,8 @@ func remove_lane_closures(tag: int) -> void:
 	_cl_n = w
 
 
-## Drops closures that end before `s` (behind the player). Director rate.
+## Drops closures (and lane-drop zones) that end before `s` (behind the player).
+## Director rate.
 func forget_lane_closures_before(s: float) -> void:
 	var w := 0
 	for c in _cl_n:
@@ -673,6 +756,14 @@ func forget_lane_closures_before(s: float) -> void:
 			_keep_closure(c, w)
 			w += 1
 	_cl_n = w
+	w = 0
+	for z in _dz_n:
+		if _dz_s1[z] >= s:
+			_dz_s0[w] = _dz_s0[z]
+			_dz_s1[w] = _dz_s1[z]
+			_dz_lane[w] = _dz_lane[z]
+			w += 1
+	_dz_n = w
 
 
 func lane_closure_count() -> int:
@@ -680,8 +771,12 @@ func lane_closure_count() -> int:
 
 
 ## The road's lane-count changes starting in [s_from, s_to) become closures (the lanes
-## between the old and the new count, over the change's start and taper). Repeated
-## calls never add a change twice. Director rate: allocates.
+## between the old and the new count, over the change's start and taper). A drop (fewer
+## lanes after) gets the long lane-drop merge zone and a harmonisation zone (WP6.8) from
+## its lane_ends sign (lane_drop_slow_zone_m before the taper without one) to
+## lane_drop_slow_after_m past the lanes coming back (_lanes_back_s). Repeated calls
+## never add a change twice.
+## Director rate: allocates.
 func sync_road_closures(s_from: float, s_to: float) -> void:
 	var lo := maxf(s_from, _cl_road_to)
 	if s_to <= lo:
@@ -693,9 +788,99 @@ func sync_road_closures(s_from: float, s_to: float) -> void:
 			continue
 		var before := road.lane_count(f.s_start - road.lane_width(f.s_start))
 		var after := int(f.value)
+		var drop := after < before
 		for l in range(mini(before, after), maxi(before, after)):
-			add_lane_closure(l, f.s_start, f.s_end, ROAD_CLOSURE_TAG)
+			if drop:
+				add_lane_closure(l, f.s_start, f.s_end, ROAD_CLOSURE_TAG, _drop_zone, _drop_urg_min)
+			else:
+				add_lane_closure(l, f.s_start, f.s_end, ROAD_CLOSURE_TAG)
+		if drop:
+			add_lane_drop_zone(after, _lane_ends_sign_s(f.s_start), _lanes_back_s(f.s_end, before) + _drop_after)
 	_cl_road_to = s_to
+
+
+## Where the lanes a drop took away come back after it (the end of the widening's taper
+## back to `lanes` lanes, within lane_drop_narrow_max_m), or `s_taper_end` when they do
+## not: the harmonisation holds through the narrowed section (a tunnel's two lanes), so
+## its traffic runs at the harmonised speeds instead of dropping back to trucks' and
+## cruisers' 80-100 km/h in two lanes (a slow wall the player cannot pass at 100 km/h).
+## Director rate: allocates.
+func _lanes_back_s(s_taper_end: float, lanes: int) -> float:
+	var found: Array[RoadFeature] = []
+	road.features_in(s_taper_end, s_taper_end + _drop_narrow_max, found)
+	for f in found:
+		if f.kind == RoadFeature.Kind.LANE_COUNT_CHANGE and f.s_start >= s_taper_end and int(f.value) >= lanes:
+			return f.s_end
+	return s_taper_end
+
+
+## Where the lane_ends sign of a drop starting at `s_drop` stands (the road's SIGN
+## feature), or lane_drop_slow_zone_m before the drop without one. Director rate.
+func _lane_ends_sign_s(s_drop: float) -> float:
+	var signs: Array[RoadFeature] = []
+	road.features_in(s_drop - 2.0 * _drop_slow, s_drop, signs)
+	var best := s_drop - _drop_slow
+	for f in signs:
+		if f.kind == RoadFeature.Kind.SIGN and f.tag == ProceduralRoadPath.SIGN_LANE_ENDS and f.s_start <= s_drop \
+				and absf(f.s_start + f.value - s_drop) < 1.0:
+			best = f.s_start
+	return best
+
+
+## Lane-drop harmonisation zone (WP6.8) over [s0, s1] (the road's: from the lane_ends
+## sign through the narrowed section to lane_drop_slow_after_m past the lanes coming
+## back): lanes below `first_lane` are
+## capped at lane_drop_through_kmh, lanes from it on (the dropping ones) at
+## lane_drop_merge_lane_kmh. sync_road_closures adds the road's; tests and the sandbox
+## may add their own. False when MAX_DROP_ZONES are live. Director rate.
+func add_lane_drop_zone(first_lane: int, s0: float, s1: float) -> bool:
+	if _dz_n >= MAX_DROP_ZONES:
+		return false
+	_dz_lane[_dz_n] = first_lane
+	_dz_s0[_dz_n] = s0
+	_dz_s1[_dz_n] = s1
+	_dz_n += 1
+	return true
+
+
+func lane_drop_zone_count() -> int:
+	return _dz_n
+
+
+## Start and end of lane-drop zone z (tests, sandbox).
+func lane_drop_zone_s0(z: int) -> float:
+	return _dz_s0[z]
+
+
+func lane_drop_zone_s1(z: int) -> float:
+	return _dz_s1[z]
+
+
+## The harmonised speed limit for a vehicle of profile p at `front` in `lane` (like
+## speed_limit_at: the zone's cap inside it, the comfortable braking envelope before it,
+## INF with none within lane_drop_view_m). Allocation-free.
+func lane_drop_limit_at(lane: int, front: float, p: int) -> float:
+	var lim := INF
+	for z in _dz_n:
+		if front > _dz_s1[z]:
+			continue
+		var vz := _drop_v_merge if lane >= _dz_lane[z] else _drop_v_through
+		var ahead := _dz_s0[z] - front
+		if ahead <= 0.0:
+			lim = minf(lim, vz)
+		elif ahead < _drop_view:
+			lim = minf(lim, sqrt(vz * vz + 2.0 * _pb[p] * ahead))
+	return lim
+
+
+## The fraction of its merge zone left before the next closure of `lane` ahead of s
+## (0 at or inside the closure, >= 1 before its zone), INF with none. Allocation-free.
+func merge_zone_frac(lane: int, s: float) -> float:
+	var best := INF
+	for c in _cl_n:
+		if _cl_lane[c] == lane and _cl_s1[c] >= s:
+			best = minf(best, maxf(_cl_s0[c] - s, 0.0) / _cl_zone[c])
+	return best
 
 
 ## Distance from s to the start of the next closure of `lane` still ahead of s (0 when
@@ -708,9 +893,9 @@ func closure_ahead(lane: int, s: float) -> float:
 	return best
 
 
-## Lane t closes within merge_zone_m ahead of vehicle i's front (or i is inside the closure).
+## Lane t closes within its merge zone ahead of vehicle i's front (or i is inside the closure).
 func _closes_soon(t: int, i: int) -> bool:
-	return closure_ahead(t, _ks[i] + _khl[i]) < _merge_zone
+	return merge_zone_frac(t, _ks[i] + _khl[i]) < 1.0
 
 
 func _keep_closure(from: int, to: int) -> void:
@@ -718,6 +903,8 @@ func _keep_closure(from: int, to: int) -> void:
 	_cl_s0[to] = _cl_s0[from]
 	_cl_s1[to] = _cl_s1[from]
 	_cl_tag[to] = _cl_tag[from]
+	_cl_zone[to] = _cl_zone[from]
+	_cl_base[to] = _cl_base[from]
 
 
 ## IDM for a standing obstacle merge_stop_margin_m before the closure of vehicle i's
@@ -741,10 +928,14 @@ func _consider_merge(i: int) -> void:
 		_consider_split_exit(i)
 		return
 	var cur := state.lane[i]
-	var dist := closure_ahead(cur, _ks[i] + _khl[i])
-	var urgency := _merge_urg * clampf(1.0 - dist / _merge_zone, 0.0, 1.0)
-	var gl := _eval_target(i, cur - 1, true) + urgency
-	var gr := _eval_target(i, cur + 1, true) + urgency
+	var base := _cf_base[i]   # (_drop_tick, this model tick)
+	var urgency := base + (_merge_urg - base) * clampf(1.0 - _cf_own[i], 0.0, 1.0)
+	# WP6.8: a road drop (a closure with a base urgency) is left on the car's own
+	# advantage plus the urgency, like a driver reading the lane_ends sign: no politeness
+	# or keep-right threshold holds it in a lane that ends (safety and no-ambush as always).
+	var own := base > 0.0
+	var gl := _eval_target(i, cur - 1, true, own) + urgency
+	var gr := _eval_target(i, cur + 1, true, own) + urgency
 	var t := -1
 	if gl > 0.0 and gl >= gr:
 		t = cur - 1
@@ -875,9 +1066,25 @@ func headway_scale_at(s: float) -> float:
 ## IDM free-road acceleration toward the lane's speed limit and, before a zone, at
 ## least the constant deceleration that brings the vehicle to the zone's speed at its
 ## start (INF: no zone ahead). IDM alone lags a falling limit by about b v / (delta a):
-## a truck (a 0.6, b 1.5) would come into the zone far above its speed.
+## a truck (a 0.6, b 1.5) would come into the zone far above its speed. Set-piece speed
+## zones and lane-drop zones (WP6.8) alike, for vehicle i in `lane` (MOBIL's target).
 func _speed_zone_accel(lane: int, i: int, vi: float, v0: float, p: int) -> float:
 	var front := _ks[i] + _khl[i]
+	var a := _set_zone_accel(lane, front, vi, v0, p) if _sz_n > 0 else INF
+	if _dz_n == 0 or front <= _dz_lo or front >= _dz_hi:
+		return a
+	var lim := lane_drop_limit_at(lane, front, p)
+	if lim < v0:
+		a = minf(a, Idm.free_accel(vi, lim, _pa[p], _pdl[p]))
+	for z in _dz_n:
+		var vz := _drop_v_merge if lane >= _dz_lane[z] else _drop_v_through
+		if vi > vz and front <= _dz_s1[z]:
+			a = minf(a, _drop_brake(_dz_s0[z] - front, vz, vi, p))
+	return a
+
+
+## The set-piece speed zones' part of _speed_zone_accel (WP6.3).
+func _set_zone_accel(lane: int, front: float, vi: float, v0: float, p: int) -> float:
 	var lim := speed_limit_at(lane, front, p)
 	if lim >= v0:
 		return INF
@@ -889,6 +1096,227 @@ func _speed_zone_accel(lane: int, i: int, vi: float, v0: float, p: int) -> float
 		if ahead > 0.0 and ahead < _look:
 			a = minf(a, (_sz_v[z] * _sz_v[z] - vi * vi) / (2.0 * ahead))
 	return a
+
+
+## Lane-drop zones (WP6.8): the constant deceleration that brings a vehicle at vi down
+## to vz `ahead` metres on, eased in (brake lights ripple instead of every fast car
+## braking hard the moment the zone comes into view): none while it needs less than
+## lane_drop_brake_onset_frac of the profile's comfortable b, all of it from b on, and
+## never more than b (a vehicle that comes into view too fast to make it, or a hair above
+## vz in the last centimetres, where the constant deceleration blows up, arrives a little
+## fast and IDM's free-road term inside the zone takes it down). INF outside
+## (0, lane_drop_view_m).
+func _drop_brake(ahead: float, vz: float, vi: float, p: int) -> float:
+	if ahead <= 0.0 or ahead >= _drop_view:
+		return INF
+	var req := (vz * vz - vi * vi) / (2.0 * ahead)
+	return maxf(req * clampf((-req / _pb[p] - _drop_onset) / (1.0 - _drop_onset), 0.0, 1.0), -_pb[p])
+
+
+## WP6.8, once per model tick of vehicle i (front at `front`, speed vi, desired speed v0,
+## profile p), in one pass each over the closures and the drop zones; vehicles outside
+## every closure's merge zone and every drop zone's reach skip the loops. Returns the
+## drop zones' acceleration limit (the envelope and _drop_brake, as _speed_zone_accel)
+## and leaves the matched desired speed in _q_v0. Caches per slot, for _step_accel,
+## _step_lateral and MOBIL: the merge-zone fractions of its own lane and the lanes
+## beside it, its own closure's base urgency and distance, the speed-matching factor.
+## Allocation-free.
+##
+## Speed matching: how much of the way from its own desired speed up to
+## lane_drop_merge_lane_kmh a vehicle drives (1: all of it; 0: none). All of it inside a
+## lane-drop zone and, before it, while still in a lane that a road drop ends within its
+## merge zone: slow trucks and cruisers match the harmonised through lanes, so a merge
+## needs an ordinary gap instead of one sized for a 30 km/h speed difference. Past the
+## zone it fades out over lane_drop_release_m (no brake lights for giving the speed
+## back). Scripted and lane-splitting vehicles: 0.
+func _drop_tick(i: int, front: float, vi: float, v0: float, p: int) -> float:
+	var own := INF
+	var left := INF
+	var right := INF
+	var base := 0.0
+	var dist := INF
+	var lane := state.lane[i]
+	if _cl_n > 0 and front > _cl_lo and front <= _cl_hi:
+		for c in _cl_n:
+			if _cl_s1[c] < front:
+				continue
+			var dl := _cl_lane[c] - lane
+			if dl < -1 or dl > 1:
+				continue
+			var d := maxf(_cl_s0[c] - front, 0.0)
+			var u := d / _cl_zone[c]
+			if dl == 0:
+				if u < own:
+					own = u
+					base = _cl_base[c]
+					dist = d
+			elif dl < 0:
+				left = minf(left, u)
+			else:
+				right = minf(right, u)
+	_cf_own[i] = own
+	_cf_left[i] = left
+	_cf_right[i] = right
+	_cf_base[i] = base
+	_cf_dist[i] = dist
+	var m := 1.0 if own < 1.0 and base > 0.0 else 0.0
+	var acc := INF
+	var lim := INF
+	if _dz_n > 0 and front > _dz_lo and front < _dz_hi:
+		for z in _dz_n:
+			var s1z := _dz_s1[z]
+			if front > s1z:
+				m = maxf(m, 1.0 - (front - s1z) / _drop_release)
+				continue
+			var vz := _drop_v_merge if lane >= _dz_lane[z] else _drop_v_through
+			var ahead := _dz_s0[z] - front
+			if ahead <= 0.0:
+				lim = minf(lim, vz)
+				m = 1.0
+			elif ahead < _drop_view:
+				lim = minf(lim, sqrt(vz * vz + 2.0 * _pb[p] * ahead))
+				if vi > vz:
+					acc = minf(acc, _drop_brake(ahead, vz, vi, p))
+	if (state.flags[i] & TrafficState.FLAG_SCRIPTED) != 0 or _split[i] != 0:
+		m = 0.0
+	_match[i] = m
+	var v0e := v0 + (_drop_v_merge - v0) * m if v0 < _drop_v_merge else v0
+	_q_v0 = v0e
+	if lim < v0e:
+		acc = minf(acc, Idm.free_accel(vi, lim, _pa[p], _pdl[p]))
+	return acc
+
+
+## Vehicle i is out of reach of every closure and drop zone (see _drop_tick).
+func _clear_drop_cache(i: int) -> void:
+	_cf_own[i] = INF
+	_cf_left[i] = INF
+	_cf_right[i] = INF
+	_cf_base[i] = 0.0
+	_cf_dist[i] = INF
+	_match[i] = 0.0
+
+
+## This step's reach of the closures and drop zones (_cl_lo.._cl_hi, _dz_lo.._dz_hi),
+## so vehicles far from all of them skip _drop_tick's loops. Allocation-free.
+func _update_drop_reach() -> void:
+	_cl_lo = INF
+	_cl_hi = -INF
+	for c in _cl_n:
+		_cl_lo = minf(_cl_lo, _cl_s0[c] - _cl_zone[c])
+		_cl_hi = maxf(_cl_hi, _cl_s1[c])
+	_dz_lo = INF
+	_dz_hi = -INF
+	for z in _dz_n:
+		_dz_lo = minf(_dz_lo, _dz_s0[z] - _drop_view)
+		_dz_hi = maxf(_dz_hi, _dz_s1[z] + _drop_release)
+
+
+## WP6.8 zipper: vehicle i (rank k) beside a lane that closes within its merge zone
+## eases off for the nearest car still in that lane ahead of it (within
+## lane_drop_yield_range_m, its closure within lane_drop_yield_frac of its zone, not held,
+## not splitting, not signaling away from i's lane): IDM behind it, but never braking
+## harder than lane_drop_yield_decel_mps2 (or the profile's comfortable b, if lower), and
+## only when falling back behind it at that rate is possible at all (dv^2 / 2(gap - s0)
+## within it); otherwise i passes and the car merges behind. Beside it (its centre ahead
+## of i's) and not slower, i always eases off. A car already MOVING is in i's lane and
+## the leader search has it. INF: no yield. Allocation-free.
+func _yield_accel(i: int, k: int, vi: float, v0: float, p: int, hw_t: float) -> float:
+	if _cand_n == 0 or state.lc_state[i] == _MOVING or _cf_own[i] < 1.0:
+		return INF   # (a car in a closing lane itself has to leave it)
+	var cur := state.lane[i]
+	var si := _ks[i]
+	for c in _cand_n:
+		var j := _cand[c]
+		if _rank[j] <= k:
+			continue
+		if _ks[j] - si > _yield_range:
+			break
+		if absi(state.lane[j] - cur) != 1 or (state.lc_state[j] == _SIGNALING and state.target_lane[j] != cur):
+			continue
+		var gap := _ks[j] - si - _khl[j] - _khl[i]
+		var dv := vi - _kv[j]
+		var soft := minf(_yield_decel, _pb[p])
+		if dv > 0.0 and (gap <= _ps0[p] or dv * dv > 2.0 * soft * (gap - _ps0[p])):
+			return INF   # faster and too close to fall back comfortably: it merges behind i
+		var ay := Idm.accel(vi, v0, gap, dv, _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor)
+		return maxf(ay, -soft)
+	return INF
+
+
+## WP6.8: a lane drop's merge zone reaching back over a set piece's slow zone (a toll's
+## booth lane just before a tunnel): its slow traffic keeps its lane (kept_by_zone) until
+## it is back up to lane_drop_merge_floor_kmh (or within lane_drop_merge_floor_until_m of
+## the closure), so booth traffic does not pull out into the express lane at booth speed,
+## and nobody yields to it before that. Allocation-free.
+func _zone_held(i: int) -> bool:
+	return _sz_n > 0 and _kv[i] < _drop_floor and _cf_dist[i] > _drop_floor_until and kept_by_zone(i)
+
+
+## WP6.8: this step's zipper candidates, in road order: vehicles (not the player) still
+## in a lane that closes, in the last lane_drop_yield_frac of its merge zone (from their
+## last model tick), not moving out yet, not held, not lane splitting, not hit.
+## Allocation-free.
+func _collect_yield_candidates() -> void:
+	for k in _n:
+		var j := _ord[k]
+		if j == _P or _cf_own[j] >= _yield_frac or state.lc_state[j] == _MOVING or _hold[j] == 1 \
+				or _split[j] != 0 or (state.flags[j] & TrafficState.FLAG_HIT) != 0 or _zone_held(j):
+			continue
+		_cand[_cand_n] = j
+		_cand_n += 1
+
+
+## WP6.8 zipper, the merging side: a vehicle still in a lane that a road drop ends
+## within lane_drop_yield_frac of its merge zone (not yet moving out) lines up behind
+## the nearest vehicle ahead of it in the lane it merges into: IDM behind it, braking no
+## harder than lane_drop_yield_decel_mps2 (or its comfortable b). A vehicle beside it in
+## that lane (overlapping along the road) and at least as fast has the right of way: it
+## drops back at that rate until it is behind it (one slower than it is passed). So a car
+## riding beside the target lane's traffic falls back into the gap behind it instead of
+## running to the end of its lane (the car beside does not yield to it: _yield_accel).
+## Not below lane_drop_merge_floor_kmh while more than lane_drop_merge_floor_until_m
+## from the closure: a merging bus crawling behind car after car would be a slow wall;
+## slower than that, the through lane's yield opens the gap. INF: nothing to line up
+## behind. Allocation-free.
+func _merge_gap_accel(i: int, k: int, vi: float, v0: float, p: int, hw_t: float) -> float:
+	var st := state.lc_state[i]
+	if st == _MOVING or _cf_own[i] >= _yield_frac or _cf_base[i] <= 0.0 \
+			or (vi <= _drop_floor and _cf_dist[i] > _drop_floor_until) or _zone_held(i):
+		return INF
+	var cur := state.lane[i]
+	var t := state.target_lane[i]
+	if st != _SIGNALING:
+		t = cur - 1
+		if t < 0 or _cf_left[i] < 1.0:
+			t = cur + 1
+			if t >= road.lane_count(_ks[i]) or _cf_right[i] < 1.0:
+				return INF
+	var tc := _lane_d(t)
+	var half := _lw * 0.5
+	var si := _ks[i]
+	var soft := minf(_yield_decel, _pb[p])
+	var kb := k - 1
+	while kb >= 0:
+		var j := _ord[kb]
+		kb -= 1
+		if si - _ks[j] >= _khl[i] + _khl[j]:
+			break
+		if _klo[j] < tc + half and _khi[j] > tc - half and _kv[j] >= vi:
+			return -soft   # beside it, and not slower: fall back behind it
+	var kk := k + 1
+	while kk < _n:
+		var j := _ord[kk]
+		kk += 1
+		if _ks[j] - si > _yield_range:
+			break
+		if _klo[j] < tc + half and _khi[j] > tc - half:
+			var gap := _ks[j] - si - _khl[j] - _khl[i]
+			if gap <= 0.0 and _kv[j] < vi:
+				continue   # a slower one beside it: passed
+			var ay := Idm.accel(vi, v0, gap, vi - _kv[j], _pa[p], _pb[p], hw_t, _ps0[p], _pdl[p], _gap_floor)
+			return maxf(ay, -soft)
+	return INF
 
 
 # ---------------------------------------------------------------- Tick
@@ -904,6 +1332,7 @@ func step(dt: float, player: VehicleState, _player_params: VehicleParams, out_ev
 	_lw = road.lane_width(_ps)
 	# 1. Schedule (near / far) and integrate every vehicle over dt with the acceleration
 	#    decided last model tick (far vehicles hold theirs between 30 Hz updates).
+	var vmax := 0.0
 	for k in _n:
 		var i := _ord[k]
 		if i == _P:
@@ -942,14 +1371,21 @@ func step(dt: float, player: VehicleState, _player_params: VehicleParams, out_ev
 		_kv[i] = nv
 		state.s[i] = s
 		state.v[i] = nv
+		vmax = maxf(vmax, nv)
 		if due == 0:
 			var vl := state.v_lat[i]
 			if vl != 0.0:
 				state.d[i] += vl * dt
 				_refresh_interval(i)
+	_vmax = vmax
+	if _cl_n > 0 or _dz_n > 0:
+		_update_drop_reach()
 	_sort()
 	# 2. Model accelerations of the due vehicles, everyone (the player too) at the same
 	#    instant: leaders, IDM, reactions, the clamp and the brake lights.
+	_cand_n = 0
+	if _cl_n > 0:
+		_collect_yield_candidates()
 	for k in _n:
 		var i := _ord[k]
 		if i != _P and _due[i] == 1:
@@ -971,6 +1407,15 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 	if _split[i] != 0:
 		v0 = minf(v0, _split_v0)
 		margin = _split_clear
+	var p := state.profile_id[i]
+	var front := si + _khl[i]
+	var drop_a := INF
+	if _cl_n > 0 or _dz_n > 0:
+		if (front > _cl_lo and front <= _cl_hi) or (front > _dz_lo and front < _dz_hi):
+			drop_a = _drop_tick(i, front, vi, v0, p)   # WP6.8: closures, drop zones, speed matching
+			v0 = _q_v0
+		elif _match[i] != 0.0 or _cf_own[i] != INF or _cf_left[i] != INF or _cf_right[i] != INF:
+			_clear_drop_cache(i)
 	var lo := _klo[i] - margin
 	var hi := _khi[i] + margin
 	var lead := -1
@@ -983,7 +1428,6 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 			lead = j
 			break
 		kk += 1
-	var p := state.profile_id[i]
 	var a: float
 	var gap := INF
 	var hw_t := _pT[p] if _hz_n == 0 else _pT[p] * headway_scale_at(si)   # WP6.3 headway zones
@@ -995,7 +1439,13 @@ func _step_accel(i: int, k: int, out: ScoreEventBuffer) -> void:
 	if _cl_n > 0:
 		a = minf(a, _closure_wall_accel(i, vi, v0, p))
 	if _sz_n > 0:
-		a = minf(a, _speed_zone_accel(state.lane[i], i, vi, v0, p))   # WP6.3 speed zones
+		a = minf(a, _set_zone_accel(state.lane[i], front, vi, v0, p))   # WP6.3 speed zones
+	a = minf(a, drop_a)   # WP6.8 drop zones
+	if _cl_n > 0 and (state.flags[i] & (TrafficState.FLAG_SCRIPTED | TrafficState.FLAG_HIT)) == 0:
+		if _cf_left[i] < 1.0 or _cf_right[i] < 1.0:
+			a = minf(a, _yield_accel(i, k, vi, v0, p, hw_t))   # WP6.8 zipper: the through lane
+		if _cf_own[i] < _yield_frac:
+			a = minf(a, _merge_gap_accel(i, k, vi, v0, p, hw_t))   # WP6.8 zipper: the merging car
 	_lead[i] = lead
 	_lead_gap[i] = gap
 	_a_raw[i] = a
@@ -1042,13 +1492,17 @@ func _step_lateral(i: int, out: ScoreEventBuffer) -> void:
 		_tick_signaling(i, mdt)
 	elif st == _MOVING:
 		_tick_moving(i, mdt)
-	elif (f & TrafficState.FLAG_HIT) == 0 and _cl_n > 0 and _hold[i] == 0 \
-			and closure_ahead(state.lane[i], _ks[i] + _khl[i]) < _merge_zone:
-		# Mandatory merge: every model tick, or a MOBIL interval after a cancelled one.
+	elif (f & TrafficState.FLAG_HIT) == 0 and _cl_n > 0 and _hold[i] == 0 and _cf_own[i] < 1.0 \
+			and not _zone_held(i):
+		# Mandatory merge: every model tick within merge_zone_m of the closure, or a
+		# MOBIL interval after a cancelled one; further out (a road drop's long zone,
+		# WP6.8) at the profile's MOBIL interval.
 		var mt := minf(_mobil_t[i], _peval[state.profile_id[i]]) - mdt
-		_mobil_t[i] = maxf(mt, 0.0)
 		if mt <= 0.0:
+			_mobil_t[i] = 0.0 if _cf_dist[i] < _merge_zone else _peval[state.profile_id[i]]
 			_consider_merge(i)
+		else:
+			_mobil_t[i] = mt
 	elif (f & (TrafficState.FLAG_HIT | TrafficState.FLAG_SCRIPTED)) == 0:
 		var mt := _mobil_t[i] - mdt
 		if mt <= 0.0:
@@ -1297,9 +1751,10 @@ func _cancel(i: int) -> void:
 
 ## MOBIL for a move of vehicle i into lane t. Returns -INF when the move is not allowed
 ## (lane, keep-right, overlap, safety or no-ambush), else the incentive minus the
-## threshold (> 0 = MOBIL accepts), or 0 when with_incentive is false. Sets _q_player
-## when the refusal involves the player.
-func _eval_target(i: int, t: int, with_incentive: bool) -> float:
+## threshold (> 0 = MOBIL accepts), or 0 when with_incentive is false. `own_only` (a
+## mandatory merge out of a road drop, WP6.8): the car's own advantage a~c - ac instead.
+## Sets _q_player when the refusal involves the player.
+func _eval_target(i: int, t: int, with_incentive: bool, own_only: bool = false) -> float:
 	_q_player = false
 	var lanes := road.lane_count(_ks[i])
 	if t < 0 or t >= lanes:
@@ -1309,12 +1764,12 @@ func _eval_target(i: int, t: int, with_incentive: bool) -> float:
 	var krl := _pkrl[state.profile_id[i]]
 	if krl > 0 and t < state.lane[i] and t < lanes - krl:
 		return -INF
-	return _eval_move(i, _lane_d(t), t, with_incentive)
+	return _eval_move(i, _lane_d(t), t, with_incentive, own_only)
 
 
 ## Safety (and optionally MOBIL's incentive) of a lateral move of vehicle i to tc,
 ## ending in lane t. Same result convention as _eval_target.
-func _eval_move(i: int, tc: float, t: int, with_incentive: bool) -> float:
+func _eval_move(i: int, tc: float, t: int, with_incentive: bool, own_only: bool = false) -> float:
 	_q_player = false
 	var si := _ks[i]
 	var cur := state.lane[i]
@@ -1346,7 +1801,10 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool) -> float:
 			foll = j
 			break
 		kk -= 1
+	var k_foll := kk
 	var v0 := state.v0[i]
+	if v0 < _drop_v_merge and (_cl_n > 0 or _dz_n > 0) and _split[i] == 0:
+		v0 += (_drop_v_merge - v0) * _match[i]   # WP6.8: as in _step_accel (its last model tick)
 	var bsafe := _pbsafe[p]
 	var a_c_new: float
 	if lead >= 0:
@@ -1360,8 +1818,8 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool) -> float:
 			return -INF
 	else:
 		a_c_new = Idm.free_accel(vi, v0, _pa[p], _pdl[p])
-	if _sz_n > 0:
-		a_c_new = minf(a_c_new, _speed_zone_accel(t, i, vi, v0, p))   # WP6.3: a slow zone in the target lane
+	if _sz_n > 0 or _dz_n > 0:
+		a_c_new = minf(a_c_new, _speed_zone_accel(t, i, vi, v0, p))   # WP6.3 / WP6.8: a slow zone in the target lane
 	var a_n_new := 0.0
 	if foll >= 0:
 		var gf := si - _ks[foll] - _khl[i] - _khl[foll]
@@ -1373,12 +1831,35 @@ func _eval_move(i: int, tc: float, t: int, with_incentive: bool) -> float:
 		if not Mobil.is_safe(a_n_new, b):
 			_q_player = foll == _P
 			return -INF
+		# WP6.8: every faster vehicle behind it on the target path that would reach the
+		# gap within mobil_follower_horizon_s must be safe too: a lane-splitting bike, a
+		# car changing lanes or the player (none of which shields the lane behind it the
+		# way a car in it does: that one has to brake for it first) must not hide a fast
+		# car behind it.
+		var reach := (maxf(_vmax, _kv[_P]) - vi) * _foll_horizon
+		kk = k_foll - 1
+		if foll != _P and _split[foll] == 0 and state.lc_state[foll] == _NONE:
+			kk = -1
+		while kk >= 0:
+			var j := _ord[kk]
+			kk -= 1
+			var gj := si - _ks[j] - _khl[i] - _khl[j]
+			if gj > reach or si - _ks[j] > _look:
+				break
+			var vj := _kv[j]
+			if vj <= vi or gj > (vj - vi) * _foll_horizon or not (_kclo[j] < hi and _kchi[j] > lo):
+				continue
+			if not Mobil.is_safe(_follower_accel(j, gj, vj - vi), Mobil.b_safe_for(bsafe, j == _P, _player_b_safe)):
+				_q_player = j == _P
+				return -INF
 	# Fairness rule 2: no ambush.
 	if NoAmbush.violates(si, vi, state.length[i], wi, tc, _ps, _pv, _pd, _pvl, _plen, _pw, _window, _margin):
 		_q_player = true
 		return -INF
 	if not with_incentive:
 		return 0.0
+	if own_only:
+		return a_c_new - _a_raw[i]
 	var a_n := 0.0
 	if foll >= 0:
 		if lead >= 0:
@@ -1562,3 +2043,19 @@ func _cache_tuning() -> void:
 	_merge_zone = t.merge_zone_m
 	_merge_urg = t.merge_urgency_mps2
 	_merge_stop = t.merge_stop_margin_m
+	_drop_zone = t.lane_drop_merge_zone_m
+	_drop_urg_min = t.lane_drop_urgency_min_mps2
+	_drop_slow = t.lane_drop_slow_zone_m
+	_drop_after = t.lane_drop_slow_after_m
+	_drop_v_through = Units.kmh_to_mps(t.lane_drop_through_kmh)
+	_drop_v_merge = Units.kmh_to_mps(t.lane_drop_merge_lane_kmh)
+	_yield_range = t.lane_drop_yield_range_m
+	_yield_frac = t.lane_drop_yield_frac
+	_yield_decel = t.lane_drop_yield_decel_mps2
+	_foll_horizon = t.mobil_follower_horizon_s
+	_drop_onset = t.lane_drop_brake_onset_frac
+	_drop_view = t.lane_drop_view_m
+	_drop_release = t.lane_drop_release_m
+	_drop_floor = Units.kmh_to_mps(t.lane_drop_merge_floor_kmh)
+	_drop_floor_until = t.lane_drop_merge_floor_until_m
+	_drop_narrow_max = t.lane_drop_narrow_max_m
