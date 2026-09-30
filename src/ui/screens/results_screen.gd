@@ -409,9 +409,9 @@ func xp_note_text(max_w: float) -> String:
 	var names := PackedStringArray()
 	for id: Variant in ids:
 		names.append(Garage.catalog().item_name(str(id)))
-	var full := head + TEXT_UNLOCKED % ", ".join(names)
-	if max_w < 0.0 or style == null or HudDraw.text_width(style.label, full, xp_note.font_px()) <= max_w:
-		return full
+	var line := head + TEXT_UNLOCKED % ", ".join(names)
+	if max_w < 0.0 or style == null or HudDraw.text_width(style.label, line, xp_note.font_px()) <= max_w:
+		return line
 	return head + TEXT_UNLOCKED_MANY % ids.size()
 
 
