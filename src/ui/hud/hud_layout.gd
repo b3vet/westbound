@@ -88,7 +88,6 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	thumb_zones = thumb_zone_rects(hud, full, px_per_cm)
 	var m := hud.edge_margin_px
 	var gap := hud.spacing_grid_px
-	var cx := safe.get_center().x
 	var top := safe.position.y + m
 
 	score = Rect2(Vector2(safe.position.x + m, top), hud.score_size_px * ts)
@@ -109,14 +108,17 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 			Vector2(lives_w, button.y + float(hud.font_label_px) * ts + gap))
 
 	var sun_size := hud.sun_bar_size_px * ts
-	sun = Rect2(Vector2(cx - sun_size.x * 0.5, top), sun_size)
+	sun = Rect2(Vector2(_top_centre_x(sun_size.x, top, top + sun_size.y), top), sun_size)
 	var row := hud.chain_row_size_px * ts
-	chain = Rect2(Vector2(cx - row.x * 0.5, sun.end.y + gap), row)
-	stack = Rect2(Vector2(chain.position.x, chain.end.y + gap),
-			Vector2(row.x, hud.event_line_height_px * ts * float(hud.event_stack_lines)))
+	var chain_y := sun.end.y + gap
+	var stack_h := hud.event_line_height_px * ts * float(hud.event_stack_lines)
+	var row_x := _top_centre_x(row.x, chain_y, chain_y + row.y + gap + stack_h)
+	chain = Rect2(Vector2(row_x, chain_y), row)
+	stack = Rect2(Vector2(row_x, chain.end.y + gap), Vector2(row.x, stack_h))
 	toast = Rect2(stack.position, Vector2(stack.size.x, hud.leg_toast_size_px.y * ts))
 	var jw := minf(hud.journey_toast_size_px.x * ts, safe.size.x - m * 2.0)
-	journey = Rect2(Vector2(cx - jw * 0.5, toast.position.y), Vector2(jw, hud.journey_toast_size_px.y * ts))
+	journey = Rect2(Vector2(_top_centre_x(jw, 0.0, 0.0, false), toast.position.y),
+			Vector2(jw, hud.journey_toast_size_px.y * ts))
 
 	_place_cluster()
 	objective = _place_objective(chip)
@@ -152,7 +154,10 @@ func thumb_areas() -> Array[Rect2]:
 
 ## Plan D14: the thumb zones, the canvas's lower-left and lower-right corners, where
 ## the thumbs rest and drag. They start at the canvas edge, not the safe area's: the
-## thumbs hold the phone's physical edges (a notch inset does not move them).
+## thumbs hold the phone's physical edges (a notch inset does not move them). WP9.7:
+## the drag zone now starts at the safe area's side, but a thumb landing just right of
+## the phone minimum (0.7 cm) and dragging the full max drag (2.5 cm) still stays inside
+## the 3.4 cm zone (tests/input/test_screen_insets.gd).
 static func thumb_zone_rects(hud: HudTuning, full_rect: Rect2, pixels_per_cm: float) -> Array[Rect2]:
 	var z := hud.thumb_zone_size_cm * pixels_per_cm
 	z = Vector2(minf(z.x, full_rect.size.x * 0.5), minf(z.y, full_rect.size.y))
@@ -182,23 +187,12 @@ static func pedal_rects(controls: ControlsLayout) -> Array[Rect2]:
 	return out
 
 
-## The display's safe area (notch, home indicator) in canvas coordinates. Headless
-## and unknown safe areas give the whole canvas.
+## The display's safe area (notch, camera cutout, home indicator) in canvas
+## coordinates: ScreenInsets.canvas_safe_rect (WP9.7: the web shell's insets, rotated
+## with a portrait page, and the phone minimum on the left). Headless and unknown safe
+## areas give the whole canvas.
 static func canvas_safe_rect(full_rect: Rect2) -> Rect2:
-	var win_size := DisplayServer.window_get_size()
-	if DisplayServer.get_name() == "headless" or win_size.x <= 0 or win_size.y <= 0:
-		return full_rect
-	var sa := DisplayServer.get_display_safe_area()
-	if sa.size.x <= 0 or sa.size.y <= 0:
-		return full_rect
-	var win_pos := DisplayServer.window_get_position()
-	var k := full_rect.size / Vector2(win_size)
-	var left := maxf(0.0, float(sa.position.x - win_pos.x)) * k.x
-	var top := maxf(0.0, float(sa.position.y - win_pos.y)) * k.y
-	var right := maxf(0.0, float(win_pos.x + win_size.x - sa.end.x)) * k.x
-	var bottom := maxf(0.0, float(win_pos.y + win_size.y - sa.end.y)) * k.y
-	return Rect2(full_rect.position + Vector2(left, top),
-			full_rect.size - Vector2(left + right, top + bottom))
+	return ScreenInsets.canvas_safe_rect(full_rect)
 
 
 var _objective_left: Rect2 = Rect2()
@@ -239,6 +233,30 @@ func _place_cluster() -> void:
 	speedo = Rect2(Vector2(sx, boost.position.y - gap - sp.y), Vector2(w, sp.y))
 	min_speed = Rect2(Vector2(sx, speedo.position.y - gap - strip), Vector2(w, strip))
 	cluster = min_speed.merge(speedo).merge(boost)
+
+
+## WP9.7: the top-centre readouts (sun bar, chain and stack, the journey banner) are
+## centred over the car (the canvas centre, like the cluster), not the safe area's
+## centre, so a one-sided inset (the camera cutout on the left) does not push them
+## towards the right thumb zone. Inside the safe area's side margins; slid clear
+## (spacing_grid_px) of the corner panels that share their band y0..y1 (`avoid`): the
+## score and the objective chip's left slot, the lives and the buttons. With symmetric
+## insets nothing moves.
+func _top_centre_x(width: float, y0: float, y1: float, avoid: bool = true) -> float:
+	var m := _hud.edge_margin_px
+	var gap := _hud.spacing_grid_px
+	var cx := full.get_center().x
+	var lo := safe.position.x + m
+	var hi := safe.end.x - m
+	if avoid:
+		for r: Rect2 in [score, _objective_left, lives, pause, camera, high_beam]:
+			if r.size.x <= 0.0 or r.end.y + gap <= y0 or r.position.y - gap >= y1:
+				continue
+			if r.get_center().x < cx:
+				lo = maxf(lo, r.end.x + gap)
+			else:
+				hi = minf(hi, r.position.x - gap)
+	return clampf(cx - width * 0.5, lo, maxf(lo, hi - width))
 
 
 ## Left edge of a `width` block centred on the canvas centre, kept in `span` (x..y).

@@ -57,8 +57,8 @@ func _init(hub: PlayerInput) -> void          # update() copies the hub; allocat
 | **Gyro** | Tilt steers. Touch and hold anywhere brakes; swipe up boosts | Brake pedal bottom-left, the gas column bottom-right |
 
 - **Gas column (plan D9).** One thumb per side: the boost cap sits directly on top of the gas pedal, same width, as one joined control (see [Gas and boost](#gas-and-boost-one-thumb)). There is no separate boost button in any layout.
-- **Left-handed** mirrors every rect across the safe area's centre (and the manual drag zone across the screen).
-- **Safe areas.** Pedals sit inside `DisplayServer.get_display_safe_area()`, converted to canvas pixels, with `controls_margin_cm` (0.4) to its edge.
+- **Left-handed** mirrors every rect across the safe area's centre (the manual drag zone is the other half, from the middle to the safe area's side).
+- **Safe areas.** Pedals sit inside the safe area (`ScreenInsets.canvas_safe_rect`: the engine's `DisplayServer.get_display_safe_area()` or, on the web, the page's insets; converted to canvas pixels), with `controls_margin_cm` (0.4) to its edge. WP9.7: on a phone the left inset is at least `min_left_inset_cm` (0.7 cm; with the margins, clear of the Dynamic Island / camera cutout), and the **drag zone spans the safe area's width** (full height): a thumb landing under the cutout does not steer. The drag visual (ring and dot, or the wheel) is drawn shifted sideways just enough to stay inside the safe width (`ControlsLayout.drag_visual_offset`); the anchor and the steering stay under the thumb. The gyro hold zone stays the whole screen. docs/WEB.md → Landscape only (also: the rotated portrait web page and its gyro angle).
 - **Sizes** are physical and multiplied by the `controls_scale` setting (1.0, clamped `controls_scale_min_factor`..`controls_scale_max_factor` = 0.6..1.6):
 
 | Control | Size (cm, at scale 1) | Before WP2.6 |

@@ -18,7 +18,9 @@ extends Node
 ##   background when the main pack leaves the music out), so no track is loaded before
 ##   it exists. Where the tracks are in the main pack this costs nothing.
 ## - Boot marks (WebBoot): "title" on the first frame after the title (Game.MENU) was
-##   drawn, "run" for a direct boot into a run (`?title=0`, `?mode=`).
+##   drawn, "run" for a direct boot into a run (`?title=0`, `?mode=`), and "start" when
+##   the first run starts after the title (WP9.7).
+## - `?probe=ui` (the smoke test's tap on PLAY, WP9.7): adds a WebUiProbe.
 ##
 ## It only listens and reads; it never drives gameplay (Architecture rule 8).
 
@@ -71,6 +73,8 @@ func start() -> void:
 	if music_pack.get_parent() == null:
 		add_child(music_pack)
 	music_pack.loaded.connect(_on_pack_loaded)
+	if WebUiProbe.wanted():
+		add_child(WebUiProbe.new())
 	poll()
 
 
@@ -146,9 +150,13 @@ func _process(dt: float) -> void:
 
 
 func _boot_marks() -> void:
-	if WebBoot.is_marked(WebBoot.TITLE) or WebBoot.is_marked(WebBoot.RUN) or not wanted():
+	if not wanted() or WebBoot.is_marked(WebBoot.RUN) or WebBoot.is_marked(WebBoot.START):
 		return
 	var st := Game.state
+	if WebBoot.is_marked(WebBoot.TITLE):
+		if st == Game.COUNTDOWN or st == Game.RUNNING:
+			WebBoot.mark(WebBoot.START)
+		return
 	if st == Game.MENU:
 		_menu_frames += 1
 		if _menu_frames >= 1:   # the title's first frame has been drawn

@@ -18,10 +18,19 @@ extends GravitySource
 ##   runs requestPermission() inside the browser's own gesture dispatch.
 ## - Browsers disagree on the sign of accelerationIncludingGravity, so sign_known()
 ##   is false and GyroControl fixes it at calibration.
+## - WP9.7: when the custom shell rotates a portrait page to landscape (WebLayout.
+##   rotated(): the canvas turned 90° clockwise, the phone's top on the player's left),
+##   the game's screen sits another 90° from the page's, so screen_rotation_deg() adds
+##   90 to the page's angle (as cool_drive does): a portrait-locked phone (angle 0)
+##   then reads like landscape with its top on the left (90), and a page at 180 like
+##   the other landscape (270).
 ##
 ## Off the web every method is inert (JavaScriptBridge returns null).
 
 const JS_NAME := "wbMotion"
+## The shell's rotation of a portrait page (clockwise), and a full turn, in degrees.
+const QUARTER_TURN_DEG := 90
+const FULL_TURN_DEG := 360
 ## Installed once per page (global execution context). ES5 so every browser parses it.
 const JS_SOURCE := """
 (function () {
@@ -87,7 +96,13 @@ func read_gravity() -> Vector3:
 func screen_rotation_deg() -> int:
 	if not _ensure():
 		return 0
-	return int(_js.get("angle"))
+	return game_rotation_deg(int(_js.get("angle")), WebLayout.rotated())
+
+
+## The game screen's rotation from the device's natural orientation: the page's
+## (screen.orientation.angle) plus the shell's quarter turn when it rotates the page.
+static func game_rotation_deg(page_angle_deg: int, rotated: bool) -> int:
+	return posmod(page_angle_deg + (QUARTER_TURN_DEG if rotated else 0), FULL_TURN_DEG)
 
 
 func sign_known() -> bool:

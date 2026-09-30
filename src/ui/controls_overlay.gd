@@ -17,6 +17,10 @@ extends Control
 ## Redraws only when something it shows changed: a cheap per-frame comparison, no
 ## allocation, and no redraw at all while nothing moves.
 ##
+## Safe area (WP9.7): the drag visual (ring and dot, or wheel) is drawn shifted
+## sideways just enough to stay inside the safe area's width (ControlsLayout.
+## drag_visual_offset), so it never sits under the camera cutout. Visual only.
+##
 ## Braking by drag (WP9.3, color is never the only cue): the thumb also gets a hot ring,
 ## the gyro hold-brake's shape, in both drag visuals.
 ##
@@ -152,7 +156,16 @@ func wheel_rotation() -> float:
 
 
 func wheel_center() -> Vector2:
-	return hub.drag.anchor if hub != null else Vector2.ZERO
+	return hub.drag.anchor + drag_visual_shift() if hub != null else Vector2.ZERO
+
+
+## WP9.7: how far the drag visual is drawn from the anchor (and the thumb) to stay
+## inside the safe area's width.
+func drag_visual_shift() -> Vector2:
+	if hub == null:
+		return Vector2.ZERO
+	var r := wheel_radius_px() if wheel_mode() else ring_radius_px()
+	return hub.layout.drag_visual_offset(hub.drag.anchor, r)
 
 
 func wheel_radius_px() -> float:
@@ -177,18 +190,19 @@ func _draw() -> void:
 	var dot_r := _controls.overlay_dot_radius_px * _scale()
 	var edge := _hud.neon_border_px
 	if hub.drag.active:
+		var shift := drag_visual_shift()
 		if wheel_mode():
-			_draw_wheel(hub.drag.anchor, wheel_radius_px(), wheel_rotation(), hub.drag.brake > 0.0)
+			_draw_wheel(hub.drag.anchor + shift, wheel_radius_px(), wheel_rotation(), hub.drag.brake > 0.0)
 		else:
 			var ring := accent
 			ring.a = Units.pct_to_frac(_controls.overlay_ring_alpha_pct)
-			_octagon(hub.drag.anchor, ring_radius_px())
+			_octagon(hub.drag.anchor + shift, ring_radius_px())
 			draw_polyline(_poly, ring, edge, true)
 			var dot := COLOR_HOT if hub.drag.brake > 0.0 else accent
-			_octagon(hub.drag.thumb, dot_r)
+			_octagon(hub.drag.thumb + shift, dot_r)
 			draw_colored_polygon(_fill, dot)
 		if brake_ring_visible():
-			_octagon(hub.drag.thumb, dot_r * 2.0)
+			_octagon(hub.drag.thumb + shift, dot_r * 2.0)
 			draw_polyline(_poly, COLOR_HOT, edge, true)
 	if hub.hold_brake > 0.0:
 		_octagon(hub.hold_pos, dot_r * 2.0)

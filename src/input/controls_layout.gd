@@ -20,6 +20,9 @@ extends RefCounted
 ## Rects are in canvas pixels, inside the safe area. Sizes come from ControlsTuning in
 ## physical cm, converted with px_per_cm (DPI or the fallback, see PlayerInput), and
 ## multiplied by the controls_scale setting (the margin to the safe-area edge is not).
+## WP9.7: the drag zone spans the safe area's width (full height), so a thumb under the
+## camera cutout on the left does not start a drag; drag_visual_offset() keeps the
+## anchor ring or the wheel inside it too (ScreenInsets: the phone minimum on the left).
 
 enum Zone { NONE, DRAG, HOLD, GAS, BRAKE, BOOST }
 
@@ -84,19 +87,19 @@ func build(tuning: ControlsTuning, full_rect: Rect2, safe_rect: Rect2, pixels_pe
 		if steering != GYRO:
 			brake_x = gas_rect.position.x - gap - brake.x
 		brake_rect = Rect2(brake_x, bottom - brake.y, brake.x, brake.y)
+	var mid := full.get_center().x
 	if steering == GYRO:
 		if not manual:
 			hold_zone = full
 	elif manual:
-		drag_zone = Rect2(full.position, Vector2(full.size.x * 0.5, full.size.y))
+		drag_zone = _columns(mid, safe.end.x) if mirrored else _columns(safe.position.x, mid)
 	else:
-		drag_zone = full
+		drag_zone = _columns(safe.position.x, safe.end.x)
 
 	if mirrored:
 		gas_rect = _mirror(gas_rect)
 		brake_rect = _mirror(brake_rect)
 		boost_rect = _mirror(boost_rect)
-		drag_zone = _mirror_full(drag_zone)
 	if has(gas_rect):
 		gas_control = gas_rect.merge(boost_rect)
 
@@ -141,6 +144,17 @@ func brake_up_frac(y: float) -> float:
 	return clampf((brake_rect.end.y - y) / brake_rect.size.y, 0.0, 1.0)
 
 
+## WP9.7: the shift that keeps a drag visual of `radius` centred on `anchor` inside the
+## safe area's width (zero when it already fits, or the safe area is narrower than it).
+## Visual only: the anchor and the steering stay where the thumb is.
+func drag_visual_offset(anchor: Vector2, radius: float) -> Vector2:
+	var lo := safe.position.x + radius
+	var hi := safe.end.x - radius
+	if lo > hi:
+		return Vector2.ZERO
+	return Vector2(clampf(anchor.x, lo, hi) - anchor.x, 0.0)
+
+
 func has(r: Rect2) -> bool:
 	return r.size.x > 0.0 and r.size.y > 0.0
 
@@ -155,7 +169,6 @@ func _mirror(r: Rect2) -> Rect2:
 	return Rect2(safe.position.x + safe.end.x - r.end.x, r.position.y, r.size.x, r.size.y)
 
 
-func _mirror_full(r: Rect2) -> Rect2:
-	if not has(r):
-		return r
-	return Rect2(full.position.x + full.end.x - r.end.x, r.position.y, r.size.x, r.size.y)
+## Full height, `x0` to `x1` (empty when x1 <= x0).
+func _columns(x0: float, x1: float) -> Rect2:
+	return Rect2(x0, full.position.y, maxf(x1 - x0, 0.0), full.size.y)

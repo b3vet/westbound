@@ -11,6 +11,7 @@
 //        [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE]
 //        [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt ms>] [--json out.json]
 //        [--audio-unlock [click|tap|key]] [--stale]
+//        [--device NAME | --portrait | --landscape] [--tap-play] [--dpr N]
 //
 // --query: the page's query string (default server=off; e.g. the loop test mode:
 // "mode=loop&server=off&at=city&bot=keep"). --expect: a console line must match
@@ -43,6 +44,19 @@
 // with ?v=<build id>. --stale serves a version.json naming a newer build first (a
 // cached index.html after a deploy): the page must reload itself exactly once.
 //
+// WP9.7 (landscape only, docs/WEB.md → Landscape only):
+// --device NAME: emulate a Playwright device (e.g. "iPhone 14", "iPhone 14 landscape":
+// its viewport, pixel ratio, touch and user agent). --portrait is --device "iPhone 14"
+// and --landscape is --device "iPhone 14 landscape"; both also --tap-play and check the
+// shell's layout: portrait must be rotated (the canvas is the landscape box, the rotated
+// box covers the viewport), landscape must not. --dpr N overrides the device's pixel
+// ratio (SwiftShader renders every backing pixel on the CPU). --tap-play: after the
+// title, tap PLAY where the game draws it (the game prints its buttons with ?probe=ui,
+// in canvas px; the tap goes through the shell's rotation when the page is rotated),
+// then DRIVE if the first-run chooser opens; the game must start a run ("web boot:
+// start"). Before any browser work the smoke runs tools/web_smoke/layout_test.mjs (the
+// shell's rotation math in node).
+//
 // Needs `npm ci` in tools/web_smoke once. Browser: Playwright's Chromium
 // (`npx playwright install chromium`), or CHROMIUM_PATH=/path/to/chrome.
 import fs from 'node:fs';
@@ -50,7 +64,8 @@ import http from 'node:http';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium, devices } from 'playwright';
+import { loadLayoutMath, runLayoutTests } from './layout_test.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -81,6 +96,10 @@ function parseArgs(argv) {
     json: null,
     audioUnlock: null,
     stale: false,
+    device: null,
+    expectRotated: null,
+    tapPlay: false,
+    dpr: null,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s, 2);
@@ -111,6 +130,11 @@ function parseArgs(argv) {
       }
       case '--json': opts.json = path.resolve(value()); break;
       case '--stale': opts.stale = true; break;
+      case '--device': opts.device = value(); break;
+      case '--portrait': opts.device = 'iPhone 14'; opts.expectRotated = true; opts.tapPlay = true; break;
+      case '--landscape': opts.device = 'iPhone 14 landscape'; opts.expectRotated = false; opts.tapPlay = true; break;
+      case '--tap-play': opts.tapPlay = true; break;
+      case '--dpr': opts.dpr = Number(value()); break;
       case '--audio-unlock': {
         // Optional value: the next argument when it names a gesture.
         let g = inline;
@@ -123,7 +147,7 @@ function parseArgs(argv) {
         break;
       }
       case '-h': case '--help':
-        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...] [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt>] [--json out.json] [--audio-unlock [click|tap|key]] [--stale] [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE]');
+        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...] [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt>] [--json out.json] [--audio-unlock [click|tap|key]] [--stale] [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE] [--device NAME | --portrait | --landscape] [--tap-play] [--dpr N]');
         process.exit(0);
       default:
         console.error(`smoke: unknown argument ${argv[i]}`);
@@ -132,6 +156,18 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(opts.timeout) || !Number.isFinite(opts.settle) || !Number.isFinite(opts.waitTimeout)) {
     console.error('smoke: --timeout, --settle and --wait-timeout take milliseconds');
+    process.exit(2);
+  }
+  if (opts.device && !devices[opts.device]) {
+    console.error(`smoke: unknown --device "${opts.device}" (Playwright device names, e.g. "iPhone 14", "iPhone 14 landscape")`);
+    process.exit(2);
+  }
+  if (opts.dpr != null && !(opts.dpr > 0)) {
+    console.error('smoke: --dpr takes a positive pixel ratio');
+    process.exit(2);
+  }
+  if (opts.tapPlay && opts.audioUnlock) {
+    console.error('smoke: --tap-play and --audio-unlock are separate runs');
     process.exit(2);
   }
   return opts;
@@ -484,6 +520,16 @@ async function main() {
     process.exit(2);
   }
 
+  // The shell's rotation math first (node, no browser).
+  const layoutFailures = runLayoutTests();
+  if (layoutFailures.length) {
+    console.error('smoke: the shell\'s layout math is wrong (tools/web_smoke/layout_test.mjs):');
+    for (const f of layoutFailures) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+  console.log('smoke: layout math (tools/web_smoke/layout_test.mjs) passes');
+  if (opts.tapPlay && !/(^|&)probe=ui(&|$)/.test(opts.query)) opts.query = `${opts.query}&probe=ui`.replace(/^&/, '');
+
   const { server, sent, urls } = await serve(root, opts.gzip, opts.stale);
   // The custom shell's build id (tools/export_web.sh fills it; '' with Godot's shell).
   const shellBuild = (/const build = '([0-9a-f]{8,})'/.exec(fs.readFileSync(path.join(root, 'index.html'), 'utf8')) || [])[1] || '';
@@ -499,9 +545,17 @@ async function main() {
 
   try {
     browser = await launch(opts.headed, !opts.audioUnlock);
-    const context = await browser.newContext({
+    const device = opts.device ? { ...devices[opts.device] } : null;
+    if (device) {
+      delete device.defaultBrowserType;   // the descriptor, in Chromium
+      if (opts.dpr != null) device.deviceScaleFactor = opts.dpr;
+      console.log(`smoke: device ${opts.device}: ${device.viewport.width}x${device.viewport.height} CSS px, ` +
+        `pixel ratio ${device.deviceScaleFactor}, touch ${device.hasTouch}`);
+    }
+    const context = await browser.newContext(device || {
       viewport: { width: 1280, height: 720 },
       hasTouch: opts.audioUnlock === 'tap',
+      ...(opts.dpr != null ? { deviceScaleFactor: opts.dpr } : {}),
     });
     const page = await context.newPage();
     await page.addInitScript(pageProbe);
@@ -577,6 +631,8 @@ async function main() {
     if (webgl) console.log(`smoke: WebGL 2 renderer: ${webgl.slice('wbsmoke: webgl '.length)}`);
 
     if (!failures.length && opts.audioUnlock) await audioUnlock(page, opts, consoleLines, failures);
+    if (!failures.length && (opts.tapPlay || opts.expectRotated != null)) await checkLayout(page, opts, consoleLines, failures);
+    if (!failures.length && opts.tapPlay) await tapPlay(page, opts, consoleLines, failures);
     if (!failures.length) checkCaching(opts, urls, consoleLines, shellBuild, failures);
 
     if (!failures.length && opts.waitFor) {
@@ -765,3 +821,131 @@ async function audioUnlock(page, opts, consoleLines, failures) {
 }
 
 main();
+
+// WP9.7: the shell's layout as the page reports it (window.wbLayout and the real
+// geometry). --portrait: rotated, the canvas the landscape box, the rotated box covering
+// the viewport; --landscape (and desktop): not rotated, the canvas the viewport.
+async function readLayout(page) {
+  return page.evaluate(() => {
+    const L = window.wbLayout;
+    const rotor = document.getElementById('wb-rotor');
+    const canvas = document.getElementById('canvas');
+    if (!L || !rotor || !canvas) return null;
+    const r = Element.prototype.getBoundingClientRect.call(rotor);
+    return {
+      rotated: L.rotated, phone: L.phone, width: L.width, height: L.height,
+      insets: [L.il, L.it, L.ir, L.ib],
+      rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height },
+      canvas: [canvas.width, canvas.height],
+      canvasCss: [canvas.clientWidth, canvas.clientHeight],
+      viewport: [window.innerWidth, window.innerHeight],
+      dpr: window.devicePixelRatio,
+    };
+  });
+}
+
+async function checkLayout(page, opts, consoleLines, failures) {
+  const L = await readLayout(page);
+  if (!L) {
+    failures.push('layout: no window.wbLayout (Godot\'s default shell? --portrait and --tap-play need platform/web/shell.html)');
+    return;
+  }
+  console.log(`smoke: layout: ${L.rotated ? 'rotated' : 'not rotated'}, box ${L.width}x${L.height} CSS px, canvas ${L.canvas.join('x')} px ` +
+    `(dpr ${L.dpr}), viewport ${L.viewport.join('x')}, box on the page ${Math.round(L.rect.width)}x${Math.round(L.rect.height)} at ` +
+    `${Math.round(L.rect.left)},${Math.round(L.rect.top)}, phone ${L.phone}, insets ${L.insets.join(',')}`);
+  const [vw, vh] = L.viewport;
+  const near = (a, b) => Math.abs(a - b) <= 1;
+  if (opts.expectRotated != null && L.rotated !== opts.expectRotated) {
+    failures.push(`layout: expected ${opts.expectRotated ? 'a rotated' : 'an unrotated'} page, got ${L.rotated ? 'rotated' : 'unrotated'}`);
+  }
+  const wantBox = L.rotated ? [vh, vw] : [vw, vh];
+  if (!near(L.width, wantBox[0]) || !near(L.height, wantBox[1])) failures.push(`layout: box ${L.width}x${L.height}, want ${wantBox.join('x')}`);
+  if (!near(L.rect.left, 0) || !near(L.rect.top, 0) || !near(L.rect.width, vw) || !near(L.rect.height, vh)) {
+    failures.push(`layout: the game box does not cover the viewport (${JSON.stringify(L.rect)})`);
+  }
+  if (L.width <= L.height) failures.push(`layout: the game box ${L.width}x${L.height} is not landscape`);
+  const wantCanvas = [Math.round(L.width * L.dpr), Math.round(L.height * L.dpr)];
+  if (!near(L.canvas[0], wantCanvas[0]) || !near(L.canvas[1], wantCanvas[1])) {
+    failures.push(`layout: canvas ${L.canvas.join('x')} px, want ${wantCanvas.join('x')} (the box x the pixel ratio)`);
+  }
+  if (!consoleLines.some((l) => /^Westbound layout: (rotated|landscape) /.test(l))) failures.push('layout: the shell never logged its layout');
+}
+
+// The newest block of "wbui: button" lines (the game prints the whole list on a change).
+function probeButtons(consoleLines, from) {
+  let end = -1;
+  for (let i = consoleLines.length - 1; i >= from; i--) {
+    if (consoleLines[i].startsWith('wbui: button ')) { end = i; break; }
+  }
+  if (end < 0) return [];
+  let start = end;
+  while (start - 1 >= from && consoleLines[start - 1].startsWith('wbui: button ')) start--;
+  const out = [];
+  for (const line of consoleLines.slice(start, end + 1)) {
+    const m = /^wbui: button (-?\d+) (-?\d+) (\d+) (\d+) canvas (\d+) (\d+) (.*)$/.exec(line);
+    if (m) out.push({ x: +m[1], y: +m[2], w: +m[3], h: +m[4], cw: +m[5], ch: +m[6], text: m[7] });
+  }
+  return out;
+}
+
+// Taps the button labelled `text` (the newest probe list since console line `from`),
+// through the shell's rotation. Returns false when the game never showed it.
+async function tapButton(page, text, from, consoleLines, failures, ms) {
+  const M = loadLayoutMath();
+  const deadline = Date.now() + ms;
+  let b = null;
+  let seenAt = -1;
+  // Wait for the button, then for its list to hold still (the title's intro animates).
+  while (Date.now() < deadline && !failures.length) {
+    const list = probeButtons(consoleLines, from);
+    const hit = list.find((x) => x.text === text) || null;
+    if (hit && (!b || hit.x !== b.x || hit.y !== b.y)) { b = hit; seenAt = Date.now(); }
+    if (b && Date.now() - seenAt > 1500) break;
+    await page.waitForTimeout(250);
+  }
+  if (!b) return false;
+  const L = await readLayout(page);
+  const bx = ((b.x + b.w / 2) / b.cw) * L.width;
+  const by = ((b.y + b.h / 2) / b.ch) * L.height;
+  const [cx, cy] = M.toClient(bx, by, L.rect, L.rotated);
+  await page.touchscreen.tap(cx, cy);
+  console.log(`smoke: tapped ${text} at canvas (${Math.round(b.x + b.w / 2)}, ${Math.round(b.y + b.h / 2)}) of ${b.cw}x${b.ch} = ` +
+    `page (${Math.round(cx)}, ${Math.round(cy)})${L.rotated ? ' (rotated)' : ''}`);
+  return true;
+}
+
+// --tap-play: PLAY (then DRIVE on the first-run chooser) must start a run.
+async function tapPlay(page, opts, consoleLines, failures) {
+  const has = (re, from = 0) => consoleLines.slice(from).some((l) => re.test(l));
+  const waitFor = async (re, ms, from = 0) => {
+    const deadline = Date.now() + ms;
+    while (!has(re, from) && Date.now() < deadline && !failures.length) await page.waitForTimeout(250);
+    return has(re, from);
+  };
+  if (!(await waitFor(/^web boot: title /, opts.timeout))) {
+    failures.push('tap play: the game never marked the title (web boot: title)');
+    return;
+  }
+  const from = consoleLines.findIndex((l) => /^web boot: title /.test(l));
+  if (!(await tapButton(page, 'PLAY', from, consoleLines, failures, 20000))) {
+    failures.push('tap play: the game never listed a PLAY button (wbui: button ... PLAY; is ?probe=ui on?)');
+    return;
+  }
+  const after = consoleLines.length;
+  const stepMs = Math.min(opts.timeout, 30000);
+  const deadline = Date.now() + stepMs;
+  let chooser = false;
+  while (Date.now() < deadline && !failures.length && !has(/^web boot: start /, after)) {
+    if (probeButtons(consoleLines, after).some((x) => x.text === 'DRIVE')) { chooser = true; break; }
+    await page.waitForTimeout(250);
+  }
+  if (chooser) {
+    console.log('smoke: the first-run chooser opened (a fresh save): tapping DRIVE');
+    await tapButton(page, 'DRIVE', after, consoleLines, failures, 10000);
+  }
+  if (!(await waitFor(/^web boot: start /, stepMs, after))) {
+    failures.push(`tap play: no run started after the tap${chooser ? ' on DRIVE' : ' on PLAY'} ("web boot: start")`);
+    return;
+  }
+  console.log('smoke: the tap on PLAY started a run');
+}
