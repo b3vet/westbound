@@ -14,8 +14,10 @@ use std::time::Instant;
 use common::Room;
 use sim::traffic::Density;
 
-const WARMUP_S: f64 = 30.0;
-const MEASURE_S: f64 = 120.0;
+/// Release: 30 s warm-up, 120 s measured per density; debug builds (the normal test
+/// suite) a short smoke run.
+const WARMUP_S: f64 = if cfg!(debug_assertions) { 2.0 } else { 30.0 };
+const MEASURE_S: f64 = if cfg!(debug_assertions) { 5.0 } else { 120.0 };
 const ROOMS: f64 = 20.0;
 const TICK_HZ: f64 = 20.0;
 /// The spec's room tick p99 (the whole room, of which traffic is the bulk).

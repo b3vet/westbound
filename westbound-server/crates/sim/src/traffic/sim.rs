@@ -56,7 +56,7 @@ const BRAKES: i32 = FLAG_BRAKE | FLAG_BRAKE_STRONG;
 /// Smoothstep 3u^2 - 2u^3 and its derivative 6u(1 - u).
 const SMOOTH_A: f64 = 3.0;
 const SMOOTH_D: f64 = 6.0;
-/// Guard against a zero frequency scale (TrafficRegistry uses the same).
+/// Bound on the intent's move-start tick search (a degenerate zero tick_dt).
 const MOVE_TICKS_MAX: u32 = 1 << 20;
 
 /// What a sim event is. The first three are `TrafficSim.KIND_*` (the GDScript sim's
@@ -1057,9 +1057,7 @@ impl TrafficSim {
         self.ord[k] = i;
         self.rank[i] = k;
         self.n += 1;
-        let vid = self.state.vehicle_id[i];
         self.push_event(EventKind::Spawned, EventTag::None, i, 0.0);
-        let _ = vid;
         Some(i)
     }
 
