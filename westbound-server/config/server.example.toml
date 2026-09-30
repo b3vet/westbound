@@ -288,11 +288,11 @@ spawn_clear_m = 15.0
 # gaps, each client is streamed its area of interest) or "none" (no cars).
 traffic = "sim"
 # Traffic streaming (docs/SERVER.md -> "Traffic streaming"): each client gets the cars
-# from 300 m behind to 900 m ahead of its car (spec); a sent car stays until it is 50 m
+# from 300 m behind to 900 m ahead of its car (spec); a sent car stays until it is 20 m
 # further out (no flapping at the edge).
 traffic_aoi_behind_m = 300.0
 traffic_aoi_ahead_m = 900.0
-traffic_aoi_hysteresis_m = 50.0
+traffic_aoi_hysteresis_m = 20.0
 # Corrections: 5 Hz for cars within 100 m of the player, 1 Hz for the rest (spec).
 traffic_near_m = 100.0
 traffic_near_hz = 5

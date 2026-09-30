@@ -743,7 +743,7 @@ impl Default for RoomsConfig {
             traffic: ROOM_TRAFFIC_SIM.into(),
             traffic_aoi_behind_m: 300.0,
             traffic_aoi_ahead_m: 900.0,
-            traffic_aoi_hysteresis_m: 50.0,
+            traffic_aoi_hysteresis_m: 20.0,
             traffic_near_m: 100.0,
             traffic_near_hz: 5,
             traffic_far_hz: 1,

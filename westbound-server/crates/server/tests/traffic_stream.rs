@@ -20,7 +20,7 @@ use sim::traffic::state::{LC_NONE, LC_SIGNALING};
 use westbound_server::rooms::road::lane_center_d_mm;
 use westbound_server::rooms::sim_traffic::{GapRules, SimTraffic, SimTrafficData};
 use westbound_server::rooms::traffic::{PlayerView, RoomTraffic};
-use westbound_server::rooms::traffic_stream::{wire_lane, StreamRules};
+use westbound_server::rooms::traffic_stream::{correction_due, wire_lane, StreamRules};
 use westbound_server::rooms::RoomParams;
 use westbound_server::Config;
 
@@ -190,15 +190,17 @@ impl Harness {
                     stream.in_outer(center, slot),
                     "car {id} outside the area kept"
                 );
-                let delta = self.map.signed_delta_mm(center, stream.s_mm(slot)).abs();
+                // The schedule: due when (tick + car_id) % period == 0, 4 ticks near the
+                // player, 20 otherwise; so never more than 20 ticks without one.
                 let age = self.now - car.corrected_tick;
-                if delta <= r.near_mm {
-                    assert!(
-                        age < r.near_period_ticks,
-                        "near car {id} corrected {age} ago"
-                    );
+                assert!(age < r.far_period_ticks, "car {id} corrected {age} ago");
+                let period = if stream.is_near(center, slot) {
+                    r.near_period_ticks
                 } else {
-                    assert!(age < r.far_period_ticks, "car {id} corrected {age} ago");
+                    r.far_period_ticks
+                };
+                if correction_due(self.now, id, period) {
+                    assert_eq!(age, 0, "car {id} due at tick {}", self.now);
                 }
                 if age == 0 {
                     assert_eq!(car.s_mm, stream.s_mm(slot), "car {id} corrected to its s");
@@ -321,7 +323,10 @@ fn spawns_carry_lanes_and_lane_changes_from_the_right() {
 fn intents_reach_every_client_that_has_the_car() {
     let mut h = Harness::new(Density::Rush, 21, eight_drivers());
     let mut seen = 0;
-    for _ in 0..400 {
+    // Hesitant cancels sent ahead: (car, tick).
+    let mut ahead: HashMap<(u16, u32), u16> = HashMap::new();
+    let mut hesitant = 0;
+    for _ in 0..800 {
         let msgs = h.step();
         for (id, list) in &msgs {
             let d = h.drivers.iter().find(|d| d.id == *id).unwrap();
@@ -330,21 +335,56 @@ fn intents_reach_every_client_that_has_the_car() {
                 let ServerMsg::TrafficIntent(it) = m else {
                     continue;
                 };
-                for e in &it.intents {
+                for (k, e) in it.intents.iter().enumerate() {
                     seen += 1;
-                    assert_eq!(e.start_tick, h.now, "sent at decision time");
-                    if e.kind == IntentKind::LaneChange {
-                        assert!(e.move_start_tick >= e.start_tick + 20);
-                        assert!(e.duration_ms > 0);
-                    }
                     let slot = h.t.stream().slot_of(e.car_id).unwrap();
                     assert!(h.t.stream().in_outer(center, slot));
+                    match e.kind {
+                        IntentKind::LaneChange => {
+                            assert_eq!(e.start_tick, h.now, "sent at decision time");
+                            assert!(e.move_start_tick >= e.start_tick + 20);
+                            assert!(e.duration_ms > 0);
+                        }
+                        IntentKind::Cancel if e.start_tick > h.now => {
+                            // A hesitant's cancel, dated at the signal's end; with its lane
+                            // change when the client had the car (a spawn carries the
+                            // signal otherwise).
+                            if k > 0 && it.intents[k - 1].car_id == e.car_id {
+                                let lc = &it.intents[k - 1];
+                                assert_eq!(lc.kind, IntentKind::LaneChange);
+                                assert_eq!(e.start_tick, lc.move_start_tick);
+                            }
+                            assert_eq!(e.move_start_tick, e.start_tick);
+                            ahead.insert((e.car_id, e.start_tick), *id);
+                            hesitant += 1;
+                        }
+                        IntentKind::Cancel => {
+                            assert_eq!(e.start_tick, h.now);
+                            assert!(
+                                !ahead.contains_key(&(e.car_id, h.now)),
+                                "car {} cancelled twice",
+                                e.car_id
+                            );
+                        }
+                        _ => assert_eq!(e.start_tick, h.now),
+                    }
+                }
+            }
+        }
+        // At a hesitant cancel's tick the server's car stays in its lane.
+        let st = &h.t.world().sim.state;
+        for &(car, t) in ahead.keys() {
+            if t == h.now {
+                if let Some(slot) = h.t.stream().slot_of(car) {
+                    assert_eq!(st.lc_state[slot], LC_NONE, "car {car} moved at {t}");
                 }
             }
         }
         h.check();
     }
     assert!(seen > 20, "{seen} intents");
+    assert!(hesitant > 0, "hesitant drivers' cancels are sent ahead");
+    println!("{seen} intents, {hesitant} hesitant cancels sent ahead");
 }
 
 #[test]
@@ -386,9 +426,9 @@ fn hit_reactions_stream_hazard_hard_brake_and_swerve_corrections() {
     let hazard = intents.iter().find(|e| e.kind == IntentKind::Hazard);
     let brake = intents.iter().find(|e| e.kind == IntentKind::HardBrake);
     let (hazard, brake) = (hazard.expect("hazard"), brake.expect("hard brake"));
-    assert_eq!(hazard.start_tick, hit_tick);
-    assert!((3_900..=4_000).contains(&hazard.duration_ms), "{hazard:?}");
-    assert!((900..=1_000).contains(&brake.duration_ms), "{brake:?}");
+    assert_eq!((hazard.start_tick, brake.start_tick), (hit_tick, hit_tick));
+    assert_eq!(hazard.duration_ms, 4_000, "hit_recover_s");
+    assert_eq!(brake.duration_ms, 1_000, "hit_brake_s");
     assert_eq!(h.t.stream().stats.hits, 1);
     // Corrected every tick through the swerve (1.2 s).
     for _ in 0..24 {
@@ -430,11 +470,7 @@ fn hit_reactions_stream_hazard_hard_brake_and_swerve_corrections() {
         .iter()
         .find(|e| e.kind == IntentKind::Hazard)
         .expect("hazard");
-    let elapsed_ms = u32::from(hazard.duration_ms) - u32::from(hz.duration_ms);
-    assert!(
-        (1_200..=1_400).contains(&elapsed_ms),
-        "time left: {hz:?} ({elapsed_ms} ms gone)"
-    );
+    assert_eq!(*hz, *hazard, "the same hazard, from the hit's tick");
     assert!(
         late.iter().all(|e| e.kind != IntentKind::HardBrake),
         "the brake is over"

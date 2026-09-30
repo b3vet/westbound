@@ -210,8 +210,19 @@ impl RoomTraffic for SimTraffic {
     }
 
     fn write_client(&mut self, player_id: u16, s_mm: u32, joined: bool, frame: &mut FrameBuilder) {
+        // The area's centre: the player's latest state extrapolated to this tick, as the
+        // sim uses it (at most `player_max_extrapolation_s`); the reported s before the
+        // player is in the sim.
+        let center = match self.slots.iter().position(|&id| id == player_id) {
+            Some(p) if self.world.sim.player_active(p) => {
+                let s = self.world.sim.state_player_s(p);
+                let len = i64::from(self.stream.length_mm());
+                ((s * MM_PER_M).round() as i64).rem_euclid(len) as u32
+            }
+            _ => s_mm,
+        };
         self.stream
-            .write_client(&self.world.sim, player_id, s_mm, joined, frame);
+            .write_client(&self.world.sim, player_id, center, joined, frame);
     }
 
     fn player_left(&mut self, player_id: u16) {

@@ -10,6 +10,8 @@
 //! - a spawn for a car it already has; a despawn, intent or correction for one it does not;
 //! - a car spawned or given an intent without a correction for it in the same frame (the
 //!   frame's tick and the lane count come from it);
+//! - a frame whose traffic messages are out of order (despawns, spawns, intents,
+//!   corrections);
 //! - a lane change whose move starts less than `min_signal_ticks` after its start;
 //! - a correction batch older than the previous one;
 //! - a car id spawned again within `id_hold_ticks` of its despawn as a different car
@@ -117,6 +119,8 @@ pub struct TrafficMirror {
     // This frame (for the same-frame correction rule).
     frame_needs: Vec<u16>,
     frame_corrected: Vec<u16>,
+    /// The last traffic message's place in the order (despawn 0 … correction 3).
+    frame_rank: u8,
 }
 
 impl TrafficMirror {
@@ -144,6 +148,17 @@ impl TrafficMirror {
     pub fn begin_frame(&mut self) {
         self.frame_needs.clear();
         self.frame_corrected.clear();
+        self.frame_rank = 0;
+    }
+
+    fn in_order(&mut self, rank: u8) {
+        if rank < self.frame_rank {
+            self.violation(format!(
+                "traffic messages out of order (a rank {rank} message after rank {})",
+                self.frame_rank
+            ));
+        }
+        self.frame_rank = rank;
     }
 
     pub fn end_frame(&mut self) {
@@ -163,6 +178,7 @@ impl TrafficMirror {
         let len = msg.encoded_len() as u64;
         match msg {
             ServerMsg::TrafficSpawn(m) => {
+                self.in_order(1);
                 self.counts.spawn_msgs += 1;
                 self.counts.spawn_bytes += len;
                 for e in &m.cars {
@@ -170,6 +186,7 @@ impl TrafficMirror {
                 }
             }
             ServerMsg::TrafficDespawn(m) => {
+                self.in_order(0);
                 self.counts.despawn_msgs += 1;
                 self.counts.despawn_bytes += len;
                 for &id in &m.car_ids {
@@ -184,6 +201,7 @@ impl TrafficMirror {
                 }
             }
             ServerMsg::TrafficIntent(m) => {
+                self.in_order(2);
                 self.counts.intent_msgs += 1;
                 self.counts.intent_bytes += len;
                 for e in &m.intents {
@@ -191,6 +209,7 @@ impl TrafficMirror {
                 }
             }
             ServerMsg::TrafficCorrection(m) => {
+                self.in_order(3);
                 self.counts.correction_msgs += 1;
                 self.counts.correction_bytes += len;
                 if let Some(t) = self.last_tick {
