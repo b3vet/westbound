@@ -153,7 +153,8 @@ func set_prop_query(q: PropQuery) -> void:
 ## point is in last_s / last_d. Allocation-free.
 func sweep_static_box(s0: float, d0: float, s1: float, d1: float, yaw: float, hl: float, hw: float,
 		bs: float, bd: float, bhl: float, bhw: float) -> float:
-	var toi := _sweep_boxes(s0, d0, s1, d1, cos(yaw), sin(yaw), hl, hw, bs, bd, bs, bd, 1.0, 0.0, bhl, bhw)
+	var sy := DetMath.sin_cos(yaw)
+	var toi := _sweep_boxes(s0, d0, s1, d1, DetMath.cos_out, sy, hl, hw, bs, bd, bs, bd, 1.0, 0.0, bhl, bhw)
 	if toi >= 0.0:
 		last_s = _c_s
 		last_d = _c_d
@@ -191,8 +192,8 @@ func step(dt: float, player: VehicleState, traffic: TrafficState, road: RoadPath
 	_prev_ps = ps1
 	_prev_pd = pd1
 	var inv_dt := 1.0 / dt if dt > 0.0 else 0.0
-	var pc := cos(player.yaw)
-	var pn := sin(player.yaw)
+	var pn := DetMath.sin_cos(player.yaw)
+	var pc := DetMath.cos_out
 	var best := INF
 
 	if traffic != null:
@@ -228,9 +229,15 @@ func step(dt: float, player: VehicleState, traffic: TrafficState, road: RoadPath
 			var r1d := td1 - pd1
 			if (r0d > reach and r1d > reach) or (r0d < -reach and r1d < -reach):
 				continue
-			var yaw_b := atan2(traffic.v_lat[i], traffic.v[i])
+			# The car's heading atan2(v_lat, v) as (cos, sin): its velocity direction, no
+			# transcendentals (N8.2).
+			var tv := traffic.v[i]
+			var tvl := traffic.v_lat[i]
+			var th := sqrt(tv * tv + tvl * tvl)
+			var tc := tv / th if th > 0.0 else 1.0
+			var tn := tvl / th if th > 0.0 else 0.0
 			var toi := _sweep_boxes(ps0, pd0, ps1, pd1, pc, pn, _hl, _hw,
-				ts0, td0, ts1, td1, cos(yaw_b), sin(yaw_b), bhl, bhw)
+				ts0, td0, ts1, td1, tc, tn, bhl, bhw)
 			if toi < 0.0 or toi >= best:
 				continue
 			best = toi

@@ -237,7 +237,7 @@ func _advance_candidate(player_s: float, now: bool = false) -> void:
 	if f == null or ready:
 		return
 	var rt := _t.road
-	var near := player_s >= f.split_s - _run.builder.view_distance_m() - rt.chunk_prefetch_m \
+	var near := player_s >= f.split_s - _run.sim_horizon_m() - rt.chunk_prefetch_m \
 		- rt.chunk_length_m * 2.0 - rt.fork_approach_straight_m
 	if candidate == null:
 		_road.ensure_generated_to(f.split_s + rt.sample_spacing_m)
@@ -266,8 +266,8 @@ func _make_candidate(f: RoadFork) -> void:
 	var h := _road.heading_at(f.split_s)
 	candidate = ProceduralRoadPath.new(_ctx)
 	candidate.set_biome_plan(_cand_plan)
-	candidate.set_forks(_forks_for(active), _road.origin_offset_x() + cos(h) * shift,
-		_road.origin_offset_z() + sin(h) * shift)
+	candidate.set_forks(_forks_for(active), _road.origin_offset_x() + cos(h) * shift,   # lint: allow-libm the branch's world origin (rendering)
+		_road.origin_offset_z() + sin(h) * shift)   # lint: allow-libm the branch's world origin (rendering)
 
 
 func _become_ready(f: RoadFork) -> void:

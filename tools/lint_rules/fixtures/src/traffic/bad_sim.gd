@@ -9,7 +9,7 @@ var _v := PackedFloat64Array()
 
 
 func accelerate(v: float, gap: float) -> float:
-	var a := 1.7 * (1.0 - pow(v / 33.3, 4)) # expect: WB101
+	var a := 1.7 * (1.0 - pow(v / 33.3, 4)) # expect: WB101, WB105
 	if gap < 12 && v > 3: # expect: WB101
 		a -= 0x10 # expect: WB101
 	return a + 1e-6 # expect: WB101
@@ -56,3 +56,13 @@ func step(dt: float) -> void:
 
 func fill_into(out: PackedFloat64Array) -> void:
 	out.append_array([0.0]) # expect: WB104
+
+
+func platform_math(yaw: float, v: float, v_lat: float) -> float:
+	var c := cos(yaw) + sin(yaw) # expect: WB105
+	var k := atan2(v_lat, v) + exp(-v) # expect: WB105
+	var r := Vector2(v, v_lat).angle() # expect: WB105
+	var p := sin(yaw) # lint: allow-libm # expect: WB100, WB105
+	var ok := DetMath.sin(yaw) + DetMath.atan2(v_lat, v) + DetMath.exp(-v)
+	var drawn := cos(yaw) # lint: allow-libm rendering only, never fed back
+	return c + k + r + p + ok + drawn

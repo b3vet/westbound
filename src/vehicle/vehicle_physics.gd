@@ -46,9 +46,11 @@ static func step(state: VehicleState, input: VehicleInput, dt: float, params: Ve
 	state.accel_long = (v_next - v) / dt
 
 	# Yaw: grip-limited bicycle yaw rate + heading return, through the yaw lag.
-	var s_dot := (v * cos(state.yaw) - state.v_lat * sin(state.yaw)) / (1.0 - kappa * state.d)
+	# Transcendentals: DetMath (bit-identical on every platform, N8.2).
+	var sy0 := DetMath.sin_cos(state.yaw)
+	var s_dot := (v * DetMath.cos_out - state.v_lat * sy0) / (1.0 - kappa * state.d)
 	var omega_road := kappa * s_dot
-	var lag_blend := 1.0 - exp(-dt / params.yaw_lag_s(v))
+	var lag_blend := 1.0 - DetMath.exp(-dt / params.yaw_lag_s(v))
 	var align := heading_align_rate(lag_blend, dt, params.heading_align_ratio) \
 		* clampf(v / params.align_fade_mps, 0.0, 1.0)
 	var r_cmd := steer_yaw_rate(params, v, state.steer_angle) - align * state.yaw
@@ -60,13 +62,13 @@ static func step(state: VehicleState, input: VehicleInput, dt: float, params: Ve
 	# Lateral grip: the car frame turns under the velocity (-v r), tire force scrubs the
 	# lateral velocity (cornering stiffness), and the slip angle is hard-clamped.
 	var v_lat_prev := state.v_lat
-	var v_lat := (v_lat_prev - v * state.yaw_rate * dt) * exp(-dt * params.lateral_grip_rate)
+	var v_lat := (v_lat_prev - v * state.yaw_rate * dt) * params.lateral_grip_decay(dt)
 	var v_lat_max := params.slip_max_tan * v
 	state.v_lat = clampf(v_lat, -v_lat_max, v_lat_max)
 
 	# Road-space kinematics (exact for the offset curve at d).
-	var cy := cos(state.yaw)
-	var sy := sin(state.yaw)
+	var sy := DetMath.sin_cos(state.yaw)
+	var cy := DetMath.cos_out
 	s_dot = (v * cy - state.v_lat * sy) / (1.0 - kappa * state.d)
 	state.s += s_dot * dt
 	state.d += (v * sy + state.v_lat * cy) * dt
@@ -124,7 +126,7 @@ static func heading_align_rate(lag_blend: float, dt: float, ratio: float) -> flo
 ## Bicycle-model yaw rate (rad/s) for a steer angle at speed v, with understeer.
 static func steer_yaw_rate(params: VehicleParams, v: float, steer_angle: float) -> float:
 	var q := v / params.understeer_speed_mps
-	return v * tan(steer_angle) / (params.wheelbase_m * (1.0 + q * q)) * params.steer_gain_factor
+	return v * DetMath.tan(steer_angle) / (params.wheelbase_m * (1.0 + q * q)) * params.steer_gain_factor
 
 
 ## Simulated automatic gearbox: picks the gear, moves rpm toward the gear's rpm at the
@@ -161,7 +163,7 @@ static func place(state: VehicleState, params: VehicleParams, s: float, d: float
 ## sample.local_point(d, ...) on the road surface (flat cross-section, so the height at
 ## (s, d) is the road elevation at s) and pitches it by this angle (rad, + nose up).
 static func surface_pitch(sample: RoadSample) -> float:
-	return atan(sample.grade)
+	return atan(sample.grade)   # lint: allow-libm rendering only (the body's pitch), never fed back
 
 
 ## Road surface height (m, world Y) at (sample.s, d): flat cross-section, no banking.
@@ -171,4 +173,4 @@ static func surface_height(sample: RoadSample, _d: float) -> float:
 
 ## Body slip angle (rad, + velocity points right of the nose).
 static func slip_angle(state: VehicleState) -> float:
-	return atan2(state.v_lat, state.v)
+	return DetMath.atan2(state.v_lat, state.v)

@@ -219,8 +219,7 @@ func _init(run_ctx: RunContext, road_path: RoadPath, traffic_sim: Object, profil
 	source = set_pieces
 	_closing_floor = Units.kmh_to_mps(director_tuning.wave_min_closing_kmh)
 	_apply_headway()
-	var q := run.tuning.quality
-	fog_end_m = q.view_distance_m[maxi(q.tier_index(q.default_tier), 0)]
+	fog_end_m = run.tuning.road.sim_horizon_m   # N8.2: tier-independent (the run sets the same)
 	set_player_box(player_length_m, player_width_m)
 	_behind_debt.resize(traffic_tuning.lane_flow_speeds_from_right_kmh.size())
 	_behind_wait.resize(_behind_debt.size())
@@ -246,8 +245,9 @@ func set_ghost_zone(behind_m: float, ahead_m: float, half_width_m: float) -> voi
 	ghost_half_width_m = half_width_m
 
 
-## The run passes the fog end at the current view distance (quality tier x the color
-## script's fog_end_frac, or just the view distance to be conservative).
+## The run passes its simulation horizon (RoadTuning.sim_horizon_m, N8.2): the same on
+## every device, and past every quality tier's fog, so the spawn distance never depends on
+## the tier (fairness rule 5 holds on every tier).
 func set_fog_end(meters: float) -> void:
 	fog_end_m = meters
 	opposite.ahead_m = ahead_distance()
@@ -471,7 +471,12 @@ func _plan_ahead(player: VehicleState) -> void:
 	waves.plan_to(road, player.s + director_tuning.wave_meet_lookahead_m)
 	_sync_closures(player, player.s + ahead_distance() + batch * 2.0)
 	while player.s + ahead_distance() >= _spawned_to:
-		var a := maxf(_spawned_to, player.s + min_ahead_m())
+		# The next batch starts where the last one ended. N8.2: with the fog end at the
+		# simulation horizon (800 m on every tier) min_ahead_m passes spawn_ahead_m, and
+		# the planning edge would jump a tick's travel past the last batch; within one fog
+		# margin of the edge the batch stays contiguous (still past the fog end).
+		var lo := player.s + min_ahead_m()
+		var a := _spawned_to if _spawned_to >= lo - traffic_tuning.spawn_fog_margin_m else lo
 		_batch_a = a
 		_batch_b = a + batch
 		_refresh_ctx(player)

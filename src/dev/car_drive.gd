@@ -295,7 +295,7 @@ func _setup_traffic() -> void:
 	var car_def: CarDef = load(CAR_PATHS[_car_index])
 	_tdir = TrafficDirector.new(_ctx, _road, _sim, _registry.profiles, _registry.types,
 		car_def.length_m, car_def.width_m)
-	_tdir.set_fog_end(_builder.view_distance_m())
+	_tdir.set_fog_end(_tuning.road.sim_horizon_m)   # as the run (N8.2: tier-independent)
 	if _car != null:
 		_tdir.set_player_params(_car.params)
 	_hits = HitDetection.new(_tuning.lives, _tuning.traffic.max_active_vehicles)

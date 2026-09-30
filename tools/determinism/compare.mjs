@@ -6,6 +6,7 @@
 //   node tools/determinism/compare.mjs native.log web.log [--names native,web]
 //
 // Prints: both runs' info lines, the libm probe (which math functions give different bits),
+// the DetMath probe (N8.2: the same inputs on DetMath, which must match),
 // how many seconds match from the start, the first diverging second and which state
 // components differ there, and with per-tick detail lines (DTT, --detail=<second>) the first
 // diverging tick with the car's float bits on both sides.
@@ -33,7 +34,7 @@ function fields(line) {
 
 function parse(file) {
   const text = fs.readFileSync(file, 'utf8');
-  const t = { info: null, libm: null, params: null, secs: new Map(), ticks: new Map(), done: false };
+  const t = { info: null, libm: null, detmath: null, params: null, secs: new Map(), ticks: new Map(), done: false };
   for (const raw of text.split(/\r?\n/)) {
     // Console captures may prefix lines; find the marker.
     const i = raw.search(/\bDTT? /);
@@ -41,6 +42,7 @@ function parse(file) {
     const line = raw.slice(i).trim();
     if (line.startsWith('DT info ')) t.info = fields(line);
     else if (line.startsWith('DT libm ')) t.libm = fields(line);
+    else if (line.startsWith('DT detmath ')) t.detmath = fields(line);
     else if (line.startsWith('DT params ')) t.params = fields(line);
     else if (line.startsWith('DT sec=')) { const f = fields(line); t.secs.set(Number(f.sec), f); }
     else if (line.startsWith('DTT ')) { const f = fields(line); t.ticks.set(Number(f.k), f); }
@@ -76,24 +78,30 @@ if (a.params && b.params) {
     : `  all ${Object.keys(a.params).length} identical`);
 }
 
-console.log('\n## libm probe (fixed inputs per function; hash of the exact result bits)');
-const libmDiff = [];
-if (a.libm && b.libm) {
-  console.log(`  ${pad('fn', 6)} ${pad('exact', 10)} ${pad('low 8 bits masked', 18)} blocks of ${a.libm.chunk} inputs that differ`);
-  for (const k of Object.keys(a.libm)) {
+// A probe table (libm or DetMath); returns the functions whose exact bits differ.
+function probe(title, pa, pb) {
+  console.log(`\n## ${title} (fixed inputs per function; hash of the exact result bits)`);
+  const diff = [];
+  if (!pa || !pb) {
+    console.log('  (missing on one side)');
+    return diff;
+  }
+  console.log(`  ${pad('fn', 6)} ${pad('exact', 10)} ${pad('low 8 bits masked', 18)} blocks of ${pa.chunk} inputs that differ`);
+  for (const k of Object.keys(pa)) {
     if (['n', 'chunk'].includes(k) || k.includes('_')) continue;
-    const same = a.libm[k] === b.libm[k];
-    if (!same) libmDiff.push(k);
-    const m = a.libm[`${k}_masked`] === b.libm[`${k}_masked`] ? 'same' : 'DIFFERENT';
-    const ca = a.libm[`${k}_chunks`] || '';
-    const cb = b.libm[`${k}_chunks`] || '';
+    const same = pa[k] === pb[k];
+    if (!same) diff.push(k);
+    const m = pa[`${k}_masked`] === pb[`${k}_masked`] ? 'same' : 'DIFFERENT';
+    const ca = pa[`${k}_chunks`] || '';
+    const cb = pb[`${k}_chunks`] || '';
     let blocks = 0;
     for (let i = 0; i < Math.min(ca.length, cb.length); i += 2) if (ca.slice(i, i + 2) !== cb.slice(i, i + 2)) blocks++;
     console.log(`  ${pad(k, 6)} ${pad(same ? 'same' : 'DIFFERENT', 10)} ${pad(m, 18)} ${blocks} / ${ca.length / 2}`);
   }
-} else {
-  console.log('  (missing on one side)');
+  return diff;
 }
+const libmDiff = probe('libm probe (the platform math library)', a.libm, b.libm);
+const detDiff = probe('DetMath probe (N8.2: must be identical)', a.detmath, b.detmath);
 
 const n = Math.min(a.secs.size, b.secs.size);
 let matched = 0;
@@ -160,12 +168,12 @@ if (a.ticks.size && b.ticks.size) {
       const mark = x[key] === y[key] ? '' : '  <- differs';
       console.log(`    ${pad(key, 6)} ${pad(x[key], 40)} ${y[key]}${mark}`);
     }
-    // The tick before: identical state on both sides; the libm results the next physics
+    // The tick before: identical state on both sides; the DetMath results the next physics
     // step takes from it (lcos, lsin, lexp, ltan). One that differs is the cause.
     const px = a.ticks.get(tick - 1);
     const py = b.ticks.get(tick - 1);
     if (px && py) {
-      console.log(`  the tick before (k=${tick - 1}, state ${px.all === py.all ? 'identical' : 'different'}): libm results the next step uses`);
+      console.log(`  the tick before (k=${tick - 1}, state ${px.all === py.all ? 'identical' : 'different'}): math results the next step uses`);
       for (const key of ['lcos', 'lsin', 'lexp', 'ltan', 'lwob']) {
         if (px[key] === undefined) continue;
         const mark = px[key] === py[key] ? '' : '  <- differs: the cause';
@@ -177,7 +185,8 @@ if (a.ticks.size && b.ticks.size) {
 
 console.log('\n## Verdict');
 const complete = a.secs.size === b.secs.size && a.done && b.done;
-const libmNote = libmDiff.length ? ` (libm differs: ${libmDiff.join(', ')})` : ' (libm probe identical)';
+const libmNote = (libmDiff.length ? ` (libm differs: ${libmDiff.join(', ')}` : ' (libm probe identical')
+  + (a.detmath && b.detmath ? (detDiff.length ? `; DetMath DIFFERS: ${detDiff.join(', ')})` : '; DetMath identical)') : ')');
 if (first < 0 && complete) {
   console.log(`  IDENTICAL: ${n} s of the ${a.info.date} Daily Drive match bit for bit (${names[0]} vs ${names[1]})${libmNote}.`);
   process.exit(0);

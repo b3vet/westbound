@@ -222,9 +222,9 @@ fn player_velocity_matches_gdscript() {
     for c in d["cases"].as_array().unwrap() {
         let f = |k: usize| hx(&c[k]);
         let p = PlayerInput::from_vehicle(0.0, f(4), f(0), f(1), f(2), f(3), 4.5, 1.9, 0);
-        // libm's cos / sin may differ by an ulp between platforms: the spec's 1e-9.
-        assert!((p.s_dot - f(5)).abs() <= TOL, "s_dot {c}");
-        assert!((p.d_dot - f(6)).abs() <= TOL, "d_dot {c}");
+        // N8.2: both sides take cos / sin from DetMath: bit for bit.
+        assert_eq!(p.s_dot.to_bits(), f(5).to_bits(), "s_dot {c}");
+        assert_eq!(p.d_dot.to_bits(), f(6).to_bits(), "d_dot {c}");
     }
 }
 

@@ -6,7 +6,7 @@ extends SceneTree
 ##
 ##   tools/godot.sh --headless --path . --script res://tools/determinism/daily_trace.gd -- \
 ##       [--date=2026-09-30] [--seconds=60] [--driver=script|bot] [--detail=<second>] \
-##       [--view_m=<m>, 0 = the device's quality tier's] \
+##       [--view_m=<m>, 0 = the device's quality tier's] [--replay=1] \
 ##       [--out=/tmp/native.log]
 ##
 ## The game's classes are loaded at run time (a --script main loop compiles before the
@@ -32,6 +32,7 @@ func _main() -> void:
 	trace.set(&"detail_second", int(String(args.get("detail", "0"))))
 	if args.has("driver"):
 		trace.set(&"driver_kind", StringName(String(args["driver"])))
+	trace.set(&"record_replay", String(args.get("replay", "0")) == "1")
 	var host := Node.new()
 	host.name = "DailyTraceHost"
 	root.add_child(host)

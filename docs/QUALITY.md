@@ -73,25 +73,22 @@ Snapshots: `tools/snap.sh src/ui/hud/dev/hud_preview.tscn --renderer=both --stat
 
 ## Simulation safety
 
-The governor may change rendering only. An audit of what the tier values feed (WP9.1, at `284b32f`):
+The governor may change rendering only. An audit of what the tier values feed (WP9.1, at `284b32f`; resolved in N8.2):
 
 | Value | Reaches the simulation? | Where |
 | --- | --- | --- |
 | render scale, MSAA | no | root viewport only |
 | particle scale | no | `JuiceFx`, `FxParticles`, `SpeedLines`, `PlayerFx`. Their randomness is a fixed `VISUAL_SEED` RandomNumberGenerator, not a run `Rng` stream |
 | frame cap (30 fps rung) | no | The simulation runs per 120 Hz tick. Calling `Run.frame()` every 1, 2 or 4 ticks gives the same trace (checked on the Daily run, 30 s) |
-| **view distance** | **yes** | see the list below |
+| view distance | **no, since N8.2** (WP9.1 found three couplings, below) | rendering only: fog, far plane, the road builder's draw distance, roadside, landmarks, features |
 
-The view distance reaches the simulation through `RoadBuilder.view_distance_m()`, which follows `Quality.view_distance_m` and is re-read on `Events.quality_changed` / `governor_changed`:
+**N8.2: the simulation reads `RoadTuning.sim_horizon_m` (800 m), never the view distance.** The three couplings WP9.1 found now read the fixed horizon:
 
-1. **Spawn distance.** `Run._start_run` (src/run/run.gd:1171) calls `director.set_fog_end(builder.view_distance_m())`, and the director spawns traffic at the fog end. This is read once per run start and retry. It is the tier coupling from [DAILY.md → Findings 3](DAILY.md): Low and Medium runs of the same date differ from second 10.
-2. **Leg planner horizon, every tick.** `Run._road_ahead()` (run.gd:942) generates the road to `_view_ahead(s) = s + view distance + 2 chunks`. `legs.plan_ahead(road, _view_ahead(s) + leg length)` queues checkpoint and sign features up to there. The queue length is part of `LegTracker.hash_into`, and so of the run's trace hash (replays, ghosts, the Daily check). A 700 → 550 m change 5 s into the 2026-09-30 Daily run changes the trace (the `legs` component) from second 27. The same `_view_ahead` is used by the respawn, teleport and start paths (run.gd:455, 944, 1144, 1215, 1545).
-3. **Fork candidate generation.** `RunForks._advance_candidate` (src/run/run_forks.gd:240) generates the candidate branch all at once instead of a few blocks per tick when the player is within `builder.view_distance_m()` (+ prefetch) of the split.
-4. **Defaults, not couplings:** `TrafficDirector` starts from the default tier's fog end (traffic_director.gd:223) until item 1 overwrites it. `DailyTrace` pins the view distance for the determinism check (daily_trace.gd:87). The dev scenes (`car_drive`, `traffic_sandbox`) call `set_fog_end(builder.view_distance_m())` as the run does.
+1. **Spawn distance.** `Run._start_run` calls `director.set_fog_end(sim_horizon_m())` (and `TrafficDirector` starts from the same value; the dev scenes `car_drive` and `traffic_sandbox` do the same). The director spawns traffic past it. The horizon is at least every tier's view distance (`tests/run/test_sim_horizon.gd` checks it), so on the low and medium tiers cars arrive out of the fog as before, just from a little further (fairness rule 5 holds on every tier).
+2. **Leg planner horizon.** `Run._plan_ahead_to(s) = s + sim_horizon_m + 2 chunks + a leg`. The road itself is generated to `s + max(sim_horizon_m, the builder's view distance) + 2 chunks` (`_view_ahead`), so a dev override that draws further still has road; the road table does not depend on how far it was generated.
+3. **Fork candidate generation.** `RunForks._advance_candidate`'s "near" check reads `Run.sim_horizon_m()`.
 
-**What WP9.1 does:** the view-distance rung is **held from a run's start to its end** and applied between runs (`governor_view_distance_between_runs = true`). A run is the Game states COUNTDOWN, RUNNING, PAUSED and CRASH, so a retry from the pause menu stays in the held state. While held, `Quality.view_distance_m` and `far_plane_m` stay at the run's start value (they match the fog). `Quality.effective.view_pending` says a rung is waiting. When the run ends (RESULTS or MENU), the value applies and `Events.governor_changed` fires again so every view reader re-reads it. The other rungs apply at once. `tests/platform/test_governor_run.gd` drives the real Run (the Daily run, device view distance, not pinned) through all four rungs and back under a forced thermal script, with 30 fps frame cadence at rung 4. The per-second trace hashes and the leg planner's horizon match an ungoverned run exactly. With the hold switched off, the same run's builder view distance and leg planner horizon move.
-
-**What remains (for N8.2):** a view-distance rung taken in one run still changes the **next** run's spawn distance and planner horizon, just as a different tier does. A user who changes the tier from the pause menu also changes the view distance mid-run, because that is a user action and not held. Both go away when the simulation stops reading the view distance. The spawn distance would become a tier-independent tuning value (DAILY.md's proposal), and `_view_ahead` / the planner horizon / the fork `near` check would read a fixed distance. `Quality.run_view_distance_m` (the user tier's view distance, never the governor's) is there for that switch. After N8.2, set `governor_view_distance_between_runs = false` and the rung applies live.
+The same Daily run at the low (500 m) and the high (800 m) tier's view distance is bit-identical, trace and leg planner horizon (`tests/run/test_sim_horizon.gd`; WP8.4 measured them differing from second 10 before). **`governor_view_distance_between_runs` is now false**: the view-distance rung applies live, mid-run. `tests/platform/test_governor_run.gd` drives the real Daily run (device view distance, not pinned) through all four rungs and back under a forced thermal script, with 30 fps frame cadence at rung 4: the builder's view distance follows the rung mid-run, and the per-second trace hashes and the leg planner's horizon match an ungoverned run exactly. The WP9.1 hold still works when switched on (a second test), and `Quality.run_view_distance_m` (the user tier's view distance, never the governor's) stays for any future reader. A user who changes the tier from the pause menu changes rendering only. docs/DETERMINISM.md has the rest of the determinism work.
 
 ## Thermal
 

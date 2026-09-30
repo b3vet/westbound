@@ -86,7 +86,7 @@ func update(dt: float, state: VehicleState, out_input: VehicleInput) -> void:
 	# Lateral: lateral error -> lateral speed -> heading -> steer.
 	var v := maxf(state.v, MIN_V)
 	var vlat_des := clampf(K_POS * (d_t - state.d), -VLAT_MAX, VLAT_MAX)
-	var yaw_des := clampf(asin(clampf(vlat_des / v, -1.0, 1.0)), -YAW_MAX, YAW_MAX)
+	var yaw_des := clampf(DetMath.asin(clampf(vlat_des / v, -1.0, 1.0)), -YAW_MAX, YAW_MAX)
 	out_input.steer = clampf(K_YAW * (yaw_des - state.yaw) - K_RATE * state.yaw_rate, -1.0, 1.0)
 	out_input.boost = false
 

@@ -466,7 +466,7 @@ func reseed(seed_value: int) -> void:
 	sim.set_player_body(car.car.length_m, car.car.width_m)
 	director = TrafficDirector.new(traffic_ctx, road, sim, registry.profiles, registry.types,
 		car.car.length_m, car.car.width_m)
-	director.set_fog_end(_builder.view_distance_m())
+	director.set_fog_end(tuning.road.sim_horizon_m)   # as the run (N8.2: tier-independent)
 	director.set_player_params(car.params)   # passability (WP6.1)
 	director.record_pass_paths = true
 	director.set_leg(leg, car.state.s)

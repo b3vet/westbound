@@ -223,6 +223,13 @@ extends Resource
 ## Chunks are started this far beyond the view distance, so the time-sliced build
 ## finishes before the chunk is needed.
 @export var chunk_prefetch_m: float = 50.0   # not in spec: ~15 frames of travel at 350 km/h and 30 fps
+## The simulation's view of the road ahead, the same on every device (N8.2): the road is
+## generated and the leg planner queues checkpoints this far past the car, the director
+## spawns traffic past it (its "fog end") and fork candidates are built within it. The
+## quality tier's view distance (fog, draw distance) is rendering only and may be shorter
+## (cars beyond it wait in the fog). Must be >= every tier's view distance
+## (QualityTuning.view_distance_m) so traffic always spawns past the fog (fairness rule 5).
+@export var sim_horizon_m: float = 800.0   # not in spec: N8.2, tier-independent simulation (= the high tier's view distance)
 
 @export_group("Roadside")
 ## Window of placed roadside props behind the focus (ahead = Quality view distance).

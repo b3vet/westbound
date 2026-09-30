@@ -132,7 +132,7 @@ func restore_life(out: ScoreEventBuffer) -> bool:
 func apply_hit_response(player: VehicleState, away_side: int) -> void:
 	player.v *= _keep
 	if away_side != 0:
-		var kick := minf(atan2(_deflect_mps, player.v), _deflect_max)
+		var kick := minf(DetMath.atan2(_deflect_mps, player.v), _deflect_max)
 		player.yaw += kick * float(away_side)
 	_wobble_t = 0.0
 	_wobbling = _wobble_s > 0.0
@@ -167,4 +167,4 @@ func hash_into(h: int) -> int:
 ## Yaw offset of the wobble at time t: a sine decaying linearly to 0 at the end, so
 ## the wobble adds no net heading.
 func _wobble_offset(t: float) -> float:
-	return _wobble_amp * sin(_wobble_w * t) * (1.0 - t / _wobble_s)
+	return _wobble_amp * DetMath.sin(_wobble_w * t) * (1.0 - t / _wobble_s)

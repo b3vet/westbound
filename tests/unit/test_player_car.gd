@@ -172,7 +172,8 @@ func test_null_controller_coasts() -> void:
 
 
 func test_state_matches_pure_physics() -> void:
-	# The node adapter (placement, visual, shadow) never feeds back into physics.
+	# The node adapter (placement, visual, shadow) never feeds back into physics; the only
+	# thing between the controller and physics is the input quantization (N8.2).
 	var road := ArcRoadPath.new(1200.0, 1, 3, _tuning.road)
 	var car := _make(road, _origin(2.0))
 	var ctl := ScriptedController.new()
@@ -189,8 +190,10 @@ func test_state_matches_pure_physics() -> void:
 		inp.steer = ctl.steer
 		inp.throttle = ctl.throttle
 		inp.brake = ctl.brake
+		inp.quantize()   # N8.2: PlayerCar quantizes the controller's inputs before physics
 		VehiclePhysics.step(ref, inp, DT, _params(), road)
 	eq(car.state.trace_hash(), ref.trace_hash(), "PlayerCar state == VehiclePhysics trace")
+	eq(car.input.steer, inp.steer, "the car took the quantized input")
 
 
 func test_origin_shift_keeps_the_car_continuous() -> void:

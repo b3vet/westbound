@@ -246,8 +246,8 @@ func _integrate(plan: RoadPlanGen) -> void:
 			o.z[i] = 0.0
 		else:
 			var mid_h := (o.h[i - 1] + o.h[i]) * 0.5 + o.dx * (o.k[i - 1] - o.k[i]) * 0.5 * 0.5 * 0.5
-			o.x[i] = o.x[i - 1] + o.dx * sin(mid_h)
-			o.z[i] = o.z[i - 1] - o.dx * cos(mid_h)
+			o.x[i] = o.x[i - 1] + o.dx * sin(mid_h)   # lint: allow-libm loop map build (loop_v1 is exported and hashed; not replayed; N8.2 open item)
+			o.z[i] = o.z[i - 1] - o.dx * cos(mid_h)   # lint: allow-libm loop map build (loop_v1 is exported and hashed; not replayed; N8.2 open item)
 
 
 ## Newton on the two closure transfers (see the header), then the seam made exact.
@@ -265,10 +265,10 @@ func _close_plan() -> void:
 		var a := _def.closure_sections[0]
 		var b := _def.closure_sections[1]
 		# Columns: d(end point) / d(transfer) = u(h_first) - u(h_last), u(h) = (sin h, -cos h).
-		var ax := sin(_h_section_start[a]) - sin(_h_section_end[a])
-		var az := -cos(_h_section_start[a]) + cos(_h_section_end[a])
-		var bx := sin(_h_section_start[b]) - sin(_h_section_end[b])
-		var bz := -cos(_h_section_start[b]) + cos(_h_section_end[b])
+		var ax := sin(_h_section_start[a]) - sin(_h_section_end[a])   # lint: allow-libm loop map build (loop_v1 is exported and hashed; not replayed; N8.2 open item)
+		var az := -cos(_h_section_start[a]) + cos(_h_section_end[a])   # lint: allow-libm loop map build (loop_v1 is exported and hashed; not replayed; N8.2 open item)
+		var bx := sin(_h_section_start[b]) - sin(_h_section_end[b])   # lint: allow-libm loop map build (loop_v1 is exported and hashed; not replayed; N8.2 open item)
+		var bz := -cos(_h_section_start[b]) + cos(_h_section_end[b])   # lint: allow-libm loop map build (loop_v1 is exported and hashed; not replayed; N8.2 open item)
 		var det := ax * bz - az * bx
 		if absf(det) <= 0.0:
 			_issue("closure sections %d and %d cannot close the loop (parallel)" % [a, b])

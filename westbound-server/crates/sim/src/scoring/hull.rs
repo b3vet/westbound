@@ -2,7 +2,7 @@
 //! hull-to-hull clearance between two of them (spec: Lives, hits and crashes: "collision
 //! boxes are oriented boxes in road space, inset 8 cm"; Scoring: "minimum hull-to-hull
 //! clearance"). Same expressions in the same order, so the results are the GDScript's
-//! bits (the trig is libm's on both sides).
+//! bits (the trig is `detmath`'s on both sides, N8.2).
 //!
 //! A box is its centre (s, d), its heading relative to the road `yaw` (rad, + nose right:
 //! forward axis (cos yaw, sin yaw) in (s, d)), its half-length and half-width (callers pass
@@ -11,6 +11,7 @@
 //! [`penetration`] is the multiplayer addition (N6, the server's hit cross-check: "overlap
 //! deeper than 0.3 m"): how far two overlapping boxes interpenetrate.
 
+use crate::detmath;
 use crate::traffic::gd::{maxf, minf};
 
 /// Minimum distance between the two boxes; 0 when they overlap or touch.
@@ -27,10 +28,28 @@ pub fn clearance(
     hl2: f64,
     hw2: f64,
 ) -> f64 {
-    let c1 = yaw1.cos();
-    let n1 = yaw1.sin();
-    let c2 = yaw2.cos();
-    let n2 = yaw2.sin();
+    let (n1, c1) = detmath::sin_cos(yaw1);
+    let (n2, c2) = detmath::sin_cos(yaw2);
+    clearance_cs(s1, d1, c1, n1, hl1, hw1, s2, d2, c2, n2, hl2, hw2)
+}
+
+/// [`clearance`] with each heading as its (cos, sin) (`RoadHull.clearance_cs`: the scoring
+/// passes the player's once per tick and a traffic car's from its velocity direction).
+#[allow(clippy::too_many_arguments)]
+pub fn clearance_cs(
+    s1: f64,
+    d1: f64,
+    c1: f64,
+    n1: f64,
+    hl1: f64,
+    hw1: f64,
+    s2: f64,
+    d2: f64,
+    c2: f64,
+    n2: f64,
+    hl2: f64,
+    hw2: f64,
+) -> f64 {
     let ds = s2 - s1;
     let dd = d2 - d1;
     let b1 = Axes {
@@ -98,7 +117,8 @@ pub fn penetration(
     hl2: f64,
     hw2: f64,
 ) -> f64 {
-    let (c1, n1, c2, n2) = (yaw1.cos(), yaw1.sin(), yaw2.cos(), yaw2.sin());
+    let (n1, c1) = detmath::sin_cos(yaw1);
+    let (n2, c2) = detmath::sin_cos(yaw2);
     let b1 = Axes {
         c: c1,
         n: n1,

@@ -5,6 +5,8 @@ extends "res://tests/integration/run_harness.gd"
 ## Not a suite itself (the runner discovers test_*.gd only).
 
 const RUN_SPEED_MPS := 52.0
+## The UTC date the harness's runs claim (a Daily run's date, whose seed it drives).
+const REPLAY_DATE := "2026-09-29"
 const CLIENT_BUILD := 7
 
 var net: NetTuning
@@ -76,6 +78,8 @@ func record_run(run_seed: int, car_index: int, max_s: float, make_controller: Ca
 	r.crash_cinematic = false
 	r.record_best = false
 	r.car_index = car_index
+	if mode == RunContext.MODE_DAILY:
+		r.daily_date = REPLAY_DATE   # a Daily run's seed is its date's
 	_run = r
 	tree.root.add_child(r)
 	_runs.append(r)
@@ -109,7 +113,7 @@ func record_run(run_seed: int, car_index: int, max_s: float, make_controller: Ca
 	out.score = r.scoring.banked()
 	out.hits = r.stats.hits
 	var results := {RunStats.SCORE: out.score, RunStats.HITS: out.hits, RunStats.DISTANCE_M: r.stats.distance_m}
-	out.bytes = rec.finish(results, "2026-09-29")
+	out.bytes = rec.finish(results, REPLAY_DATE)
 	out.replay = NetReplayFile.decode(out.bytes)
 	out.record_ms = Time.get_ticks_msec() - started
 	_runs.erase(r)
@@ -121,21 +125,25 @@ func record_run(run_seed: int, car_index: int, max_s: float, make_controller: Ca
 
 
 ## Plays `replay` back (optionally with the server's claims) and returns the result.
-func verify(replay: NetReplayFile, score: int = -1, hits: int = -1, run_seed: int = -1) -> Dictionary:
+## `resim` false: the N8.1 kinematic playback even when the replay has inputs.
+func verify(replay: NetReplayFile, score: int = -1, hits: int = -1, run_seed: int = -1,
+		resim: bool = true) -> Dictionary:
 	var v := ReplayVerifier.new(replay, net)
 	v.claimed_score = score
 	v.claimed_hits = hits
 	v.expected_seed = run_seed
+	v.resim = resim
 	var res := v.verify(tree.root)
 	await tree.process_frame
 	return res
 
 
-## Plays `rec` back with the original's exact car state fed in at every tick (instead of
-## the quantized, interpolated samples) and returns the first tick whose simulation hash
+## Plays `rec` back kinematically with the original's exact car state fed in at every tick
+## (instead of the quantized, interpolated samples) and returns the first tick whose simulation hash
 ## differs from the original's (-1: identical throughout) and the result.
 func verify_exact(rec: Recorded) -> Array:
 	var v := ReplayVerifier.new(rec.replay, net)
+	v.resim = false   # the kinematic playback, fed the exact states
 	v.claimed_score = rec.score
 	v.claimed_hits = rec.hits
 	var first := [-1]
