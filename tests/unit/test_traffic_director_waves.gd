@@ -511,3 +511,25 @@ func test_meet_pace_is_the_players_cruising_pace() -> void:
 	lt(dir.set_pieces.meet_x(v, s), dir.waves.meet_x(v, s), "sooner than at the dipped pace")
 	dir.set_pieces.meet_pace = 0.0
 	near(dir.set_pieces.meet_x(v, s), dir.waves.meet_x(v, s), 1e-9, "unset: the waves' meeting map")
+
+
+func test_set_piece_zones_widenings_and_forks() -> void:
+	# WP9.6 (ACCEPTANCE F2): a widening adds lanes on the right, so a rolling piece may
+	# drive through it (clear_of_zones(..., true)); a road-anchored piece (road hooks) and a
+	# lane drop still count. A fork's zone ends set_piece_fork_clear_after_m past its
+	# split, not at the far end of its span (the opposite carriageway's rejoin).
+	var grow := tuning.director.set_piece_feature_clear_m
+	var widen := _waves(SEED, LaneChangeRoadPath.new(3, 4, 2000.0, 250.0, true, tuning.road), 8000.0)
+	check(not widen.clear_of_zones(1900.0, 2100.0), "a widening is a zone for anchored pieces")
+	check(widen.clear_of_zones(1900.0, 2100.0, true), "a rolling piece drives through a widening")
+	var drop := _waves(SEED, LaneChangeRoadPath.new(3, 2, 2000.0, 250.0, true, tuning.road), 8000.0)
+	check(not drop.clear_of_zones(1900.0, 2100.0), "a lane drop is a zone")
+	check(not drop.clear_of_zones(1900.0, 2100.0, true), "for rolling pieces too")
+	var road_f := StraightRoadPath.new(LANES, tuning.road)
+	var split := 3700.0
+	road_f.add_feature(RoadFeature.make(RoadFeature.Kind.FORK, 3000.0, 6350.0, split))
+	var fork := _waves(SEED, road_f, 9000.0)
+	var end := split + tuning.director.set_piece_fork_clear_after_m + grow
+	check(not fork.clear_of_zones(3000.0 - grow + 1.0, 3000.0), "the fork's approach")
+	check(not fork.clear_of_zones(end - 1.0, end - 1.0, true), "up to the breather past the split")
+	check(fork.clear_of_zones(end + 1.0, 6350.0 + grow + 100.0, true), "clear beyond it (the rejoin is ordinary road)")

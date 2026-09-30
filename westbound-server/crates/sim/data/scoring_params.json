@@ -77,7 +77,7 @@
   "body": {
     "player_length_m": 4.5,
     "player_width_m": 1.9,
-    "max_active_vehicles": 90
+    "max_active_vehicles": 120
   },
   "net": {
     "tick_rate_hz": 20.0

@@ -486,6 +486,7 @@ func result() -> Dictionary:
 		"collisions_at_pieces": collisions_at_pieces,
 		"decel_violations": c.decel_violations, "brake_flag_violations": c.brake_flag_violations,
 		"offroad_violations": c.offroad_violations, "merges": sim.stat_merges,
+		"long_merge_holds": sim.stat_long_merge_holds,
 		"closed_area_violations": closed_area_violations, "prop_hits": prop_hits,
 		"standstill_beside_fast": standstill_beside_fast,
 		"min_accel": c.min_accel,

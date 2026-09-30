@@ -501,6 +501,19 @@ fn replay(text: &str) -> (usize, usize, Option<String>) {
             return (k - 1, ticks, Some(format!("tick {k}: state hash differs")));
         }
     }
+    // WP9.6: the long-merge guard held as often as in the GDScript sim.
+    if let Some(want) = d["stats"]["long_merge_holds"].as_u64() {
+        if sim.stat_long_merge_holds != want {
+            return (
+                ticks,
+                ticks,
+                Some(format!(
+                    "long_merge_holds {} vs {want}",
+                    sim.stat_long_merge_holds
+                )),
+            );
+        }
+    }
     (ticks, ticks, None)
 }
 
@@ -533,6 +546,18 @@ fn trace_sp_closure_120hz() {
         "sp_closure_120hz",
         include_str!("../vectors/trace_sp_closure_120hz.json"),
     );
+}
+
+/// WP9.6: a semi crawling out of a closing lane while a car comes up in the lane beyond
+/// its target (`long_crawl_held`; the vector's stats count the holds).
+#[test]
+fn trace_sp_long_merge_120hz() {
+    let text = include_str!("../vectors/trace_sp_long_merge_120hz.json");
+    assert!(
+        doc(text)["stats"]["long_merge_holds"].as_u64().unwrap() > 0,
+        "the scenario exercises the guard"
+    );
+    check_trace("sp_long_merge_120hz", text);
 }
 
 #[test]

@@ -67,6 +67,12 @@ const KAPPA_MAX := 1.0 / 1200.0
 const PCT := 100.0
 const SPECIAL_PCT := 10.0   # share of special cases (INF gap, zero lateral speed, ...)
 
+## sp_long_merge (WP9.6): the crawling semi this far before the closure, the car in lane 0
+## this far before it, and their speeds (km/h).
+const LONG_MERGE_SEMI_BEFORE_M := 20.0
+const LONG_MERGE_CAR_BEFORE_M := 200.0
+const LONG_MERGE_CRAWL_KMH := 5.0
+const LONG_MERGE_CAR_KMH := 100.0
 ## Loop closures: samples every this many metres over one lap, lanes 0..LOOP_LANES-1.
 const LOOP_SAMPLE_M := 50.0
 const LOOP_LANES := 5
@@ -89,6 +95,11 @@ const SCENARIOS: Array[Dictionary] = [
 	{"name": "sp_closure_120hz", "seed": 44, "lanes": 3, "hz": 120, "far": true, "floor": 0.0, "seconds": 30.0,
 		"player_kmh": 110.0, "weave": false, "density": 14.0, "hits": [], "closure": 700.0, "drop": 0.0,
 		"headway": 1.0},
+	# WP9.6: a dense queue at the end of a closing lane, where long vehicles crawl out of it
+	# beside a faster lane (TrafficSim._long_crawl_held; stats.long_merge_holds > 0).
+	{"name": "sp_long_merge_120hz", "seed": 55, "lanes": 3, "hz": 120, "far": true, "floor": 0.0, "seconds": 30.0,
+		"player_kmh": 100.0, "weave": false, "density": 4.0, "hits": [], "closure": 900.0, "drop": 0.0,
+		"headway": 1.0, "long_merge": true},
 ]
 ## Scenario rig (tool-local): window around the player, spawn cadence, player script.
 const WINDOW_BEHIND_M := 250.0
@@ -272,6 +283,11 @@ func _params_text(tuning: Tuning, reg: TrafficRegistry) -> String:
 		"look_through_leaving_leaders": t.look_through_leaving_leaders,
 		"predict_leader_braking": t.predict_leader_braking,
 		"anticipate_leader_braking": t.anticipate_leader_braking,
+		"long_merge_guard": t.long_merge_guard,
+		"long_merge_min_length_m": t.long_merge_min_length_m,
+		"long_merge_crawl_mps": Units.kmh_to_mps(t.long_merge_crawl_kmh),
+		"long_merge_fast_mps": Units.kmh_to_mps(t.long_merge_fast_kmh),
+		"long_merge_guard_s": t.long_merge_guard_s,
 		"brake_light_decel_mps2": t.brake_light_decel_mps2,
 		"brake_light_strong_decel_mps2": t.brake_light_strong_decel_mps2,
 		"signal_time_floor_s": t.signal_time_floor_s,
@@ -712,6 +728,14 @@ func _trace(base: Tuning, sc: Dictionary) -> String:
 		ops.append([0, "drop_zone", lanes - 1, _hx(z0), _hx(z1)])
 	var density: float = sc["density"]
 	var spawn_rng := Rng.new(seed_value).derive(&"parity_spawner")
+	if bool(sc.get("long_merge", false)):
+		# WP9.6: a semi crawling in the closing lane just before the closure and a car
+		# holding the lane beyond its target (scripted) coming up behind it at 100 km/h.
+		var c_s := player.s + closure_m
+		_spawn_fixed(sim, reg, c_s - LONG_MERGE_SEMI_BEFORE_M, lanes - 1, &"truck", &"semi",
+			Units.kmh_to_mps(LONG_MERGE_CRAWL_KMH), 0, ops)
+		_spawn_fixed(sim, reg, c_s - LONG_MERGE_CAR_BEFORE_M, 0, &"commuter", &"sedan",
+			Units.kmh_to_mps(LONG_MERGE_CAR_KMH), TrafficState.FLAG_SCRIPTED, ops)
 	_populate(sim, reg, road, tt, spawn_rng, player, lanes, density, ops)
 	var hits_s: Array = sc["hits"]
 	var hit_ticks: Array[int] = []
@@ -787,7 +811,8 @@ func _trace(base: Tuning, sc: Dictionary) -> String:
 		"length": _hx(PLAYER_LENGTH_M), "width": _hx(PLAYER_WIDTH_M), "script": script}
 	head["stats"] = {"signals": sim.stat_signals, "moves": sim.stat_moves, "completed": sim.stat_completed,
 		"cancel_player": sim.stat_cancel_player, "cancel_hesitant": sim.stat_cancel_hesitant,
-		"cancel_unsafe": sim.stat_cancel_unsafe, "merges": sim.stat_merges, "events": ev_out.size(),
+		"cancel_unsafe": sim.stat_cancel_unsafe, "merges": sim.stat_merges,
+		"long_merge_holds": sim.stat_long_merge_holds, "events": ev_out.size(),
 		"vehicles_end": sim.state.count}
 	head["ops"] = ops
 	head["events"] = ev_out
@@ -815,6 +840,26 @@ func _nearest_ahead(sim: TrafficSim, player: VehicleState) -> int:
 
 
 ## Fills the window with traffic at IDM-consistent gaps (ops at tick 0).
+## WP9.6: one vehicle placed by the scenario (tick 0), recorded as a spawn op.
+func _spawn_fixed(sim: TrafficSim, reg: TrafficRegistry, s: float, ln: int, profile: StringName, type: StringName,
+		v: float, flags: int, ops: Array) -> void:
+	var rec := SpawnSource.Record.new()
+	rec.s = s
+	rec.lane = ln
+	rec.d = NAN
+	rec.v = v
+	rec.v0 = v
+	rec.profile_id = reg.profile_index(profile)
+	rec.type_id = reg.type_index(type)
+	rec.model_variant = 0
+	rec.color_index = 0
+	rec.flags = flags
+	var slot := sim.spawn(rec)
+	if slot >= 0:
+		ops.append([0, "spawn", _hx(s), ln, _hx(sim.state.d[slot]), _hx(v), _hx(v), rec.type_id, rec.profile_id, 0, 0,
+			flags])
+
+
 func _populate(sim: TrafficSim, reg: TrafficRegistry, road: StraightRoadPath, tt: TrafficTuning, rng: Rng,
 		player: VehicleState, lanes: int, density: float, ops: Array) -> void:
 	var target := int(density * lanes * (WINDOW_AHEAD_M + WINDOW_BEHIND_M) / 1000.0)

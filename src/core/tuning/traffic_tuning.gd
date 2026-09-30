@@ -157,7 +157,7 @@ extends Resource
 ## long_merge_fast_kmh in the lane beyond its target would reach its body within
 ## long_merge_guard_s (it waits for that lane to be clear too): a 16 m truck pulling out
 ## of a standstill queue swings its cab toward the next lane as it moves over.
-@export var long_merge_guard: bool = false   # not in spec
+@export var long_merge_guard: bool = true   # not in spec
 @export var long_merge_min_length_m: float = 12.0   # not in spec
 @export var long_merge_crawl_kmh: float = 20.0   # not in spec
 @export var long_merge_fast_kmh: float = 60.0   # not in spec
