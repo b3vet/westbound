@@ -420,6 +420,9 @@ func _back() -> void:
 	if view == View.CODE and code_for_party:
 		open_party()
 		return
+	if view == View.INVITE:
+		decline_invite()
+		return
 	close()
 
 
@@ -770,6 +773,9 @@ func _layout() -> void:
 			var row := k / PARTY_COLS
 			b.position = Vector2(pad + float(k % PARTY_COLS) * (cw + g), y + float(row) * (th + g))
 			b.size = Vector2(cw, th)
+			var p := _party()
+			if k < p.members.size():
+				SocialUi.fit_button(b, p.members[k].full_name(), tuning)
 			k += 1
 		if k > 0:
 			@warning_ignore("integer_division")

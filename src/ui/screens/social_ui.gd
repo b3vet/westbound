@@ -37,6 +37,26 @@ static func fit_text(t: ScreenText, full: String, max_w: float) -> void:
 	t.text = ""
 
 
+## N9.3: sets `b`'s label to `full`, shortened with "..." until it fits the button's
+## width (a player's name on a list button).
+static func fit_button(b: ScreenButton, full: String, t: HudTuning) -> void:
+	b.text = full
+	if b.style == null:
+		return
+	var room := b.size.x - t.spacing_grid_px * 4.0 - ScreenButton.PRESS_SHIFT
+	var fs := b.font_px()
+	if HudDraw.text_width(b.style.label, full, fs) <= room:
+		return
+	var n := full.length()
+	while n > 0:
+		n -= 1
+		var s := full.left(n).strip_edges() + ELLIPSIS
+		if HudDraw.text_width(b.style.label, s, fs) <= room:
+			b.text = s
+			return
+	b.text = ""
+
+
 ## The width `b` needs for its label (and note) with the design system's padding, at
 ## least a square touch target.
 static func button_width(b: ScreenButton, t: HudTuning) -> float:

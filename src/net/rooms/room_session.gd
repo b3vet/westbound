@@ -471,13 +471,18 @@ func poll() -> void:
 			party_changed.emit()
 			party_left.emit("lost", text_for("party_lost"))
 	var cs := client.get_state()
+	if _lobby_retry_until_us > 0 and now >= _lobby_retry_until_us \
+			and (state == State.IDLE or state == State.CONNECTING) and _request == Request.NONE:
+		# The server's hold on the party place is over: stop trying.
+		_lobby_retry_until_us = 0
+		_pending_lobby.clear()
+		client.close()
+		_set_state(State.IDLE)
+		_drop_party("lost")
 	match state:
 		State.IDLE:
 			if _lobby_retry_until_us > 0:
-				if now >= _lobby_retry_until_us:
-					_lobby_retry_until_us = 0
-					_drop_party("lost")
-				elif now >= _next_retry_us:
+				if now >= _next_retry_us:
 					_next_retry_us = now + roundi(tuning.party_reconnect_retry_s * USEC_PER_S)
 					_set_state(State.CONNECTING)
 					if _connect() != OK:

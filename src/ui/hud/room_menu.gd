@@ -113,6 +113,8 @@ var _items: Array[Dictionary] = []
 var _version: int = -1
 var _kick_armed: int = -1
 var _kick_until_us: int = 0
+var _title_full: String = ""
+var _sub_full: String = ""
 
 
 func _init() -> void:
@@ -205,6 +207,7 @@ func setup(s: HudStyle, hud_tuning: HudTuning, net_tuning: NetTuning, room_sessi
 func open(which: Tab = Tab.CHAT) -> void:
 	visible = true
 	link_note.text = ""
+	_version = -1
 	refresh()
 	show_tab(which)
 
@@ -268,9 +271,11 @@ func refresh() -> void:
 	_version = r.version
 	var me := r.me()
 	crew_total.text = TEXT_CREW_TOTAL % HudFormat.thousands(int(r.crew_totals.get(me.crew_slot, 0)) if me != null else 0)
-	title.text = TEXT_ROOM % r.code
-	sub.text = TEXT_SUB % [TEXT_PUBLIC if r.is_public() else TEXT_PRIVATE, r.density.to_upper(),
+	_title_full = TEXT_ROOM % r.code
+	_sub_full = TEXT_SUB % [TEXT_PUBLIC if r.is_public() else TEXT_PRIVATE, r.density.to_upper(),
 		r.time_mode.to_upper()]
+	title.text = _title_full
+	sub.text = _sub_full
 	player_ids.fill(-1)
 	var k := 0
 	for m in r.members:
@@ -454,19 +459,23 @@ func _layout() -> void:
 	var rows := (n + cols - 1) / cols
 	var ts_h := title.get_combined_minimum_size().y + sub.get_combined_minimum_size().y
 	var head := maxf(th, ts_h)
-	# Header: the title left; CHAT, PLAYERS, ROOM, CLOSE right, each as wide as it needs.
-	var x := w - pad
-	for b: ScreenButton in [close_button, room_tab, players_tab, chat_tab]:
-		var bw := maxf(SocialUi.button_width(b, hud), inner * TAB_SHARE)
-		x -= bw
-		b.size = Vector2(bw, th)
-		b.position = Vector2(x, pad)
-		x -= g
+	# Header (N9.3: two rows): the title and the settings line left, CLOSE right; under
+	# them CHAT, PLAYERS and ROOM as one row of equal tabs.
+	var cw0 := SocialUi.button_width(close_button, hud)
+	close_button.size = Vector2(cw0, th)
+	close_button.position = Vector2(w - pad - cw0, pad)
+	SocialUi.fit_text(title, _title_full, inner - cw0 - g)
+	SocialUi.fit_text(sub, _sub_full, inner - cw0 - g)
 	title.position = Vector2(pad, pad)
 	title.size = title.get_combined_minimum_size()
 	sub.position = Vector2(pad, pad + title.size.y)
 	sub.size = sub.get_combined_minimum_size()
-	var top := pad + head + g
+	var tabs: Array[ScreenButton] = [chat_tab, players_tab, room_tab]
+	var tw := (inner - g * float(tabs.size() - 1)) / float(tabs.size())
+	for i in tabs.size():
+		tabs[i].size = Vector2(tw, th)
+		tabs[i].position = Vector2(pad + float(i) * (tw + g), pad + head + g)
+	var top := pad + head + g + th + g
 	var h := top
 	if tab == Tab.ROOM:
 		h = _layout_room(pad, top, inner, th, g)
@@ -500,23 +509,38 @@ func _layout() -> void:
 ## bottom (with a grid gap).
 func _layout_room(pad: float, top: float, inner: float, th: float, g: float) -> float:
 	var y := top
+	# The link on its own line, without its scheme; the code alone when even that does not
+	# fit. COPY LINK (and SHARE) under it, the copy's answer beside them.
+	var url := _invite_url()
+	var code := session.room.code if session != null else ""
+	link_text.text = "%s  %s" % [TEXT_INVITE, url.trim_prefix("https://").trim_prefix("http://")] \
+			if not url.is_empty() else "%s  %s" % [TEXT_INVITE, code]
+	if link_text.text_width() > inner:
+		link_text.text = "%s  %s" % [TEXT_INVITE, code]
+	SocialUi.fit_text(link_text, link_text.text, inner)
+	var ls := link_text.get_combined_minimum_size()
+	link_text.size = ls
+	link_text.position = Vector2(pad, y)
+	y += ls.y + g
 	var bw := maxf(SocialUi.button_width(copy_button, hud), inner * TAB_SHARE)
 	var sw := maxf(SocialUi.button_width(share_button, hud), inner * TAB_SHARE) if share_button.visible else 0.0
 	copy_button.size = Vector2(bw, th)
-	copy_button.position = Vector2(pad + inner - bw - (sw + g if sw > 0.0 else 0.0), y)
+	copy_button.position = Vector2(pad, y)
 	share_button.size = Vector2(sw, th)
-	share_button.position = Vector2(pad + inner - sw, y)
-	var room_w := copy_button.position.x - pad - g
-	var full := link_text.text
-	SocialUi.fit_text(link_text, full, room_w)
-	var ls := link_text.get_combined_minimum_size()
-	link_text.size = ls
-	link_text.position = Vector2(pad, y + (th - ls.y) * 0.5)
+	share_button.position = Vector2(pad + bw + g, y)
+	var nx := pad + bw + g + (sw + g if sw > 0.0 else 0.0)
+	var end := pad + inner
+	if kick_button.visible:
+		# The host's REMOVE A PLAYER at the row's right end.
+		var kw := SocialUi.button_width(kick_button, hud)
+		kick_button.size = Vector2(kw, th)
+		kick_button.position = Vector2(end - kw, y)
+		end -= kw + g
+	SocialUi.fit_text(link_note, link_note.text, maxf(end - nx, 0.0))
+	var ns := link_note.get_combined_minimum_size()
+	link_note.size = ns
+	link_note.position = Vector2(nx, y + (th - ns.y) * 0.5)
 	y += th + g
-	if not link_note.text.is_empty():
-		link_note.size = link_note.get_combined_minimum_size()
-		link_note.position = Vector2(pad, y)
-		y += link_note.size.y + g
 	if host_note.visible:
 		host_note.size = host_note.get_combined_minimum_size()
 		host_note.position = Vector2(pad, y)
@@ -533,13 +557,8 @@ func _layout_room(pad: float, top: float, inner: float, th: float, g: float) -> 
 			buttons[i].position = Vector2(pad + float(i) * (cw + g), y)
 			buttons[i].size = Vector2(cw, th)
 		y += th + g
-	var kw := maxf(SocialUi.button_width(kick_button, hud), inner * KICK_SHARE)
-	kick_button.size = Vector2(kw, th)
-	kick_button.position = Vector2(pad, y)
-	return y + th + g
+	return y
 
 
-## The header's tab and close buttons: at least this share of the panel's inner width.
+## COPY LINK and SHARE: at least this share of the panel's inner width.
 const TAB_SHARE := 0.15   # lint: allow-number layout proportion
-## REMOVE A PLAYER: at least this share of the inner width.
-const KICK_SHARE := 0.35   # lint: allow-number layout proportion
