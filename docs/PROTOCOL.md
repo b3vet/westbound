@@ -70,7 +70,7 @@ Physical values are converted once at the edge (`crates/protocol/src/quant.rs`, 
 | --- | --- | --- | --- | --- |
 | Tick | u32 | 20 Hz room ticks since room start | 0..=4,294,967,295 | — |
 | `s` (along the loop) | u32 | 1 mm | 0..=4,294,967,295 (4,294 km) | **reject**: wrap into [0, L) first |
-| `d` (lateral, + = right of travel, as CONTRACTS §3) | i16 | 1 cm | ±10,000 (±100 m) | clamp |
+| `d` (lateral, + = right of travel, as CONTRACTS §2) | i16 | 1 cm | ±10,000 (±100 m) | clamp |
 | Speed | u16 | 1 cm/s | 0..=20,000 (200 m/s) | clamp |
 | Heading vs road | i16 | 1e-4 rad | ±31,416 (±π) | wrap by whole turns beyond ±3.14165, then clamp |
 | Lateral velocity | i16 | 1 cm/s | ±32,767 (±327.67 m/s) | clamp |
@@ -107,12 +107,12 @@ Sizes are payload bytes (add 3 for the header). Field order is wire order.
 | --- | --- | --- |
 | `tick` | u32 | room tick of this state (from `server_now()`) |
 | `s_mm` | u32 | mm |
-| `d_cm` | i16 | cm, ±10,000 |
-| `heading_e4` | i16 | 1e-4 rad relative to the road, ±31,416 |
+| `d_cm` | i16 | cm, ±10,000; + = right of travel |
+| `heading_e4` | i16 | 1e-4 rad relative to the road (VehicleState `yaw`), ±31,416; + = nose right of the road tangent |
 | `speed_cms` | u16 | cm/s, ≤ 20,000 |
-| `lat_vel_cms` | i16 | cm/s, ±32,767 |
-| `yaw_rate_mrad_s` | i16 | mrad/s, ±32,767 |
-| `steer_e4` | i16 | 1e-4, ±10,000 |
+| `lat_vel_cms` | i16 | cm/s, ±32,767; + = toward the car's right (VehicleState `v_lat`) |
+| `yaw_rate_mrad_s` | i16 | mrad/s, ±32,767; + = turning right |
+| `steer_e4` | i16 | 1e-4, ±10,000; + = steering right (VehicleInput `steer`) |
 | `flags` | flags | `brake`, `boost`, `headlights`, `ghost` (bits 0–3) |
 | `run_state` | enum | `run_state` |
 
@@ -313,6 +313,7 @@ Both stay under the 10 KB/s downstream budget. A typical tick is `player_states`
 - **Protocol sanity bounds** (|d| ≤ 100 m, speed ≤ 200 m/s, heading ±π, lanes 0–7, lists and strings capped) are rejected by the decoder; real plausibility checks stay in the server.
 - **Clarifications after the freeze (2026-09-30, orchestrator; no wire change).**
   - **`d` sign:** the codecs pass `d` unchanged. Its sign is the CONTRACTS convention (+ = right of travel); earlier wording here said "+ = left".
+  - **Every lateral PlayerState field is right-positive**, as CONTRACTS §2 (sign conventions) and §4 (`VehicleState`, `VehicleInput`): `heading_e4` (+ = nose right of the road tangent), `lat_vel_cms` (+ = toward the car's right), `yaw_rate_mrad_s` (+ = turning right), `steer_e4` (+ = steering right). The codecs pass them unchanged (wording fix, 2026-09-30, orchestrator; no wire change).
   - **Lane numbering** in `lane`, `lc_target_lane` and `target_lane`: 0 = rightmost on the wire. The server converts from the sim's median-first lanes at encode, and the client converts back at decode. Value 7 is a ramp (MP-D6).
   - **`car_id`:** the server allocates it and never reuses one within 30 s of its despawn (MP-D6).
   - **Placement:** there is no spawn message. When the server places a player (join, respawn, rejoin), it puts that player's own id in `player_states` with `run_state = protected` and the placement tick. It repeats this every tick until the client reports a state near it. The client teleports there, applies each placement tick once, and starts 3 s of protection. States the client sent before the placement are dropped for 2 s.

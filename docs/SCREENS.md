@@ -324,7 +324,8 @@ The game boots into the title: the run's MENU state over the attract drive (docs
 | --- | --- | --- |
 | `title_screens.gd` | `TitleScreens` | CanvasLayer (layer 60, like RunScreens; they never show together): built on first use, opened by the run in MENU, emits `start(mode)` |
 | `title_screen.gd` | `TitleScreen` | the title: logo, menu, profile chip, settings / account view, leaderboards |
-| `online_hub_screen.gd` | `OnlineHubScreen` | the online hub stub |
+| `online_hub_screen.gd` | `OnlineHubScreen` | the online hub: rooms (N5.2), loop practice, friends, crew, leaderboards |
+| `room_lobby_panel.gd` | `RoomLobbyPanel` | N5.2: the hub's room flows (PRIVATE ROOM, JOIN BY CODE, ROOM BROWSER, joining) |
 | `title_profile_chip.gd` | `TitleProfileChip` | `name#tag` and the online status (a ScreenButton) |
 | `title_band.gd` | `TitleBand` | the slanted ink band behind the left-anchored menus (one draw call) |
 
@@ -341,7 +342,20 @@ The game boots into the title: the run's MENU state over the attract drive (docs
 
 ### Online hub
 
-ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS OFF IN THIS BUILD · LOOP PRACTICE STILL WORKS") top-left, BACK top-right (Esc too). A ROOMS panel (COMING SOON in gold): QUICK JOIN, ROOM BROWSER, PRIVATE ROOM, JOIN BY CODE, disabled with SOON until N5. LOOP PRACTICE (primary, bottom-left, "SOLO ON THE LOOP · WORKS OFFLINE" over it) starts the run in loop mode, the same as `?mode=loop`. FRIENDS, CREW and LEADERBOARDS go up from the right thumb: FRIENDS / CREW open the title's account view on that tab and DONE comes back to the hub (disabled, ONLINE OFF, without a session); LEADERBOARDS opens on the Loop board.
+ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS OFF IN THIS BUILD · LOOP PRACTICE STILL WORKS") top-left, BACK top-right (Esc too). A ROOMS panel (UP TO 8 PLAYERS in gold): QUICK JOIN, ROOM BROWSER, PRIVATE ROOM, JOIN BY CODE (N5.2, below); without the server (`?server=off`) they are disabled with ONLINE OFF and the panel says "Rooms need the online server. Loop practice still works." (OFFLINE and the reason while signing in or offline). LOOP PRACTICE (primary, bottom-left, "SOLO ON THE LOOP · WORKS OFFLINE" over it) starts the run in loop mode, the same as `?mode=loop`. FRIENDS, CREW and LEADERBOARDS go up from the right thumb: FRIENDS / CREW open the title's account view on that tab and DONE comes back to the hub (disabled, ONLINE OFF, without a session); LEADERBOARDS opens on the Loop board.
+
+### Rooms (N5.2)
+
+Docs: [ROOMS_CLIENT.md](ROOMS_CLIENT.md). The room buttons open `RoomLobbyPanel` over the dimmed hub, one view at a time; every button is a ScreenButton at least `touch_target_px` tall; Esc / BACK closes it.
+
+| Button | View | Then |
+| --- | --- | --- |
+| QUICK JOIN | joining status: "CONNECTING...", "FINDING A ROOM...", CANCEL | the room |
+| PRIVATE ROOM | TRAFFIC: LIGHT / NORMAL / RUSH HOUR; TIME OF DAY: CYCLE / MORNING / GOLDEN (fixed) / NIGHT; CREATE ROOM, BACK | "CREATING YOUR ROOM...", the room |
+| JOIN BY CODE | the code field (6 characters; lower case, spaces and dashes are forgiven; a wrong code says "A code is 6 letters and digits."), JOIN, BACK | "JOINING ABC234...", the room |
+| ROOM BROWSER | up to 4 public rooms, fullest first: `7/8 · NORMAL · NIGHT ×2 · 42 MS` (a full room disabled), REFRESH (also every `room_browse_refresh_s`), BACK; none: "NO PUBLIC ROOMS YET · QUICK JOIN STARTS ONE" | "JOINING ROOM 12...", the room |
+
+A refusal shows the server's reason in hot text ("No room with that code.", "That room is full.", ...) with TRY AGAIN and BACK. When the room's snapshot arrives the panel closes and the hub emits `room_ready(session)`; the run drives in the room (in-room HUD: ROOMS_CLIENT.md → Room HUD). Leaving the room (LEAVE ROOM, the pause menu's QUIT), a kick, the room closing or the seat lost come back to the hub with the reason on the ROOMS panel in hot text.
 
 ### Flow
 
@@ -350,6 +364,8 @@ ONLINE (speed-tilted) and the status line (`name#tag · ONLINE`, or "ONLINE IS O
 | Title PLAY / Enter | `start(&"journey")` (WP8.1: after the first-run chooser on a fresh save) | `start_mode`: the Journey run, full 1 s countdown, same frame (the first one on a fresh save warms up) |
 | Title DAILY DRIVE | `start(&"daily")` | the day's seed (`Rng.daily_seed` of today's UTC date) |
 | Hub LOOP PRACTICE | `start(&"loop")` | loop mode (N3.2) |
+| Hub room joined (N5.2) | `room_ready(session)` | `start_room(session)`: loop mode in the room (RunRoom) |
+| Pause RETRY in a room | `retry` | REJOIN CREW (`run_event.rejoin`) |
 | Pause QUIT | `quit` | `enter_menu()` |
 | Results MENU | `menu` | `enter_menu()` |
 | Results RETRY | `retry` | `retry()`: the same mode (Daily keeps the day's seed) |
@@ -367,11 +383,12 @@ tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=sky_t:0.2,0.
 tools/snap.sh src/run/run.tscn --state=menu --attract_s=24                               # later in the attract drive
 tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=title:hub,settings,play   # the hub, the settings view, PLAY -> countdown
 tools/snap.sh src/run/run.tscn --state=menu --shot=pass --attract_s=1.5
+tools/snap.sh src/run/run.tscn --renderer=both --state=menu --sweep=title:rooms,rooms_off,rooms_create,rooms_code,rooms_browser,rooms_joining,rooms_failed   # N5.2
 ```
 
 ### Tests
 
-`tests/ui/test_title_screen.gd` (every button's intent through iOS-id taps, Enter / Esc, the left-anchored layout and touch targets, the settings and account views, the profile chip following a fake session, FRIENDS / CREW from the hub into the account tabs and back, the Loop board, the text size, nothing drawn when hidden), `tests/ui/test_title_text_fit.gd` (menu with the widest name#tag, settings GAME / AUDIO, account, hub with and without a session; both text sizes, 1280x720 and a notched 1560x720), `tests/run/test_title_flow.gd` (see docs/RUN.md).
+`tests/ui/test_room_hub.gd` (N5.2: rooms off without a server, every room flow through iOS-id taps, refusals, touch targets), `tests/ui/test_title_screen.gd` (every button's intent through iOS-id taps, Enter / Esc, the left-anchored layout and touch targets, the settings and account views, the profile chip following a fake session, FRIENDS / CREW from the hub into the account tabs and back, the Loop board, the text size, nothing drawn when hidden), `tests/ui/test_title_text_fit.gd` (menu with the widest name#tag, settings GAME / AUDIO, account, hub with and without a session; both text sizes, 1280x720 and a notched 1560x720), `tests/run/test_title_flow.gd` (see docs/RUN.md).
 
 
 ## Garage (WP8.2)
