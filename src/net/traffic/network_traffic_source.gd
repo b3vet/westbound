@@ -27,7 +27,8 @@ extends SpawnSource
 ## from the last tick, then IDM toward its leader (the same leader search by lateral
 ## overlap as TrafficSim, the local player included as a participant, the profile's
 ## parameters, the leg's headway scale and the racers' weaving T / s0 / b toward traffic),
-## the brake tap when the player cuts in, hard brakes and the clamp. It runs up to the
+## the road's lane-drop harmonisation zones (WP6.8, mirrored), the brake tap when the
+## player cuts in, hard brakes and the clamp. It runs up to the
 ## integer part of `server_now()`; the published state is that tick's state carried
 ## ballistically to the fraction, so it moves smoothly between ticks and matches the
 ## server's discrete trajectory when the model agrees. MOBIL, lane splitting, lane-drop
@@ -37,7 +38,8 @@ extends SpawnSource
 ## rules, remote players); see TrafficCorrector for the history and blending.
 ##
 ## Pure (no Node or autoload access); allocation-free per tick (step, apply_frame,
-## notify_hit and the queries).
+## notify_hit and the queries), except `sync_road` (the road's lane drops, every ~1 km of
+## the player's travel, director rate).
 
 const SOURCE_ID := &"network"
 const NO_SLOT := -1
@@ -50,7 +52,6 @@ const _NONE := TrafficState.LaneChange.NONE
 const _SIGNALING := TrafficState.LaneChange.SIGNALING
 const _MOVING := TrafficState.LaneChange.MOVING
 const _BLINKERS := TrafficState.FLAG_BLINKER_LEFT | TrafficState.FLAG_BLINKER_RIGHT
-const _BRAKES := TrafficState.FLAG_BRAKE | TrafficState.FLAG_BRAKE_STRONG
 ## NetCodec.INTENT_KIND indices.
 const INTENT_LANE_CHANGE := 0
 const INTENT_CANCEL := 1
