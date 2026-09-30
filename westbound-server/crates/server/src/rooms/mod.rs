@@ -11,8 +11,10 @@
 //! | `clock` | The room clock (32 min cycle, UTC-derived, fixed, night) |
 //! | `plausibility` | Checks on reported `PlayerState`s |
 //! | `road` | Lane geometry, bounds and flow speeds on the loop |
-//! | `traffic` | The traffic seam (`RoomTraffic`, `NoTraffic`) for N4.2 |
-//! | `sim_traffic` | `RoomTraffic` over `sim::traffic::TrafficWorld` (`rooms.traffic = "sim"`) |
+//! | `traffic` | The traffic seam (`RoomTraffic`, `NoTraffic`) |
+//! | `sim_traffic` | `RoomTraffic` over `sim::traffic::TrafficWorld` (`rooms.traffic = "sim"`, the default) |
+//! | `traffic_stream` | N4.2: each client's traffic (area of interest, spawns, despawns, intents, corrections) |
+//! | `car_ids` | N4.2: wire car ids (MP-D6: never reused within 30 s) |
 //! | `metrics` | `wb_rooms`, `wb_room_tick_seconds`, offences, drops |
 //!
 //! **Locks.** The registry (`Shared::registry`, one `std::sync::Mutex`) is taken to create,
@@ -20,6 +22,7 @@
 //! across an `.await`. Lock order: the registry is released before the presence hub is
 //! called. Per-tick data lives in the room task alone.
 
+pub mod car_ids;
 pub mod clock;
 pub mod metrics;
 pub mod plausibility;
@@ -30,6 +33,7 @@ mod task;
 #[cfg(test)]
 mod tests;
 pub mod traffic;
+pub mod traffic_stream;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
@@ -57,6 +61,7 @@ use plausibility::CheckLimits;
 use room::{Cmd, JoinReq, Room};
 use sim_traffic::{GapRules, SimTraffic, SimTrafficData};
 use traffic::{NoTraffic, RoomTraffic};
+use traffic_stream::StreamRules;
 
 /// `Error.detail` texts of the registry.
 pub const DETAIL_SERVER_FULL: &str = "All rooms are full. Try again soon.";
@@ -88,6 +93,8 @@ pub struct RoomParams {
     pub gap: GapRules,
     /// `rooms.traffic = "sim"`.
     pub traffic_sim: bool,
+    /// Traffic streaming (`rooms.traffic_*`).
+    pub stream: StreamRules,
 }
 
 impl RoomParams {
@@ -129,6 +136,15 @@ impl RoomParams {
                 clear_m: r.spawn_clear_m,
             },
             traffic_sim: r.traffic == ROOM_TRAFFIC_SIM,
+            stream: StreamRules {
+                aoi_behind_mm: (r.traffic_aoi_behind_m * MM_PER_M).round() as i64,
+                aoi_ahead_mm: (r.traffic_aoi_ahead_m * MM_PER_M).round() as i64,
+                hysteresis_mm: (r.traffic_aoi_hysteresis_m * MM_PER_M).round() as i64,
+                near_mm: (r.traffic_near_m * MM_PER_M).round() as i64,
+                near_period_ticks: (rate / r.traffic_near_hz.max(1)).max(1),
+                far_period_ticks: (rate / r.traffic_far_hz.max(1)).max(1),
+                car_id_hold_ticks: ms_ticks(r.traffic_car_id_hold_ms),
+            },
         }
     }
 
@@ -286,10 +302,10 @@ impl RoomHooks {
         let traffic: TrafficFactory = if params.traffic_sim {
             let data = SimTrafficData::builtin().map_err(anyhow::Error::msg)?;
             let map = map.clone();
-            let gap = params.gap;
+            let (gap, rules) = (params.gap, params.stream);
             Arc::new(move |s: &RoomSettings, seed, origin| {
                 Box::new(SimTraffic::new(
-                    &data, &map.map, s.density, seed, origin, gap,
+                    &data, &map.map, s.density, seed, origin, gap, rules,
                 )) as Box<dyn RoomTraffic>
             })
         } else {
@@ -332,6 +348,8 @@ pub struct Rooms {
     next_id: AtomicU32,
     shutdown: CancellationToken,
     hooks: RoomHooks,
+    /// Tests: builds the traffic of rooms created from now on instead of `hooks.traffic`.
+    traffic_override: Mutex<Option<TrafficFactory>>,
 }
 
 impl std::fmt::Debug for Rooms {
@@ -372,7 +390,17 @@ impl Rooms {
             next_id: AtomicU32::new(1),
             shutdown,
             hooks,
+            traffic_override: Mutex::new(None),
         }
+    }
+
+    /// Tests (probes around the traffic): rooms created from now on get their traffic from
+    /// `factory`.
+    pub fn set_traffic_factory(&self, factory: TrafficFactory) {
+        *self
+            .traffic_override
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(factory);
     }
 
     pub fn params(&self) -> &RoomParams {
@@ -469,7 +497,13 @@ impl Rooms {
         };
         let origin = clock.now().tick;
         let seed = start_unix_ms ^ i64::from(id);
-        let traffic = (self.hooks.traffic)(&settings, seed, origin);
+        let factory = self
+            .traffic_override
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| self.hooks.traffic.clone());
+        let traffic = factory(&settings, seed, origin);
         let info = Arc::new(RoomInfo::new(id, code.clone(), &settings));
         let (tx, rx) = mpsc::channel(p.command_queue);
         let room = Room::new(

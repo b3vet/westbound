@@ -2,18 +2,22 @@
 //! `PlayerState` a client would send each room tick. It drives the loop in its lane at a
 //! set speed (accelerating like a car, never faster than `accel_mps2`), takes the server's
 //! placements (its own id in `player_states`), keeps a server-tick estimate from the room
-//! snapshot and `Pong`s, and records what it saw for the tests. Spec:
+//! snapshot and `Pong`s, keeps a mirror of the traffic it is streamed (N4.2,
+//! [`TrafficMirror`]), and records what it saw for the tests. Spec:
 //! WESTBOUND_MULTIPLAYER_HANDOFF.md → Players, Testing → Netcode harness ("bots drive
 //! scripted paths"); docs/PROTOCOL.md §1 (clock sync), §4.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use protocol::budget::{on_wire_len, Direction};
 use protocol::{
     decode_server_frame, ClientMsg, Code, DecodeError, ErrorMsg, LobbyEvent, Ping, PlayerFlags,
     PlayerState, RoomEvent, RoomLeftReason, RoomSnapshot, RunResult, RunState, ServerMsg,
 };
 use sim::map::LoopMap;
+
+use crate::traffic::TrafficMirror;
 
 const MS_PER_S: f64 = 1_000.0;
 const MM_PER_M: f64 = 1_000.0;
@@ -58,6 +62,10 @@ pub struct Seen {
     /// Largest frame (bytes) and total bytes received.
     pub max_frame: usize,
     pub bytes: u64,
+    /// Bytes on the wire with WebSocket and TLS framing (docs/PROTOCOL.md §11).
+    pub wire_bytes: u64,
+    /// The traffic the bot has been told about (N4.2).
+    pub traffic: TrafficMirror,
 }
 
 pub struct RoomBot {
@@ -142,10 +150,19 @@ impl RoomBot {
     pub fn on_frame(&mut self, bytes: &[u8], now_ms: u64) -> Result<(), DecodeError> {
         self.seen.frames += 1;
         self.seen.bytes += bytes.len() as u64;
+        self.seen.wire_bytes += on_wire_len(bytes.len(), Direction::ServerToClient) as u64;
         self.seen.max_frame = self.seen.max_frame.max(bytes.len());
+        let own_s_mm = ((self.s_m * MM_PER_M).round() as u32) % self.map.length_mm();
+        self.seen.traffic.begin_frame();
         for msg in decode_server_frame(bytes)? {
-            self.on_msg(msg, now_ms);
+            if let ServerMsg::RoomSnapshot(_) = &msg {
+                self.seen.traffic.reset();
+            }
+            if !self.seen.traffic.on_msg(&msg, own_s_mm, &self.map) {
+                self.on_msg(msg, now_ms);
+            }
         }
+        self.seen.traffic.end_frame();
         Ok(())
     }
 

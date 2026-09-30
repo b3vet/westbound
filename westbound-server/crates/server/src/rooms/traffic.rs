@@ -3,10 +3,11 @@
 //! vehicle at its latest reported state"), Players → Spawning ("The server picks a gap in
 //! traffic about 40 m behind your crew leader").
 //!
-//! A room owns one `Box<dyn RoomTraffic>`. N5.1 ships [`NoTraffic`] (no cars; every spawn
-//! request is already a free gap). N4.2 plugs the `sim` crate's ring in behind the same
-//! trait: it reads the players every tick, streams `TrafficSpawn/Despawn/Intent/Correction`
-//! into each client's frame, and moves a spawn request into a real gap.
+//! A room owns one `Box<dyn RoomTraffic>`: [`NoTraffic`] (no cars; every spawn request is
+//! already a free gap; `rooms.traffic = "none"`) or the `sim` crate's ring
+//! (`sim_traffic::SimTraffic`, the default): it reads the players every tick, streams
+//! `TrafficSpawn/Despawn/Intent/Correction` into each client's frame (N4.2,
+//! `traffic_stream`), and moves a spawn request into a real gap.
 //!
 //! Contract for implementations (the room loop's rules): no blocking, no I/O, and no
 //! per-tick allocation where practical (the room hands out reused buffers).
@@ -65,12 +66,19 @@ pub trait RoomTraffic: Send {
     /// A seat was released (the player left, was kicked or timed out).
     fn player_left(&mut self, player_id: u16);
 
+    /// A player's hit on traffic car `car_id` was accepted (N6 decides that): the car's
+    /// scripted reaction (swerve, hard brake, hazards), streamed to every client that has
+    /// the car. False when there is no such car. Nothing calls this before N6.
+    fn hit_car(&mut self, _player_id: u16, _car_id: u16) -> bool {
+        false
+    }
+
     /// The free gap nearest `want` (same lane or a neighbour, within a few tens of metres),
     /// for a spawn, respawn or rejoin. The spot's speed is the traffic's local flow.
     fn free_gap(&self, map: &LoopMap, want: SpawnSpot) -> SpawnSpot;
 }
 
-/// No traffic (until N4.2): nothing to stream, and every spot is free.
+/// No traffic (`rooms.traffic = "none"`): nothing to stream, and every spot is free.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoTraffic;
 
