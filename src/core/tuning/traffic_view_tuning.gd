@@ -48,6 +48,12 @@ const PATH := "res://data/tuning/traffic_view.tres"
 @export var cull_behind_focus_m: float = 40.0   # not in spec
 ## Blob shadows only within this distance of the camera (a few pixels beyond).
 @export var shadow_distance_m: float = 250.0   # not in spec
+## G8 (docs/ART_PRODUCTION.md §3.5): models that bring a LOD1 mesh (mesh meta
+## `lod1_path`, written by tools/art/convert.gd) are drawn with it beyond this distance
+## from the camera: a car is ~14 px wide there on the owner's phone (§2.3: ~450/D px per
+## metre). Each such model costs one more draw call while it has both near and far
+## instances. <= 0 = never (LOD0 at every distance). The procedural models have no LOD1.
+@export var lod1_distance_m: float = 60.0   # not in spec
 
 @export_group("Glow sprites")
 ## Rear lamps glow at night only when the vehicle has its headlights on (FLAG_HEADLIGHTS).

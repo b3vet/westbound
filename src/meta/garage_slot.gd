@@ -29,6 +29,11 @@ const UNLOCKS: Array[StringName] = [UNLOCK_START, UNLOCK_LEVEL, UNLOCK_LEG, UNLO
 @export var unlock: StringName = UNLOCK_LEVEL
 ## The driver level that unlocks it (unlock == level).
 @export var unlock_level: int = 1
+## G7 (docs/ART_PRODUCTION.md §3.11): ids this slot had before, e.g. "slot_4" once its
+## COMING SOON placeholder gets a real car and the id becomes the CarDef id. The save's
+## unlock ("car/slot_4") and look keys under a former id move to `id` on load
+## (Garage.profile -> SaveMigrations.rename_car_ids), so an unlock earned early carries over.
+@export var former_ids: PackedStringArray = []
 
 
 ## A real car (not a placeholder).

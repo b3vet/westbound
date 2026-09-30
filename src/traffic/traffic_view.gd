@@ -17,6 +17,11 @@ extends Node3D
 ## One MultiMesh per model (body, glass, wheels and every lamp group in one mesh; one
 ## draw call per model with any vehicle on screen), one MultiMesh of glow sprites and
 ## headlight pools for every vehicle, one BlobShadowMulti: about models + 2 draw calls.
+## LOD (WP-ART-G, G8): a model whose mesh carries a `lod1_path` meta (a converted .glb
+## model's LOD1, tools/art/convert.gd) gets a second MultiMesh with that mesh, used
+## for its vehicles beyond TrafficViewTuning.lod1_distance_m from the camera (one more
+## draw call while it has both near and far vehicles). Models without one draw LOD0 at
+## every distance, as before.
 ## Paint comes from a palette uniform (the biome's traffic palette, or a model's fixed
 ## palette); lamps, wheel spin and body roll/pitch come from per-instance custom data
 ## (see assets/shaders/traffic.gdshader and TrafficLights).
@@ -90,6 +95,12 @@ class ModelPool:
 	var palette_size: int = 0
 	## One central lamp per pair (motorbikes): the glow shows the more important kind.
 	var single_lamp: bool = false
+	## G8: the LOD1 mesh and its MultiMesh (null without one), instances written this frame.
+	var lod_mesh: Mesh
+	var lod_node: MultiMeshInstance3D
+	var lod_mm: MultiMesh
+	var lod_count: int = 0
+	var lod_tris: int = 0
 
 
 class Carriageway:
@@ -192,6 +203,7 @@ var _cull_behind: float = 0.0
 var _shadow_lift: float = 0.0
 var _shadow_scale: float = 1.0
 var _shadow_dist2: float = 0.0
+var _lod1_dist2: float = INF
 var _behind_focus: float = 0.0
 ## Road-space pre-cull window from update_view() (off until it is called).
 var _focus_s: float = 0.0
@@ -369,6 +381,7 @@ func render(fraction: float) -> void:
 	var s_max := _focus_s + cull_distance_m if _has_focus and cull_distance_m > 0.0 else INF
 	for m in _models:
 		m.count = 0
+		m.lod_count = 0
 	_glow_count = 0
 	_shadow_count = 0
 	_visible = 0
@@ -388,17 +401,24 @@ func render(fraction: float) -> void:
 			sd.wheel[i] = fposmod(sd.wheel[i] + sd.v1[i] * dt_frame * sd.inv_wheel_r[i], TAU)
 			_place(sd, i, _fraction)
 			var shadow := true
+			var far := false
 			if cam != null:
 				var to := _pos - cam_pos
 				var dist2 := to.length_squared()
 				if (cull2 > 0.0 and dist2 > cull2) or to.dot(cam_fwd) < -_cull_behind:
 					continue
 				shadow = dist2 < _shadow_dist2
+				far = dist2 > _lod1_dist2
 			_finish(sd, i, t)
 			var m := _models[sd.model[i]]
-			m.mm.set_instance_transform(m.count, _xf)
-			m.mm.set_instance_custom_data(m.count, _custom)
-			m.count += 1
+			if far and m.lod_mm != null:
+				m.lod_mm.set_instance_transform(m.lod_count, _xf)
+				m.lod_mm.set_instance_custom_data(m.lod_count, _custom)
+				m.lod_count += 1
+			else:
+				m.mm.set_instance_transform(m.count, _xf)
+				m.mm.set_instance_custom_data(m.count, _custom)
+				m.count += 1
 			_visible += 1
 			# Blob shadow: the vehicle's footprint grown by the margin, on the road plane
 			# (skipped far away, where it would be a few pixels).
@@ -448,6 +468,8 @@ func render(fraction: float) -> void:
 	for m in _models:
 		if m.mm.visible_instance_count != m.count:
 			m.mm.visible_instance_count = m.count
+		if m.lod_mm != null and m.lod_mm.visible_instance_count != m.lod_count:
+			m.lod_mm.visible_instance_count = m.lod_count
 	if _glow_mm.visible_instance_count != _glow_count:
 		_glow_mm.visible_instance_count = _glow_count
 	if _shadow_mm.visible_instance_count != _shadow_count:
@@ -472,6 +494,8 @@ func draw_calls() -> int:
 	for m in _models:
 		if m.count > 0:
 			n += 1
+		if m.lod_count > 0:
+			n += 1
 	if _glow_count > 0:
 		n += 1
 	if _shadow_count > 0:
@@ -483,7 +507,7 @@ func draw_calls() -> int:
 func triangles() -> int:
 	var n := 0
 	for m in _models:
-		n += m.count * m.tris
+		n += m.count * m.tris + m.lod_count * m.lod_tris
 	return n + _glow_count * GLOW_TRIS + _shadow_count * SHADOW_TRIS
 
 
@@ -516,6 +540,17 @@ func model_instances(index: int) -> int:
 
 func model_capacity(index: int) -> int:
 	return _models[index].mm.instance_count
+
+
+## G8: vehicles of a model drawn with its LOD1 mesh this frame (0 without a LOD1).
+func model_lod_instances(index: int) -> int:
+	var m := _models[index]
+	return m.lod_mm.visible_instance_count if m.lod_mm != null else 0
+
+
+## G8: the model's LOD1 triangle count (0 without a LOD1).
+func model_lod_triangles(index: int) -> int:
+	return _models[index].lod_tris
 
 
 func model_triangles(index: int) -> int:
@@ -707,6 +742,7 @@ func _read_tuning() -> void:
 	_cull_behind = tuning.cull_behind_m
 	_behind_focus = tuning.cull_behind_focus_m
 	_shadow_dist2 = tuning.shadow_distance_m * tuning.shadow_distance_m
+	_lod1_dist2 = tuning.lod1_distance_m * tuning.lod1_distance_m if tuning.lod1_distance_m > 0.0 else INF
 
 
 func _default_cull_distance(ctx: RunContext) -> float:
@@ -764,22 +800,37 @@ func _load_model(path: String, instance_capacity: int) -> int:
 			_next_palette_slot += n
 		else:
 			push_warning("TrafficView: no paint slots left for %s's palette" % m.id)
-	m.mm = MultiMesh.new()
-	m.mm.transform_format = MultiMesh.TRANSFORM_3D
-	m.mm.use_custom_data = true
-	# Compatibility multiplies the vertex COLOR by the instance color even when the
-	# MultiMesh has none (it reads zero): carry white instance colors, written once.
-	m.mm.use_colors = true
-	m.mm.mesh = mesh
-	m.mm.instance_count = instance_capacity
-	for i in instance_capacity:
-		m.mm.set_instance_color(i, Color.WHITE)
-	m.mm.visible_instance_count = 0
+	m.mm = _pool_multimesh(mesh, instance_capacity)
 	m.node = _make_instance(StringName("Model_" + String(m.id)), m.mm, _material)
+	var lod_path := String(mesh.get_meta(&"lod1_path", ""))
+	if not lod_path.is_empty():
+		m.lod_mesh = load_model_mesh(lod_path)
+		if m.lod_mesh == null:
+			push_warning("TrafficView: %s's LOD1 %s does not load; LOD0 at every distance" % [m.id, lod_path])
+		else:
+			m.lod_tris = mesh_triangles(m.lod_mesh)
+			m.lod_mm = _pool_multimesh(m.lod_mesh, instance_capacity)
+			m.lod_node = _make_instance(StringName("Model_%s_lod1" % m.id), m.lod_mm, _material)
 	_models.append(m)
 	var k := _models.size() - 1
 	_model_by_path[path] = k
 	return k
+
+
+## A model pool's MultiMesh: transforms, custom data (lamps, wheel, roll, pitch, paint).
+static func _pool_multimesh(mesh: Mesh, instance_capacity: int) -> MultiMesh:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_custom_data = true
+	# Compatibility multiplies the vertex COLOR by the instance color even when the
+	# MultiMesh has none (it reads zero): carry white instance colors, written once.
+	mm.use_colors = true
+	mm.mesh = mesh
+	mm.instance_count = instance_capacity
+	for i in instance_capacity:
+		mm.set_instance_color(i, Color.WHITE)
+	mm.visible_instance_count = 0
+	return mm
 
 
 func _model_for(type_id: int, variant: int) -> int:
@@ -806,6 +857,8 @@ func _free_nodes() -> void:
 	for m in _models:
 		if is_instance_valid(m.node):
 			m.node.free()
+		if m.lod_node != null and is_instance_valid(m.lod_node):
+			m.lod_node.free()
 	_models.clear()
 	if is_instance_valid(_glow):
 		_glow.free()

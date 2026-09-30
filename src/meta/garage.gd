@@ -32,10 +32,14 @@ static func catalog() -> GarageCatalog:
 ## The player's profile over the save's sections (a save from before WP8.2 is backfilled
 ## once; unlocks whose rule holds are recorded).
 static func profile() -> MetaProfile:
+	# G7: unlocks and looks recorded under a slot's former id (a COMING SOON slot that
+	# now holds a car) move to its current id.
+	var renamed := SaveMigrations.rename_car_ids(Save.section(SECTION_UNLOCKS), Save.section(SECTION_GARAGE),
+			catalog().car_id_renames())
 	var p := MetaProfile.new(Save.section(SECTION_STATS), Save.section(SECTION_UNLOCKS),
 			Save.section(SECTION_GARAGE), catalog(), tuning())
 	var changed_now := p.backfill(Save.section(SaveMigrations.KEY_BESTS), Save.section(SaveMigrations.KEY_JOURNEYS))
-	if not p.refresh_unlocks().is_empty() or changed_now:
+	if not p.refresh_unlocks().is_empty() or changed_now or renamed:
 		Save.request_save()
 	return p
 

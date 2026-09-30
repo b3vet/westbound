@@ -18,6 +18,7 @@ cull_distance_m = 0.0
 cull_behind_m = 20.0
 cull_behind_focus_m = 40.0
 shadow_distance_m = 250.0
+lod1_distance_m = 60.0
 glow_day_tail = false
 pool_start_m = 0.5
 pool_length_m = 16.0

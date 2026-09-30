@@ -11,6 +11,8 @@ extends SceneTree
 ## Writes assets/traffic/<model>.res (ArrayMesh, traffic material) and
 ## assets/traffic/<model>.tscn (root Traffic_<model> + Body MeshInstance3D, the path
 ## VehicleType.model_scene_paths lists). Deterministic; rerun after changing a recipe.
+## A model already converted from a modelled .glb (tools/art/convert.gd, G3) is kept:
+## its recipe is retired (ArtConvert.is_converted; delete the .res to bring it back).
 ##
 ## Frame: -Z forward, +X right, Y up, meters; origin on the ground at the center of
 ## the body box (TrafficState's s, d), which for cars is also between the axles.
@@ -110,8 +112,13 @@ func _save(model: StringName, glow_front: Vector3, glow_rear: Vector3, wheel_r: 
 	}
 	if not paint_palette.is_empty():
 		meta["paint_palette"] = paint_palette
-	var mesh := _b.commit(meta)
 	var mesh_path := OUT + String(model) + ".res"
+	# Recipe retirement (WP-ART-G, G3): a model converted from a modelled .glb
+	# (tools/art/convert.gd; mesh meta art_source) wins; this recipe no longer writes it.
+	if ArtConvert.is_converted(mesh_path):
+		_written.append("%s (kept: converted from a .glb)" % mesh_path)
+		return
+	var mesh := _b.commit(meta)
 	var err := ResourceSaver.save(mesh, mesh_path)
 	if err != OK:
 		push_error("build_traffic_models: cannot save %s (%d)" % [mesh_path, err])

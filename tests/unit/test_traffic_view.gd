@@ -632,3 +632,77 @@ func _check_orientation(path: String, mesh: Mesh) -> void:
 		lt(sum[TrafficLights.PART_HEAD] / cnt[TrafficLights.PART_HEAD], 0.0, "%s headlamps forward (-Z)" % path)
 		gt(sum[TrafficLights.PART_REAR] / cnt[TrafficLights.PART_REAR], 0.0, "%s tail lamps rearward" % path)
 	near(wheel_min_y, 0.0, GROUND_TOL_M, "%s wheels touch the ground" % path)
+
+
+# ---------------------------------------------------------------- LOD1 (WP-ART-G, G8)
+
+## A converted model with a LOD1 (the calibration traffic model, in tools/art/convert.gd's
+## output shape) draws its far vehicles with the LOD1 mesh; the procedural models have
+## none, so they keep drawing LOD0 everywhere.
+func test_lod1_models_draw_far_vehicles_with_their_lod1() -> void:
+	for k in _view.model_count():
+		eq(_view.model_lod_triangles(k), 0, "%s: procedural, no LOD1" % _view.model_id(k))
+	var dir := "user://traffic_view_lod"
+	var conv := ArtConvert.new()
+	var side := {"model": "calib_traffic", "vehicle_type": "sedan"}
+	var meshes: Array[ArrayMesh] = []
+	for glb: String in ["res://tests/art/fixtures/export/traffic/calib_traffic.glb",
+			"res://tests/art/fixtures/export/traffic/calib_traffic_lod1.glb"]:
+		var scene := ArtCalib.read_glb(glb)
+		var r := conv.traffic(scene, side, glb)
+		scene.free()
+		eq(r.problems, PackedStringArray(), "%s converts" % glb)
+		meshes.append(r.mesh)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
+	eq(ResourceSaver.save(meshes[1], dir + "/calib_traffic_lod1.res"), OK, "LOD1 saved")
+	meshes[0].set_meta(&"lod1_path", dir + "/calib_traffic_lod1.res")
+	eq(ArtConvert.save_traffic(meshes[0], "calib_traffic", dir), OK, "LOD0 saved")
+	var reg := TrafficRegistry.load_default(_ctx.tuning.traffic)
+	var ti := reg.type_index(&"sedan")
+	var t := reg.types[ti].duplicate() as VehicleType
+	t.model_scene_paths = PackedStringArray([dir + "/calib_traffic.tscn"])
+	reg.types[ti] = t
+	var cam := Camera3D.new()
+	tree.root.add_child(cam)
+	cam.make_current()
+	var views: Array[TrafficView] = []
+	for lod_on: bool in [true, false]:
+		var st := TrafficState.new(_ctx.tuning.traffic.max_active_vehicles)
+		var view := TrafficView.new()
+		view.tuning = _tt.duplicate() as TrafficViewTuning
+		if not lod_on:
+			view.tuning.lod1_distance_m = 0.0
+		tree.root.add_child(view)
+		views.append(view)
+		view.setup(_ctx, _road, _origin, reg, st)
+		cam.look_at_from_position(_local(0.0, 0.0) + Vector3.UP * 2.0, _local(100.0, 0.0) + Vector3.UP * 2.0, Vector3.UP)
+		var near_slot := st.allocate()
+		var far_slot := st.allocate()
+		for pair: Array in [[near_slot, 20.0], [far_slot, 20.0 + _tt.lod1_distance_m + 60.0]]:
+			var i: int = pair[0]
+			var s: float = pair[1]
+			st.s[i] = s
+			st.d[i] = _road.lane_center_d(1, s)
+			st.v[i] = 25.0
+			st.length[i] = reg.length[ti]
+			st.width[i] = reg.width[ti]
+			st.lane[i] = 1
+			st.type_id[i] = ti
+		view.capture_tick()
+		view.capture_tick()
+		view.render(1.0)
+		var m := view.slot_model(near_slot)
+		eq(view.model_id(m), &"calib_traffic", "the sedan draws the converted model")
+		if lod_on:
+			eq(view.model_instances(m), 1, "near vehicle on LOD0")
+			eq(view.model_lod_instances(m), 1, "far vehicle on LOD1")
+			var extra := (1 if view.glow_count() > 0 else 0) + (1 if view.shadow_count() > 0 else 0)
+			eq(view.draw_calls(), 2 + extra, "LOD0 and LOD1: one more draw while both show")
+			ge(view.triangles(), view.model_triangles(m) + view.model_lod_triangles(m), "both meshes counted")
+			lt(view.model_lod_triangles(m), view.model_triangles(m), "LOD1 is lighter")
+		else:
+			eq(view.model_instances(m), 2, "lod1_distance_m <= 0: LOD0 at every distance")
+			eq(view.model_lod_instances(m), 0, "no LOD1 instances")
+	for v in views:
+		v.free()
+	cam.free()

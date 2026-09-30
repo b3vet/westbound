@@ -32,7 +32,9 @@ extends Node3D
 ##   - look point: ahead of the car along the smoothed heading, shifted up to 1.2 m toward
 ##     the road-relative lateral velocity (the lane you are moving into);
 ##   - roll: up to 1.5 deg into the lateral acceleration (right turn = right side down);
-##   - hood: rigid (0 Hz springs) at the model's Markers/cam_hood when it has one.
+##   - hood: rigid (0 Hz springs) at the model's Markers/cam_hood when it has one: a
+##     marker directly under the target, or the authored (not stubbed) marker of the
+##     target's CarModel (`model` property; WP-ART-G, G6). Else the mode's offsets.
 ##   - cockpit (CameraTuning.cockpit_mode): this node is the rigid seat frame at the
 ##     driver's eye (the model's authored Markers/cam_cockpit, else CameraTuning's
 ##     CarDef-proportional default), with the car's full pose (road pitch included) and
@@ -42,6 +44,11 @@ extends Node3D
 ##     you move into), a bounded head sway from the accelerations, and the shake. The
 ##     target's body is hidden (target.set_body_visible(false), when it has the method)
 ##     while in cockpit mode and restored when leaving it or changing targets.
+##     G4 (WP-ART-G): when the target's CarModel brings its own Interior
+##     (CarModel.has_authored_interior), the cockpit view shows the model instead: the
+##     body stays visible (its hood shows through the windscreen), the Interior is shown
+##     (hidden again on leaving), the procedural cockpit is not drawn, and the model's
+##     Gauges get the needles (CarModel.set_gauges; the SteeringWheel turns in CarVisual).
 ## Reduced motion (Settings `reduced_motion`) zeroes shake, roll, head sway and the FOV
 ## punch.
 ##
@@ -125,6 +132,8 @@ var _head := DampedSpring.new()
 var _head_xform := Transform3D.IDENTITY
 ## The target whose body this rig hid (restored on leaving cockpit or changing target).
 var _body_hidden_on: Node3D
+## G4: the model whose own Interior this rig shows in cockpit mode (hidden on leaving).
+var _interior_shown_on: CarModel
 
 # Journey finale swing: time into it (-1 = off) and the side it swings to.
 var _finale_t: float = -1.0
@@ -179,6 +188,7 @@ func _physics_process(delta: float) -> void:
 
 func _exit_tree() -> void:
 	_restore_body()
+	_hide_model_interior()
 
 
 func _enter_tree() -> void:
@@ -195,6 +205,7 @@ func _enter_tree() -> void:
 ## CarDef defaults). Snaps to the target.
 func set_target(target: Node3D, state: VehicleState, top_speed_mps: float, car_def: CarDef = null) -> void:
 	_restore_body()
+	_hide_model_interior()
 	_target = target
 	_state = state
 	_top_speed_mps = top_speed_mps
@@ -475,9 +486,7 @@ func _resolve_marker() -> void:
 	if is_cockpit():
 		_resolve_cockpit_eye()
 		return
-	var path := tuning.mode_marker[_mode_i]
-	if not path.is_empty():
-		_marker = _target.get_node_or_null(NodePath(path)) as Node3D
+	_marker = _authored_marker(tuning.mode_marker[_mode_i])
 
 
 # ---------------------------------------------------------------- Cockpit
@@ -500,32 +509,41 @@ func _resolve_cockpit_eye() -> void:
 	var size := _body_size()
 	_eye_local = tuning.cockpit_eye_default(size.z, size.x, size.y)
 	_eye_from_marker = false
-	var mk := _authored_cockpit_marker()
+	var mk := _authored_marker(tuning.mode_marker[_cockpit_i])
 	if mk != null:
 		_eye_local = _relative_xform(_target, mk).origin
 		_eye_from_marker = true
 
 
-## The cockpit marker directly under the target (tuning path), or in the target's
-## CarModel (`model` property) unless CarModel.conform() stubbed it (at import time,
-## root meta `car_import_stubbed`, or at load time, CarModel.stubbed): a stub is only a
-## guess from the body bounds, and the CarDef-proportional default fits the generic
-## cockpit better.
-func _authored_cockpit_marker() -> Node3D:
-	var path := tuning.mode_marker[_cockpit_i]
+## A mode's marker (tuning path, e.g. Markers/cam_cockpit, Markers/cam_hood) directly
+## under the target, or in the target's CarModel (`model` property) unless
+## CarModel.conform() stubbed it (at import time, root meta `car_import_stubbed`, or at
+## load time, CarModel.stubbed): a stub is only a guess from the body bounds, and the
+## mode's own default (the CarDef-proportional eye, the hood offsets) fits better.
+func _authored_marker(path: String) -> Node3D:
 	if path.is_empty():
 		return null
 	var direct := _target.get_node_or_null(NodePath(path)) as Node3D
 	if direct != null:
 		return direct
-	var m: Variant = _target.get(&"model")
-	var model := m as CarModel if m is CarModel else null
-	if model == null or model.root == null or not is_instance_valid(model.root):
+	var model := _model_of(_target)
+	if model == null:
 		return null
 	var import_stubs: Variant = model.root.get_meta(&"car_import_stubbed", PackedStringArray())
 	if model.stubbed.has(path) or (import_stubs is PackedStringArray and (import_stubs as PackedStringArray).has(path)):
 		return null
 	return model.root.get_node_or_null(NodePath(path)) as Node3D
+
+
+## The target's CarModel (`model` property), or null.
+static func _model_of(target: Node3D) -> CarModel:
+	if target == null or not is_instance_valid(target):
+		return null
+	var m: Variant = target.get(&"model")
+	var model := m as CarModel if m is CarModel else null
+	if model == null or model.root == null or not is_instance_valid(model.root):
+		return null
+	return model
 
 
 ## Transform of `n` relative to its ancestor `ancestor`.
@@ -541,19 +559,40 @@ static func _relative_xform(ancestor: Node3D, n: Node3D) -> Transform3D:
 
 
 ## Shows the cockpit and hides the target's body in cockpit mode; restores otherwise.
+## G4: a model with its own Interior shows that (and its body) instead.
 func _apply_cockpit_view() -> void:
 	var on := is_cockpit() and _has_target() and not _attract
-	if on:
+	var model := _model_of(_target) if on else null
+	var own := model != null and model.has_authored_interior()
+	if on and not own:
 		_ensure_cockpit()
 	if _cockpit != null:
-		_cockpit.visible = on
-	if _body_hidden_on != null and (not on or _body_hidden_on != _target):
+		_cockpit.visible = on and not own
+	if _interior_shown_on != null and (not own or _interior_shown_on != model):
+		_hide_model_interior()
+	if own and _interior_shown_on == null:
+		model.set_interior_visible(true)
+		model.configure_gauges(Tuning.load_default().vehicle.engine_redline_rpm / tuning.cockpit_tach_max_rpm)
+		_interior_shown_on = model
+	var hide_body := on and not own
+	if _body_hidden_on != null and (not hide_body or _body_hidden_on != _target):
 		_restore_body()
-	if on and _body_hidden_on == null and _target.has_method(&"set_body_visible"):
+	if hide_body and _body_hidden_on == null and _target.has_method(&"set_body_visible"):
 		_target.call(&"set_body_visible", false)
 		_body_hidden_on = _target
 	if not on:
 		_head_xform = Transform3D.IDENTITY
+
+
+func _hide_model_interior() -> void:
+	if _interior_shown_on != null and _interior_shown_on.root != null and is_instance_valid(_interior_shown_on.root):
+		_interior_shown_on.set_interior_visible(false)
+	_interior_shown_on = null
+
+
+## The model whose own Interior the cockpit view shows (G4), or null.
+func model_interior() -> CarModel:
+	return _interior_shown_on
 
 
 func _restore_body() -> void:
@@ -710,6 +749,10 @@ func _pose_follow(anchor: Vector3, fwd: Vector3, right: Vector3, psi: float, mi:
 ## Cockpit: this node = the seat frame (the car's pose at the eye, rolled); the head
 ## (look direction + bounded sway) goes on the Camera3D via _head_xform.
 func _pose_cockpit(tp: Transform3D, dt: float, snap: bool) -> void:
+	if _interior_shown_on != null and not is_instance_valid(_interior_shown_on.root):
+		# The target rebuilt its model (a car or look change): show the new one's view.
+		_interior_shown_on = null
+		_apply_cockpit_view()
 	var mi := _mode_i
 	var seat := tp.basis.orthonormalized() * Basis(Vector3.BACK, -_roll_out)
 	global_transform = Transform3D(seat, _pos.vec_value)
@@ -733,6 +776,13 @@ func _pose_cockpit(tp: Transform3D, dt: float, snap: bool) -> void:
 			_cockpit.update_from(_state.steer_angle, _state.v, _state.rpm)
 		else:
 			_cockpit.update_from(0.0, 0.0, 0.0)
+	if _interior_shown_on != null:
+		var sf := 0.0
+		var rf := 0.0
+		if _state != null:
+			sf = clampf(_state.v / Units.kmh_to_mps(tuning.cockpit_speedo_max_kmh), 0.0, 1.0)
+			rf = clampf(_state.rpm / tuning.cockpit_tach_max_rpm, 0.0, 1.0)
+		_interior_shown_on.set_gauges(sf, rf)
 
 
 ## Camera3D local transform: the head (identity outside the cockpit) and the shake,

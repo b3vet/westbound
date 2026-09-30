@@ -48,6 +48,17 @@ func slot_for_car_path(path: String) -> GarageSlot:
 	return null
 
 
+## G7: every former slot id -> the slot's current id (GarageSlot.former_ids), for
+## SaveMigrations.rename_car_ids. A former id that is some slot's current id is skipped.
+func car_id_renames() -> Dictionary:
+	var out := {}
+	for s in slots:
+		for f in s.former_ids:
+			if not f.is_empty() and slot(StringName(f)) == null:
+				out[f] = String(s.id)
+	return out
+
+
 ## Every unlock id in catalog order: the cars, then the paints, then the rims.
 func unlock_ids() -> PackedStringArray:
 	var out := PackedStringArray()
