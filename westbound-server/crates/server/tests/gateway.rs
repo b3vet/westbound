@@ -165,10 +165,10 @@ async fn full_handshake_welcome_session_and_pong() {
     let msgs = recv(&mut ws).await;
     assert!(matches!(msgs.as_slice(), [ServerMsg::Pong(p)] if p.client_time_ms == 5));
 
-    // A lobby command gets a non-fatal answer until N9.
+    // A party command gets a non-fatal answer until N9.
     send(
         &mut ws,
-        &[ClientMsg::LobbyCommand(LobbyCommand::QuickJoin(
+        &[ClientMsg::LobbyCommand(LobbyCommand::PartyCreate(
             Default::default(),
         ))],
     )

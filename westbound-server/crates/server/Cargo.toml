@@ -46,5 +46,7 @@ tower_governor = { version = "0.8.0", default-features = false, features = ["axu
 governor = { version = "0.10.4", default-features = false, features = ["std", "dashmap", "quanta", "jitter"] }
 
 [dev-dependencies]
+# N5.1: scripted room clients for the rooms integration tests and bench.
+bots = { path = "../bots" }
 tempfile = "3.27.0"
 tokio-tungstenite = "0.29.0"

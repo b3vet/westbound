@@ -32,6 +32,7 @@ use crate::map::ServerMap;
 use crate::metrics::Metrics;
 use crate::presence::PresenceHub;
 use crate::ratelimit::{RateLimiters, CLEANUP_INTERVAL};
+use crate::rooms::Rooms;
 use crate::sessions::Sessions;
 use crate::tick::{MonotonicTickClock, TickClock};
 use crate::{accounts, leaderboards, profile, runs, ws};
@@ -70,6 +71,8 @@ pub struct AppState {
     pub map: Arc<ServerMap>,
     /// Woken by each replay upload: the verification worker looks for work (N8.1).
     pub replay_jobs: Arc<Notify>,
+    /// The rooms registry (N5.1): room tasks, codes, seats, Quick Join, the browser.
+    pub rooms: Arc<Rooms>,
 }
 
 impl AppState {
@@ -108,6 +111,13 @@ impl AppState {
         let gateway = crate::gateway::policy(&config, &map);
         let sessions = Arc::new(Sessions::new(metrics.clone()));
         let presence = Arc::new(PresenceHub::new(sessions.clone()));
+        let shutdown = CancellationToken::new();
+        let rooms = Arc::new(Rooms::new(
+            &config,
+            map.clone(),
+            presence.clone(),
+            shutdown.clone(),
+        )?);
         let boards = Arc::new(Leaderboards::new(
             db.clone(),
             config.leaderboards.clone(),
@@ -117,7 +127,7 @@ impl AppState {
             config: Arc::new(config),
             db,
             metrics,
-            shutdown: CancellationToken::new(),
+            shutdown,
             tasks: TaskTracker::new(),
             deeplinks: Arc::new(deeplinks),
             clock,
@@ -130,6 +140,7 @@ impl AppState {
             presence,
             map,
             replay_jobs: Arc::new(Notify::new()),
+            rooms,
         })
     }
 
