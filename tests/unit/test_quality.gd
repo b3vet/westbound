@@ -312,7 +312,11 @@ func test_governor_rung_is_an_offset_not_a_setting() -> void:
 	eq(q.tier, &"high")
 	near(tree.root.scaling_3d_scale, 0.8, 1e-6)
 	eq(Engine.max_fps, 30)
-	near(q.view_distance_m, 650.0, 1e-9)
+	# WP9.1: the view-distance rung is held until the run ends (it feeds the simulation).
+	near(q.view_distance_m, 800.0, 1e-9, "held during the run")
+	Events.game_state_changed.emit(Game.RUNNING, Game.RESULTS)
+	near(q.view_distance_m, 650.0, 1e-9, "applied between runs")
+	Events.game_state_changed.emit(Game.RESULTS, Game.COUNTDOWN)
 	# Changing the tier keeps the offset on top of the new tier.
 	Settings.set_value(&"quality_tier", &"low")
 	near(tree.root.scaling_3d_scale, 0.5, 1e-6)

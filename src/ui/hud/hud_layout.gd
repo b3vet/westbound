@@ -16,6 +16,8 @@ extends RefCounted
 ## under the car (speed, then boost, in a row; the TOO SLOW strip above), slid
 ## sideways into the free span between the thumb areas; stacked (boost under speed)
 ## when the row does not fit. Sizes scale with the text size, margins do not.
+## WP9.1: the governor's cooling icon has a small slot centred under [II]
+## (docs/QUALITY.md → Cooling icon).
 
 var full: Rect2 = Rect2()
 var safe: Rect2 = Rect2()
@@ -31,6 +33,9 @@ var camera: Rect2 = Rect2()
 ## WP5.5: the high-beam button, under [CAM] (its slot is kept while it is hidden by day,
 ## so nothing moves when it appears).
 var high_beam: Rect2 = Rect2()
+## WP9.1: the governor's cooling icon, a small square centred under [II] (its slot is kept
+## while it is hidden, so nothing moves when it appears).
+var cooling: Rect2 = Rect2()
 ## Plan D14, the bottom-centre cluster: the speedometer and the boost meter beside it
 ## (or under it when stacked), and the minimum-speed strip above them (its slot is
 ## reserved while it is hidden).
@@ -95,6 +100,8 @@ func build(hud: HudTuning, full_rect: Rect2, safe_rect: Rect2, controls: Control
 	camera = Rect2(Vector2(safe.end.x - m - button.x, top), button)
 	pause = Rect2(Vector2(camera.position.x - gap - button.x, top), button)
 	high_beam = Rect2(Vector2(camera.position.x, camera.end.y + gap), button)
+	var cool := HudCooling.side_px(hud, ts)
+	cooling = Rect2(Vector2(pause.get_center().x - cool * 0.5, pause.end.y + gap), Vector2(cool, cool))
 	var n := maxi(1, life_icons)
 	var icon := hud.lives_icon_px * ts
 	var lives_w := float(n) * icon + float(n + 1) * gap * LIVES_PAD
@@ -126,12 +133,13 @@ func objective_fit(width: float) -> Rect2:
 
 ## Every HUD rect (tests check them against the touch controls and each other).
 func rects() -> Array[Rect2]:
-	return [score, sun, chain, stack, lives, pause, camera, min_speed, speedo, boost, objective, high_beam]
+	return [score, sun, chain, stack, lives, pause, camera, min_speed, speedo, boost, objective, high_beam,
+			cooling]
 
 
 static func names() -> PackedStringArray:
 	return PackedStringArray(["score", "sun", "chain", "stack", "lives", "pause", "camera",
-			"min_speed", "speedo", "boost", "objective", "high_beam"])
+			"min_speed", "speedo", "boost", "objective", "high_beam", "cooling"])
 
 
 ## The thumb areas no readout may touch: the thumb zones and the pedals.
@@ -270,7 +278,8 @@ func _place_objective(size: Vector2) -> Rect2:
 	if _clear_of_bottom(left.grow(gap)):
 		return left
 	var right := Rect2(Vector2(camera.end.x - size.x, maxf(lives.end.y, high_beam.end.y) + gap), size)
-	if _clear_of_bottom(right.grow(gap)) and not right.intersects(middle_column()):
+	if _clear_of_bottom(right.grow(gap)) and not right.intersects(middle_column()) \
+			and not right.intersects(cooling):
 		objective_anchor = 1.0
 		return right
 	var centre := Rect2(Vector2(stack.get_center().x - size.x * 0.5, toast.end.y + gap), size)
@@ -289,7 +298,7 @@ func _widen_chain(width: float) -> void:
 	var wide := Rect2(Vector2(chain.get_center().x - width * 0.5, chain.position.y), Vector2(width, chain.size.y))
 	if not safe.encloses(wide):
 		return
-	for r: Rect2 in [score, lives, pause, camera, high_beam, min_speed, speedo, boost, objective]:
+	for r: Rect2 in [score, lives, pause, camera, high_beam, cooling, min_speed, speedo, boost, objective]:
 		if wide.intersects(r):
 			return
 	if _hits(wide, _hud.pedal_clearance_px):
