@@ -93,8 +93,10 @@ func test_each_button_emits_its_intent() -> void:
 	_tap(ts.online_hub.back_button)
 	check(tt.visible and not ts.online_hub.visible, "BACK")
 	_tap(tt.garage_button)
-	eq(_started.size(), 3, "GARAGE is disabled (SOON)")
-	eq(tt.garage_button.note, TitleScreen.TEXT_SOON)
+	eq(_started.size(), 3, "GARAGE starts no run")
+	check(ts.garage != null and ts.garage.visible and not tt.visible, "GARAGE opens the garage (WP8.2)")
+	_tap(ts.garage.done_button)
+	check(tt.visible and not ts.garage.visible, "DONE: back to the title")
 
 
 func test_keys_play_and_leave_the_hub() -> void:

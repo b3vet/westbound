@@ -44,6 +44,12 @@ extends Node3D
 ## room's network traffic (N4.3's NetworkTrafficSource in place of sim.step,
 ## director.step and sim.notify_hit once the server streams traffic; the opposite
 ## carriageway keeps its local director; the traffic state is kept across respawns).
+##
+## Garage (WP8.2; docs/GARAGE.md): the title's flow (enter_menu, start_mode, retries after
+## it) drives the garage's selected car in its paint and rims (Garage.selected_car_path /
+## selected_look); `?car=` / `--car=` (a CAR_PATHS index or a car id) overrides it. Direct
+## boots, tests and tools keep car_index. At run end (record_best) the run's XP, driver
+## level and unlocks are awarded (Garage.award_run) and merged into the run_over payload.
 
 const PLAYER_CAR_SCENE := preload("res://src/vehicle/player_car.tscn")
 const CAR_PATHS: Array[String] = [
@@ -88,6 +94,8 @@ const MODE_LOOP := &"loop"
 @export var run_seed: int = 0
 @export var mode: StringName = RunContext.MODE_JOURNEY
 @export var car_index: int = 0
+## WP8.2: the car's paint and rims (null = its factory look); set from the garage.
+var car_look: CarLook
 ## Off: the countdown waits for go(). On (the game), the run counts hud.countdown_from
 ## steps of hud.countdown_step_s (a retry: retry_countdown_step_s) and the countdown
 ## screen shows them and calibrates the gyro; the screen can hold it (hold_countdown).
@@ -331,6 +339,8 @@ func _ready() -> void:
 	if wants_title():
 		enter_menu()
 	else:
+		if not boot_param("car").is_empty():
+			car_index = car_index_of(boot_param("car"))   # WP8.2: `?car=` on a direct boot too
 		_start_run()
 	dev.setup(self)
 	_sync_hud()
@@ -383,6 +393,7 @@ func enter_menu() -> void:
 		crash_sequence.call(&"reset")
 	mode = RunContext.MODE_JOURNEY
 	_base_seed = _journey_seed
+	_use_garage()   # WP8.2
 	_menu_build = true
 	_start_run()
 	_menu_build = false
@@ -395,6 +406,7 @@ func start_mode(run_mode: StringName) -> void:
 	_base_seed = daily_seed_today() if run_mode == RunContext.MODE_DAILY else _journey_seed
 	_full_countdown = true
 	warmup.arm(run_mode == RunContext.MODE_JOURNEY and Save.warmup_pending())   # WP8.1
+	_use_garage()   # WP8.2
 	retry()
 
 
@@ -404,6 +416,7 @@ func start_room(room_session: NetRoomSession) -> void:
 	if room != null:
 		room.uninstall()
 	mode = MODE_LOOP
+	_use_garage()   # WP8.2: the garage's car in the room too
 	room = RunRoom.new(self, room_session)
 	_full_countdown = true
 	retry()
@@ -455,6 +468,53 @@ func _on_screen_retry() -> void:
 	retry()
 
 
+## WP8.2: the garage's car and look for the title and the runs from it, unless `?car=` /
+## `--car=` names one (a CAR_PATHS index or a car id: the factory look).
+func _use_garage() -> void:
+	var over := boot_param("car")
+	if not over.is_empty():
+		car_index = car_index_of(over)
+		car_look = null
+		return
+	var i := CAR_PATHS.find(Garage.selected_car_path())
+	if i >= 0:
+		car_index = i
+		car_look = Garage.selected_look(load(CAR_PATHS[i]) as CarDef)
+
+
+## A CAR_PATHS index from "2" or a car id ("night_viper"); 0 when unknown.
+static func car_index_of(key: String) -> int:
+	if key.is_valid_int():
+		return posmod(key.to_int(), CAR_PATHS.size())
+	for i in CAR_PATHS.size():
+		if CAR_PATHS[i].get_file().get_basename() == key:
+			return i
+	return 0
+
+
+## WP8.2: the garage closed on the title: the attract drive takes the selected car and look.
+func refresh_menu_car() -> void:
+	if state != Game.MENU:
+		return
+	var old_index := car_index
+	var old_look := car_look
+	_use_garage()
+	var car_def: CarDef = load(CAR_PATHS[car_index])
+	if old_index == car_index and CarLook.same(old_look, car_look, car_def):
+		return
+	var st := car.state
+	_place_car(car_def, st.s, st.v)
+	hits.reset(car.state, sim.state)
+	adapter.player = car.state
+	attract.begin(self)
+
+
+## WP8.2: the results' GARAGE: the title (over a fresh attract drive) with the garage open.
+func open_garage() -> void:
+	enter_menu()
+	title.open_garage()
+
+
 ## True on the title.
 func is_menu() -> bool:
 	return state == Game.MENU
@@ -489,6 +549,7 @@ func _install_title() -> void:
 	add_child(title)
 	title.bind(hub)
 	title.start.connect(start_mode)
+	title.garage_closed.connect(refresh_menu_car)   # WP8.2
 
 
 ## Ends the countdown now (WP4.4's countdown screen calls this when auto_countdown is off).
@@ -933,6 +994,8 @@ func _show_results() -> void:
 	last_results[&"car"] = String(car.car.id) if car != null and car.car != null else ""   # N7.2 run submission
 	if warmup.ran:
 		last_results[RunWarmup.RESULT_KEY] = true   # WP8.1: not replayable by the verifier
+	if record_best:
+		Garage.award_run(last_results)   # WP8.2: XP, driver level, unlocks (payload keys)
 	Events.run_over.emit(last_results)   # the results screen opens on it
 
 
@@ -1233,7 +1296,7 @@ func _place_car(car_def: CarDef, s: float, v_mps: float) -> void:
 	var index := car_index % CAR_PATHS.size()
 	if not _params_cache.has(index):
 		_params_cache[index] = VehicleParams.build(tuning, car_def)
-	if car == null or car.car != car_def:
+	if car == null or car.car != car_def or not CarLook.same(car.look, car_look, car_def):
 		if car != null:
 			remove_child(car)
 			car.queue_free()
@@ -1241,7 +1304,7 @@ func _place_car(car_def: CarDef, s: float, v_mps: float) -> void:
 		car.name = "PlayerCar"
 		car.self_tick = false
 		add_child(car)
-		car.setup(ctx, road, origin, car_def, _params_cache[index])
+		car.setup(ctx, road, origin, car_def, _params_cache[index], car_look)   # WP8.2: the look
 		rig.set_target(car, car.state, car.params.top_speed_mps)
 		fx.bind(car)
 	else:
@@ -1331,6 +1394,7 @@ func _install_screens() -> void:
 	screens.retry.connect(_on_screen_retry)   # N5.2: REJOIN CREW in a room
 	screens.quit.connect(enter_menu)   # WP8.5: QUIT goes back to the title
 	screens.results_screen.menu.connect(enter_menu)   # WP8.5: the results' MENU
+	screens.results_screen.garage.connect(open_garage)   # WP8.2: the results' GARAGE
 	screens.skip.connect(skip)
 	screens.countdown_hold.connect(hold_countdown)
 
@@ -1575,7 +1639,7 @@ func snap_setup(args: Dictionary) -> void:
 
 ## Dev (snaps, WP8.5): the title's attract drive after --s / --sky_t: --shot=orbit|pass
 ## (cut to that shot), --attract_s= seconds of it (ticked here), --title=hub|settings|
-## account|boards (a title view, settled) or play (PLAY pressed: title -> countdown).
+## account|boards|garage (a title view, settled) or play (PLAY pressed: title -> countdown).
 func _snap_menu(args: Dictionary) -> void:
 	attract.begin(self)
 	if str(args.get("shot", "orbit")) == "pass":
@@ -1597,6 +1661,10 @@ func _snap_menu(args: Dictionary) -> void:
 			title.title.open_account()
 		"boards":
 			title.title.open_leaderboards()
+		"garage":
+			# WP8.2: --xp= (lifetime XP), --tab=car|paint|rims, --pick=<item id> (GarageScreen.snap_setup)
+			title.open_garage()
+			title.garage.snap_setup(args)
 		var v when v.begins_with("rooms"):
 			RunRoom.snap_hub(self, v)   # N5.2: the hub's room flows without a server
 	title.finish_animations()

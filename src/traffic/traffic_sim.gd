@@ -185,6 +185,7 @@ var _n := 0
 
 # Per slot
 var _acc_t := PackedFloat64Array()     # far: time accumulated since the last model update
+var _sig_pre := PackedFloat64Array()   # far: _acc_t already accumulated when a signal began between ticks
 var _acc_n := PackedInt32Array()       # far: ticks accumulated
 var _due := PackedByteArray()          # model runs this tick
 var _mdt := PackedFloat64Array()       # model dt this tick
@@ -325,6 +326,7 @@ func _init(ctx: RunContext, road_path: RoadPath, reg: TrafficRegistry) -> void:
 	_ord.resize(_cap + 1)
 	_rank.resize(_cap + 1)
 	_acc_t.resize(_cap)
+	_sig_pre.resize(_cap)
 	_mdt.resize(_cap)
 	_lead_gap.resize(_cap)
 	_a_raw.resize(_cap)
@@ -485,6 +487,7 @@ func spawn(rec: SpawnSource.Record) -> int:
 	state.flags[i] = f
 
 	_acc_t[i] = 0.0
+	_sig_pre[i] = 0.0
 	_acc_n[i] = state.vehicle_id[i] % _far_ratio
 	_due[i] = 0
 	_mdt[i] = 0.0
@@ -1532,7 +1535,10 @@ func _step_lateral(i: int, out: ScoreEventBuffer) -> void:
 
 
 func _tick_signaling(i: int, mdt: float) -> void:
-	var timer := state.lc_timer[i] + mdt
+	# A signal started between ticks (request_lane_change) on a far vehicle: this model
+	# dt also holds the time accumulated before the blinker came on (WP6.10).
+	var timer := state.lc_timer[i] + mdt - _sig_pre[i]
+	_sig_pre[i] = 0.0
 	state.lc_timer[i] = timer
 	var ok := not is_inf(_eval_move(i, _lc_target_d[i], state.target_lane[i], false))
 	# Fairness rule 2: the player entered the target gap (or its predicted space) -> cancel.
@@ -1732,6 +1738,9 @@ func _start_signal(i: int, t: int, target_d: float, split: int) -> void:
 	state.target_lane[i] = t
 	state.lc_timer[i] = 0.0
 	state.lc_duration[i] = _psig[p]
+	# Outside a model tick (a scripted request) a far vehicle may hold accumulated dt
+	# from before the blinker; the next model tick must not count it (fairness rule 1).
+	_sig_pre[i] = _acc_t[i]
 	_lc_target_d[i] = target_d
 	_lc_split[i] = split
 	_split[i] = 0

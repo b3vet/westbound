@@ -494,7 +494,7 @@ func test_results_ignore_the_skip_tap_then_retry() -> void:
 	check(not _intents.has(&"retry"), "the skip tap's follow-up is ignored")
 	s.finish_animations()
 	check(rs.accepting)
-	check(rs.garage_button.disabled, "GARAGE until Phase 8")
+	check(not rs.garage_button.disabled, "GARAGE (WP8.2; the run opens the garage)")
 	_tap(rs.garage_button)
 	_tap(rs.retry_button)
 	eq(_intents, [&"retry"] as Array[StringName], "RETRY")
