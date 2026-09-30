@@ -16,9 +16,10 @@ const RUN_SCENE := preload("res://src/run/run.tscn")
 ## (run seed, bot speed km/h): three seeds flat out, two at a cruising cut-up pace.
 const DRIVES: Array[Vector2i] = [Vector2i(20260929, 250), Vector2i(7, 250), Vector2i(20260929, 170),
 	Vector2i(11, 250), Vector2i(7, 170)]
-## The floor over all the drives (WP9.6; measured numbers in docs/ACCEPTANCE.md, F2).
-const MIN_SET_PIECES_MET := 0
-const MIN_SET_PIECE_KINDS := 0
+## The floor over all the drives (WP9.6; measured numbers in docs/ACCEPTANCE.md, F2:
+## 10 pieces of 4 kinds in the 5 journeys; WP9.5's director met 2 of 2 kinds in 3).
+const MIN_SET_PIECES_MET := 6
+const MIN_SET_PIECE_KINDS := 3
 const BOT_SEED := 3
 const FRAME_S := 1.0 / 60.0
 const TICKS_PER_FRAME := 2

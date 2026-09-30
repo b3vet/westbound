@@ -177,6 +177,7 @@ The lane profile follows lane discipline: the right lanes are denser (e.g. 14.8 
       The fast tier's `test_tick_cost_at_the_cap` now benches at the tuning's cap (90, 4 lanes), with a budget of 10 µs per vehicle (15 µs when all are near). The director's step stays at 40-60 µs per tick in the survey.
     - **Phone:** the owner's iPhone measured 0.10 ms at 45 vehicles, where this container measures 126 µs, so the phone runs at about 0.8× the container's time. That extrapolates to about 0.14 ms at leg 8 on 3 lanes (~60 active), 0.18 ms on 4 lanes (~80 active) and at most 0.21 ms at the cap. At 60 fps that is about 0.4 ms of the 16.7 ms frame (two 120 Hz ticks per frame).
 - **View:** `TrafficView` sizes every MultiMesh from the two states' capacities (`state.capacity`, and the cap follows `max_active_vehicles`), so nothing is hard-coded to 60. Draw calls are per model, not per vehicle, so they do not grow. `test_traffic_view` already benches 120 vehicles at 0.65 ms (day) and 0.73 ms (night) per render.
+- **WP9.6 (PL-2, proposed D33): 120 on 4-lane roads.** At leg 8 on 4 lanes the 90 cap bound 5.7 % of the time and cost density the player sees (survey, 3 seeds × 2 legs: 14.54 per km per lane in the window, 81 % of the target, against 15.71 / 87 % with the cap at 120; at the player during the peaks 13.1 against 15.2). `max_active_vehicles` is now **120** (the `TrafficState` capacity, and the cap on roads of `wide_road_min_lanes` = 4 lanes or more) and `max_active_vehicles_narrow` **90** is the cap on narrower roads (`TrafficTuning.active_cap(lanes)`; the director takes the wider of the road at the player and at the spawn, `TrafficDirector._active_cap_at`). 3 lanes never reach 90 at leg 8 (peak 82), so nothing changes there. Measured: 4 lanes leg 8 active about 82 on average, peak 111, the cap binding 0 %, 85–87 % of the target; sim 332–387 µs per tick in the survey (380 at the 90 cap); draw calls unchanged (41 3D calls with 91 vehicles in the city, traffic 13). Phone: by the D11 extrapolation (0.8 × the container) about 0.26 ms per tick at 111 vehicles; to be confirmed on the owner's device (📱).
 
 ### Fairness
 
@@ -430,10 +431,61 @@ What would give passes at 170–230 km/h (owner / orchestrator decisions, beyond
 
 ### Density (D11 / D17)
 
-The leg-8 survey (`--density --lanes=3,4 --legs=8 --seeds=8 --run-legs=4`, scripted observer): 3 lanes 15.48 → **15.45** per km per lane (−0.2 %), 4 lanes 15.51 → **15.20** (−2.0 %); the chaos between otherwise identical runs is about ±1.5 % (three no-op perturbations of the racer: 15.00–15.38 on 3 lanes). The levers that cost density are off in the data (docs/TRAFFIC.md). `soak_density_with_weaving_racers` gates ±3 % (weaving on vs off, 8 × 14 km per cell; with 4 × 14 km the 4-lane cell read −3.04 %, within the chaos).
+The leg-8 survey (`--density --lanes=3,4 --legs=8 --seeds=8 --run-legs=4`, scripted observer): 3 lanes 15.48 → **15.45** per km per lane (−0.2 %), 4 lanes 15.51 → **15.20** (−2.0 %); the chaos between otherwise identical runs is about ±1.5 % (three no-op perturbations of the racer: 15.00–15.38 on 3 lanes). The levers that cost density are off in the data (docs/TRAFFIC.md). `soak_density_with_weaving_racers` gates ±3 % (weaving on vs off, 8 × 14 km per cell; with 4 × 14 km the 4-lane cell read −3.04 %, within the chaos). WP9.6: one-sided, at least −3 % and at most +8 %, both surveys without set pieces (SOAK.md, *WP9.6*).
 
 ### Soak and metrics baseline
 
 `tools/soak.sh --km=2000 --shards=4 --all-pieces` (2,016 km in 72 runs, 15.3 simulated hours, wall 4,554 s on a shared container): signal 0, unsignaled 0, no-ambush 0 (49,110 lane moves checked, 54,127 signals, 2,463 cancels), decel 0 (min −6.00 m/s²), brake flags 0, rear-ends of a normally driving player 0 (132 contact episodes, 115 from behind, all after the bot's own move or hard braking), off-road 0, closed areas 0; 103 player-induced impossible windows. **Not all zero:** 78 collision pairs in two canyon runs (1 and 17, 3 lanes) and 1 traffic impossible window (run 61). Both collisions are the known lane-drop pattern of docs/SET_PIECES.md (*Canyon runs*: 195 pairs in 3 runs before this WP): a truck stopped at the end of a dropping lane merges at 0–3 km/h and the checker's box, turned by its heading atan2(v_lat, v), lies across the lanes next to a car in lane 0 (d 3.5 vs the truck's centre at 8.9 / 10.5 m). No racer took part in run 1's collision (an aggressive driver and a truck); in run 17 the other car was a racer holding its lane. The same two runs with the racer's weaving off are clean, i.e. the traffic's chaos moved the pattern, not the weaving. WP6.8 (lane-drop safety, in progress in parallel) fixes this pattern; the gate is to be re-run on the merge with WP6.8. Every 2- and 4-lane run and every non-canyon 3-lane run: 0 collisions. Arrivals 0.36 per km, 98 % of them passed the bot; racers of any origin passed it 0.56 per km and it overtook them 0.27 per km.
 
 **Metrics baseline** (`tests/baselines/traffic_metrics.json`, rewritten deliberately), against WP6.7's: lane changes per vehicle-minute 1.146 → **1.336** (+16.6 %, beyond the ±15 % tolerance: racers change lanes more often, which is the point), density 10.05 → 10.33 (+2.8 %), gaps per km 8.70 → 8.70, mean speed lane 0/1/2 142.8 / 128.1 / 113.9 → 140.9 / 129.2 / 114.1, set pieces per leg 0.031 → 0.031.
+
+## Set pieces in a real journey (WP9.6, ACCEPTANCE F2)
+
+WP9.5's journey acceptance soak (`tests/acceptance/test_acceptance_journey.gd`: the real `Run`, a weaving `SandboxBot` at 250 or 170 km/h, no teleports) met 1, 1 and 0 set pieces in three journeys (2 of 8 kinds). The orchestrator's decision: tune the director toward 4–8 per journey, every unlocked kind reachable, within the unlock order, D11 / D17 density, the breathers and fairness.
+
+### Why so few (diagnosed with per-peak logs)
+
+A journey has 9–10 wave peaks. After the chance roll, nearly every peak that picked a **rolling** kind (truck wall, roadblock, slalom, convoy) was lost to the road, not to the rules' intent:
+
+- **The bot's pace.** At a 250 km/h set speed the weaving bot averages about 150 km/h in leg traffic (705–790 s for the journey) and its 5 s smoothed pace dips to 115–130 behind slow cars. Rolling pieces run at 105–125 km/h (the minimum speed + 5 km/h and up), so the closing speed is 15–45 km/h.
+- **The spawn distance.** A piece can only appear beyond the fog, about 830 m ahead. At those closing speeds the player meets it 60–150 s later, and the piece has driven 2–4 km by then (the meeting map clamps at the 4 km lookahead).
+- **The road.** The piece must not drive through a lane drop, tunnel or fork before the player passes it, nor be met in a checkpoint's range or just past a blind crest. The journey road has one of these every 1–3 km. A fork's zone alone covered its whole span, 3.35 km plus margins, and journeys fork every other leg.
+- **The meet rule.** It then dropped most of the rest: the dipped pace made the approach look longer than `set_piece_meet_max_pct` (75 %) of `approach_max_s` (150 s).
+- **Scheduled but never met.** A rolling piece that was scheduled often found no room in the live traffic of its batch (dropped unplaced), or rolled into a zone before the player reached it. While on its long approach it held the one live slot, so a tunnel squeeze offered meanwhile was lost.
+
+### What changed
+
+| Change | Where | Kind |
+| --- | --- | --- |
+| Meet rule and rolling fit at the player's cruising pace: the faster of the waves' pace (5 s) and the speed smoothed over `set_piece_meet_pace_smoothing_s` (30 s) | `TrafficDirector._meet_pace`, `SetPieceSource.meet_pace` / `meet_x()`; checkpoint ranges are still checked over both estimates | code + data |
+| Placement retries: a rolling peak that does not fit the road (or finds another piece live) is tried again at the next batch while it would still be met in the peak; a piece dropped unplaced gives its peak back the same way; only then is the peak counted unfit / busy | `_hold_peak`, `_give_up_peak`, `_check_scheduled` | code |
+| A road-anchored peak (merge zone, road works) scans later zone starts up to where its interesting part still falls in the peak (was one batch, 300 m) | `_schedule_anchored_peak`, `_place_zone(s_last)` | code |
+| A feature-tied piece (tunnel squeeze, toll gantry) that finds another piece live is offered again at the next batch while in its lead window (was: lost) | `_schedule_tied` | code |
+| A fork's set-piece zone ends `set_piece_fork_clear_after_m` (1,200 m, the fork's traffic breather) past the split instead of at the end of its span (the opposite carriageway's rejoin, 2 km further, ordinary road for traffic) | `IntensityWaves._scan` | data + code (docs/FORKS.md §3 still says the whole span: needs a line there) |
+| Widenings no longer stop a rolling piece (the added lane comes on the right; its lanes are unchanged); drops, tunnels and forks do | `IntensityWaves.zone_widen`, `clear_of_zones(..., rolling)`; `fits_road`, the `ended_zone` check | code |
+| `approach_max_s` 150 → 240 s (truck wall, roadblock, slalom, convoy), `set_piece_meet_max_pct` 75 → 90 % | `data/set_pieces/*.tres`, `director.tres` | data |
+| Peak chance 50 → 80 % by leg → **70 → 90 %** | `director.tres` | data |
+| Tunnel squeeze `feature_chance_pct` 60 → **100 %** (every road tunnel ≥ 300 m) | `tunnel_squeeze.tres` | data |
+| Merge zone and road works weights up in the biomes that list them (city 1.4 / 1.2 → 2.4 / 2.0; coast 1 / 0.8 → 2 / 1.8; farmland 1 / 1 → 2 / 2; valley 0.8 / 1 → 1.8 / 2): static pieces are met whatever the pace | `data/biomes/*.tres` (weights only) | data |
+
+The unlock order and the per-leg unlock counts are unchanged, as are the breathers, the checkpoint and blind-crest clearances and every fairness check.
+
+### Measured
+
+| | WP9.5 | WP9.6 |
+| --- | --- | --- |
+| Journey acceptance (seed / km/h) | 20260929 / 250: 1; 7 / 250: 1; 20260929 / 170: 0 | 20260929 / 250: **1** (truck wall); 7 / 250: **1** (toll); 20260929 / 170: **1** (slalom); 11 / 250: **4** (toll ×3, tunnel squeeze); 7 / 170: **3** (toll, tunnel squeeze, truck wall) |
+| Per journey | 0.67 (2 of 8 kinds) | **2.0 (4 of 8 kinds: toll gantry 5, truck wall 2, tunnel squeeze 2, slalom 1)** |
+| `soak.sh --km=500 --all-pieces` | 0.63 per leg, 6 kinds (no convoy, no road works) | **0.78 per leg, 7 kinds**: toll 52, tunnel squeeze 33, truck wall 9, convoy 6, merge zone 5, slalom 4, roadblock 3 |
+| `soak.sh --km=500 --canyon` | — | 71 tunnel squeezes in 144 legs (0.49 per leg) |
+
+The acceptance test now asserts a floor over its five journeys: at least 6 pieces and 3 kinds (`MIN_SET_PIECES_MET`, `MIN_SET_PIECE_KINDS`).
+
+**The 4–8 target is not reached with this driver.** The limit is the physics above: rolling pieces are met after 60–150 s at the bot's pace and need 2–4 km of clear road. The journey peaks mostly end unfit (3–7 per journey). Options beyond tuning, for the orchestrator and owner (O9):
+
+1. Accept about 2 per journey for a 150 km/h driver. A player cruising at 180–230 km/h closes 2–3× faster and meets more.
+2. Rolling pieces that run slower while hidden beyond the fog and come up to their speed as the player nears them. This shortens the approach, but it is a design change: traffic behind a hidden slow formation queues.
+3. More feature-tied pieces. More toll-gantry checkpoints (the biomes' `landmark_styles`), or a piece tied to the canyon's lane drops.
+4. Restate the M6 bar as "the set pieces a journey meets appear".
+
+**Density (D11 / D17).** Pieces take their zone's traffic at the peaks they get, and more peaks now get one. `test_density_the_player_meets_follows_the_waves` measures the waves' own shape, so it now runs without set pieces. With pieces a 170 km/h player on a straight road met 11.6 vehicles per km at the peaks against 14.9 without. The leg-8 density survey still passes (SOAK.md, *WP9.6*).

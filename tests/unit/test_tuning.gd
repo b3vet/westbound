@@ -281,7 +281,12 @@ func test_ref_aggressive_share() -> void:
 
 func test_ref_max_active_vehicles() -> void:
 	# Spec 60; plan D7/D11: raised to 90 (leg-8 density on 4 lanes, phone tick budget).
-	eq(t.traffic.max_active_vehicles, 90)
+	# WP9.6 (proposed D33): 120 on roads of 4+ lanes (the state's capacity), 90 elsewhere.
+	eq(t.traffic.max_active_vehicles, 120)
+	eq(t.traffic.max_active_vehicles_narrow, 90)
+	eq(t.traffic.wide_road_min_lanes, 4)
+	eq(t.traffic.active_cap(3), 90)
+	eq(t.traffic.active_cap(4), 120)
 
 
 func test_ref_field_of_view() -> void:

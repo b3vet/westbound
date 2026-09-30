@@ -515,7 +515,10 @@ func soak_racers_pass_through_traffic() -> void:
 ## density", so the bound is one-sided (WEAVE_DENSITY_MIN_CHANGE), with an upper sanity
 ## bound (WEAVE_DENSITY_MAX_CHANGE) that catches a weave piling traffic up; weaving
 ## racers pass through slow traffic, so they may add a few percent (WP9.5: +3.63 % on 4
-## lanes, +2.4 % on 3).
+## lanes, +2.4 % on 3). Both surveys run without set pieces (WP9.6): a piece takes its
+## zone's traffic, and which peaks get one follows the trace, so with WP9.6's more frequent
+## pieces they swung the pair by several percent either way (3 lanes: -3.68 % with pieces,
+## +1.29 % without, same seeds); the guard is about the weaving.
 const WEAVE_DENSITY_MIN_CHANGE := -0.03
 const WEAVE_DENSITY_MAX_CHANGE := 0.08
 
@@ -524,11 +527,15 @@ func soak_density_with_weaving_racers() -> void:
 	var r := _racer()
 	var saved := r.duplicate() as DriverProfile
 	var plain := _plain_racer()
+	var base := t.duplicate() as Tuning
+	base.director = t.director.duplicate() as DirectorTuning
+	base.director.set_piece_chance_first_pct = 0.0
+	base.director.set_piece_chance_last_pct = 0.0
 	for lanes: int in [3, 4]:
 		_copy_weaving(plain, r)
-		var before := DensitySurvey.cell(lanes, 8, DensitySurvey.SCRIPTED, DENSITY_SEEDS, 4)
+		var before := DensitySurvey.cell(lanes, 8, DensitySurvey.SCRIPTED, DENSITY_SEEDS, 4, base)
 		_copy_weaving(saved, r)
-		var after := DensitySurvey.cell(lanes, 8, DensitySurvey.SCRIPTED, DENSITY_SEEDS, 4)
+		var after := DensitySurvey.cell(lanes, 8, DensitySurvey.SCRIPTED, DENSITY_SEEDS, 4, base)
 		print("      weaving off %s" % DensitySurvey.format_row(before))
 		print("      weaving on  %s" % DensitySurvey.format_row(after))
 		var change := float(after["density"]) / float(before["density"]) - 1.0
