@@ -143,7 +143,9 @@ func _set_accent(c: Color) -> void:
 
 
 ## Canvas-rect layout: a panel right-aligned under the HUD's top-right buttons (and the
-## high-beam slot), holding the two lines and SKIP on its right.
+## high-beam slot), holding the two lines and SKIP on its right. When that panel would
+## reach into the event stack's column (125 % text on a 16:9 or 4:3 canvas, WP9.3), SKIP
+## goes under the lines instead (the warm-up's road is empty: nothing to read there).
 func _layout() -> void:
 	if tuning == null or not is_inside_tree():
 		return
@@ -164,14 +166,21 @@ func _layout() -> void:
 	var h := maxf(th, hs.y + cs.y) + g * 2.0
 	var right := hl.camera.end.x
 	var top := hl.high_beam.end.y + g
+	var stacked := sw > 0.0 and right - w < hl.stack.end.x + g
+	if stacked:
+		w = pad + maxf(text_w, sw) + pad
+		h = g + hs.y + cs.y + g + th + g
 	panel.position = Vector2(right - w, top)
 	panel.size = Vector2(w, h)
-	var ty := top + (h - hs.y - cs.y) * 0.5
+	var ty := top + g if stacked else top + (h - hs.y - cs.y) * 0.5
 	head.position = Vector2(right - w + pad, ty)
 	head.size = hs
 	count.position = Vector2(right - w + pad, ty + hs.y)
 	count.size = Vector2(text_w, cs.y)
-	skip_button.position = Vector2(right - pad - sw, top + (h - th) * 0.5)
+	if stacked:
+		skip_button.position = Vector2(right - pad - sw, ty + hs.y + cs.y + g)
+	else:
+		skip_button.position = Vector2(right - pad - sw, top + (h - th) * 0.5)
 	skip_button.size = Vector2(sw, th)
 
 

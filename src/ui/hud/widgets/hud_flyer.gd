@@ -4,6 +4,7 @@ extends HudWidget
 ## ("Banking animation. The chain flies into the banked total with a count-up and a
 ## chime"); Design system (speed tilt on celebrations). The count-up itself is the
 ## Hud's (it starts when the flyer lands). Hidden (not drawn) when not flying.
+## Reduced motion (WP9.3): the banked amount fades out where the chain was, no flight.
 
 var _text: String = ""
 var _from: Vector2 = Vector2.ZERO
@@ -43,8 +44,26 @@ func animate(dt: float) -> bool:
 	return true
 
 
+func settle_motion() -> void:
+	super.settle_motion()
+	if flying():
+		_place(_t / _dur)
+
+
+## Distance flown (px) and the shrink (tests, WP9.3).
+func motion_amount() -> float:
+	if not flying():
+		return 0.0
+	return super.motion_amount() + position.distance_to(_from - size * 0.5)
+
+
 ## Position along the flight (ease in: it accelerates into the total) and a shrink.
 func _place(k: float) -> void:
+	if style != null and style.reduced_motion:
+		scale = Vector2.ONE
+		position = _from - size * 0.5
+		modulate.a = 1.0 - k
+		return
 	var e := k * k
 	var c := _from.lerp(_to, e)
 	var sc := lerpf(1.0, 0.5, e)

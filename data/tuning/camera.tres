@@ -74,3 +74,4 @@ attract_edge_margin_m = 0.8
 attract_weave = true
 attract_min_shot_s = 1.5
 attract_clear_margin_m = 0.4
+attract_reduced_motion_mode = &"chase"

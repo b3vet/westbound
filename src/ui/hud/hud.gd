@@ -23,6 +23,10 @@ extends CanvasLayer
 ## out (modulate only), hidden (no draw call) by day. Its slot is always reserved, so
 ## the cluster never moves.
 ##
+## Reduced motion (WP9.3, Settings `reduced_motion`, live): HudStyle.reduced_motion; the
+## widgets fade only (no pops, slides, flights, glitter, wobble or pulses) and turning it
+## on settles any running motion (docs/ACCESSIBILITY.md).
+##
 ## Cooling (WP9.1): a small snowflake icon under [II] while the adaptive governor holds a
 ## thermal step (Quality.is_cooling(), re-read on Events.governor_changed and
 ## thermal_state_changed). Its slot is always reserved; hidden, it draws nothing.
@@ -69,6 +73,7 @@ const MINUS := "-"
 
 const SET_UNITS := &"units"
 const SET_TEXT_SCALE := &"text_scale"
+const SET_REDUCED_MOTION := &"reduced_motion"
 const UNITS_MPH := &"mph"
 ## Settings that move the touch controls (the HUD re-places around them).
 const CONTROL_SETTINGS: Array[StringName] = [&"steering_mode", &"throttle_mode", &"left_handed",
@@ -884,6 +889,11 @@ func _on_setting_changed(key: StringName) -> void:
 		_relayout()
 		if feed != null:
 			_read_feed()
+	elif key == SET_REDUCED_MOTION:
+		_read_settings()
+		if style.reduced_motion:
+			for w in _widgets:
+				w.settle_motion()
 	elif key in CONTROL_SETTINGS and _hub == null:
 		_relayout()
 
@@ -893,6 +903,7 @@ func _on_setting_changed(key: StringName) -> void:
 func _read_settings() -> void:
 	_miles = StringName(_setting(SET_UNITS, &"kmh")) == UNITS_MPH
 	_text_scale = tuning.clamp_text_scale(float(_setting(SET_TEXT_SCALE, 1.0)))
+	style.reduced_motion = bool(_setting(SET_REDUCED_MOTION, false))
 
 
 func _restyle() -> void:

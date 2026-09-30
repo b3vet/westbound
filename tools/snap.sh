@@ -3,12 +3,14 @@
 # --renderer=mobile uses the Mobile renderer on Mesa lavapipe (Vulkan, software),
 # --renderer=both captures each (mobile images get a "mobile" tag).
 #   tools/snap.sh <scene.tscn> [--renderer=compat|mobile|both] [--size=WxH] [--frames=N] [--seconds=S]
-#                 [--sweep=key:v1,v2,...]... [--out=DIR] [--tag=NAME] [--key=value ...]
+#                 [--sweep=key:v1,v2,...]... [--out=DIR] [--tag=NAME] [--cvd=KINDS] [--key=value ...]
 #   tools/snap.sh src/main.tscn
 #   tools/snap.sh src/sun/sky_preview.tscn --sweep=sky_t:0,0.17,0.33,0.5,0.67,0.83,1
 # Unreserved --key=value pairs reach the scene root's snap_setup(args: Dictionary).
 # PNGs go to tests/out/snaps/ (gitignored) as <scene>[_<tag>][_<key>-<value>].png;
 # their paths are printed one per line on stdout. See docs/TOOLS.md.
+# --cvd=protan,deutan,tritan,mono|all also writes a simulated color-blindness copy of each
+# image (<png>_cvd-<kind>.png; DEV ONLY, a post-process of the file, docs/ACCESSIBILITY.md).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -16,14 +18,16 @@ size="1280x720"
 scene=""
 renderer="compat"
 tag=""
+cvd=""
 pass=()
 for a in "$@"; do
   case "$a" in
     --renderer=*) renderer="${a#--renderer=}" ;;
     --tag=*) tag="${a#--tag=}" ;;
+    --cvd=*) cvd="${a#--cvd=}" ;;
     --size=*) size="${a#--size=}"; pass+=("$a") ;;
     --out=*) pass+=("--out=$(realpath -m "${a#--out=}")") ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*) pass+=("$a") ;;
     *)
       if [[ "$a" == res://* ]]; then scene="$a"
@@ -98,6 +102,15 @@ awk '/Could not set V-Sync mode/ {skip=1; next}
      /ERROR|WARNING|^snap: |^ +at: / {print}' "$log" >&2
 if ! grep -q '^SNAP ' "$log"; then
   cat "$log" >&2; echo "snap.sh: no image written" >&2; exit 1
+fi
+if [[ -n "$cvd" ]]; then
+  mapfile -t shots < <(grep '^SNAP ' "$log" | cut -c6-)
+  if ! "$root/tools/godot.sh" --headless --path "$root" --script res://src/ui/screens/dev/cvd_snap.gd \
+      -- "--cvd=$cvd" "${shots[@]}" >>"$log" 2>&1; then
+    grep -v '^SNAP ' "$log" >&2 || true
+    echo "snap.sh: --cvd failed" >&2
+    exit 1
+  fi
 fi
 grep '^SNAP ' "$log" | cut -c6- | while read -r f; do
   if [[ "$f" == "$root"/* ]]; then echo "${f#"$root"/}"; else echo "$f"; fi

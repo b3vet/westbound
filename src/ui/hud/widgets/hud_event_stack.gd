@@ -8,7 +8,8 @@ extends HudWidget
 ## Newest line on top; older lines slide down one row and dim. A line pops in from
 ## the left, holds, then fades; a new line past the limit pushes the oldest out.
 ## Storage is sized once (event_stack_lines); strings are built per event, never
-## per frame. Redraws only while a line slides or fades.
+## per frame. Redraws only while a line slides or fades. Reduced motion (WP9.3): lines
+## fade in and out where they stand (no pop from the left, no slide down a row).
 
 enum Role { TEXT, ACCENT, GOLD, HOT }
 
@@ -58,6 +59,9 @@ func push(word: String, points: String, role: Role) -> void:
 	_age[0] = 0.0
 	_row[0] = 0.0
 	_n = mini(_n + 1, _cap)
+	if style != null and style.reduced_motion:
+		for i in _n:
+			_row[i] = float(i)   # WP9.3: older lines take their new row at once
 	changes += 1
 	visible = not muted
 	queue_redraw()
@@ -83,6 +87,25 @@ func clear() -> void:
 	visible = false
 
 
+func settle_motion() -> void:
+	for i in _n:
+		_row[i] = float(i)
+	super.settle_motion()
+
+
+## The largest pop (px) or slide (px) of a line now (tests, WP9.3).
+func motion_amount() -> float:
+	var m := super.motion_amount()
+	if style == null:
+		return m
+	var t := style.tuning
+	for i in _n:
+		var pop := clampf(_age[i] / maxf(t.event_slide_s, 1e-6), 0.0, 1.0)   # lint: allow-number divide guard
+		var pop_px := 0.0 if style.reduced_motion else style.px(t.event_pop_px) * (1.0 - pop) * (1.0 - pop)
+		m = maxf(m, pop_px + absf(_row[i] - float(i)) * style.px(t.event_line_height_px))
+	return m
+
+
 func animate(dt: float) -> bool:
 	if _n == 0:
 		return false
@@ -93,7 +116,8 @@ func animate(dt: float) -> bool:
 	for i in _n:
 		_age[i] += dt
 		if _row[i] != float(i):
-			_row[i] = move_toward(_row[i], float(i), step)
+			# WP9.3: with reduced motion a line takes its new row at once (no slide).
+			_row[i] = float(i) if style.reduced_motion else move_toward(_row[i], float(i), step)
 			moving = true
 		if _age[i] - dt < t.event_slide_s or _age[i] > t.event_hold_s:
 			moving = true
@@ -131,7 +155,8 @@ func _paint_pass(outlines: bool) -> void:
 		var pts := _pts[i]
 		var ww := HudDraw.text_width(s.display, word, s.size_event)
 		var pw := 0.0 if pts.is_empty() else HudDraw.number_width(s.display, pts, s.size_event, cell) + gap
-		var x := (size.x - ww - pw) * 0.5 - s.px(t.event_pop_px) * (1.0 - ease_in)
+		var pop_px := 0.0 if s.reduced_motion else s.px(t.event_pop_px) * (1.0 - ease_in)
+		var x := (size.x - ww - pw) * 0.5 - pop_px
 		var y := _row[i] * line_h + line_h * 0.5 + cap * 0.5
 		if outlines:
 			var o := Color(s.outline, s.outline.a * a)

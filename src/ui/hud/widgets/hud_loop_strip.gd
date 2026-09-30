@@ -8,6 +8,8 @@ extends Control
 ##
 ## Positions are fractions of the loop (wrapped s / L, 0 = the start / finish line at the
 ## left end). Remote dots take their crew color, yours is the accent, larger, drawn last.
+## Each crew color also has its own dot shape (NetTuning.room_crew_dot_facets, WP9.3:
+## color is never the only cue).
 ## One triangle array (one draw call); redraws only when a dot moves a whole pixel or
 ## changes color. Never takes touches.
 
@@ -22,6 +24,7 @@ var redraws: int = 0
 var _sectors := PackedFloat64Array()
 var _dot_px := PackedInt32Array()
 var _dot_color: Array[Color] = []
+var _dot_facets := PackedInt32Array()
 var _me_px: int = -1
 var _mesh := HudMesh.new()
 
@@ -38,6 +41,8 @@ func setup(s: HudStyle, net_tuning: NetTuning, dots: int) -> void:
 	_dot_px.fill(-1)
 	_dot_color.resize(dots)
 	_dot_color.fill(Color.TRANSPARENT)
+	_dot_facets.resize(dots)
+	_dot_facets.fill(DOT_FACETS)
 	queue_redraw()
 
 
@@ -56,7 +61,24 @@ func set_dot(i: int, frac: float, color: Color) -> void:
 		return
 	_dot_px[i] = px
 	_dot_color[i] = color
+	_dot_facets[i] = facets_for(net, color)
 	queue_redraw()
+
+
+## The dot shape (facets) of a crew color: its index in room_crew_colors picks from
+## room_crew_dot_facets; any other color is a hexagon. Allocation-free.
+static func facets_for(net_tuning: NetTuning, color: Color) -> int:
+	if net_tuning == null or net_tuning.room_crew_dot_facets.is_empty():
+		return DOT_FACETS
+	var k := net_tuning.room_crew_colors.find(color)
+	if k < 0:
+		return DOT_FACETS
+	return maxi(3, net_tuning.room_crew_dot_facets[k % net_tuning.room_crew_dot_facets.size()])
+
+
+## Dot i's shape (facets; tests).
+func dot_facets(i: int) -> int:
+	return _dot_facets[i] if i >= 0 and i < _dot_facets.size() else DOT_FACETS
 
 
 func set_me(frac: float) -> void:
@@ -125,7 +147,7 @@ func _draw() -> void:
 	var r := _dot_r()
 	for i in _dot_px.size():
 		if _dot_px[i] >= 0:
-			_mesh.ngon(Vector2(float(_dot_px[i]), cy), r, DOT_FACETS, _dot_color[i], s.ink, s.edge_w)
+			_mesh.ngon(Vector2(float(_dot_px[i]), cy), r, _dot_facets[i], _dot_color[i], s.ink, s.edge_w)
 	if _me_px >= 0:
 		_mesh.ngon(Vector2(float(_me_px), cy), r * ME_SCALE, DOT_FACETS, s.accent, s.ink, s.edge_w)
 	_mesh.flush(self)

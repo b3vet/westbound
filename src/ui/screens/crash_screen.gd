@@ -68,7 +68,7 @@ func _process(delta: float) -> void:
 	var k := _t - d
 	var fade := clampf(k / maxf(tuning.screen_fade_in_s, EPS), 0.0, 1.0)
 	var pulse := lerpf(PULSE_MIN, 1.0, 0.5 + 0.5 * cos(TAU * tuning.crash_hint_pulse_hz * k))
-	hint.modulate.a = fade * (pulse if not reduced_motion else 1.0)
+	hint.modulate.a = fade * (pulse if not motion_reduced() else 1.0)
 
 
 ## Skips the hint's delay (snaps).

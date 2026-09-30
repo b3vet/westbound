@@ -59,6 +59,8 @@ extends Node3D
 ## so stop_attract() snaps back to the mode's pose. Only in MENU, where hit detection is
 ## off ("No scripted camera ever takes control while traffic can still hit the player").
 ## The car's body always shows (the cockpit steps aside), and there is no shake.
+## Reduced motion (WP9.3) ignores the shots: the rig holds the follow pose of
+## CameraTuning.attract_reduced_motion_mode (chase) behind the car, with no cuts.
 
 ## Runs after the player car's physics tick (default priority 0).
 const PHYSICS_PRIORITY := 100
@@ -293,6 +295,8 @@ func start_attract() -> void:
 		_cockpit.visible = false
 	_restore_body()
 	_head_xform = Transform3D.IDENTITY
+	if attract_still():
+		snap_to_target()   # WP9.3: straight into the still pose, no swoop
 
 
 ## Back to the mode's pose (snapped: a run starts from the title).
@@ -308,15 +312,31 @@ func is_attract() -> bool:
 	return _attract
 
 
+## WP9.3: the attract drive with reduced motion: the follow pose of
+## attract_reduced_motion_mode instead of the orbit and drive-past shots.
+func attract_still() -> bool:
+	return _attract and _reduced_motion
+
+
+## The mode whose pose the rig takes this tick (the player's, or the still attract's).
+func _pose_mode_i() -> int:
+	if attract_still():
+		var i := tuning.mode_index(tuning.attract_reduced_motion_mode)
+		if i >= 0 and i != _cockpit_i:
+			return i
+	return _mode_i
+
+
 ## The attract shot's view this tick: the eye and the look point (render space), the FOV
 ## (deg) and a yaw (rad, + turns the view left, so the car sits right of centre). `cut`:
-## a new shot, placed at once with no interpolation from the last one.
+## a new shot, placed at once with no interpolation from the last one. Ignored while the
+## attract holds still (reduced motion).
 func set_attract_view(eye: Vector3, look: Vector3, fov_deg: float, yaw_rad: float, cut: bool = false) -> void:
 	_attract_eye = eye
 	_attract_look = look
 	_attract_fov = fov_deg
 	_attract_yaw = yaw_rad
-	if cut and _attract and _cam != null:
+	if cut and _attract and not attract_still() and _cam != null:
 		_apply_attract()
 		reset_physics_interpolation()
 		_cam.reset_physics_interpolation()
@@ -562,7 +582,7 @@ static func heading_of(b: Basis, fallback: float) -> float:
 func _update(dt: float, snap: bool) -> void:
 	var tp := _target.global_transform
 	var anchor := tp.origin
-	var mi := _mode_i
+	var mi := _pose_mode_i()
 	var v := _state.v if _state != null else 0.0
 
 	# Heading spring (wrapped so it always takes the short way round).
@@ -581,7 +601,7 @@ func _update(dt: float, snap: bool) -> void:
 	var goal: Vector3
 	if mi == _cockpit_i:
 		goal = tp * _eye_local
-	elif _marker != null and is_instance_valid(_marker):
+	elif mi == _mode_i and _marker != null and is_instance_valid(_marker):
 		goal = _marker.global_position
 	else:
 		var k := tuning.pullback_scale(v, _top_speed_mps, mi)
@@ -619,14 +639,14 @@ func _update(dt: float, snap: bool) -> void:
 	if mi == _cockpit_i:
 		_pose_cockpit(tp, dt, snap)
 	else:
-		_pose_follow(anchor, fwd, right, psi)
+		_pose_follow(anchor, fwd, right, psi, mi)
 	_fov_out = tuning.fov_deg(v, _top_speed_mps) + tuning.mode_fov_offset_deg[mi] \
 			+ punch_deg() * tuning.mode_punch_scale[mi]
 	_cam.fov = _fov_out
 	_apply_shake()
 	if _finale_t >= 0.0:
 		_apply_finale()
-	if _attract:
+	if _attract and not attract_still():
 		_apply_attract()
 
 
@@ -664,8 +684,7 @@ func _apply_finale() -> void:
 	_cam.transform = Transform3D.IDENTITY
 
 
-func _pose_follow(anchor: Vector3, fwd: Vector3, right: Vector3, psi: float) -> void:
-	var mi := _mode_i
+func _pose_follow(anchor: Vector3, fwd: Vector3, right: Vector3, psi: float, mi: int) -> void:
 	var look := anchor + fwd * tuning.mode_look_ahead_m[mi] \
 			+ Vector3.UP * tuning.mode_look_height_m[mi] + right * _look_lat.value
 	var eye := _pos.vec_value
@@ -740,6 +759,8 @@ func _on_settings_changed(key: StringName) -> void:
 			_head.reset_vec(Vector3.ZERO)
 			_head_xform.origin = Vector3.ZERO
 			_cam.transform = _head_xform
+		if _attract:
+			snap_to_target()   # into (or out of) the still attract pose at once, no swoop
 	elif key == &"camera_mode":
 		var i := tuning.mode_index(StringName(str(Settings.get_value(&"camera_mode"))))
 		if i >= 0 and i != _mode_i:

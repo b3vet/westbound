@@ -17,6 +17,9 @@ extends Control
 ## Redraws only when something it shows changed: a cheap per-frame comparison, no
 ## allocation, and no redraw at all while nothing moves.
 ##
+## Braking by drag (WP9.3, color is never the only cue): the thumb also gets a hot ring,
+## the gyro hold-brake's shape, in both drag visuals.
+##
 ## Accent: follows the SkyRig (accent_changed) when there is one; set_accent() for
 ## anything else; falls back to the color script's run-start accent.
 ## Colors below are the design system's until ui/theme.tres exists (WP4.3).
@@ -131,6 +134,11 @@ func wheel_mode() -> bool:
 	return hub != null and hub.drag_visual == PlayerInput.WHEEL
 
 
+## The drag brakes: the hot ring shows round the thumb (WP9.3, both drag visuals).
+func brake_ring_visible() -> bool:
+	return hub != null and hub.drag.active and hub.drag.brake > 0.0
+
+
 ## The wheel is on screen: wheel mode and a steering thumb down.
 func wheel_visible() -> bool:
 	return wheel_mode() and hub.drag.active
@@ -179,6 +187,9 @@ func _draw() -> void:
 			var dot := COLOR_HOT if hub.drag.brake > 0.0 else accent
 			_octagon(hub.drag.thumb, dot_r)
 			draw_colored_polygon(_fill, dot)
+		if brake_ring_visible():
+			_octagon(hub.drag.thumb, dot_r * 2.0)
+			draw_polyline(_poly, COLOR_HOT, edge, true)
 	if hub.hold_brake > 0.0:
 		_octagon(hub.hold_pos, dot_r * 2.0)
 		draw_polyline(_poly, COLOR_HOT, edge, true)

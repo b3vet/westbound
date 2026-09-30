@@ -15,7 +15,7 @@ extends CanvasLayer
 ## strip in the top margin over the sun bar; the room line, ROOM and REJOIN CREW and the
 ## feed under the score panel (where loop mode has no leg objective), clear of the thumb
 ## zones; the toast and the banner in the event stack's column. Labels change only when
-## their text changes.
+## their text changes. The text size applies live (Settings `text_scale`, WP9.3: restyle()).
 
 signal rejoin_pressed()
 signal leave_pressed()
@@ -67,6 +67,10 @@ var _reconnecting: bool = false
 var _line_key: int = -1
 var _banner_key: int = -1
 var _feed_left := PackedFloat32Array()
+## The feed lines in full (a shown line is shortened with "..." to stop short of the event
+## stack's column, where the toast and banner sit: WP9.3, 125 % text on a 16:9 canvas).
+var _feed_full := PackedStringArray()
+var _lay := HudLayout.new()
 
 
 func _init() -> void:
@@ -119,8 +123,6 @@ func setup(net_tuning: NetTuning, room_session: NetRoomSession) -> void:
 	net = net_tuning
 	session = room_session
 	hud = Tuning.load_default().hud
-	var ts := hud.clamp_text_scale(float(Settings.get_value(&"text_scale")))
-	style.setup(UiTheme.load_theme(), hud, ts)
 	for i in net.room_chat_feed_lines:
 		var t := ScreenText.make("", ScreenText.Face.LABEL, net.room_font_px, ScreenText.Ink.TEXT)
 		t.name = "Feed%d" % i
@@ -130,9 +132,32 @@ func setup(net_tuning: NetTuning, room_session: NetRoomSession) -> void:
 		feed.append(t)
 	_feed_left.resize(feed.size())
 	_feed_left.fill(0.0)
+	_feed_full.resize(feed.size())
+	_restyle_all()
 	strip.setup(style, net, net.room_max_remotes)
 	nametags.setup(style, net, net.room_max_remotes)
 	nametags.clock = func() -> float: return float(session.time.now_usec()) / NetRoomSession.USEC_PER_S
+	line.size_px = net.room_font_px
+	if not session.room_changed.is_connected(refresh_room):
+		session.room_changed.connect(refresh_room)
+	_relayout()
+	refresh_room()
+
+
+## The text size changed (WP9.3; Accessibility → text size): every piece takes the new
+## style and the layout is rebuilt.
+func restyle() -> void:
+	if hud == null:
+		return
+	_restyle_all()
+	strip.queue_redraw()
+	nametags.queue_redraw()
+	_relayout()
+	refresh_room()
+
+
+func _restyle_all() -> void:
+	style.setup(UiTheme.load_theme(), hud, hud.clamp_text_scale(float(Settings.get_value(&"text_scale"))))
 	for c in get_children():
 		if c is ScreenButton:
 			(c as ScreenButton).setup(style)
@@ -142,12 +167,22 @@ func setup(net_tuning: NetTuning, room_session: NetRoomSession) -> void:
 			(c as ScreenPanel).setup(style)
 	for c in toast.get_children():
 		(c as ScreenText).setup(style)
-	line.size_px = net.room_font_px
 	menu.setup(style, hud, net, session)
-	if not session.room_changed.is_connected(refresh_room):
-		session.room_changed.connect(refresh_room)
-	_relayout()
-	refresh_room()
+
+
+func _enter_tree() -> void:
+	if not Events.settings_changed.is_connected(_on_setting_changed):
+		Events.settings_changed.connect(_on_setting_changed)
+
+
+func _exit_tree() -> void:
+	if Events.settings_changed.is_connected(_on_setting_changed):
+		Events.settings_changed.disconnect(_on_setting_changed)
+
+
+func _on_setting_changed(key: StringName) -> void:
+	if key == &"text_scale":
+		restyle()
 
 
 func _ready() -> void:
@@ -234,11 +269,11 @@ func add_feed(who: String, text: String, color: Color) -> void:
 	if feed.is_empty():
 		return
 	for i in range(feed.size() - 1, 0, -1):
-		feed[i].text = feed[i - 1].text
+		_feed_full[i] = _feed_full[i - 1]
 		feed[i].modulate = feed[i - 1].modulate
 		feed[i].visible = feed[i - 1].visible
 		_feed_left[i] = _feed_left[i - 1]
-	feed[0].text = TEXT_FEED % [who, text]
+	_feed_full[0] = TEXT_FEED % [who, text]
 	feed[0].modulate = color
 	feed[0].visible = true
 	_feed_left[0] = net.room_chat_show_s
@@ -246,7 +281,7 @@ func add_feed(who: String, text: String, color: Color) -> void:
 
 
 func feed_text(i: int) -> String:
-	return feed[i].text if i < feed.size() and feed[i].visible else ""
+	return _feed_full[i] if i < feed.size() and feed[i].visible else ""
 
 
 func set_reconnecting(on: bool) -> void:
@@ -283,6 +318,7 @@ func _relayout() -> void:
 	var ts := style.ts
 	var m := hud.edge_margin_px
 	var g := hud.spacing_grid_px
+	_lay.build(hud, _full, _safe, null, ts)
 	nametags.position = Vector2.ZERO
 	nametags.size = _full.size
 	# The strip: centred in the top margin, over the sun bar.
@@ -315,8 +351,12 @@ var _feed_top: float = 0.0
 
 func _place_feed() -> void:
 	var y := _feed_top
-	for t in feed:
-		t.position = Vector2(_safe.position.x + hud.edge_margin_px, y)
+	var x := _safe.position.x + hud.edge_margin_px
+	var max_w := maxf(_lay.stack.position.x - hud.spacing_grid_px - x, 0.0)
+	for i in feed.size():
+		var t := feed[i]
+		SocialUi.fit_text(t, _feed_full[i], max_w)
+		t.position = Vector2(x, y)
 		t.size = t.get_combined_minimum_size()
 		y += t.size.y + hud.spacing_grid_px * 0.5
 

@@ -7,7 +7,7 @@ extends HudWidget
 ##
 ## Visible below hud.min_speed_bar_show_below_kmh (hidden again above it plus the
 ## hysteresis), and always while TOO SLOW. The bar fills to the minimum-speed mark.
-## Pulses only while TOO SLOW.
+## Pulses only while TOO SLOW (steady with reduced motion, WP9.3).
 
 const LABEL_MIN := "MIN SPEED"
 const LABEL_TOO_SLOW := "TOO SLOW"
@@ -59,7 +59,7 @@ func set_state(frac: float, too_slow: bool, min_value: int) -> void:
 
 
 func animate(dt: float) -> bool:
-	if not (visible and _too_slow):
+	if not (visible and _too_slow) or style.reduced_motion:
 		return false
 	_clock += dt
 	_plate_redraw()
@@ -81,8 +81,13 @@ func _bar_rect() -> Rect2:
 	return Rect2(Vector2(pad + left + gap, (size.y - h) * 0.5), Vector2(size.x - pad * 2.0 - left - right - gap * 2.0, h))
 
 
+## Pulse depth now (tests, WP9.3).
+func motion_amount() -> float:
+	return super.motion_amount() + (1.0 - _pulse())
+
+
 func _pulse() -> float:
-	if not _too_slow:
+	if not _too_slow or style.reduced_motion:
 		return 1.0
 	return lerpf(PULSE_MIN, 1.0, 0.5 + 0.5 * cos(TAU * style.tuning.too_slow_pulse_hz * _clock))
 

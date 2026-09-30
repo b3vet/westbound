@@ -68,8 +68,23 @@ func _update_pivot() -> void:
 
 
 ## Advances animations by dt; true while something is moving (a redraw is queued).
+## With style.reduced_motion a widget fades only: no scale, slide, rotation or pulse.
 func animate(_dt: float) -> bool:
 	return false
+
+
+## How far from rest this widget is drawn now, in px, radians or pulse depth (tests,
+## WP9.3): 0 when nothing but opacity changes. The base counts scale and rotation;
+## widgets that move or pulse their drawing add their own.
+func motion_amount() -> float:
+	return (scale - Vector2.ONE).abs().length() + absf(rotation)
+
+
+## Reduced motion turned on (WP9.3): puts a moving transform back at rest now.
+func settle_motion() -> void:
+	scale = Vector2.ONE
+	rotation = 0.0
+	_redraw_all()
 
 
 ## The accent changed (redraw if this widget shows it).

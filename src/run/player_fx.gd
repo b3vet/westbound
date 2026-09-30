@@ -17,6 +17,9 @@ extends Node3D
 ## with wb_output). Both stay hidden (0 draw calls) until the first hit. Every number
 ## is in FeelTuning's "Damage look" group (data/tuning/feel.tres).
 ##
+## Reduced motion (WP9.3, Settings `reduced_motion`, live): both flickers slow to their
+## *_reduced_motion_hz rates, under 3 flashes a second (docs/ACCESSIBILITY.md).
+##
 ## WP7.4 (juice): it also carries the run's JuiceFx (speed lines, tire smoke, barrier
 ## sparks: src/fx/juice_fx.gd) and CarFxEvents (publishes hard_braking_changed and
 ## barrier_scrape: src/fx/car_fx_events.gd) as children, created once and bound to the
@@ -51,6 +54,7 @@ var _ghost_left_s: float = 0.0
 var _t: float = 0.0
 var _visual_was_visible: bool = true
 var _lamp_level: float = -1.0
+var _reduced_motion: bool = false
 ## WP7.4: the juice layer and the feel-event adapter (children, created on entering the tree).
 var juice: JuiceFx
 var fx_events: CarFxEvents
@@ -58,6 +62,8 @@ var fx_events: CarFxEvents
 
 func _enter_tree() -> void:
 	camera_mode = StringName(str(Settings.get_value(&"camera_mode")))
+	_reduced_motion = bool(Settings.get_value(&"reduced_motion"))
+	_connect(Events.settings_changed, _on_settings_changed)
 	_connect(Events.hit, _on_hit)
 	_connect(Events.ghost_started, _on_ghost_started)
 	_connect(Events.ghost_ended, stop_ghost)
@@ -72,6 +78,7 @@ func _exit_tree() -> void:
 	_disconnect(Events.ghost_ended, stop_ghost)
 	_disconnect(Events.run_started, _on_run_started)
 	_disconnect(Events.camera_mode_changed, _on_camera_mode_changed)
+	_disconnect(Events.settings_changed, _on_settings_changed)
 
 
 ## Attaches the effect nodes to `player_car`'s model (call again after the model
@@ -154,15 +161,25 @@ func advance(delta: float) -> void:
 		if _ghost_left_s <= 0.0:
 			stop_ghost()
 		elif car != null and car.visual != null:
-			car.visual.visible = car.body_visible and int(_t * _feel().ghost_flicker_hz * 2.0) % 2 == 0
+			car.visual.visible = car.body_visible and int(_t * ghost_hz() * 2.0) % 2 == 0
 	if damaged and _lamp_mat != null:
 		var f := _feel()
-		var step := int(_t * f.lamp_flicker_hz)
+		var step := int(_t * (f.lamp_flicker_reduced_motion_hz if _reduced_motion else f.lamp_flicker_hz))
 		var lit := float(((step * _HASH_MUL) >> _HASH_SHIFT) & _HASH_MASK) < f.lamp_lit_share * float(_HASH_MASK)
 		var level := 1.0 if lit else 0.0
 		if level != _lamp_level:
 			_lamp_level = level
 			_lamp_mat.set_shader_parameter(&"level", level)
+
+
+## The ghost flicker's rate now (hidden/shown cycles per second).
+func ghost_hz() -> float:
+	return _feel().ghost_flicker_reduced_motion_hz if _reduced_motion else _feel().ghost_flicker_hz
+
+
+func _on_settings_changed(key: StringName) -> void:
+	if key == &"reduced_motion":
+		_reduced_motion = bool(Settings.get_value(&"reduced_motion"))
 
 
 func _apply_damage() -> void:
