@@ -50,7 +50,6 @@ pub(crate) async fn run(
                 let keep = room.advance_to(clock.now().tick);
                 metrics.observe_tick(t0.elapsed());
                 if !keep {
-                    tracing::info!(room = room.id, "room closed (empty)");
                     break;
                 }
             }

@@ -60,6 +60,7 @@ room_max_remotes = 7
 room_protection_s = 3.0
 room_reconnect_window_s = 15.0
 room_reconnect_retry_s = 1.0
+room_restart_rejoin_window_s = 90.0
 room_join_timeout_s = 10.0
 room_result_toast_s = 3.0
 room_ghost_near_m = 15.0

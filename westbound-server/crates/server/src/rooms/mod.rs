@@ -54,7 +54,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 pub use metrics::RoomMetrics;
-pub use room::{Joined, Refusal};
+pub use room::{CloseMode, Joined, Refusal};
 
 use crate::config::{Config, ROOM_TRAFFIC_SIM};
 use crate::leaderboards::RoomKind;
@@ -75,6 +75,8 @@ pub const DETAIL_SERVER_FULL: &str = "All rooms are full. Try again soon.";
 pub const DETAIL_ROOM_NOT_FOUND: &str = "No room with that code.";
 pub const DETAIL_PUBLIC_CREATE: &str = "Public rooms are run by the server.";
 pub const DETAIL_ROOM_BUSY: &str = "The room did not answer. Try again.";
+/// N10.2: joins refused while a planned restart drains the server.
+pub const DETAIL_RESTARTING: &str = "The server is restarting. Try again in a minute.";
 
 const KMH_PER_MPS: f64 = 3.6;
 const MM_PER_M: f64 = 1_000.0;
@@ -418,9 +420,26 @@ impl JoinOpts {
     }
 }
 
+/// A live room as the admin API lists it (N10.2).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RoomSummary {
+    pub room_id: u32,
+    pub code: String,
+    pub visibility: Visibility,
+    pub players: u8,
+    pub max_players: u8,
+    pub density: Density,
+    pub night: bool,
+    /// Accounts holding a seat (connected or held).
+    pub accounts: Vec<u64>,
+}
+
 /// The rooms registry (`AppState.rooms`).
 pub struct Rooms {
     shared: Arc<Shared>,
+    /// N10.2: a planned restart is draining the server: no new rooms and no new seats
+    /// (a held seat can still be taken back).
+    draining: AtomicBool,
     next_id: AtomicU32,
     shutdown: CancellationToken,
     hooks: RoomHooks,
@@ -464,6 +483,7 @@ impl Rooms {
                 registry: Mutex::new(Registry::default()),
                 runs: Mutex::new(None),
             }),
+            draining: AtomicBool::new(false),
             next_id: AtomicU32::new(1),
             shutdown,
             hooks,
@@ -547,12 +567,41 @@ impl Rooms {
         }
     }
 
+    /// N10.2: starts or ends draining (a planned restart).
+    pub fn set_draining(&self, on: bool) {
+        self.draining.store(on, Ordering::Release);
+    }
+
+    pub fn is_draining(&self) -> bool {
+        self.draining.load(Ordering::Acquire)
+    }
+
+    fn restarting() -> Refusal {
+        Refusal::new(ErrorCode::ServerFull, DETAIL_RESTARTING)
+    }
+
     /// Creates a room and starts its task. `Err` past `limits.max_rooms`.
-    pub fn create(&self, mut settings: RoomSettings) -> Result<u32, Refusal> {
+    pub fn create(&self, settings: RoomSettings) -> Result<u32, Refusal> {
+        self.create_room(settings, None)
+    }
+
+    /// N10.2: recreates a room handed over by the previous instance under its old code
+    /// (a live room with that code is returned as it is).
+    pub fn restore(&self, code: Code, settings: RoomSettings) -> Result<u32, Refusal> {
+        self.create_room(settings, Some(code))
+    }
+
+    fn create_room(&self, mut settings: RoomSettings, code: Option<Code>) -> Result<u32, Refusal> {
+        if self.is_draining() {
+            return Err(Self::restarting());
+        }
         let p = &self.shared.params;
         settings.max_players = settings.max_players.clamp(1, p.max_players);
         settings.fixed_cycle_ms = p.clock.normalize(settings.fixed_cycle_ms);
         let mut reg = self.shared.lock();
+        if let Some(id) = code.as_ref().and_then(|c| reg.codes.get(c)) {
+            return Ok(*id);
+        }
         if reg.rooms.len() >= p.max_rooms {
             return Err(Refusal::new(ErrorCode::ServerFull, DETAIL_SERVER_FULL));
         }
@@ -562,13 +611,16 @@ impl Rooms {
                 break id;
             }
         };
-        let code = loop {
-            let c = Code(crate::social::crews::new_invite_code(
-                protocol::types::CODE_LEN as u32,
-            ));
-            if !reg.codes.contains_key(&c) {
-                break c;
-            }
+        let code = match code {
+            Some(c) => c,
+            None => loop {
+                let c = Code(crate::social::crews::new_invite_code(
+                    protocol::types::CODE_LEN as u32,
+                ));
+                if !reg.codes.contains_key(&c) {
+                    break c;
+                }
+            },
         };
         let clock = (self.hooks.tick_clock)(p.tick_rate_hz);
         let start_unix_ms = (self.hooks.utc_ms)();
@@ -626,6 +678,75 @@ impl Rooms {
             self.shutdown.clone(),
         ));
         Ok(id)
+    }
+
+    /// N10.2: every live room for the admin API, by id.
+    pub fn list(&self) -> Vec<RoomSummary> {
+        let reg = self.shared.lock();
+        let mut out: Vec<RoomSummary> = reg
+            .rooms
+            .values()
+            .map(|e| {
+                let id = e.info.room_id;
+                let mut accounts: Vec<u64> = reg
+                    .seats
+                    .iter()
+                    .filter(|(_, r)| **r == id)
+                    .map(|(a, _)| a.0)
+                    .collect();
+                accounts.sort_unstable();
+                RoomSummary {
+                    room_id: id,
+                    code: e.info.code.0.clone(),
+                    visibility: e.info.visibility,
+                    players: e.info.players(),
+                    max_players: e.info.max_players,
+                    density: e.info.density(),
+                    night: e.info.night(),
+                    accounts,
+                }
+            })
+            .collect();
+        out.sort_by_key(|r| r.room_id);
+        out
+    }
+
+    /// N10.2: closes one room at its next tick (see `room::Cmd::Close`); its settings, or
+    /// None when the room is gone or did not answer within the join timeout.
+    pub async fn close_room(
+        &self,
+        room_id: u32,
+        mode: CloseMode,
+        notice: Option<protocol::ServerMsg>,
+    ) -> Option<(Code, RoomSettings)> {
+        let entry = self.shared.lock().rooms.get(&room_id).cloned()?;
+        let timeout = self.shared.params.join_timeout;
+        let (reply, rx) = oneshot::channel();
+        let cmd = Cmd::Close {
+            mode,
+            notice,
+            reply,
+        };
+        match tokio::time::timeout(timeout, entry.tx.send(cmd)).await {
+            Ok(Ok(())) => {}
+            _ => return None,
+        }
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(settings)) => Some((entry.info.code.clone(), settings)),
+            _ => None,
+        }
+    }
+
+    /// N10.2: closes every live room at once (the restart handover); the rooms that
+    /// answered, with their settings.
+    pub async fn close_all(&self, mode: CloseMode) -> Vec<(Code, RoomSettings)> {
+        let ids: Vec<u32> = self.shared.lock().rooms.keys().copied().collect();
+        let closes = ids.into_iter().map(|id| self.close_room(id, mode, None));
+        futures_util::future::join_all(closes)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// The live room `target` names without creating one (`Create` and `Quick` name none).
@@ -707,6 +828,10 @@ impl Rooms {
         let account = session.account_id;
         let (entry, elsewhere) = {
             let reg = self.shared.lock();
+            if self.is_draining() && reg.seats.get(&account) != Some(&room_id) {
+                // N10.2: only a held seat can be taken back while draining.
+                return Err(Self::restarting());
+            }
             let entry = reg
                 .rooms
                 .get(&room_id)

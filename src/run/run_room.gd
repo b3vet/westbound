@@ -341,6 +341,9 @@ func _apply_placement() -> void:
 		or run.state == Game.CRASH
 	if not _read_placement():
 		return
+	# N10.2: back after a server restart: the server ended the run there (room_closed, the
+	# banked score kept), so this placement starts a fresh one.
+	fresh = session.take_restart_rejoin() or fresh
 	if fresh:
 		# The first spawn (held countdown) or the respawn after a crash-out: a fresh run
 		# at the placement (Run._start_run reads start_*).

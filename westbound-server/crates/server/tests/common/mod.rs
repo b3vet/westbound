@@ -38,6 +38,8 @@ pub const WAIT: Duration = Duration::from_secs(5);
 pub struct TestServer {
     pub addr: SocketAddr,
     pub metrics_addr: SocketAddr,
+    /// N10.2: the admin API (when the test config has a token).
+    pub admin_addr: Option<SocketAddr>,
     pub state: AppState,
     pub handle: JoinHandle<anyhow::Result<()>>,
     pub dir: TempDir,
@@ -69,6 +71,15 @@ pub fn test_config(dir: &TempDir) -> Config {
     r.runs_burst = 100_000;
     r.social_per_hour = 100_000;
     r.social_burst = 100_000;
+    // N10.2: every test client is 127.0.0.1; the per-IP limits have their own tests.
+    r.ip_per_minute = 1_000_000;
+    r.ip_burst = 100_000;
+    r.ws_connect_per_minute = 1_000_000;
+    r.ws_connect_burst = 100_000;
+    c.rooms.create_per_hour = 100_000;
+    c.rooms.create_burst = 100_000;
+    // The admin API binds an ephemeral port when a test gives it a token.
+    c.admin.bind = "127.0.0.1:0".into();
     c.validate().expect("test config is valid");
     c
 }
@@ -78,7 +89,11 @@ pub async fn start() -> TestServer {
 }
 
 pub async fn start_with(tweak: impl FnOnce(&mut Config)) -> TestServer {
-    let dir = tempfile::tempdir().unwrap();
+    start_in(tempfile::tempdir().unwrap(), tweak).await
+}
+
+/// A server on `dir`'s database (N10.2: a second instance after a restart or a restore).
+pub async fn start_in(dir: TempDir, tweak: impl FnOnce(&mut Config)) -> TestServer {
     let mut cfg = test_config(&dir);
     tweak(&mut cfg);
     cfg.validate().expect("tweaked test config is valid");
@@ -107,11 +122,13 @@ pub async fn start_with_tick_clock(
 fn serve(server: Server, dir: TempDir) -> TestServer {
     let addr = server.local_addr();
     let metrics_addr = server.metrics_addr().unwrap();
+    let admin_addr = server.admin_addr();
     let state = server.state().clone();
     let handle = tokio::spawn(server.run());
     TestServer {
         addr,
         metrics_addr,
+        admin_addr,
         state,
         handle,
         dir,
@@ -142,13 +159,20 @@ impl TestServer {
 
     /// Cancels and waits for `run()` to return.
     pub async fn stop(self) {
+        drop(self.stop_keep_dir().await);
+    }
+
+    /// Cancels (unless a restart already did), waits for `run()`, closes the database the
+    /// way `serve` does, and hands the directory back (N10.2: for the next instance).
+    pub async fn stop_keep_dir(self) -> TempDir {
         self.state.shutdown.cancel();
         tokio::time::timeout(WAIT, self.handle)
             .await
             .expect("server stops in time")
             .unwrap()
             .unwrap();
-        self.state.db.close().await;
+        db::close(&self.state.db).await;
+        self.dir
     }
 }
 

@@ -1,8 +1,12 @@
 //! Admin commands behind `westbound-server admin ...`: ban, unban, force-rename, (N7.1)
 //! remove a run or a leaderboard entry, and (N9.1) list and handle reports, rename or
-//! disband a crew. Each change is recorded in `admin_log` (actor `cli`). Spec:
+//! disband a crew; (N10.2) player lookup by `name#tag` or id, ban reasons, player deletion,
+//! board recomputes, database stats, the admin log and the backup list. Each change is
+//! recorded in `admin_log` (actor `cli`). The live commands (rooms, notices, kicks) go
+//! through the running server's admin API (`admin_api.rs`). Spec:
 //! WESTBOUND_MULTIPLAYER_HANDOFF.md → "Moderation" (admin CLI: list reports, ban or unban
-//! with duration, force-rename, and remove a run or leaderboard entry).
+//! with duration, force-rename, and remove a run or leaderboard entry). Runbook:
+//! docs/OPERATIONS.md.
 
 use anyhow::{bail, Context};
 use sqlx::SqlitePool;
@@ -46,15 +50,50 @@ async fn require_account(pool: &SqlitePool, id: i64) -> anyhow::Result<accounts:
         .with_context(|| format!("no account {id}"))
 }
 
-/// Bans an account until `now + duration` (or permanently).
-pub async fn ban(pool: &SqlitePool, id: i64, duration: &str, now: i64) -> anyhow::Result<String> {
+/// A player by account id (`42`) or full name (`Road Runner#0042`, case-insensitive).
+pub async fn resolve_player(pool: &SqlitePool, spec: &str) -> anyhow::Result<i64> {
+    let spec = spec.trim();
+    if let Ok(id) = spec.parse::<i64>() {
+        return Ok(id);
+    }
+    let (name, tag) = spec
+        .rsplit_once('#')
+        .with_context(|| format!("player `{spec}`: give an account id or name#1234"))?;
+    let tag: i64 = tag
+        .parse()
+        .with_context(|| format!("player `{spec}`: the tag after # must be a number"))?;
+    sqlx::query_scalar::<_, i64>("SELECT id FROM accounts WHERE display_name = ? AND tag = ?")
+        .bind(name.trim())
+        .bind(tag)
+        .fetch_optional(pool)
+        .await?
+        .with_context(|| format!("no player {spec}"))
+}
+
+/// One line of free text for `admin_log` (reasons, notes).
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Bans an account until `now + duration` (or permanently), with an optional reason
+/// (kept in `admin_log`, shown by `admin player`).
+pub async fn ban(
+    pool: &SqlitePool,
+    id: i64,
+    duration: &str,
+    reason: Option<&str>,
+    now: i64,
+) -> anyhow::Result<String> {
     let secs = parse_duration(duration)?;
     require_account(pool, id).await?;
     let until = secs.map_or(PERMANENT_BAN_UNTIL, |d| {
         now.saturating_add(d).min(PERMANENT_BAN_UNTIL)
     });
     accounts::set_ban(pool, id, Some(until)).await?;
-    let detail = format!("until={until} duration={duration}");
+    let mut detail = format!("until={until} duration={duration}");
+    if let Some(r) = reason.map(one_line).filter(|r| !r.is_empty()) {
+        detail.push_str(&format!(" reason={r}"));
+    }
     crate::db::admin_log(pool, ACTOR, "ban", &id.to_string(), &detail).await?;
     Ok(if secs.is_none() {
         format!("account {id} banned permanently")
@@ -296,6 +335,336 @@ pub async fn crew_disband(pool: &SqlitePool, crew_id: i64) -> anyhow::Result<Str
         "crew {crew_id} disbanded ({} members released)",
         members.len()
     ))
+}
+
+/// Everything moderation needs about one player, as `key value` lines.
+pub async fn player(pool: &SqlitePool, id: i64, now: i64) -> anyhow::Result<String> {
+    type Row = (
+        i64,
+        String,
+        i64,
+        i64,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        bool,
+        bool,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT id, display_name, tag, created_at, last_seen, banned_until, name_changed_at,
+                apple_sub IS NOT NULL, google_sub IS NOT NULL
+         FROM accounts WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((id, name, tag, created, seen, banned_until, renamed, apple, google)) = row else {
+        bail!("no account {id}");
+    };
+    let count = |sql: &'static str| sqlx::query_scalar::<_, i64>(sql).bind(id).fetch_one(pool);
+    let runs = count("SELECT COUNT(*) FROM runs WHERE account_id = ?").await?;
+    let reports_against = count("SELECT COUNT(*) FROM reports WHERE target_id = ?").await?;
+    let reports_open =
+        count("SELECT COUNT(*) FROM reports WHERE target_id = ? AND handled = 0").await?;
+    let reports_by = count("SELECT COUNT(*) FROM reports WHERE reporter_id = ?").await?;
+    let friends = count(
+        "SELECT COUNT(*) FROM friends WHERE (account_a = ?1 OR account_b = ?1) AND status = 'accepted'",
+    )
+    .await?;
+    let crew: Option<(i64, String, String, String)> = sqlx::query_as(
+        "SELECT c.id, c.name, c.tag, m.role FROM crew_members m JOIN crews c ON c.id = m.crew_id
+         WHERE m.account_id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    let last_ban: Option<(String, i64)> = sqlx::query_as(
+        "SELECT detail, created_at FROM admin_log WHERE action = 'ban' AND target = ?
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(id.to_string())
+    .fetch_optional(pool)
+    .await?;
+    let entries: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT board, period_key, score FROM leaderboard_entries WHERE account_id = ?
+         ORDER BY board, period_key DESC LIMIT ?",
+    )
+    .bind(id)
+    .bind(PLAYER_ENTRIES_SHOWN)
+    .fetch_all(pool)
+    .await?;
+    let opt = |v: Option<i64>| v.map_or("-".to_string(), |t| t.to_string());
+    let ban = match banned_until {
+        Some(u) if u >= PERMANENT_BAN_UNTIL => "permanent".to_string(),
+        Some(u) if u > now => format!("until {u} ({} s left)", u - now),
+        Some(u) => format!("expired {u}"),
+        None => "no".to_string(),
+    };
+    let mut out = vec![
+        format!("account {id}"),
+        format!(
+            "name {}",
+            names::full_name(&name, u16::try_from(tag).unwrap_or(0))
+        ),
+        format!("created {created}"),
+        format!("last_seen {}", opt(seen)),
+        format!("renamed {}", opt(renamed)),
+        format!("linked apple={apple} google={google}"),
+        format!("banned {ban}"),
+    ];
+    if let Some((detail, at)) = last_ban {
+        out.push(format!("last_ban {at} {detail}"));
+    }
+    out.push(match crew {
+        Some((cid, cname, ctag, role)) => format!("crew {cid} {cname} [{ctag}] {role}"),
+        None => "crew -".to_string(),
+    });
+    out.push(format!("friends {friends}"));
+    out.push(format!("runs {runs}"));
+    out.push(format!(
+        "reports against={reports_against} (unhandled {reports_open}) by={reports_by}"
+    ));
+    for (board, period, score) in entries {
+        out.push(format!("entry {board}/{period} {score}"));
+    }
+    Ok(out.join("\n"))
+}
+
+/// Leaderboard entries `admin player` lists.
+const PLAYER_ENTRIES_SHOWN: i64 = 20;
+
+/// Deletes a player and all of their data, as `DELETE /api/v1/account` does (actor `cli`).
+pub async fn delete_player(
+    pool: &SqlitePool,
+    cfg: &LeaderboardsConfig,
+    id: i64,
+    now: i64,
+) -> anyhow::Result<String> {
+    let before = require_account(pool, id).await?;
+    let r = accounts::delete(pool, cfg, id, ACTOR, now).await?;
+    if r.accounts == 0 {
+        bail!("no account {id}");
+    }
+    Ok(format!(
+        "account {id} ({}) deleted: runs={} entries={} replays={} friends={} crew_memberships={}",
+        names::full_name(&before.display_name, before.tag),
+        r.runs,
+        r.leaderboard_entries,
+        r.replays,
+        r.social.friends,
+        r.social.crew_memberships
+    ))
+}
+
+/// Rebuilds a board period from the runs: every player's entry from their best eligible
+/// run (`leaderboards::recompute`), or on `loop_crew` every crew's sum. One transaction.
+pub async fn recompute_board(
+    pool: &SqlitePool,
+    cfg: &LeaderboardsConfig,
+    board: &str,
+    period: &str,
+    now: i64,
+) -> anyhow::Result<String> {
+    let b = Board::parse(board).with_context(|| {
+        format!("board `{board}`: expected loop, loop_crew, journey, daily or distance")
+    })?;
+    let p = b
+        .parse_period(period)
+        .with_context(|| format!("period `{period}` is not one board `{board}` keeps"))?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM leaderboard_entries WHERE board = ? AND period_key = ?",
+    )
+    .bind(b.id())
+    .bind(&p.key)
+    .fetch_one(&mut *tx)
+    .await?;
+    let mut changed = 0usize;
+    if b.is_crew() {
+        let crews: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM crews UNION SELECT subject_id FROM leaderboard_entries
+             WHERE board = ? AND period_key = ?",
+        )
+        .bind(b.id())
+        .bind(&p.key)
+        .fetch_all(&mut *tx)
+        .await?;
+        for crew in crews {
+            if leaderboards::recompute_crew(&mut tx, cfg, crew, &p, now).await? {
+                changed += 1;
+            }
+        }
+    } else {
+        let players: Vec<i64> = sqlx::query_scalar(
+            "SELECT DISTINCT account_id FROM runs UNION SELECT account_id FROM leaderboard_entries
+             WHERE board = ? AND period_key = ? AND account_id IS NOT NULL",
+        )
+        .bind(b.id())
+        .bind(&p.key)
+        .fetch_all(&mut *tx)
+        .await?;
+        for account in players {
+            if leaderboards::recompute(&mut tx, b, &p, account, cfg.show_pending).await? {
+                changed += 1;
+            }
+        }
+    }
+    let after: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM leaderboard_entries WHERE board = ? AND period_key = ?",
+    )
+    .bind(b.id())
+    .bind(&p.key)
+    .fetch_one(&mut *tx)
+    .await?;
+    let target = format!("{board}/{}", p.key);
+    crate::db::admin_log(
+        &mut *tx,
+        ACTOR,
+        "recompute",
+        &target,
+        &format!("entries={before}->{after} written={changed}"),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(format!(
+        "{target} recomputed: {before} -> {after} entries ({changed} written)"
+    ))
+}
+
+/// Database-side stats, as `key value` lines.
+pub async fn db_stats(pool: &SqlitePool, now: i64) -> anyhow::Result<String> {
+    let day = now - crate::clock::SECS_PER_DAY;
+    let week = now - 7 * crate::clock::SECS_PER_DAY;
+    let scalar = |sql: &'static str| sqlx::query_scalar::<_, i64>(sql);
+    let mut out = Vec::new();
+    for (key, sql) in [
+        ("accounts", "SELECT COUNT(*) FROM accounts"),
+        ("runs", "SELECT COUNT(*) FROM runs"),
+        (
+            "leaderboard_entries",
+            "SELECT COUNT(*) FROM leaderboard_entries",
+        ),
+        ("crews", "SELECT COUNT(*) FROM crews"),
+        (
+            "friendships",
+            "SELECT COUNT(*) FROM friends WHERE status = 'accepted'",
+        ),
+        (
+            "reports_unhandled",
+            "SELECT COUNT(*) FROM reports WHERE handled = 0",
+        ),
+    ] {
+        let n = scalar(sql).fetch_one(pool).await?;
+        out.push(format!("{key} {n}"));
+    }
+    for (key, sql, since) in [
+        (
+            "accounts_new_24h",
+            "SELECT COUNT(*) FROM accounts WHERE created_at >= ?",
+            day,
+        ),
+        (
+            "accounts_seen_24h",
+            "SELECT COUNT(*) FROM accounts WHERE last_seen >= ?",
+            day,
+        ),
+        (
+            "accounts_seen_7d",
+            "SELECT COUNT(*) FROM accounts WHERE last_seen >= ?",
+            week,
+        ),
+        (
+            "accounts_banned",
+            "SELECT COUNT(*) FROM accounts WHERE banned_until > ?",
+            now,
+        ),
+        (
+            "runs_24h",
+            "SELECT COUNT(*) FROM runs WHERE created_at >= ?",
+            day,
+        ),
+        (
+            "reports_24h",
+            "SELECT COUNT(*) FROM reports WHERE created_at >= ?",
+            day,
+        ),
+    ] {
+        let n = scalar(sql).bind(since).fetch_one(pool).await?;
+        out.push(format!("{key} {n}"));
+    }
+    let modes: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT mode, COUNT(*) FROM runs WHERE created_at >= ? GROUP BY mode ORDER BY mode",
+    )
+    .bind(day)
+    .fetch_all(pool)
+    .await?;
+    for (mode, n) in modes {
+        out.push(format!("runs_24h_{mode} {n}"));
+    }
+    let queue: Vec<(String, i64)> =
+        sqlx::query_as("SELECT status, COUNT(*) FROM replays GROUP BY status ORDER BY status")
+            .fetch_all(pool)
+            .await?;
+    for (status, n) in queue {
+        out.push(format!("replays_{status} {n}"));
+    }
+    let size: i64 =
+        scalar("SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()")
+            .fetch_one(pool)
+            .await?;
+    out.push(format!("db_bytes {size}"));
+    let last_backup: Option<(String, i64)> = sqlx::query_as(
+        "SELECT target, created_at FROM admin_log WHERE action = 'backup' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    out.push(match last_backup {
+        Some((file, at)) => format!("last_backup {at} {file}"),
+        None => "last_backup -".to_string(),
+    });
+    Ok(out.join("\n"))
+}
+
+/// The admin log, newest first.
+pub async fn log(pool: &SqlitePool, limit: i64) -> anyhow::Result<String> {
+    let rows: Vec<(i64, i64, String, String, String, String)> = sqlx::query_as(
+        "SELECT id, created_at, actor, action, target, detail FROM admin_log
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(limit.max(1))
+    .fetch_all(pool)
+    .await?;
+    if rows.is_empty() {
+        return Ok("admin log is empty".into());
+    }
+    Ok(rows
+        .into_iter()
+        .map(|(id, at, actor, action, target, detail)| {
+            format!("#{id} {at} {actor} {action} {target} {detail}")
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// The dated backups in `dir`, oldest first, with sizes.
+pub fn backups(dir: &std::path::Path) -> anyhow::Result<String> {
+    if !dir.exists() {
+        return Ok(format!(
+            "no backups in {} (it does not exist yet)",
+            dir.display()
+        ));
+    }
+    let files = crate::backup::list(dir).with_context(|| format!("reading {}", dir.display()))?;
+    if files.is_empty() {
+        return Ok(format!("no backups in {}", dir.display()));
+    }
+    Ok(files
+        .iter()
+        .map(|f| format!("{} {}", f.name, f.bytes))
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 #[cfg(test)]

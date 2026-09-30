@@ -21,11 +21,17 @@
 //! host rules, public rooms (Quick Join, the browser), the `PlayerState` relay with
 //! plausibility checks, spawns, crash-out respawns, rejoin crew, the 15 s seat hold and
 //! the room clock; the gateway routes room messages to the session's room.
+//! N10.2: operations: the admin API and the full admin CLI, the planned restart (notice,
+//! drain, room handover, close 1012), backups with verification, an off-site hook and
+//! restore, per-IP and per-account rate limits, request ids, and the ops metrics.
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Architecture", "Server tech stack",
 //! "Resource budget and deployment"; docs/MULTIPLAYER_PLAN.md → N0, MP-D1.
 
+pub mod account_limits;
 pub mod accounts;
 pub mod admin;
+pub mod admin_api;
+pub mod admin_client;
 pub mod app;
 pub mod auth;
 pub mod backup;
@@ -34,6 +40,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod gateway;
+pub mod handover;
 pub mod healthcheck;
 pub mod http;
 pub mod leaderboards;
@@ -41,6 +48,7 @@ pub mod map;
 pub mod metrics;
 pub mod msg_limits;
 pub mod names;
+pub mod ops;
 pub mod presence;
 pub mod profanity;
 pub mod profile;

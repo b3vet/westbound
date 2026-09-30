@@ -16,6 +16,10 @@ extends RefCounted
 ##   IDLE --request--> CONNECTING --Welcome--> LOBBY --join sent--> JOINING --snapshot--> IN_ROOM
 ##   IN_ROOM --socket lost--> RECONNECTING --Welcome, join by code, snapshot--> IN_ROOM (seat kept)
 ##   RECONNECTING --room_reconnect_window_s over--> IDLE (`left`, timed_out)
+##   N10.2: after a `server_notice{restart}` the window is room_restart_rejoin_window_s; the
+##   server closed the room at the restart (the run ended as room_closed), so the rejoin by
+##   code lands in the next instance's recreated room with a fresh run
+##   (take_restart_rejoin()). A lobby connection dropped by the restart reconnects quietly.
 ##   IN_ROOM --leave() / room_left--> LOBBY (`left`) ; any fatal error --> FAILED
 ##
 ## N9.3 (docs/ROOMS_CLIENT.md → Parties): the party commands and events on the same
@@ -67,6 +71,7 @@ enum Request { NONE, QUICK_JOIN, CREATE, CODE, ID, BROWSE }
 
 const REASON_JOIN_TIMEOUT := "join_timeout"
 const REASON_SEAT_LOST := "seat_lost"
+const NOTICE_RESTART := "restart"
 const RUN_PROTECTED := 1
 const RUN_DRIVING := 2
 const RUN_CRASHED := 3
@@ -155,6 +160,10 @@ var _left_for_retry: bool = false
 var _placement_pending: bool = false
 var _seen_placement_tick: int = -1
 var _reconnect_deadline_us: int = 0
+## N10.2: when the announced restart happens (usec; 0 = none announced).
+var _restart_at_us: int = 0
+## N10.2: the room was rejoined after a restart (a fresh run on the next placement).
+var _restart_rejoin: bool = false
 var _next_retry_us: int = 0
 var _chat_next_us: int = 0
 var _out := NetPlayerState.new()
@@ -326,6 +335,8 @@ func close() -> void:
 	_clear_room()
 	_pending_lobby.clear()
 	_lobby_retry_until_us = 0
+	_restart_at_us = 0
+	_restart_rejoin = false
 	party.clear()
 	_set_state(State.IDLE)
 
@@ -344,6 +355,26 @@ func reconnect_left_s() -> float:
 	if state != State.RECONNECTING:
 		return 0.0
 	return maxf(float(_reconnect_deadline_us - time.now_usec()) / USEC_PER_S, 0.0)
+
+
+## N10.2: seconds until the announced server restart (0: none, or it is due).
+func restart_left_s() -> float:
+	if _restart_at_us == 0:
+		return 0.0
+	return maxf(float(_restart_at_us - time.now_usec()) / USEC_PER_S, 0.0)
+
+
+## N10.2: true once after a rejoin that followed a server restart: the server's run ended
+## at the restart, so the next placement starts a fresh run.
+func take_restart_rejoin() -> bool:
+	var was := _restart_rejoin
+	_restart_rejoin = false
+	return was
+
+
+## A restart was announced and the rejoin window after it is not over.
+func _restart_expected(now: int) -> bool:
+	return _restart_at_us > 0 and now < _restart_at_us + roundi(tuning.room_restart_rejoin_window_s * USEC_PER_S)
 
 
 ## The room clock (fractional room tick), or -1 before the first clock sample.
@@ -610,8 +641,10 @@ func _fail_request(code: String, message: String) -> void:
 
 ## The socket died while connected: in a room, hold on and reconnect.
 func _lost(now: int) -> void:
+	var restart := _restart_expected(now)
 	if state == State.IN_ROOM and not room.code.is_empty() and not NO_RETRY.has(client.failure_reason):
-		_reconnect_deadline_us = now + roundi(tuning.room_reconnect_window_s * USEC_PER_S)
+		var window := tuning.room_restart_rejoin_window_s if restart else tuning.room_reconnect_window_s
+		_reconnect_deadline_us = now + roundi(window * USEC_PER_S)
 		_next_retry_us = now
 		_set_state(State.RECONNECTING)
 		reconnecting.emit(true)
@@ -620,9 +653,11 @@ func _lost(now: int) -> void:
 	last_code = client.failure_reason
 	last_message = client.failure_message
 	_clear_room()
-	if party.in_party() and not NO_RETRY.has(client.failure_reason):
-		# N9.3: the server holds the party place for a while; reconnect for it.
-		_lobby_retry_until_us = now + roundi(tuning.party_reconnect_window_s * USEC_PER_S)
+	if (party.in_party() or restart) and not NO_RETRY.has(client.failure_reason):
+		# N9.3: the server holds the party place for a while; reconnect for it. N10.2: a
+		# planned restart dropped the lobby: reconnect quietly to the next instance.
+		var window := tuning.room_restart_rejoin_window_s if restart else tuning.party_reconnect_window_s
+		_lobby_retry_until_us = now + roundi(window * USEC_PER_S)
 		_next_retry_us = now
 		_set_state(State.IDLE)
 	else:
@@ -750,7 +785,12 @@ func _on_message(msg: Dictionary) -> void:
 			m.chat_at_s = float(time.now_usec()) / USEC_PER_S
 			chat.emit(pid, text)
 		"server_notice":
-			notice.emit(String(msg.get("text", "")))
+			if String(msg.get("kind", "")) == NOTICE_RESTART:
+				# N10.2: the room HUD counts it down (restart_left_s()); the reconnect after it
+				# gets the longer window.
+				_restart_at_us = time.now_usec() + roundi(float(msg.get("seconds", 0)) * USEC_PER_S)
+			else:
+				notice.emit(String(msg.get("text", "")))
 
 
 func _on_snapshot(msg: Dictionary) -> void:
@@ -760,7 +800,12 @@ func _on_snapshot(msg: Dictionary) -> void:
 		client.send_messages([{"type": "lobby_command", "kind": "room_leave"}])
 		return
 	var back := state == State.RECONNECTING
-	var same_room := back and int(msg.get("room_id", 0)) == room.room_id
+	# N10.2: after a restart the room is the next instance's (its ids start over).
+	var restarted := back and _restart_at_us > 0
+	var same_room := back and not restarted and int(msg.get("room_id", 0)) == room.room_id
+	if restarted:
+		_restart_rejoin = true
+	_restart_at_us = 0
 	room.tick_rate = client.clock.tick_rate()
 	room.apply_snapshot(msg)
 	remotes.clear()

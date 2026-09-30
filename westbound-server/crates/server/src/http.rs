@@ -2,9 +2,13 @@
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Deployment" (deep-link files);
 //! docs/MULTIPLAYER_PLAN.md MP-D1 (the server serves the deep-link files itself).
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+
 use anyhow::Context;
-use axum::extract::State;
-use axum::http::{header, StatusCode};
+use axum::extract::{Request, State};
+use axum::http::{header, HeaderValue, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
@@ -20,7 +24,8 @@ const ASSETLINKS_PLACEHOLDER: &str = include_str!("../../../config/well-known/as
 
 #[derive(Debug, Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Health {
-    /// `ok`, or `degraded` when the database does not answer (HTTP 503).
+    /// `ok`; `degraded` when the database does not answer (HTTP 503); N10.2: `draining`
+    /// during a planned restart's notice (HTTP 503: a proxy stops sending new clients).
     pub status: String,
     pub version: String,
     pub build: String,
@@ -30,13 +35,19 @@ pub struct Health {
 
 pub async fn health(State(state): State<AppState>) -> Response {
     let db_ok = crate::db::ping(&state.db).await;
+    let draining = state.drain.is_draining();
+    let status = match (db_ok, draining) {
+        (_, true) => "draining",
+        (true, false) => "ok",
+        (false, false) => "degraded",
+    };
     let body = Health {
-        status: if db_ok { "ok" } else { "degraded" }.into(),
+        status: status.into(),
         version: crate::VERSION.into(),
         build: crate::BUILD.into(),
         db: if db_ok { "ok" } else { "error" }.into(),
     };
-    let code = if db_ok {
+    let code = if db_ok && !draining {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
@@ -290,7 +301,71 @@ pub async fn echo_check() -> Response {
         .into_response()
 }
 
+/// A request's id (N10.2): the client's `X-Request-Id` when it is short and plain, else a
+/// fresh one. It is in the request's log span (`req_id`) and echoed in the response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestId(pub String);
+
+pub const REQUEST_ID_HEADER: &str = "x-request-id";
+/// Longest client-supplied request id kept.
+const MAX_REQUEST_ID_LEN: usize = 64;
+
+/// A client-supplied id is kept only if it is 1–64 characters of `[A-Za-z0-9._-]`.
+pub fn valid_request_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_REQUEST_ID_LEN
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+/// A new id: 8 hex digits fixed per process (random) and a 12-digit counter.
+pub fn new_request_id() -> String {
+    static PREFIX: OnceLock<u32> = OnceLock::new();
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let prefix = *PREFIX.get_or_init(|| {
+        let mut b = [0u8; 4];
+        let _ = getrandom::fill(&mut b);
+        u32::from_le_bytes(b)
+    });
+    format!("{prefix:08x}-{:012x}", NEXT.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Middleware: tags the request with its [`RequestId`] (read by the trace span) and adds
+/// `X-Request-Id` to the response.
+pub async fn request_id(mut req: Request, next: Next) -> Response {
+    let id = req
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| valid_request_id(v))
+        .map(str::to_owned)
+        .unwrap_or_else(new_request_id);
+    req.extensions_mut().insert(RequestId(id.clone()));
+    let mut resp = next.run(req).await;
+    if let Ok(v) = HeaderValue::from_str(&id) {
+        resp.headers_mut().insert(REQUEST_ID_HEADER, v);
+    }
+    resp
+}
+
 /// 404 in the API error format.
 pub async fn not_found() -> Response {
     crate::error::ApiError::not_found().into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_ids() {
+        let a = new_request_id();
+        let b = new_request_id();
+        assert_ne!(a, b);
+        assert!(valid_request_id(&a), "{a}");
+        assert!(valid_request_id("trace-01.AB_c"));
+        for bad in ["", "has space", "semi;colon", &"x".repeat(65)] {
+            assert!(!valid_request_id(bad), "{bad}");
+        }
+    }
 }

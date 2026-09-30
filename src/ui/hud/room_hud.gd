@@ -25,6 +25,10 @@ extends CanvasLayer
 ## (RunRoom). Chat feed lines are kept clear of the event stack's column (a long name is
 ## shortened on the feed; the nametag shows it whole), re-fitted on every layout, so a
 ## text-size change keeps them clear too (WP9.3).
+##
+## N10.2: an announced server restart counts down in the banner (SERVER RESTART · n S) until
+## the connection drops and the reconnecting banner takes over; a run the server ended as
+## `room_closed` (restart, operator) shows RUN ENDED with its official score.
 
 signal rejoin_pressed()
 signal leave_pressed()
@@ -39,7 +43,13 @@ const TEXT_LINE := "ROOM %s  ·  %s  ·  %d MS"
 const TEXT_CRASHED_OUT := "CRASHED OUT"
 const TEXT_RESULT_SUB := "SCORE %s  ·  %s  ·  %s  ·  RESPAWNING"
 const TEXT_UNVERIFIED := "  ·  UNVERIFIED"
+const END_ROOM_CLOSED := "room_closed"
+## N10.2: a run the server ended because the room closed (a restart or an operator).
+const TEXT_RUN_ENDED := "RUN ENDED"
+const TEXT_RESULT_SUB_ENDED := "SCORE %s  ·  %s  ·  %s"
 const TEXT_RECONNECTING := "RECONNECTING  ·  %d S"
+## N10.2: the announced server restart (then the reconnect rejoins the room by code).
+const TEXT_RESTART := "SERVER RESTART  ·  %d S"
 const TEXT_FEED := "%s  %s"
 const TEXT_CREW := "CREW ×%s"
 const TEXT_CREW_NEAR := "CREW ×%s  ·  %d NEAR"
@@ -80,6 +90,8 @@ var _safe: Rect2 = Rect2(0.0, 0.0, 1280.0, 720.0)
 var _toast_left_s: float = 0.0
 var _notice_left_s: float = 0.0
 var _reconnecting: bool = false
+## N10.2: the restart countdown shown (seconds; -1 = none).
+var _restart_key: int = -1
 var _line_key: int = -1
 var _banner_key: int = -1
 var _feed_left := PackedFloat32Array()
@@ -265,6 +277,8 @@ func advance(dt: float) -> void:
 			_banner_key = left
 			banner.text = TEXT_RECONNECTING % left
 			_place_banner()
+	else:
+		_advance_restart()
 	var ping := roundi(session.ping_ms() / float(PING_STEP_MS)) * PING_STEP_MS
 	var key := ping * NetCodec.MAX_ROOM_PLAYERS * NetCodec.MAX_ROOM_PLAYERS + session.room.members.size() * NetCodec.MAX_ROOM_PLAYERS + session.room.max_players
 	if key != _line_key:
@@ -283,8 +297,10 @@ func show_result(result: Dictionary) -> void:
 	var score := int(result.get("score", 0))
 	var dist := float(result.get("distance_m", 0)) / M_PER_KM
 	var secs := roundi(float(result.get("duration_ms", 0)) / MS_PER_S)
-	var sub := TEXT_RESULT_SUB % [HudFormat.thousands(score), TEXT_KM % dist,
-		TEXT_TIME % [floori(secs / float(SECONDS_PER_MINUTE)), secs % SECONDS_PER_MINUTE]]
+	var closed := String(result.get("end_reason", "")) == END_ROOM_CLOSED
+	toast_title.text = TEXT_RUN_ENDED if closed else TEXT_CRASHED_OUT
+	var sub := (TEXT_RESULT_SUB_ENDED if closed else TEXT_RESULT_SUB) % [HudFormat.thousands(score),
+		TEXT_KM % dist, TEXT_TIME % [floori(secs / float(SECONDS_PER_MINUTE)), secs % SECONDS_PER_MINUTE]]
 	var f: Dictionary = result.get("flags", {})
 	if not bool(f.get("verified", true)):
 		sub += TEXT_UNVERIFIED
@@ -353,6 +369,23 @@ func set_reconnecting(on: bool) -> void:
 	if on:
 		advance(0.0)
 	_place_banner()
+
+
+## N10.2: the announced server restart counts down in the banner until the connection
+## drops (then the reconnecting banner takes over).
+func _advance_restart() -> void:
+	var left := ceili(session.restart_left_s())
+	if left <= 0:
+		if _restart_key >= 0:
+			_restart_key = -1
+			if _notice_left_s <= 0.0:
+				banner.visible = false
+		return
+	if left != _restart_key:
+		_restart_key = left
+		banner.text = TEXT_RESTART % left
+		banner.visible = true
+		_place_banner()
 
 
 func show_notice(text: String) -> void:
