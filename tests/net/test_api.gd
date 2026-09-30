@@ -7,6 +7,15 @@ extends WBTest
 
 const BASE := "https://api.test/api/v1"
 const BIG_ID := "9223372036854775807"
+## The local HTTP server gives up after this long.
+const SERVE_TIMEOUT_MS := 3000
+## Frames the server keeps the socket open after answering.
+const SERVE_LINGER_FRAMES := 5
+## A frame longer than the request timeout (the long-frame regression).
+const LONG_FRAME_TIMEOUT_S := 1.0
+const LONG_FRAME_STALL_MS := 1300
+## Frames given to a request or wait() to notice the clock.
+const CLOCK_FRAMES := 4
 
 var tuning: NetTuning
 var fake: NetFakeAccounts
@@ -239,58 +248,17 @@ func test_response_header_lookup_is_case_insensitive() -> void:
 ## refused connection.
 func test_http_node_round_trip_with_local_server() -> void:
 	var server := TCPServer.new()
-	var port := 0
-	for p in range(38471, 38491):
-		if server.listen(p, "127.0.0.1") == OK:
-			port = p
-			break
-	if not check(port > 0, "listening"):
+	if not check(server.listen(0, "127.0.0.1") == OK, "listening"):
 		return
-	var host := Node.new()
-	tree.root.add_child(host)
-	_nodes.append(host)
+	var host := _host()
 	var t := tuning.duplicate() as NetTuning
 	t.api_max_retries = 0
 	t.api_timeout_s = 3.0
-	var a := NetApi.new(NetHttpNode.new(host), t, "http://127.0.0.1:%d/api/v1" % port)
+	var a := NetApi.new(NetHttpNode.new(host), t, _local_base(server))
 	a.bearer = func() -> String: return "abc"
 	var seen: Array[String] = []
-	var answers: Array[String] = [
-		"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-		"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 42\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
-	]
-	var bodies: Array[String] = ['{"account_id":"9223372036854775807","display_name":"Şahin"}',
-			'{"error":"rate_limited","message":"slow down","retry_after_secs":42}']
-	var serve := func(i: int) -> void:
-		var deadline := Time.get_ticks_msec() + 3000
-		var peer: StreamPeerTCP = null
-		var got := ""
-		while Time.get_ticks_msec() < deadline:
-			await tree.process_frame
-			if peer == null and server.is_connection_available():
-				peer = server.take_connection()
-			if peer == null:
-				continue
-			peer.poll()
-			var n := peer.get_available_bytes()
-			if n > 0:
-				got += (peer.get_data(n)[1] as PackedByteArray).get_string_from_utf8()
-			var head_end := got.find("\r\n\r\n")
-			if head_end >= 0:
-				var cl := 0
-				for line in got.substr(0, head_end).split("\r\n"):
-					if line.to_lower().begins_with("content-length:"):
-						cl = line.substr(15).strip_edges().to_int()
-				if got.to_utf8_buffer().size() >= head_end + 4 + cl:
-					seen.append(got)
-					var b := bodies[i].to_utf8_buffer()
-					peer.put_data((answers[i] % [b.size(), bodies[i]]).to_utf8_buffer())
-					for k in 5:
-						await tree.process_frame
-						peer.poll()
-					peer.disconnect_from_host()
-					return
-	serve.call(0)
+	_serve_once(server, 200, "OK", PackedStringArray(),
+			'{"account_id":"9223372036854775807","display_name":"Şahin"}', seen)
 	var r: NetApiResult = await a.patch_me("Şahin")
 	if check(r.ok, "200 via HTTPRequest: %s %d" % [r.error, r.transport_result]):
 		eq(r.str_field("account_id"), BIG_ID)
@@ -301,7 +269,8 @@ func test_http_node_round_trip_with_local_server() -> void:
 		check(req.contains("Authorization: Bearer abc"), "bearer header")
 		check(req.contains("Content-Type: application/json"), "JSON content type")
 		check(req.ends_with('{"display_name":"Şahin"}'), "JSON body, UTF-8")
-	serve.call(1)
+	_serve_once(server, 429, "Too Many Requests", PackedStringArray(["Retry-After: 42"]),
+			'{"error":"rate_limited","message":"slow down","retry_after_secs":42}', seen)
 	r = await a.create_device()
 	eq(r.error, NetApiResult.RATE_LIMITED)
 	near(r.retry_after_s, 42.0, 1e-9, "Retry-After header through HTTPRequest")
@@ -310,3 +279,119 @@ func test_http_node_round_trip_with_local_server() -> void:
 	r = await a.create_device()
 	eq(r.error, NetApiResult.NETWORK)
 	eq(r.status, 0)
+
+
+## Regression: a request that starts in a long frame must not time out on the next one.
+## HTTPRequest.timeout counts down by the engine's raw frame step, which a stall inflates
+## (the process delta is clamped, that step is not), so a stall longer than the timeout
+## used to end the request with RESULT_TIMEOUT a frame later, ~0 ms after it began. The
+## test harness hit it after loading test scripts synchronously; the game would on a
+## request made in a frame with a synchronous load or at boot.
+func test_http_node_request_started_in_a_long_frame_does_not_time_out() -> void:
+	var server := TCPServer.new()
+	if not check(server.listen(0, "127.0.0.1") == OK, "listening"):
+		return
+	var t := tuning.duplicate() as NetTuning
+	t.api_max_retries = 0
+	t.api_timeout_s = LONG_FRAME_TIMEOUT_S
+	var a := NetApi.new(NetHttpNode.new(_host()), t, _local_base(server))
+	var seen: Array[String] = []
+	_serve_once(server, 200, "OK", PackedStringArray(), '{"account_id":"7"}', seen)
+	# This frame outlasts the timeout; the request starts in it.
+	OS.delay_msec(LONG_FRAME_STALL_MS)
+	var r: NetApiResult = await a.create_device()
+	check(r.ok, "answered after a long frame: %s %d" % [r.error, r.transport_result])
+	eq(seen.size(), 1, "server saw the request")
+	server.stop()
+
+
+## The timeout and wait() run on the injected monotonic clock: nothing ends while it
+## stands still, and the request times out once it passes the deadline.
+func test_http_node_timeout_and_wait_run_on_its_clock() -> void:
+	var server := TCPServer.new()  # Accepts (the OS backlog) but never answers.
+	if not check(server.listen(0, "127.0.0.1") == OK, "listening"):
+		return
+	var vt := NetVirtualTime.new(1)
+	var node := NetHttpNode.new(_host(), null, vt)
+	var out: Array[NetHttpResponse] = []
+	var send := func() -> void:
+		out.append(await node.request(HTTPClient.METHOD_GET, _local_base(server) + "/me",
+				PackedStringArray(), "", 0.5))
+	send.call()
+	for i in CLOCK_FRAMES:
+		await tree.process_frame
+	eq(out.size(), 0, "still waiting: the clock has not moved")
+	vt.advance_s(0.49)
+	for i in CLOCK_FRAMES:
+		await tree.process_frame
+	eq(out.size(), 0, "still waiting just before the deadline")
+	vt.advance_s(0.01)
+	for i in CLOCK_FRAMES:
+		await tree.process_frame
+	if check(out.size() == 1, "timed out at the deadline"):
+		eq(out[0].result, HTTPRequest.RESULT_TIMEOUT)
+		eq(out[0].status, 0)
+	server.stop()
+	var waited: Array[bool] = []
+	var nap := func() -> void:
+		await node.wait(2.0)
+		waited.append(true)
+	nap.call()
+	for i in CLOCK_FRAMES:
+		await tree.process_frame
+	eq(waited.size(), 0, "wait() holds while the clock stands still")
+	vt.advance_s(2.0)
+	for i in CLOCK_FRAMES:
+		await tree.process_frame
+	eq(waited.size(), 1, "wait() ends once the clock passes")
+
+
+func _host() -> Node:
+	var host := Node.new()
+	tree.root.add_child(host)
+	_nodes.append(host)
+	return host
+
+
+func _local_base(server: TCPServer) -> String:
+	return "http://127.0.0.1:%d/api/v1" % server.get_local_port()
+
+
+## Serves one request on `server` (appending it to `seen`), answers `status` with
+## `extra_headers` and a JSON `body`, then closes. A coroutine: call it without await.
+func _serve_once(server: TCPServer, status: int, reason: String,
+		extra_headers: PackedStringArray, body: String, seen: Array[String]) -> void:
+	var deadline := Time.get_ticks_msec() + SERVE_TIMEOUT_MS
+	var peer: StreamPeerTCP = null
+	var got := ""
+	while Time.get_ticks_msec() < deadline:
+		await tree.process_frame
+		if peer == null and server.is_connection_available():
+			peer = server.take_connection()
+		if peer == null:
+			continue
+		peer.poll()
+		var n := peer.get_available_bytes()
+		if n > 0:
+			got += (peer.get_data(n)[1] as PackedByteArray).get_string_from_utf8()
+		var head_end := got.find("\r\n\r\n")
+		if head_end < 0:
+			continue
+		var cl := 0
+		for line in got.substr(0, head_end).split("\r\n"):
+			if line.to_lower().begins_with("content-length:"):
+				cl = line.substr(15).strip_edges().to_int()
+		if got.to_utf8_buffer().size() < head_end + 4 + cl:
+			continue
+		seen.append(got)
+		var b := body.to_utf8_buffer()
+		var head := "HTTP/1.1 %d %s\r\n" % [status, reason]
+		for h in extra_headers:
+			head += h + "\r\n"
+		head += "Content-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % b.size()
+		peer.put_data(head.to_utf8_buffer() + b)
+		for k in SERVE_LINGER_FRAMES:
+			await tree.process_frame
+			peer.poll()
+		peer.disconnect_from_host()
+		return
