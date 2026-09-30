@@ -59,6 +59,8 @@ static func keys() -> Array[String]:
 static func eligible(results: Dictionary, t: NetTuning) -> bool:
 	if not MODES.has(String(results.get(RunStats.MODE, ""))):
 		return false
+	if bool(results.get(RunWarmup.RESULT_KEY, false)):
+		return false   # WP8.1: the first run's warm-up (no traffic for 20 s) cannot be verified
 	var s: Variant = results.get(RunStats.SEED, -1)
 	if not (s is int) or int(s) < 0:
 		return false
