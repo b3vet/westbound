@@ -17,10 +17,24 @@ extends WBTest
 ## failure. So one table covers every screen at every size, with each screen's own
 ## fixture, and nothing is copied. The two screens with no text-fit test of their own
 ## (the first-run warm-up hint and the room HUD) are checked here at all three canvases.
+##
+## WP9.7 (landscape only, room for the camera cutout): every one of those methods also
+## re-runs on a left-inset canvas: 1560x720 with the phone minimum on the left
+## (ControlsTuning.min_left_inset_cm at the web's px per cm, about 74 px; what a phone
+## gets when Safari reports no inset), nothing on the right (the right side only gets
+## a reported inset) and the 21 px home indicator. Same mechanism: CANVASES becomes
+## [1560x720], the NOTCH constant that inset, and its "wider than the first canvas"
+## test always true. The warm-up hint and the room HUD get the same canvas.
 
 const TABLET := Vector2(1280.0, 960.0)
 const CANVASES_RE := "const CANVASES: Array\\[Vector2\\] = \\[[^\\n]*\\]"
 const CANVASES_TABLET := "const CANVASES: Array[Vector2] = [Vector2(%.1f, %.1f)]"
+## WP9.7: the left-inset canvas and how its re-run rewrites the per-screen tests.
+const LEFT_CANVAS := Vector2(1560.0, 720.0)
+const HOME_INDICATOR_PX := 21.0
+const NOTCH_RE := "const NOTCH := Vector4\\([^\\n]*\\)"
+const NOTCH_LEFT := "const NOTCH := Vector4(%.2f, 0.0, 0.0, %.1f)"
+const WIDER_THAN_FIRST := "if size.x > CANVASES[0].x:"
 
 ## [script, methods] re-run on the tablet canvas. Only methods that loop over CANVASES.
 const TEXT_FIT: Array[Array] = [
@@ -41,22 +55,44 @@ const TEXT_FIT: Array[Array] = [
 ]
 
 
-## Loads `path` with its CANVASES constant swapped for [TABLET].
-func _tablet_script(path: String) -> GDScript:
+## The left inset (canvas px) on LEFT_CANVAS: the phone minimum at the web's px per cm.
+static func left_inset_px() -> float:
+	var c := Tuning.load_default().controls
+	return ScreenInsets.min_left_px(c, PlayerInput.canvas_px_per_cm(c, LEFT_CANVAS, Vector2i.ZERO))
+
+
+## The left-inset canvas's insets: left, top, right, bottom.
+static func left_notch() -> Vector4:
+	return Vector4(left_inset_px(), 0.0, 0.0, HOME_INDICATOR_PX)
+
+
+## Loads `path` with its CANVASES constant swapped for [TABLET], or (`left`) for
+## [LEFT_CANVAS] with the left-only inset.
+func _variant_script(path: String, left: bool) -> GDScript:
 	var src := FileAccess.get_file_as_string(path)
 	var re := RegEx.create_from_string(CANVASES_RE)
 	if not check(re.search(src) != null, "%s declares CANVASES" % path):
 		return null
+	var size := LEFT_CANVAS if left else TABLET
+	src = re.sub(src, CANVASES_TABLET % [size.x, size.y])
+	if left:
+		var nre := RegEx.create_from_string(NOTCH_RE)
+		if not check(nre.search(src) != null and src.contains(WIDER_THAN_FIRST),
+				"%s declares NOTCH and insets canvases wider than the first" % path):
+			return null
+		src = nre.sub(src, NOTCH_LEFT % [left_inset_px(), HOME_INDICATOR_PX])
+		src = src.replace(WIDER_THAN_FIRST, "if size.x > 0.0:")
 	var s := GDScript.new()
-	s.source_code = re.sub(src, CANVASES_TABLET % [TABLET.x, TABLET.y])
-	if not eq(s.reload(), OK, "%s compiles with the tablet canvas" % path):
+	s.source_code = src
+	if not eq(s.reload(), OK, "%s compiles with the %s canvas" % [path, "left-inset" if left else "tablet"]):
 		return null
 	return s
 
 
-## Runs `methods` of `path` on the tablet canvas (tests/run_all.gd's lifecycle).
-func _rerun(path: String, methods: Array) -> void:
-	var s := _tablet_script(path)
+## Runs `methods` of `path` on the tablet canvas, or (`left`) the left-inset canvas
+## (tests/run_all.gd's lifecycle).
+func _rerun(path: String, methods: Array, left: bool = false) -> void:
+	var s := _variant_script(path, left)
 	if s == null:
 		return
 	# Object, as in tests/run_all.gd: the hooks may be coroutines in the subclass.
@@ -71,13 +107,14 @@ func _rerun(path: String, methods: Array) -> void:
 		await suite.after_each()
 		var fails: PackedStringArray = suite.call(&"_take_failures")
 		for f in fails:
-			fail("%s::%s @ %dx%d: %s" % [path.get_file(), m, TABLET.x, TABLET.y, f])
+			fail("%s::%s @ %s: %s" % [path.get_file(), m, "%dx%d left inset" % [LEFT_CANVAS.x, LEFT_CANVAS.y]
+					if left else "%dx%d" % [TABLET.x, TABLET.y], f])
 		expect_errors(int(suite.call(&"_take_expected_errors")))
 	await suite.after_all()
 
 
-func _rerun_row(i: int) -> void:
-	await _rerun(TEXT_FIT[i][0], TEXT_FIT[i][1])
+func _rerun_row(i: int, left: bool = false) -> void:
+	await _rerun(TEXT_FIT[i][0], TEXT_FIT[i][1], left)
 
 
 func test_tablet_hud() -> void:
@@ -128,9 +165,69 @@ func test_tablet_room_scoring_lines() -> void:
 	await _rerun_row(11)
 
 
+# ---------------------------------------------------------------- Left inset (WP9.7)
+
+func test_left_inset_hud() -> void:
+	await _rerun_row(0, true)
+
+
+func test_left_inset_hud_objective_and_toast() -> void:
+	await _rerun_row(1, true)
+
+
+func test_left_inset_run_screens() -> void:
+	await _rerun_row(2, true)
+
+
+func test_left_inset_title_and_hub() -> void:
+	await _rerun_row(3, true)
+
+
+func test_left_inset_garage_and_results_xp() -> void:
+	await _rerun_row(4, true)
+
+
+func test_left_inset_achievements() -> void:
+	await _rerun_row(5, true)
+
+
+func test_left_inset_friends_and_crew() -> void:
+	await _rerun_row(6, true)
+
+
+func test_left_inset_first_run_chooser() -> void:
+	await _rerun_row(7, true)
+
+
+func test_left_inset_settings_pages() -> void:
+	await _rerun_row(8, true)
+
+
+func test_left_inset_leaderboards() -> void:
+	await _rerun_row(9, true)
+
+
+func test_left_inset_achievement_toast() -> void:
+	await _rerun_row(10, true)
+
+
+func test_left_inset_room_scoring_lines() -> void:
+	await _rerun_row(11, true)
+
+
+## Every row has a left-inset re-run (and a tablet one).
+func test_every_row_is_swept_on_the_left_inset_canvas() -> void:
+	var src := FileAccess.get_file_as_string(get_script().resource_path)
+	for i in TEXT_FIT.size():
+		check(src.contains("await _rerun_row(%d, true)" % i), "row %d (%s) has a left-inset re-run" % [i, TEXT_FIT[i][0]])
+		check(src.contains("await _rerun_row(%d)\n" % i), "row %d has a tablet re-run" % i)
+
+
 # ---------------------------------------------------------------- No text-fit test of their own
 
 const CANVASES: Array[Vector2] = [Vector2(1280.0, 720.0), Vector2(1560.0, 720.0), TABLET]
+## The notched canvas again with the left-only inset (WP9.7): in _configs() as a fourth.
+const LEFT_INSET_CANVAS := Vector2(1560.0, 720.0)
 ## The notched phone's insets: left, top, right, bottom (canvas px).
 const NOTCH := Vector4(44.0, 0.0, 44.0, 21.0)
 const TOL := 0.5
@@ -171,6 +268,11 @@ func _configs() -> Array[Array]:
 			safe = Rect2(Vector2(NOTCH.x, NOTCH.y), size - Vector2(NOTCH.x + NOTCH.z, NOTCH.y + NOTCH.w))
 		for ts in ht.text_scales:
 			out.append([full, safe, ts, "%dx%d text %d%%" % [size.x, size.y, roundi(ts * 100.0)]])
+	var lfull := Rect2(Vector2.ZERO, LEFT_INSET_CANVAS)
+	var lsafe := ScreenInsets.safe_rect(lfull, left_notch())
+	for ts in ht.text_scales:
+		out.append([lfull, lsafe, ts, "%dx%d left inset text %d%%" % [LEFT_INSET_CANVAS.x, LEFT_INSET_CANVAS.y,
+				roundi(ts * 100.0)]])
 	return out
 
 

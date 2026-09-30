@@ -10,6 +10,9 @@ extends WBTest
 ## and 1560x720), with and without a notch/home-indicator safe inset. Controls: drag
 ## and gyro steering, auto and manual throttle, right- and left-handed,
 ## controls_scale 0.8 / 1.0 / 1.2; text size 100% / 125%.
+## WP9.7: the same on every canvas with the phone's minimum left inset only (the camera
+## cutout on the left, nothing reported on the right); the left thumb zone still covers
+## a steering thumb that lands just right of it and drags the full max drag.
 
 const CANVASES: Array[Vector2] = [Vector2(1280.0, 720.0), Vector2(1361.0, 720.0), Vector2(1560.0, 720.0)]
 ## Landscape iPhone: notch side, the other side, home indicator (canvas px).
@@ -212,6 +215,42 @@ func test_cluster_slides_clear_of_big_pedals() -> void:
 		for p in l.pedals:
 			var gap := (p.position.x - l.cluster.end.x) if not left else (l.cluster.position.x - p.end.x)
 			ge(gap, t.hud.pedal_clearance_px - EPS, "clear of the pedals")
+
+
+## WP9.7: the phone's minimum left inset only (Safari reporting nothing), every canvas,
+## mode, hand, scale and text size: everything inside the safe area and off the thumbs.
+func test_left_inset_every_layout() -> void:
+	var cases := 0
+	var stacked := 0
+	for size in CANVASES:
+		var full := Rect2(Vector2.ZERO, size)
+		var min_left := ScreenInsets.min_left_px(t.controls, _px_per_cm(full))
+		var safe := ScreenInsets.safe_rect(full, ScreenInsets.with_min_left(Vector4(0.0, 0.0, 0.0, INSET.w), min_left))
+		for steering: StringName in [PlayerInput.DRAG, PlayerInput.GYRO]:
+			for throttle: StringName in [PlayerInput.AUTO, PlayerInput.MANUAL]:
+				for left: bool in [false, true]:
+					for scale in SCALES:
+						var c := _controls(full, safe, steering, throttle, left, scale)
+						for ts in t.hud.text_scales:
+							var l := HudLayout.new()
+							l.build(t.hud, full, safe, c, ts)
+							var what := "%dx%d left inset %s %s %s x%.1f text %.2f" % [size.x, size.y, steering,
+									throttle, "left" if left else "right", scale, ts]
+							# The stacked cluster (boost under speed) is the layout's fallback when
+							# the row does not fit: here only on the 16:9 canvas, left-handed
+							# manual pedals at x1.2 and 125 % text. It still keeps off the thumbs.
+							_check_layout(l, what, true, not l.cluster_stacked)
+							if l.cluster_stacked:
+								stacked += 1
+								check(size.x <= CANVASES[0].x and throttle == PlayerInput.MANUAL and left,
+										"%s: stacked only on the 16:9 canvas with left-handed pedals" % what)
+							ge(l.score.position.x, min_left + t.hud.edge_margin_px - EPS, "%s: score clear of the cutout" % what)
+							ge(l.objective.position.x, min_left - EPS, "%s: objective clear of the cutout" % what)
+							ge(l.thumb_zones[0].end.x, min_left + t.controls.drag_max_cm * l.px_per_cm - EPS,
+									"%s: the left thumb zone covers a full drag from the inset" % what)
+							cases += 1
+	eq(cases, CANVASES.size() * 2 * 2 * 2 * SCALES.size() * t.hud.text_scales.size())
+	le(stacked, 2, "the stacked cluster stays the exception")
 
 
 func test_layout_follows_the_safe_area() -> void:

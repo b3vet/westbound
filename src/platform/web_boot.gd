@@ -12,6 +12,9 @@ extends RefCounted
 
 const TITLE := "title"
 const RUN := "run"
+## WP9.7: the first run started from the title (PLAY, or the first-run chooser after it):
+## the smoke test's proof that a tap on PLAY reached the game.
+const START := "start"
 
 static var _marked: Dictionary = {}
 

@@ -35,6 +35,14 @@ extends Resource
 ## taken to be this many cm: a phone held in landscape. Converts drag distance and
 ## pedal sizes from cm to canvas pixels.
 @export var fallback_screen_height_cm: float = 6.8   # not in spec: typical phone landscape height
+## WP9.7: on a phone, the HUD, the menus and the touch controls keep at least this far
+## from the left edge (the 3D view stays full-bleed) when the platform reports a smaller
+## left safe-area inset (Safari may report 0). The Dynamic Island's far edge in
+## landscape is 11 pt + 37 pt = 48 pt ≈ 0.8 cm on a 460 ppi, 3x iPhone; the HUD adds its
+## edge margin (16 px ≈ 0.15 cm) on top, so its panels start ≈ 0.85 cm in. Most players
+## hold the phone with its camera on the left; the right side only gets a reported inset.
+## 0.7 still fits the whole HUD at 125 % text on a 16:9 canvas (tests/ui/test_hud_layout.gd).
+@export var min_left_inset_cm: float = 0.7   # not in spec: owner request (WP9.7)
 
 @export_group("Touch layout")
 ## Manual layouts, in physical cm (converted via DPI), all multiplied by the

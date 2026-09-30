@@ -6,7 +6,7 @@ WP9.2 (plan Phase 9: "web build polish (gyro decision, load time)"). Spec: *Plat
 
 | File | What it does |
 | --- | --- |
-| `platform/web/shell.html` | The custom HTML shell: the loading screen, versioned downloads, the stale-page check, the AudioContext hook. Needs `html/custom_html_shell` in the Web preset (requested, see [Shared-file requests](#shared-file-requests)). |
+| `platform/web/shell.html` | The custom HTML shell: the loading screen, versioned downloads, the stale-page check, the AudioContext hook, and (WP9.7) the landscape-only layout: a portrait page rotated to landscape, input remapped, the canvas sized, the safe-area insets for the game ([Landscape only](#landscape-only)). Set as `html/custom_html_shell` in the Web preset. |
 | `platform/web/wordmark.woff`, `make_font.py` | Chakra Petch Bold cut down to A–Z, digits and a few signs (3.6 KB) for the loading screen; `make_font.py` rebuilds it (fontTools). |
 | `platform/web/pack_music.gd` | Writes `music.pck` (the music tracks as their own pack). |
 | `platform/web/.gdignore` | Keeps the directory out of Godot's import and out of `index.pck`. |
@@ -14,9 +14,13 @@ WP9.2 (plan Phase 9: "web build polish (gyro decision, load time)"). Spec: *Plat
 | `src/platform/web_audio_bridge.gd` (`WebAudioBridge`) | The page side: finds the engine's AudioContext, resumes it inside gestures, reports its state. |
 | `src/platform/web_audio.gd` (`WebAudio`) | The node: polls the bridge, holds the music until the unlock and the music pack, boot marks. `GameAudio` adds it on the web. |
 | `src/platform/web_music_pack.gd` (`WebMusicPack`) | Fetches and mounts `music.pck` when the main pack leaves the music out. |
-| `src/platform/web_boot.gd` (`WebBoot`) | Boot milestones (`window.wbBoot`, the `wb-boot` event, a console line). |
+| `src/platform/web_boot.gd` (`WebBoot`) | Boot milestones (`window.wbBoot`, the `wb-boot` event, a console line): `title`, `run`, and `start` (the first run after the title, WP9.7). |
+| `src/platform/web_layout.gd` (`WebLayout`) | WP9.7: reads the shell's `window.wbLayout` (rotated, phone, the landscape box, the page's safe-area insets). |
+| `src/input/screen_insets.gd` (`ScreenInsets`) | WP9.7: the safe area in canvas px for the HUD, menus and touch controls (web insets rotated and scaled, the engine's safe area natively, the phone's minimum left inset). |
+| `src/platform/web_ui_probe.gd` (`WebUiProbe`) | WP9.7: with `?probe=ui`, prints the visible menu buttons (canvas px) for the smoke test's tap on PLAY. |
 | `tools/export_web.sh` | Exports, then writes `music.pck` (when needed), `version.json` and the shell's build id and font; prints sizes and the transfer to the title. |
-| `tools/web_smoke/smoke.mjs` | The headless-Chromium smoke test, plus timings, transfer, memory, the audio-unlock test and the caching checks. |
+| `tools/web_smoke/smoke.mjs` | The headless-Chromium smoke test, plus timings, transfer, memory, the audio-unlock test, the caching checks and (WP9.7) phone emulation: `--portrait` / `--landscape` / `--device`, `--tap-play`. |
+| `tools/web_smoke/layout_test.mjs` | WP9.7: the shell's rotation math in node (the smoke runs it first; `tests/platform/test_web_layout.gd` runs it when node is installed). |
 | `tools/web_smoke/pck_list.py` | Lists a `.pck` by group and file, raw and gzip. |
 | `tests/platform/test_web_audio.gd` | Unit tests: the unlock state machine, the music hold, the node, the `GameAudio` hook, the music pack. |
 
@@ -29,6 +33,8 @@ node tools/web_smoke/smoke.mjs --settle 8000 --gzip           # timings as Pages
 node tools/web_smoke/smoke.mjs --gzip --network 4g --json build/web_metrics.json
 node tools/web_smoke/smoke.mjs --settle 8000 --audio-unlock tap   # also: click, key
 node tools/web_smoke/smoke.mjs --stale                        # custom shell: a stale page reloads once
+node tools/web_smoke/smoke.mjs --portrait --dpr 1             # iPhone 14 portrait: rotated, a tap on PLAY starts a run
+node tools/web_smoke/smoke.mjs --landscape --dpr 1            # iPhone 14 landscape: not rotated, the same tap
 ```
 
 `--gzip` serves every file gzip-encoded, as GitHub Pages does (checked: Pages sends `content-encoding: gzip` for `.wasm`, `.pck`, `.js` and `.html`, never brotli, with `cache-control: max-age=600`). `--network` uses Chrome DevTools' throttling (`wifi` 30 Mbps / 20 ms, `4g` 9 Mbps / 60 ms, `slow4g` 1.6 Mbps / 150 ms, or `<Mbps>,<rtt ms>`). The timings are page times from navigation start:
@@ -129,6 +135,63 @@ Measured effect: first contentful paint 0.12–0.16 s instead of the canvas's fi
 **Tests.** `tests/platform/test_web_audio.gd` (15 tests: the state machine, the hold, the node with a scripted bridge, the `GameAudio` hook, native unchanged, the music pack mounting a real `.pck`). `smoke.mjs --audio-unlock click|tap|key` launches Chromium with its default autoplay policy, checks the context is `suspended` and the game says `web audio: locked`, taps an empty part of the title, and requires the context `running`, `web audio: unlocked` and the music playing. All three gestures pass with both shells.
 
 iOS note: Web Audio on iOS follows the ring/silent switch (like native Godot's default *ambient* session). Safari 17's `navigator.audioSession.type = 'playback'` would play through the silent switch; left alone to match native.
+
+## Landscape only
+
+WP9.7 (owner request). Westbound only plays in landscape. On a phone's browser in portrait, Safari's toolbars take much of the screen when the phone is turned, so instead of asking the player to turn the phone, the page itself turns the game: a phone locked in portrait (or just held upright) shows the game rotated a quarter turn and the player holds it sideways as usual. Same approach as the owner's cool_drive (`src/main.js` `applyLayout()`, `src/input.js`).
+
+### Rotation (the shell)
+
+`platform/web/shell.html` wraps the canvas and the loading screen in `#wb-rotor`. Its layout script runs before the engine and again on `resize`, `orientationchange` (and 250 ms after it: iOS reports the new viewport late), `visualViewport` resize and `screen.orientation` change:
+
+- **When:** a touch device (`(pointer: coarse)`, or a mobile user agent) whose viewport (`visualViewport`, else `innerWidth`/`innerHeight`) is portrait. Desktop browsers and landscape viewports are never rotated. `?rotate=0` turns it off; `?rotate=1` also rotates a portrait desktop window (testing).
+- **How:** the box gets the landscape size (the viewport's height × its width) and `transform: translate(<viewport width>px, 0) rotate(90deg)` about its top-left: it covers the viewport exactly, turned 90° clockwise. The game's top is the page's right edge, so the player turns the phone counter-clockwise and **the phone's top (the Dynamic Island or camera) is on the player's left**, as in cool_drive. A box point (x, y) is the page point (viewport width − y, x).
+- **Canvas size:** the shell starts the engine with `canvasResizePolicy = 0` (the export's Adaptive policy would size the canvas to the portrait window) and sizes the canvas itself, rotated or not: CSS size = the box, backing size = the box × `devicePixelRatio` (what Adaptive did before). The engine follows `canvas.width/height` every frame, so Godot renders at the landscape size and the stretch (1280×720, `canvas_items` / `expand`) sees a landscape window: an iPhone 14 in portrait Safari (390×664 CSS px) gives a 664×390 box and a 1280×752 canvas.
+- **Loading screen:** inside the box, sized in container units (`cqh`/`cqw`, with `vh`/`vw` fallbacks) and inset by the mapped safe area, so it is landscape from the first paint.
+
+### Input
+
+Godot 4.7's web input (`GodotInput.computePosition` in the engine JS) turns a DOM event into canvas pixels as `(clientX − rect.x) × canvas.width / rect.width` (and the same for y), with `rect = canvas.getBoundingClientRect()`. Under a CSS rotation the rect is the rotated box's bounding box and the axes swap, so every touch would land in the wrong place. The fix is in the shell, before the engine sees anything:
+
+- The canvas' `getBoundingClientRect` is replaced: while rotated it returns the box's own rect `(0, 0, width, height)`.
+- A capture-phase listener on `window` (it runs before the engine's listeners on the canvas and window) rewrites what the engine reads: `clientX`/`clientY` (and `movementX`/`movementY`) of `mousedown`, `mouseup`, `pointermove` (and the other pointer and mouse events) become the box's coordinates, `(clientY − box.top, box.right − clientX)`, and `changedTouches` of every touch event becomes a list of `{identifier, clientX, clientY}` in the box's frame. Own properties shadow the event's prototype getters (standard JS; no browser-specific API).
+- So the game receives plain landscape `InputEventScreenTouch/Drag` and mouse events in canvas pixels: multi-touch (steering thumb + pedal thumb) works, touch ids are still the browser's (`TouchSlots` maps them), GUI buttons take their emulated mouse events, and nothing in GDScript knows about the rotation except the gyro and the insets.
+- Why not in GDScript: a remap at the root viewport would have to run before every node's `_input` (autoloads get `_input` last) and would leave the engine's own mouse state unrotated. The shell's version is also what the smoke test exercises end to end.
+
+The math is a pure block in the shell (`<wb-layout-math>`), tested in node by `tools/web_smoke/layout_test.mjs` (rotation decision, box, client → box and back, movements, insets, and the canvas pixel Godot's `computePosition` then computes).
+
+### Gyro
+
+The phone is physically in portrait (the page reports `screen.orientation.angle` 0 when orientation-locked) while the game is landscape. `WebMotionSource.screen_rotation_deg()` returns `WebMotionSource.game_rotation_deg(angle, WebLayout.rotated())`: the page's angle plus 90° when rotated (cool_drive adds the same 90). A portrait-locked phone then reads exactly like real landscape with its top on the left (angle 90); a page at 180 (Android upside-down portrait, where allowed) reads like the other landscape (270). Calibration and the sign check are unchanged (`tests/input/test_rotated_gyro.gd`: the same hold steers identically rotated and in landscape).
+
+### Safe area
+
+The 3D view stays full-bleed; the HUD, the menus and the touch controls stay inside the safe area (`ScreenInsets.canvas_safe_rect`, used by `HudLayout.canvas_safe_rect` and `PlayerInput`):
+
+| Where | Source |
+| --- | --- |
+| Web (custom shell) | `env(safe-area-inset-*)` (the page has `viewport-fit=cover`), read by the shell from a probe element and passed as `wbLayout.il/it/ir/ib` (CSS px, the page's frame). Rotated: mapped into the box (**the portrait top, where the camera is, becomes the left**; the portrait bottom, the home indicator, the right; `ScreenInsets.rotate_cw`). Scaled from CSS px to canvas px by canvas ÷ box. |
+| Native, and the web without the shell | `DisplayServer.get_display_safe_area()`, converted to canvas px as before. |
+| Phone minimum | On a phone-class device (web: coarse pointer and a short screen side ≤ 600 CSS px; native: `mobile`), the left inset is at least `controls.min_left_inset_cm` (0.7 cm; with the HUD's 16 px edge margin its panels start about 0.85 cm in, past the Dynamic Island's far edge in landscape, 48 pt ≈ 0.8 cm), in canvas px via the controls' px per cm (web: the 6.8 cm-tall fallback, about 74 px on a 720-tall canvas). Safari often reports 0 in landscape; most players hold the phone with the camera on the left. The right side keeps only what the device reports. |
+
+The touch controls follow it: the drag zone starts at the safe area's side (a thumb under the cutout does not steer), the drag visual (ring and dot, or wheel) is drawn shifted just enough to stay inside the safe width (`ControlsLayout.drag_visual_offset`; the anchor and the steering stay under the thumb), pedals already sat inside the safe area, and the HUD's thumb zones (3.4 cm from the canvas edge) still cover a thumb that lands just right of the minimum inset and drags the full 2.5 cm. Every screen's text fit is swept on a 1560×720 canvas with this left-only inset (`tests/a11y/test_text_size_sweep.gd`, `test_left_inset_*`).
+
+### Native
+
+Already landscape only: `display/window/handheld/orientation = 4` (sensor landscape: both landscape directions, never portrait) is what the iOS export writes into Info.plist (`UISupportedInterfaceOrientations` landscape left and right) and the Android export into the manifest (`sensorLandscape`); neither preset overrides it. The Web preset's PWA orientation is landscape. No portrait layout or "rotate your device" overlay exists in the game (searched).
+
+### What to check on the iPhone
+
+1. **Portrait-locked Safari** (orientation lock on, phone upright): the loading screen and the title appear turned; hold the phone sideways with its top on the left: the game is upright, fills the screen, Safari's toolbars stay small. Tap PLAY, drag-steer with the left thumb while holding gas with the right (multi-touch), pause, settings sliders.
+2. **Gyro in that hold:** tilting like a wheel (right edge down) steers right; recalibrate works.
+3. **Landscape Safari** (lock off, phone turned): not rotated, input normal; turn the phone the other way (camera on the right): still correct, gyro sign still right.
+4. **Rotation both ways while playing** (lock off): portrait → landscape → portrait re-lays out without a stuck touch.
+5. **Island side:** in both modes, the score, the menus, the drag wheel and the left brake pedal (gyro + manual) stay clear of the Dynamic Island on the left.
+6. `javascript:alert(JSON.stringify(wbLayout))` from the address bar shows what the page decided (rotated, box, insets).
+
+### Smoke
+
+`smoke.mjs --portrait` emulates an iPhone 14 in portrait (390×664, touch, iPhone user agent), `--landscape` the same phone in landscape, `--device NAME` any Playwright device; `--dpr N` overrides the pixel ratio (SwiftShader renders every backing pixel on the CPU, so `--dpr 1` keeps it fast). It checks the layout (rotated or not, the box, the canvas's backing size, the box covering the viewport), then `--tap-play`: the page is opened with `?probe=ui`, the game prints its visible buttons in canvas px, the smoke taps PLAY's centre through the shell's rotation (`toClient`), taps DRIVE if the first-run chooser opens (a fresh profile), and requires the game's `web boot: start` mark. The default (desktop 1280×720) run is unchanged.
 
 ## Web gyro
 

@@ -560,24 +560,10 @@ func _apply_layout() -> void:
 
 
 func _update_screen() -> void:
-	var vp := get_viewport()
-	var full := vp.get_visible_rect()
-	var safe := full
-	var win_size := DisplayServer.window_get_size()
-	if DisplayServer.get_name() != "headless" and win_size.x > 0 and win_size.y > 0:
-		var sa := DisplayServer.get_display_safe_area()
-		if sa.size.x > 0 and sa.size.y > 0:
-			var win_pos := DisplayServer.window_get_position()
-			var scale := full.size / Vector2(win_size)
-			var left := maxf(0.0, float(sa.position.x - win_pos.x)) * scale.x
-			var top := maxf(0.0, float(sa.position.y - win_pos.y)) * scale.y
-			var right := maxf(0.0, float(win_pos.x + win_size.x - sa.end.x)) * scale.x
-			var bottom := maxf(0.0, float(win_pos.y + win_size.y - sa.end.y)) * scale.y
-			safe = Rect2(full.position + Vector2(left, top),
-					full.size - Vector2(left + right, top + bottom))
+	var full := get_viewport().get_visible_rect()
 	layout.full = full
-	layout.safe = safe
-	layout.px_per_cm = canvas_px_per_cm(controls, full.size, win_size)
+	layout.safe = ScreenInsets.canvas_safe_rect(full)
+	layout.px_per_cm = canvas_px_per_cm(controls, full.size, DisplayServer.window_get_size())
 	_apply_layout()
 
 
