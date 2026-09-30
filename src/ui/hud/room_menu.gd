@@ -109,6 +109,7 @@ func setup(s: HudStyle, hud_tuning: HudTuning, net_tuning: NetTuning, room_sessi
 	hud = hud_tuning
 	net = net_tuning
 	session = room_session
+	panel.fill_alpha = 1.0 / maxf(s.panel_fill.a, 0.01)   # opaque: nothing reads through it
 	panel.setup(s)
 	for c in panel.get_children():
 		if c is ScreenButton:

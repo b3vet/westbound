@@ -111,12 +111,6 @@ func _init() -> void:
 	for i in labels.size():
 		var b := _button(labels[i], ScreenButton.Kind.NORMAL, actions[i], rooms_panel)
 		room_buttons.append(b)
-	lobby = RoomLobbyPanel.new()
-	lobby.joined.connect(_on_room_joined)
-	lobby.closed.connect(func() -> void:
-		dim.visible = false
-		refresh())
-	add_child(lobby)
 	loop_caption = ScreenText.make(TEXT_LOOP_NOTE, ScreenText.Face.LABEL, STATUS_PX, ScreenText.Ink.ACCENT)
 	loop_caption.name = "LoopCaption"
 	add_child(loop_caption)
@@ -126,6 +120,13 @@ func _init() -> void:
 			func() -> void: social.emit(ProfilePanel.View.CREW), self)
 	friends_button = _button(TEXT_FRIENDS, ScreenButton.Kind.NORMAL,
 			func() -> void: social.emit(ProfilePanel.View.FRIENDS), self)
+	# N5.2: the room flows' panel, over everything else on the hub.
+	lobby = RoomLobbyPanel.new()
+	lobby.joined.connect(_on_room_joined)
+	lobby.closed.connect(func() -> void:
+		dim.visible = false
+		refresh())
+	add_child(lobby)
 
 
 func _button(label: String, kind: ScreenButton.Kind, action: Callable, parent: Node) -> ScreenButton:

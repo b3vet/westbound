@@ -148,6 +148,7 @@ func setup(s: HudStyle, t: HudTuning, net_tuning: NetTuning) -> void:
 	style = s
 	tuning = t
 	net = net_tuning
+	panel.fill_alpha = 1.0 / maxf(s.panel_fill.a, 0.01)   # opaque: nothing reads through it
 	panel.setup(s)
 	backdrop.color = Color(s.ink, Units.pct_to_frac(t.screen_dim_pct))
 	for c in panel.get_children():
