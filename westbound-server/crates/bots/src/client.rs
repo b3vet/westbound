@@ -18,6 +18,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::bot::RoomBot;
+use crate::link::DelayLine;
 
 pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -25,6 +26,8 @@ pub type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
 /// Client ping interval (`Welcome.ping_interval_ms` is the same).
 pub const PING_EVERY: Duration = Duration::from_secs(2);
+/// How often a simulated link is polled for due frames.
+const LINK_POLL: Duration = Duration::from_millis(5);
 
 pub struct BotClient {
     ws: Ws,
@@ -164,33 +167,62 @@ impl BotClient {
         Ok(())
     }
 
-    /// Drives for `dur`: a state every room tick, a ping every 2 s, frames read as they
-    /// come.
+    /// Drives for `dur`: a state every room tick (with the claims its rules made, N6.1), a
+    /// ping every 2 s, frames read as they come. With `cfg.link` every frame each way goes
+    /// through a [`DelayLine`].
     pub async fn drive_for(&mut self, dur: Duration) -> anyhow::Result<()> {
         let end = Instant::now() + dur;
         let tick = Duration::from_secs_f64(1.0 / self.bot.cfg.tick_rate_hz);
         let mut timer = tokio::time::interval(tick);
         timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let link = self.bot.cfg.link;
+        let seed = self.bot.cfg.seed;
+        let mut up: Option<DelayLine<Vec<u8>>> = link.map(|l| DelayLine::new(l, seed ^ 0x55));
+        let mut down: Option<DelayLine<Vec<u8>>> = link.map(|l| DelayLine::new(l, seed ^ 0xAA));
+        let mut poll = tokio::time::interval(LINK_POLL);
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         while Instant::now() < end {
             tokio::select! {
                 _ = timer.tick() => {
                     let now = self.now_ms();
-                    let mut out: Vec<ClientMsg> = Vec::with_capacity(2);
+                    let mut out: Vec<ClientMsg> = Vec::with_capacity(4);
                     if let Some(st) = self.bot.step(now) {
                         out.push(ClientMsg::PlayerState(st));
                     }
+                    out.extend(self.bot.take_claims());
                     if self.last_ping.is_none_or(|t| t.elapsed() >= PING_EVERY) {
                         self.last_ping = Some(Instant::now());
                         out.push(self.bot.ping(now));
                     }
                     if !out.is_empty() {
-                        self.send(&out).await?;
+                        match up.as_mut() {
+                            Some(line) => {
+                                let frame = encode_frame(&out).context("encoding")?;
+                                line.push(now, frame.to_vec());
+                            }
+                            None => self.send(&out).await?,
+                        }
+                    }
+                }
+                _ = poll.tick(), if link.is_some() => {
+                    let now = self.now_ms();
+                    while let Some(f) = up.as_mut().and_then(|l| l.pop_due(now)) {
+                        self.ws
+                            .send(Message::Binary(f.into()))
+                            .await
+                            .context("sending")?;
+                    }
+                    while let Some(b) = down.as_mut().and_then(|l| l.pop_due(now)) {
+                        self.bot.on_frame(&b, now)?;
                     }
                 }
                 next = self.ws.next() => match next {
                     Some(Ok(Message::Binary(b))) => {
                         let now = self.now_ms();
-                        self.bot.on_frame(&b, now)?;
+                        match down.as_mut() {
+                            Some(line) => line.push(now, b.to_vec()),
+                            None => self.bot.on_frame(&b, now)?,
+                        }
                     }
                     Some(Ok(Message::Close(c))) => bail!("closed by the server: {c:?}"),
                     Some(Ok(_)) => {}
@@ -198,6 +230,17 @@ impl BotClient {
                     None => bail!("connection ended"),
                 },
             }
+        }
+        // Nothing sent is lost when the drive ends: the frames still on the link go now.
+        let now = self.now_ms();
+        while let Some(f) = up.as_mut().and_then(|l| l.pop_due(u64::MAX)) {
+            self.ws
+                .send(Message::Binary(f.into()))
+                .await
+                .context("sending")?;
+        }
+        while let Some(b) = down.as_mut().and_then(|l| l.pop_due(u64::MAX)) {
+            self.bot.on_frame(&b, now)?;
         }
         Ok(())
     }

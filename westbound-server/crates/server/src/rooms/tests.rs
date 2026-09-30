@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex};
 
 use axum::extract::ws::Message;
 use protocol::{
-    decode_server_frame, AccountId, ChatItem, Code, CrewTag, Density, DisplayName, ErrorCode,
-    HitReport, HitTarget, Identity, LeaveReason, LobbyEvent, PlayerRef, PlayerState, RoomEvent,
-    RoomHostCommand, RoomLeftReason, RoomSettings, RunEndReason, RunEvent, RunEventKind, RunResult,
-    RunState, ServerMsg, SetDensity, SetTimeMode, TimeMode, Visibility,
+    decode_server_frame, AccountId, ChatItem, ClaimCar, ClaimKind, Code, CrewTag, Density,
+    DisplayName, ErrorCode, HitReport, HitTarget, Identity, LeaveReason, LobbyEvent, PlayerRef,
+    PlayerState, RoomEvent, RoomHostCommand, RoomLeftReason, RoomSettings, RunEndReason, RunEvent,
+    RunEventKind, RunResult, RunState, ScoreClaim, ScoreEventKind, ServerMsg, SetDensity,
+    SetTimeMode, Side, TimeMode, Visibility,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -17,7 +18,8 @@ use super::clock::RoomTime;
 use super::plausibility::Offence;
 use super::room::{Cmd, JoinReq, Joined, Refusal, Room};
 use super::traffic::NoTraffic;
-use super::{Registry, RoomInfo, RoomMetrics, RoomParams, Shared};
+use super::{FinishedRun, Registry, RoomInfo, RoomMetrics, RoomParams, Shared};
+use crate::leaderboards::RoomKind;
 use crate::metrics::Metrics;
 use crate::presence::PresenceHub;
 use crate::sessions::{Kick, SessionHandle, Sessions};
@@ -92,6 +94,7 @@ impl T {
             presence: Arc::new(PresenceHub::new(sessions)),
             metrics: Arc::new(RoomMetrics::default()),
             registry: Mutex::new(Registry::default()),
+            runs: Mutex::new(None),
         });
         let time = RoomTime {
             shape: shared.params.clock,
@@ -353,6 +356,13 @@ fn relay_one_frame_per_tick_and_placement_ack() {
     let (mut sa, mut sb) = (sa, sb);
     for _ in 0..20 {
         t.tick();
+        // A tick without new states carries at most the official score's sync (N6.1).
+        for f in a.frames().into_iter().chain(b.frames()) {
+            assert!(
+                f.iter().all(|m| matches!(m, ServerMsg::ScoreSync(_))),
+                "{f:?}"
+            );
+        }
         sa = moved(&sa, t.now, 1.5, sa.speed_cms);
         sb = moved(&sb, t.now, 1.5, sb.speed_cms);
         t.state(&a, sa.clone());
@@ -371,9 +381,16 @@ fn relay_one_frame_per_tick_and_placement_ack() {
         assert!(relayed(&fa[0], 1).is_empty(), "never your own state back");
         assert_eq!(relayed(&fb[0], 1)[0].tick, sa.tick);
     }
-    // A tick without new states sends nothing at all (no empty frames).
+    // A tick without new states sends no states (and no empty frames; N6.1's score sync
+    // may go out).
     t.tick();
-    assert!(a.frames().is_empty());
+    for f in a.frames() {
+        assert!(!f.is_empty());
+        assert!(
+            f.iter().all(|m| matches!(m, ServerMsg::ScoreSync(_))),
+            "{f:?}"
+        );
+    }
     assert_eq!(RoomMetrics::get(&t.shared.metrics.placements), 2);
     assert_eq!(
         Offence::ALL
@@ -382,6 +399,82 @@ fn relay_one_frame_per_tick_and_placement_ack() {
             .sum::<u64>(),
         0
     );
+}
+
+/// N6.1 through the room: a claim is routed to scoring and its rejection comes back in
+/// the player's frame; `ScoreSync` goes out; a run's result carries the official score
+/// and a verified run reaches the run sink (an unverified one does not).
+#[test]
+fn claims_score_sync_and_verified_runs_reach_the_sink() {
+    let mut t = T::new(settings(Visibility::Private, 8));
+    let runs: Arc<Mutex<Vec<FinishedRun>>> = Arc::default();
+    let sink = runs.clone();
+    *t.shared.runs.lock().unwrap() = Some(Arc::new(move |r| sink.lock().unwrap().push(r)));
+    let mut a = Client::new(10, 1);
+    t.join(&mut a).unwrap();
+    t.tick();
+    let sa = ack(&mut t, &mut a);
+    let sa = drive(&mut t, &a, &sa, 10);
+    // No traffic in this room: the car was never streamed to the client.
+    t.cmd(Cmd::Claim {
+        player_id: 1,
+        session_id: 1,
+        claim: ScoreClaim {
+            claim_id: 42,
+            tick: t.now,
+            kind: ClaimKind::Pass,
+            side: Side::Left,
+            cars: vec![ClaimCar {
+                car_id: 9,
+                clearance_mm: 800,
+            }],
+        },
+    });
+    t.tick();
+    let msgs = a.msgs();
+    assert!(
+        msgs.iter().any(|m| matches!(m, ServerMsg::ScoreEvent(e)
+            if e.kind == ScoreEventKind::ClaimRejected && e.ref_id == 42 && e.player_id == 1)),
+        "{msgs:?}"
+    );
+    let sa = drive(&mut t, &a, &sa, 40);
+    assert!(a
+        .msgs()
+        .iter()
+        .any(|m| matches!(m, ServerMsg::ScoreSync(s) if s.run_seq == 1 && s.lives == 2)));
+    t.run(&a, RunEventKind::End);
+    t.tick();
+    let r = run_results(&a.msgs());
+    assert_eq!(r.len(), 1);
+    assert!(
+        r[0].flags.verified && r[0].flags.leaderboard_eligible,
+        "{r:?}"
+    );
+    assert_eq!(r[0].score, 0);
+    {
+        let got = runs.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].account, AccountId(10));
+        assert_eq!(got[0].room, RoomKind::PrivateDefault);
+        assert_eq!(got[0].result, r[0]);
+        assert_eq!(
+            got[0].ended_at,
+            (1_790_000_000_000 + i64::from(t.now - 1) * 50) / 1_000
+        );
+    }
+    // A second run with an offence: unverified, never handed to the boards.
+    t.run(&a, RunEventKind::Start);
+    let st = ack(&mut t, &mut a);
+    let _ = sa;
+    t.tick();
+    let far = moved(&st, t.now, 2_000.0, st.speed_cms);
+    t.state(&a, far);
+    t.run(&a, RunEventKind::End);
+    t.tick();
+    let r = run_results(&a.msgs());
+    assert!(!r[0].flags.verified);
+    assert_eq!(runs.lock().unwrap().len(), 1);
+    assert_eq!(RoomMetrics::get(&t.shared.metrics.runs_recorded), 1);
 }
 
 #[test]
@@ -840,4 +933,68 @@ impl T {
     fn room_info_night(&self) -> bool {
         self.room.info().night()
     }
+}
+
+/// N6.1: a respawn where the car is (no crewmate driving) is not acknowledged by the
+/// crashed car's in-flight states near it; the client's first protected state answers
+/// it, so the jump to the placement is no teleport and the new run stays verified.
+#[test]
+fn a_respawn_where_the_car_stopped_is_no_teleport() {
+    let mut t = T::new(settings(Visibility::Private, 8));
+    let mut a = Client::new(10, 1);
+    t.join(&mut a).unwrap();
+    t.tick();
+    let sa = ack(&mut t, &mut a);
+    let sa = drive(&mut t, &a, &sa, 10);
+    t.cmd(Cmd::Hit {
+        player_id: 1,
+        session_id: 1,
+        hit: HitReport {
+            tick: t.now,
+            target: HitTarget::Barrier,
+            car_id: 0,
+            lives_left: 0,
+        },
+    });
+    // The crashed car stops and waits for its respawn (3 s), reporting `crashed`.
+    let mut stopped = PlayerState {
+        speed_cms: 0,
+        run_state: RunState::Crashed,
+        ..sa.clone()
+    };
+    for _ in 0..60 {
+        t.tick();
+        stopped.tick = t.now;
+        t.state(&a, stopped.clone());
+    }
+    let _ = a.msgs();
+    t.tick();
+    let p = placement(&a.msgs(), 1).expect("the respawn");
+    assert!(
+        t.shared.map.map.signed_delta_mm(p.s_mm, stopped.s_mm).abs() < 5_000,
+        "where the car is"
+    );
+    // In flight: a crashed state stamped after the placement tick, before the client got it.
+    t.tick();
+    stopped.tick = t.now;
+    t.state(&a, stopped.clone());
+    assert_eq!(t.shared.metrics.drops("in_flight"), 1);
+    // The client applies the placement: protected, at its speed, then driving on.
+    t.tick();
+    let mut st = moved(&p, t.now, f64::from(p.speed_cms) / 2000.0, p.speed_cms);
+    st.run_state = RunState::Protected;
+    t.state(&a, st.clone());
+    let _ = drive(&mut t, &a, &st, 20);
+    t.run(&a, RunEventKind::End);
+    t.tick();
+    let r = run_results(&a.msgs());
+    assert_eq!((r.len(), r[0].run_seq), (1, 2));
+    assert!(r[0].flags.verified, "no offence after the respawn");
+    assert_eq!(
+        Offence::ALL
+            .iter()
+            .map(|o| t.shared.metrics.offences(*o))
+            .sum::<u64>(),
+        0
+    );
 }

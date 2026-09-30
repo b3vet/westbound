@@ -3,7 +3,10 @@
 //! set speed (accelerating like a car, never faster than `accel_mps2`), takes the server's
 //! placements (its own id in `player_states`), keeps a server-tick estimate from the room
 //! snapshot and `Pong`s, keeps a mirror of the traffic it is streamed (N4.2,
-//! [`TrafficMirror`]), and records what it saw for the tests. Spec:
+//! [`TrafficMirror`]), and records what it saw for the tests. N6.1: with
+//! [`DriveMode::Traffic`] it drives through that traffic ([`TrafficDriver`]), and with a
+//! [`ClaimMode`] it claims what the client's rules detect on it ([`Scorer`]); its states
+//! describe the car at exactly their tick. Spec:
 //! WESTBOUND_MULTIPLAYER_HANDOFF.md → Players, Testing → Netcode harness ("bots drive
 //! scripted paths"); docs/PROTOCOL.md §1 (clock sync), §4.
 
@@ -12,17 +15,33 @@ use std::sync::Arc;
 
 use protocol::budget::{on_wire_len, Direction};
 use protocol::{
-    decode_server_frame, ClientMsg, Code, DecodeError, ErrorMsg, LobbyEvent, Ping, PlayerFlags,
-    PlayerState, RoomEvent, RoomLeftReason, RoomSnapshot, RunResult, RunState, ServerMsg,
+    decode_server_frame, ClientMsg, Code, DecodeError, ErrorMsg, HitReport, HitTarget, LobbyEvent,
+    Ping, PlayerFlags, PlayerState, RoomEvent, RoomLeftReason, RoomSnapshot, RunResult, RunState,
+    ScoreEvent, ScoreEventKind, ScoreSync, ServerMsg,
 };
 use sim::map::LoopMap;
 
+use crate::driver::{Bodies, ClaimMode, DriveMode, Scorer, TrafficDriver};
+use crate::link::LinkSim;
 use crate::traffic::TrafficMirror;
 
 const MS_PER_S: f64 = 1_000.0;
 const MM_PER_M: f64 = 1_000.0;
 const CM_PER_M: f64 = 100.0;
 const FRACTION_ONE: f64 = 65_536.0;
+/// Lateral speed of the traffic driver's lane changes and wandering (m/s).
+const LATERAL_MPS: f64 = 3.0;
+/// The game's lives, ghost period (2 s) and spawn protection (3 s) at 20 Hz, the default
+/// car body and the hull inset (data/tuning: lives, traffic).
+const LIVES: u8 = 2;
+const GHOST_TICKS: u32 = 40;
+const PROTECTION_TICKS: u32 = 60;
+const PLAYER_LENGTH_M: f64 = 4.5;
+const PLAYER_WIDTH_M: f64 = 1.9;
+const INSET_M: f64 = 0.08;
+const HIT_LOOK_M: f64 = 12.0;
+/// How hard a crashed-out car stops (m/s²).
+const CRASH_DECEL_MPS2: f64 = 10.0;
 
 /// How a bot drives.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,6 +52,14 @@ pub struct BotConfig {
     pub accel_mps2: f64,
     /// Room tick rate (the server's `Welcome.tick_rate_hz`).
     pub tick_rate_hz: f64,
+    /// N6.1: straight in its lane, or through traffic.
+    pub drive: DriveMode,
+    /// N6.1: no claims, honest ones, or a cheat.
+    pub claims: ClaimMode,
+    /// N6.1: the connection's simulated conditions (`None`: as is).
+    pub link: Option<LinkSim>,
+    /// Seeds the driver's choices, the cheats and the link.
+    pub seed: u64,
 }
 
 impl Default for BotConfig {
@@ -41,6 +68,10 @@ impl Default for BotConfig {
             speed_mps: 40.0,
             accel_mps2: 4.0,
             tick_rate_hz: 20.0,
+            drive: DriveMode::Lane,
+            claims: ClaimMode::Off,
+            link: None,
+            seed: 1,
         }
     }
 }
@@ -66,6 +97,20 @@ pub struct Seen {
     pub wire_bytes: u64,
     /// The traffic the bot has been told about (N4.2).
     pub traffic: TrafficMirror,
+    /// N6.1: `score_sync`s received and the latest; `score_event`s received.
+    pub score_syncs: u32,
+    pub last_sync: Option<ScoreSync>,
+    pub score_events: Vec<ScoreEvent>,
+}
+
+impl Seen {
+    /// Claims the server rejected (`score_event.claim_rejected`).
+    pub fn claims_rejected(&self) -> usize {
+        self.score_events
+            .iter()
+            .filter(|e| e.kind == ScoreEventKind::ClaimRejected)
+            .count()
+    }
 }
 
 pub struct RoomBot {
@@ -86,6 +131,21 @@ pub struct RoomBot {
     last_sent: Option<u32>,
     last_placement: Option<u32>,
     pub seen: Seen,
+    /// N6.1: lateral speed (m/s) of the last step, the driver, the scorer.
+    lat_vel: f64,
+    pub driver: TrafficDriver,
+    /// Forward distance driven (m) and time driving (s) (diagnostics).
+    pub odometer_m: f64,
+    pub driven_s: f64,
+    /// N6.1: the client's own hits (it reports them: the client is authoritative for its
+    /// lives), its lives, the ghost period after a hit and the spawn protection (ticks).
+    pub hits_reported: u32,
+    lives: u8,
+    ghost_until: u32,
+    protected_until: u32,
+    pending: Vec<ClientMsg>,
+    pub scorer: Scorer,
+    bodies: Bodies,
 }
 
 impl RoomBot {
@@ -106,6 +166,17 @@ impl RoomBot {
             last_sent: None,
             last_placement: None,
             seen: Seen::default(),
+            lat_vel: 0.0,
+            odometer_m: 0.0,
+            driven_s: 0.0,
+            hits_reported: 0,
+            lives: LIVES,
+            ghost_until: 0,
+            protected_until: 0,
+            pending: Vec::new(),
+            driver: TrafficDriver::new(cfg.seed),
+            scorer: Scorer::new(cfg.claims, cfg.seed),
+            bodies: Bodies::builtin(),
         }
     }
 
@@ -212,6 +283,11 @@ impl RoomBot {
             ServerMsg::RoomEvent(e) => self.seen.room_events.push(e),
             ServerMsg::Error(e) => self.seen.errors.push(e),
             ServerMsg::RunResult(r) => self.seen.run_results.push(r),
+            ServerMsg::ScoreSync(s) => {
+                self.seen.score_syncs += 1;
+                self.seen.last_sync = Some(s);
+            }
+            ServerMsg::ScoreEvent(e) => self.seen.score_events.push(e),
             ServerMsg::LobbyEvent(LobbyEvent::RoomLeft(l)) => {
                 self.seen.room_left = Some(l.reason);
                 self.player_id = None;
@@ -230,6 +306,71 @@ impl RoomBot {
         self.s_m = f64::from(st.s_mm) / MM_PER_M;
         self.d_m = f64::from(st.d_cm) / CM_PER_M;
         self.speed_mps = f64::from(st.speed_cms) / CM_PER_M;
+        self.lat_vel = 0.0;
+        self.scorer.restart();
+        if self.lives == 0 {
+            self.lives = LIVES;
+        }
+        self.protected_until = st.tick.wrapping_add(PROTECTION_TICKS);
+    }
+
+    /// N6.1: the claims its rules made since the last call.
+    pub fn take_claims(&mut self) -> Vec<ClientMsg> {
+        let mut out: Vec<ClientMsg> = self.pending.drain(..).collect();
+        out.extend(self.scorer.out.drain(..).map(ClientMsg::ScoreClaim));
+        out
+    }
+
+    /// The client's hit detection (Traffic mode): its hull touching a mirrored car at the
+    /// state's tick is a hit, reported with the lives left; nothing more for the ghost
+    /// period, nothing during spawn protection.
+    fn detect_hit(&mut self, tick: u32, s_m: f64, d: f64) {
+        if self.lives == 0
+            || (tick.wrapping_sub(self.ghost_until) as i32) < 0
+            || (tick.wrapping_sub(self.protected_until) as i32) < 0
+        {
+            return;
+        }
+        let tick_dt = 1.0 / self.cfg.tick_rate_hz;
+        let (p_hl, p_hw) = (
+            PLAYER_LENGTH_M * 0.5 - INSET_M,
+            PLAYER_WIDTH_M * 0.5 - INSET_M,
+        );
+        let hit = self.seen.traffic.cars.iter().find_map(|(&id, car)| {
+            let c = self
+                .seen
+                .traffic
+                .car_at(id, f64::from(tick), &self.map, tick_dt)?;
+            let ds = self.map.signed_delta_m(s_m, c.s_m);
+            if ds.abs() > HIT_LOOK_M {
+                return None;
+            }
+            let (length, width) = self.bodies.of(car.vehicle);
+            let clr = sim::scoring::hull::clearance(
+                0.0,
+                d,
+                0.0,
+                p_hl,
+                p_hw,
+                ds,
+                c.d,
+                c.v_lat.atan2(c.v),
+                length * 0.5 - INSET_M,
+                width * 0.5 - INSET_M,
+            );
+            (clr <= 0.0).then_some(id)
+        });
+        if let Some(car_id) = hit {
+            self.lives -= 1;
+            self.hits_reported += 1;
+            self.ghost_until = tick.wrapping_add(GHOST_TICKS);
+            self.pending.push(ClientMsg::HitReport(HitReport {
+                tick,
+                target: HitTarget::Traffic,
+                car_id,
+                lives_left: self.lives,
+            }));
+        }
     }
 
     /// Advances the car to `now_ms` and returns the state for the current room tick (at
@@ -242,27 +383,90 @@ impl RoomBot {
         if self.last_placement.is_none() || !self.in_room() {
             return None;
         }
-        let dv = (self.cfg.speed_mps - self.speed_mps)
-            .clamp(-self.cfg.accel_mps2 * dt, self.cfg.accel_mps2 * dt);
+        let now_tick = self.server_now(now_ms)?;
         let v0 = self.speed_mps;
-        self.speed_mps += dv;
+        match self.cfg.drive {
+            DriveMode::Lane => {
+                let dv = (self.cfg.speed_mps - self.speed_mps)
+                    .clamp(-self.cfg.accel_mps2 * dt, self.cfg.accel_mps2 * dt);
+                self.speed_mps += dv;
+            }
+            DriveMode::Traffic => {
+                let tick_dt = 1.0 / self.cfg.tick_rate_hz;
+                let (acc, target_d) = self.driver.control(
+                    self.s_m,
+                    self.d_m,
+                    self.speed_mps,
+                    self.cfg.speed_mps,
+                    self.cfg.accel_mps2,
+                    now_tick,
+                    dt,
+                    &self.seen.traffic,
+                    &self.bodies,
+                    &self.map,
+                    tick_dt,
+                );
+                // Crashed out (no lives): the car stops until the respawn placement.
+                let acc = if self.lives == 0 {
+                    -CRASH_DECEL_MPS2
+                } else {
+                    acc
+                };
+                self.speed_mps = (self.speed_mps + acc * dt).max(0.0);
+                let step = LATERAL_MPS * dt;
+                let dd = (target_d - self.d_m).clamp(-step, step);
+                self.d_m += dd;
+                self.lat_vel = if dt > 0.0 { dd / dt } else { 0.0 };
+            }
+        }
         self.s_m = self.map.wrap_m(self.s_m + (v0 + self.speed_mps) * 0.5 * dt);
-        let tick = self.server_now(now_ms)?.floor();
+        self.odometer_m += (v0 + self.speed_mps) * 0.5 * dt;
+        self.driven_s += dt;
+        let tick = now_tick.floor();
         if tick < 0.0 {
             return None;
         }
+        // The state describes the car at exactly its tick: carried back from now.
+        let back_s = (now_tick - tick) / self.cfg.tick_rate_hz;
         let tick = tick as u32;
         if self.last_sent.is_some_and(|t| t == tick) {
             return None;
         }
         self.last_sent = Some(tick);
+        let s_at = self.map.wrap_m(self.s_m - self.speed_mps * back_s);
+        let d_at = self.d_m - self.lat_vel * back_s;
+        let s_mm = ((s_at * MM_PER_M).round() as u32) % self.map.length_mm();
+        let tick_dt = 1.0 / self.cfg.tick_rate_hz;
+        if self.cfg.drive == DriveMode::Traffic {
+            self.detect_hit(tick, s_at, d_at);
+        }
+        // A crashed-out car claims nothing until its respawn.
+        if self.lives > 0 {
+            self.scorer.step(
+                tick,
+                s_mm,
+                d_at,
+                self.speed_mps,
+                &self.seen.traffic,
+                &self.bodies,
+                &self.map,
+                tick_dt,
+            );
+        }
         Some(PlayerState {
             tick,
-            s_mm: ((self.s_m * MM_PER_M).round() as u32) % self.map.length_mm(),
-            d_cm: (self.d_m * CM_PER_M).round() as i16,
+            s_mm,
+            d_cm: (d_at * CM_PER_M).round() as i16,
             speed_cms: (self.speed_mps * CM_PER_M).round() as u16,
+            lat_vel_cms: (self.lat_vel * CM_PER_M).round() as i16,
             flags: PlayerFlags::default(),
-            run_state: RunState::Driving,
+            run_state: if self.lives == 0 {
+                RunState::Crashed
+            } else if (tick.wrapping_sub(self.protected_until) as i32) < 0 {
+                RunState::Protected
+            } else {
+                RunState::Driving
+            },
             ..PlayerState::default()
         })
     }

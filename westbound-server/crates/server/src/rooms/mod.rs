@@ -15,6 +15,8 @@
 //! | `sim_traffic` | `RoomTraffic` over `sim::traffic::TrafficWorld` (`rooms.traffic = "sim"`, the default) |
 //! | `traffic_stream` | N4.2: each client's traffic (area of interest, spawns, despawns, intents, corrections) |
 //! | `car_ids` | N4.2: wire car ids (MP-D6: never reused within 30 s) |
+//! | `car_history` | N6.1: the traffic of the last ticks (claim verification, the hit cross-check) |
+//! | `scoring` | N6.1: claims, verification, the official score, `ScoreSync`, hits, sectors, crew proximity, trains, crew totals |
 //! | `metrics` | `wb_rooms`, `wb_room_tick_seconds`, offences, drops |
 //!
 //! **Locks.** The registry (`Shared::registry`, one `std::sync::Mutex`) is taken to create,
@@ -22,12 +24,14 @@
 //! across an `.await`. Lock order: the registry is released before the presence hub is
 //! called. Per-tick data lives in the room task alone.
 
+pub mod car_history;
 pub mod car_ids;
 pub mod clock;
 pub mod metrics;
 pub mod plausibility;
 pub mod road;
 pub mod room;
+pub mod scoring;
 pub mod sim_traffic;
 mod task;
 #[cfg(test)]
@@ -42,7 +46,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use protocol::{
     AccountId, ChatItem, Code, CrewTag, Density, DisplayName, ErrorCode, HitReport, Identity,
-    PlayerState, RoomHostCommand, RoomListEntry, RoomSettings, RunEvent, TimeMode, Visibility,
+    PlayerState, RoomHostCommand, RoomListEntry, RoomSettings, RunEvent, RunResult, ScoreClaim,
+    TimeMode, Visibility,
 };
 use sqlx::SqliteConnection;
 use tokio::sync::{mpsc, oneshot};
@@ -52,6 +57,7 @@ pub use metrics::RoomMetrics;
 pub use room::{Joined, Refusal};
 
 use crate::config::{Config, ROOM_TRAFFIC_SIM};
+use crate::leaderboards::RoomKind;
 use crate::map::ServerMap;
 use crate::presence::{PresenceHub, RoomPresence};
 use crate::sessions::SessionHandle;
@@ -59,6 +65,7 @@ use crate::tick::{MonotonicTickClock, TickClock};
 use clock::{ClockShape, RoomTime};
 use plausibility::CheckLimits;
 use room::{Cmd, JoinReq, Room};
+use scoring::ScoringRules;
 use sim_traffic::{GapRules, SimTraffic, SimTrafficData};
 use traffic::{NoTraffic, RoomTraffic};
 use traffic_stream::StreamRules;
@@ -95,6 +102,8 @@ pub struct RoomParams {
     pub traffic_sim: bool,
     /// Traffic streaming (`rooms.traffic_*`).
     pub stream: StreamRules,
+    /// Multiplayer scoring (`[scoring]`, N6.1).
+    pub scoring: ScoringRules,
 }
 
 impl RoomParams {
@@ -145,6 +154,7 @@ impl RoomParams {
                 far_period_ticks: (rate / r.traffic_far_hz.max(1)).max(1),
                 car_id_hold_ticks: ms_ticks(r.traffic_car_id_hold_ms),
             },
+            scoring: ScoringRules::from_config(&cfg.scoring, rate, r.stale_state_ms),
         }
     }
 
@@ -226,6 +236,25 @@ struct Registry {
     seats: HashMap<AccountId, u32>,
 }
 
+/// A finished multiplayer run for the boards (N6.1; spec: "Multiplayer runs go on the
+/// boards automatically. The server already holds the official score").
+#[derive(Debug, Clone, PartialEq)]
+pub struct FinishedRun {
+    pub account: AccountId,
+    /// Public, private on the defaults (both ranked), or private custom (stats only).
+    pub room: RoomKind,
+    /// The run's `run_result` (the official score and counts).
+    pub result: RunResult,
+    pub duration_s: f64,
+    pub distance_m: f64,
+    /// Unix seconds at the run's end (its date and season).
+    pub ended_at: i64,
+}
+
+/// Where rooms hand finished, verified runs (the app writes them to the boards; tests
+/// collect them).
+pub type RunSink = Arc<dyn Fn(FinishedRun) + Send + Sync>;
+
 /// What the registry and every room share.
 pub struct Shared {
     pub params: RoomParams,
@@ -233,6 +262,7 @@ pub struct Shared {
     pub presence: Arc<PresenceHub>,
     pub metrics: Arc<RoomMetrics>,
     registry: Mutex<Registry>,
+    runs: Mutex<Option<RunSink>>,
 }
 
 impl Shared {
@@ -272,6 +302,15 @@ impl Shared {
         );
     }
 
+    /// Hands a finished run to the sink, if one is set.
+    fn record_run(&self, run: FinishedRun) {
+        let sink = self.runs.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(sink) = sink {
+            RoomMetrics::inc(&self.metrics.runs_recorded);
+            sink(run);
+        }
+    }
+
     fn unregister(&self, room_id: u32) {
         let mut reg = self.lock();
         if let Some(e) = reg.rooms.remove(&room_id) {
@@ -303,10 +342,12 @@ impl RoomHooks {
             let data = SimTrafficData::builtin().map_err(anyhow::Error::msg)?;
             let map = map.clone();
             let (gap, rules) = (params.gap, params.stream);
+            let depth = params.scoring.history_ticks;
             Arc::new(move |s: &RoomSettings, seed, origin| {
-                Box::new(SimTraffic::new(
-                    &data, &map.map, s.density, seed, origin, gap, rules,
-                )) as Box<dyn RoomTraffic>
+                Box::new(
+                    SimTraffic::new(&data, &map.map, s.density, seed, origin, gap, rules)
+                        .with_history(depth),
+                ) as Box<dyn RoomTraffic>
             })
         } else {
             Arc::new(|_: &RoomSettings, _, _| Box::new(NoTraffic) as Box<dyn RoomTraffic>)
@@ -386,6 +427,7 @@ impl Rooms {
                 presence,
                 metrics: Arc::new(RoomMetrics::default()),
                 registry: Mutex::new(Registry::default()),
+                runs: Mutex::new(None),
             }),
             next_id: AtomicU32::new(1),
             shutdown,
@@ -401,6 +443,11 @@ impl Rooms {
             .traffic_override
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(factory);
+    }
+
+    /// Where finished, verified runs go (the app: the leaderboards; N6.1).
+    pub fn set_run_sink(&self, sink: RunSink) {
+        *self.shared.runs.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
     }
 
     pub fn params(&self) -> &RoomParams {
@@ -703,6 +750,15 @@ impl RoomLink {
             player_id: self.player_id,
             session_id: self.session_id,
             event,
+        });
+    }
+
+    /// `score_claim` (N6.1).
+    pub fn claim(&self, claim: ScoreClaim) {
+        self.post(Cmd::Claim {
+            player_id: self.player_id,
+            session_id: self.session_id,
+            claim,
         });
     }
 
