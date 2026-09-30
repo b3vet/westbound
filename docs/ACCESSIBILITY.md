@@ -54,7 +54,7 @@ The table below is `ROWS` in `tests/a11y/test_reduced_motion.gd`. The test drive
 | `crash_orbit` | crash cinematic orbit camera | slower orbit (`crash.orbit_reduced_motion_frac`, 35 %) and no slow motion | `CrashSequence` | covered: `tests/run/test_crash_sequence.gd` |
 | `loading_shell` | web loading bar sweep | follows the **system** setting (`prefers-reduced-motion`; the game's setting is not readable before the engine runs): no sweep, the bar breathes in opacity (stepped, one change per 1.2 s) | `platform/web/shell.html` | covered: `test_web_shell_follows_the_system_setting` |
 
-**Not decorative motion (unchanged).** Nametags follow their cars; the touch overlay follows the thumb; the leaderboards list scrolls under the finger; traffic blinkers and hazards (1.5 Hz) and the road-works arrow board (1 Hz) are information, all under 3 Hz. The room HUD (loop strip, room line, feed, toast, banner) has no animation.
+**Not decorative motion (unchanged).** Nametags follow their cars; the touch overlay follows the thumb; the leaderboards list scrolls under the finger; traffic blinkers and hazards (1.5 Hz) and the road-works arrow board (1 Hz) are information, all under 3 Hz. The room HUD (loop strip, room line, feed, toast, banner) has no animation. There are no full-screen flashes anywhere (a hit is a shake, a sting and a pulse).
 
 ## Color independence
 
@@ -86,7 +86,7 @@ The rule: no meaning is carried by color alone. The audit below covers every pla
 
 `tools/snap.sh <scene> --cvd=protan,deutan,tritan,mono` (or `--cvd=all`) writes a simulated copy of each screenshot, `<png>_cvd-<kind>.png`, next to it. It is a post-process of the saved file (`src/ui/screens/dev/cvd_snap.gd` with `CvdFilter`), never a render pass: gameplay keeps the single color grade. Dichromacy uses the Machado, Oliveira and Fernandes (2009) matrices at full severity in linear RGB; `mono` is achromatopsia (Rec. 709 luminance). `CvdFilter.simulate()` and `delta_e()` also run in tests (the loop-strip shape rule).
 
-Review snaps (both renderers): the HUD in a run (`src/ui/hud/dev/hud_run_snap.tscn`), the results and pause screens (`src/ui/screens/dev/screens_preview.tscn`) and the title, each with `--cvd=all`.
+Review snaps (both renderers, each with `--cvd=all` or `--cvd=deutan,protan`): `hud_preview.tscn --state=busy` (ghost, boosting, the event words), `--state=too_slow`, `--state=objective --failed=true`, and `screens_preview.tscn --screen=results_best`. What they show: every state keeps its word or shape under all four filters. One observation: the hot color (#ff5a4d) loses most of its lightness for a protanope, so hot text (TOO SLOW, FAILED, CHAIN LOST) reads dimmer on the dark panels, still legible; a lighter hot would help if the design system is revisited.
 
 ## Text size
 
@@ -110,7 +110,11 @@ Settings → TEXT SIZE is 100 % or 125 % (`hud.text_scales`) for the HUD and eve
 
 **The sweep.** `tests/a11y/test_text_size_sweep.gd` re-runs each per-screen test's own methods on the tablet canvas: it loads the test's source, swaps its `CANVASES` constant for `[1280×960]`, and runs the methods through `run_all.gd`'s lifecycle, forwarding every failure. Each screen keeps its own fixture and rules, and nothing is copied. The warm-up hint and the room HUD, which had no text-fit test, get the same rules (inside its box, its panel or button and the safe area; no overlaps; touch-sized buttons; off the HUD's panels) at all three canvases.
 
-**Findings.** Everything fitted at both sizes on every canvas; no overflow needed a fix. One live-update gap was fixed: the room HUD read the text size once, at setup, so a change made during a room run (pause → settings) left it at the old size. It now restyles on `settings_changed(text_scale)` (`RoomHud.restyle()`).
+**Findings and fixes.** Every screen with a text-fit test also fits the tablet canvas at both sizes. The two new checks found three problems, all fixed:
+
+- **Warm-up hint, 125 % on 1280×720 and 1280×960:** its panel (the two lines with SKIP beside them, 413 px) reached 14 px into the event stack's column. When it would, SKIP now goes under the lines (a narrower, taller panel; the warm-up's road is empty, so nothing is read there). The notched 1560 canvas keeps the one-row panel. `FirstRunWarmupHint._layout`.
+- **Room chat feed, 125 % on 1280×720:** a long `name#tag  TEXT` line ran under the crash-out toast in the centre column. Feed lines are now shortened with "..." to stop short of the event stack's column (`RoomHud._place_feed`, `SocialUi.fit_text`); `feed_text()` still returns the full line.
+- **Room HUD text size was not live:** it read the setting once, at setup, so a change made during a room run left it at the old size. It now restyles on `settings_changed(text_scale)` (`RoomHud.restyle()`).
 
 ## Audio and haptic redundancy
 
