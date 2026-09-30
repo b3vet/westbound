@@ -934,3 +934,67 @@ impl T {
         self.room.info().night()
     }
 }
+
+/// N6.1: a respawn where the car is (no crewmate driving) is not acknowledged by the
+/// crashed car's in-flight states near it; the client's first protected state answers
+/// it, so the jump to the placement is no teleport and the new run stays verified.
+#[test]
+fn a_respawn_where_the_car_stopped_is_no_teleport() {
+    let mut t = T::new(settings(Visibility::Private, 8));
+    let mut a = Client::new(10, 1);
+    t.join(&mut a).unwrap();
+    t.tick();
+    let sa = ack(&mut t, &mut a);
+    let sa = drive(&mut t, &a, &sa, 10);
+    t.cmd(Cmd::Hit {
+        player_id: 1,
+        session_id: 1,
+        hit: HitReport {
+            tick: t.now,
+            target: HitTarget::Barrier,
+            car_id: 0,
+            lives_left: 0,
+        },
+    });
+    // The crashed car stops and waits for its respawn (3 s), reporting `crashed`.
+    let mut stopped = PlayerState {
+        speed_cms: 0,
+        run_state: RunState::Crashed,
+        ..sa.clone()
+    };
+    for _ in 0..60 {
+        t.tick();
+        stopped.tick = t.now;
+        t.state(&a, stopped.clone());
+    }
+    let _ = a.msgs();
+    t.tick();
+    let p = placement(&a.msgs(), 1).expect("the respawn");
+    assert!(
+        t.shared.map.map.signed_delta_mm(p.s_mm, stopped.s_mm).abs() < 5_000,
+        "where the car is"
+    );
+    // In flight: a crashed state stamped after the placement tick, before the client got it.
+    t.tick();
+    stopped.tick = t.now;
+    t.state(&a, stopped.clone());
+    assert_eq!(t.shared.metrics.drops("in_flight"), 1);
+    // The client applies the placement: protected, at its speed, then driving on.
+    t.tick();
+    let mut st = moved(&p, t.now, f64::from(p.speed_cms) / 2000.0, p.speed_cms);
+    st.run_state = RunState::Protected;
+    t.state(&a, st.clone());
+    let _ = drive(&mut t, &a, &st, 20);
+    t.run(&a, RunEventKind::End);
+    t.tick();
+    let r = run_results(&a.msgs());
+    assert_eq!((r.len(), r[0].run_seq), (1, 2));
+    assert!(r[0].flags.verified, "no offence after the respawn");
+    assert_eq!(
+        Offence::ALL
+            .iter()
+            .map(|o| t.shared.metrics.offences(*o))
+            .sum::<u64>(),
+        0
+    );
+}

@@ -22,6 +22,9 @@ const MM_PER_M: f64 = 1_000.0;
 /// Cars more than this far behind the overlap window are not tracked (a car passed at up
 /// to 200 m/s relative still completes within it at 20 Hz).
 const BEHIND_MARGIN_M: f64 = 10.0;
+/// A first cut on the distance before anything else (m past `ahead_m`; longer than any
+/// vehicle's overlap window behind).
+const NEAR_SCAN_M: f64 = 40.0;
 /// Cars tracked at once (rush hour has ~30 within the window).
 pub const MAX_TRACKS: usize = 64;
 /// Observed passes, contacts and near misses remembered (seconds of play).
@@ -157,8 +160,21 @@ impl Tracker {
         }
         self.stamp = self.stamp.wrapping_add(1);
         let r = self.rules;
+        let len = i64::from(map.length_mm());
+        let (half, near_mm) = (len / 2, ((r.ahead_m + NEAR_SCAN_M) * MM_PER_M) as i64);
         for c in cars {
-            let ds = map.signed_delta_mm(st.s_mm, c.s_mm) as f64 / MM_PER_M;
+            // The wrapped signed difference without a division (s in [0, L) on both
+            // sides), and most of the ring skipped on it.
+            let mut dmm = i64::from(c.s_mm) - i64::from(st.s_mm);
+            if dmm >= half {
+                dmm -= len;
+            } else if dmm < -half {
+                dmm += len;
+            }
+            if dmm.abs() > near_mm {
+                continue;
+            }
+            let ds = dmm as f64 / MM_PER_M;
             let c_hl = f64::from(c.length) * 0.5 - r.inset;
             let c_hw = f64::from(c.width) * 0.5 - r.inset;
             let hl_sum = c_hl + r.p_hl;

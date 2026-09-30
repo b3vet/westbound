@@ -19,6 +19,7 @@ use std::time::Duration;
 use bots::{BotClient, BotConfig, Cheat, ClaimMode, DriveMode, LinkSim, RoomBot};
 use common::TestServer;
 use protocol::{CodeRef, Density, LobbyCommand, MapHash, RoomSettings, TimeMode, Visibility};
+use westbound_server::rooms::plausibility::Offence;
 use westbound_server::rooms::scoring::claims::Reject;
 use westbound_server::rooms::RoomMetrics;
 use westbound_server::Config;
@@ -153,6 +154,19 @@ fn report(s: &TestServer, bots: &[RoomBot], what: &str) -> Tally {
         RoomMetrics::get(&m.hits_confirmed),
         RoomMetrics::get(&m.hits_unreported),
         RoomMetrics::get(&m.scoring_late),
+    );
+    let offences: Vec<String> = Offence::ALL
+        .iter()
+        .filter(|o| m.offences(**o) > 0)
+        .map(|o| format!("{}={}", o.label(), m.offences(*o)))
+        .collect();
+    println!(
+        "  offences [{}], crash-outs {}, drops out_of_order={} stale={} in_flight={}",
+        offences.join(" "),
+        RoomMetrics::get(&m.crash_outs),
+        m.drops("out_of_order"),
+        m.drops("stale"),
+        m.drops("in_flight"),
     );
     for b in bots {
         let st = b.scorer.stats;

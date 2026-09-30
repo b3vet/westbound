@@ -40,6 +40,8 @@ const PLAYER_LENGTH_M: f64 = 4.5;
 const PLAYER_WIDTH_M: f64 = 1.9;
 const INSET_M: f64 = 0.08;
 const HIT_LOOK_M: f64 = 12.0;
+/// How hard a crashed-out car stops (m/s²).
+const CRASH_DECEL_MPS2: f64 = 10.0;
 
 /// How a bot drives.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -404,6 +406,12 @@ impl RoomBot {
                     &self.map,
                     tick_dt,
                 );
+                // Crashed out (no lives): the car stops until the respawn placement.
+                let acc = if self.lives == 0 {
+                    -CRASH_DECEL_MPS2
+                } else {
+                    acc
+                };
                 self.speed_mps = (self.speed_mps + acc * dt).max(0.0);
                 let step = LATERAL_MPS * dt;
                 let dd = (target_d - self.d_m).clamp(-step, step);
@@ -452,7 +460,9 @@ impl RoomBot {
             speed_cms: (self.speed_mps * CM_PER_M).round() as u16,
             lat_vel_cms: (self.lat_vel * CM_PER_M).round() as i16,
             flags: PlayerFlags::default(),
-            run_state: if (tick.wrapping_sub(self.protected_until) as i32) < 0 {
+            run_state: if self.lives == 0 {
+                RunState::Crashed
+            } else if (tick.wrapping_sub(self.protected_until) as i32) < 0 {
                 RunState::Protected
             } else {
                 RunState::Driving

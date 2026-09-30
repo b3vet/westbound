@@ -17,7 +17,7 @@
 //! Every distance along the loop is the wrapped signed difference
 //! ([`LoopMap::signed_delta_mm`]), so crossing the seam is not a teleport.
 
-use protocol::PlayerState;
+use protocol::{PlayerState, RunState};
 use sim::map::LoopMap;
 
 use super::road::{d_bounds_mm, MM_PER_CM};
@@ -28,6 +28,15 @@ const CMS_PER_MPS: f64 = 100.0;
 const MM_PER_M: f64 = 1_000.0;
 /// Two quantization steps (1 cm, 1 cm/s): the rate checks' own slack.
 const QUANT_SLACK: f64 = 0.02;
+/// N6.1: a state answers a pending placement only when it is the placed car: in
+/// protection (`run_state = protected`, what a client sends once it applied a placement),
+/// or at the placement's speed and lateral offset within these (plus what the car's
+/// acceleration and lateral speed cover since the placement). A state sent before the
+/// client applied it (driving on, or stopped after a crash) is in flight even when the
+/// placement is near the car (a respawn "where the car is"): acknowledging it would make
+/// the client's jump to the placement a teleport. Not in spec.
+const PLACEMENT_SPEED_SLACK_MPS: f64 = 3.0;
+const PLACEMENT_D_SLACK_M: f64 = 1.0;
 
 /// A kind of implausible state (`wb_room_offences_total{kind}`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,9 +217,14 @@ pub fn check(
             lim.placement_radius_m + lim.speed_cap_mps * (since.max(0) as f64) / lim.tick_rate_hz;
         let along = map.signed_delta_mm(p.state.s_mm, out.s_mm).abs() as f64 / MM_PER_M;
         let across = (i64::from(out.d_cm) - i64::from(p.state.d_cm)).abs() as f64 / CMS_PER_MPS;
+        let since_s = since.max(0) as f64 / lim.tick_rate_hz;
+        let dv = (f64::from(out.speed_cms) - f64::from(p.state.speed_cms)).abs() / CMS_PER_MPS;
+        let placed_car = out.run_state == RunState::Protected
+            || (dv <= lim.accel_cap_mps2 * since_s + PLACEMENT_SPEED_SLACK_MPS
+                && across <= lim.lateral_cap_mps * since_s + PLACEMENT_D_SLACK_M);
         // A client whose clock estimate lags may stamp its first state a little before
-        // the placement tick; anything near the placement answers it.
-        if since >= -i64::from(lim.future_ticks) && along + across <= reach {
+        // the placement tick; the placed car near the placement answers it.
+        if since >= -i64::from(lim.future_ticks) && along + across <= reach && placed_car {
             return Verdict::Accept {
                 state: out,
                 offences,
@@ -516,6 +530,32 @@ mod tests {
             } => assert_eq!((offences, placed), (0, true)),
             v => panic!("{v:?}"),
         }
+        // N6.1: near the placement but not the placed car (sent before the client applied
+        // it: stopped after a crash, or on another lane at another speed): in flight...
+        let mut crashed = st(202, 1_000_300, 350, 0);
+        crashed.run_state = RunState::Crashed;
+        assert_eq!(
+            check(&l, &m.map, Some(&old), Some(&p), &crashed, 205),
+            Verdict::Drop(DropReason::InFlight)
+        );
+        assert_eq!(
+            check(
+                &l,
+                &m.map,
+                Some(&old),
+                Some(&p),
+                &st(202, 1_000_300, 710, 2_000),
+                205
+            ),
+            Verdict::Drop(DropReason::InFlight)
+        );
+        // ...while the placed car answers it in protection wherever it steered since.
+        let mut protected = st(204, 1_000_500, 900, 3_000);
+        protected.run_state = RunState::Protected;
+        assert!(matches!(
+            check(&l, &m.map, Some(&old), Some(&p), &protected, 205),
+            Verdict::Accept { placed: true, .. }
+        ));
         // After the deadline, a far state is taken as a teleport and ends the placement.
         match check(
             &l,

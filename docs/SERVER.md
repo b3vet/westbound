@@ -1194,7 +1194,7 @@ WP N5.1 (server side), in `crates/server/src/rooms/`. Spec: [multiplayer handoff
 
 ### Players
 
-**Placements.** The protocol has no spawn message, so the server places a player by putting **the player's own id** in its `player_states`: a `PlayerState` with the placement tick, `s`, `d` (the lane centre), the speed, heading 0 and `run_state = protected`. It is repeated every tick until the client sends a state near it (within `rooms.placement_radius_m`, 30 m, plus what the speed cap covers since the placement), and apply each placement tick once. States far from it are dropped as in flight for `rooms.placement_grace_ms` (2 s); after that the next state is taken with a `teleport` offence. Others see the car at its new place at once. **This is a semantic proposal for PROTOCOL.md** (no wire change; see the N5.1 handoff). Placements come with `rooms.protection_ms` (3 s) of protection (`PlayerView.protected_until` for traffic and N6).
+**Placements.** The protocol has no spawn message, so the server places a player by putting **the player's own id** in its `player_states`: a `PlayerState` with the placement tick, `s`, `d` (the lane centre), the speed, heading 0 and `run_state = protected`. It is repeated every tick until the client sends a state near it (within `rooms.placement_radius_m`, 30 m, plus what the speed cap covers since the placement), and apply each placement tick once. **Since N6.1** the answering state must also be the placed car: `run_state = protected` (what a client sends once it applied a placement: **clients must send `protected` during the placement's protection**), or at the placement's speed (± 3 m/s plus the acceleration cap since the placement) and lateral offset (± 1 m plus the lateral cap since). A crashed car's stopped states near a respawn "where the car is" are in flight, not an answer (they used to be, and the client's jump to the placement then counted as a teleport). States far from it are dropped as in flight for `rooms.placement_grace_ms` (2 s); after that the next state is taken with a `teleport` offence. Others see the car at its new place at once. **This is a semantic proposal for PROTOCOL.md** (no wire change; see the N5.1 handoff). Placements come with `rooms.protection_ms` (3 s) of protection (`PlayerView.protected_until` for traffic and N6).
 
 | When | Where |
 | --- | --- |
@@ -1315,6 +1315,7 @@ Measured 2026-09-30 (release without LTO, the 4-vCPU dev box shared with a Godot
 | `sim` (`TrafficWorld`, normal density, 857 cars per room) | 9,594 | 427 µs | ≤ 300 µs | ≤ 4 ms | 17.6 ms | 14.8 % of a core | 30 % | 2.5 KB/s | 301 B | 0 |
 | **N4.2** `sim` + streaming, normal (≈ 43 cars per player) | 9,595 | 496 µs | ≤ 500 µs | ≤ 4 ms | 18.7 ms | 17.3 % of a core | 29 % | 3.6 KB/s on the wire (3.2 KB/s payload) | 1,731 B | 0 |
 | **N4.2** `sim` + streaming, rush (1,200 cars per room, ≈ 59 per player) | 9,599 | 605 µs | ≤ 500 µs | ≤ 4 ms | 15.7 ms | 21.0 % of a core | 32 % | 3.8 KB/s on the wire (3.4 KB/s payload) | 2,482 B | 0 |
+| **N6.1** `sim` + streaming + scoring, normal; bots through traffic with honest claims (`ROOMS_BENCH_CLAIMS`, default on) | 9,606 | 609 µs (scoring 28.5 µs of it) | ≤ 500 µs | ≤ 4 ms | 18.1 ms | 21.2 % of a core (scoring 1.0 %) | 42 % | 3.6 KB/s on the wire | 1,798 B | 0 |
 
 - **Per room tick:** 57 µs for rooms alone (8 seats: take the tick's states, build and queue 8 frames); about 370 µs more with the traffic ring. The N10 target (20 full rooms ≤ 50 % of one vCPU, tick p99 < 5 ms) holds with room to spare for streaming (N4.2) and scoring (N6); the bench asserts p99 ≤ 5 ms in release. The maxima are scheduler stalls on the loaded box (the tick is wall time).
 - **Downstream** (N5.1 rows) was `player_states` only (7 × 24 B + headers each tick): 2.5 KB/s per player at the socket payload level.
@@ -1550,13 +1551,20 @@ Every **verified** run goes to the boards: the room hands it to the rooms' run s
 
 Nothing allocates per tick: rings and queues are sized when a player joins (states 64, observed passes 64, contacts 16, near misses 128, claims 32, pending hits 16), the outbox and the seats' private queues keep their capacity. `tests/scoring_alloc.rs` (a counting allocator): 600 ticks of a rush room, 8 players, ~250 honest claims (the client's rules on the same traffic, all accepted), bogus ones, hits, a rejoin and a run ended and restarted: **0 allocations**.
 
-BENCH_PLACEHOLDER
+**Cost** (the 20 rooms × 8 bots bench, `bench_20_rooms_of_8_bots`, release, 2026-09-30 on the shared 4-vCPU box at load average 5–12; see "Rooms → Bench"): scoring (`RoomScoring::tick`, timed separately into `wb_room_scoring_seconds_total`) costs **28.5 µs per room tick** with 8 bots driving through normal traffic and claiming (309 claims in 20 s, all accepted, 191 trains, 3,300 syncs): **1.0 % of a core for 20 rooms** (42 µs before the tracker's distance cut; the same with lane bots that claim nothing: the pass tracker and the official timelines run for every state either way). Recording the traffic history adds a copy of the live cars per world step inside the traffic's tick. The whole room tick stays at p99 ≤ 4 ms (≤ 3 ms in the run before), room CPU 19–21 % of a core against N4.2's 17.3 % (different bots: through traffic now, and a busier box), 3.6 KB/s down per player on the wire (`score_sync` once a second and at banking moments: 24 B each).
 
 ### Bots
 
 `bots::driver`: `DriveMode::Traffic` bots drive through the traffic they are streamed (a simple IDM behind a slower car, an overtake through a clear neighbouring lane, leaving a lane that ends, wandering ±1.3 m in the lane so some passes are close), report their own hits (hull contact on their mirror, 2 lives, a 2 s ghost, the placement's 3 s protection), and with `ClaimMode::Honest` run the client's rules (`sim::scoring`, the parity-tested port) on their traffic mirror carried to each state's tick (the last correction at its speed, lane changes on their intent's curve), turning its events into claims exactly as above. `ClaimMode::Cheat` bends every claim: `InflateClearance` (plain passes claimed close at 0.3 m), `FabricateCars` (cars ahead never passed, or ids never sent), `WrongTiming` (1.5 s early). `bots::link` is a minimal delay line per direction (RTT/2 ± jitter/2; a "lost" frame arrives an RTT later, the order kept, as over TCP); the full N4.4 layer and its metrics are N4.4's.
 
-ACCEPTANCE_PLACEHOLDER
+**Acceptance** (`tests/scoring.rs → acceptance_run_long`, release, 8 honest bots in one private room, the mobile link: 150 ms RTT, ±30 ms jitter, 2 % of frames retransmitted an RTT late):
+
+| Run | Claims (pass / close / cut) | Accepted | Rejected | Other |
+| --- | --- | --- | --- | --- |
+| normal density, 300 s | 337 (275 / 53 / 9) | **337 (100 %)** | 0 | 181 trains, 8 reported traffic hits all confirmed (the cars reacted), 0 unreported contacts. (This run predates the placement fix above: 3 runs after a crash-out respawn went unverified by a `teleport`; fixed, `rooms::tests::a_respawn_where_the_car_stopped_is_no_teleport`) |
+| rush, 150 s | 218 (179 / 39 / 0) | **218 (100 %)** | 0 | 81 trains, 0 offences, 0 unreported contacts |
+
+Cheating bots (`cheating_bots_claims_are_rejected`, 3 cheats among 5 honest bots, rush, 30 s): every fabricated claim is refused (`unknown_car` / `no_pass`), every claim 1.5 s early (`timing`), inflated clearances (`clearance`) unless the pass really was close within 0.35 m; the honest bots in the same room: all accepted. Threads are rare with this driver (none in these runs); the parity traces and the room tests cover them.
 
 ### Tests
 
@@ -1566,7 +1574,8 @@ ACCEPTANCE_PLACEHOLDER
 | `sim::scoring::*::tests` | Params (the spec's numbers), the event buffer, hull and penetration, the loop road against its lane ranges, sector bonuses |
 | `rooms::scoring::tests` | Without sockets, a scripted traffic with a history: an honest pass accepted and paid at its tick (the sync's chain, the banking sync, at least one a second); fabricated, never-passed, late, inflated and duplicate claims each rejected for their reason; close passes and a thread paid on one tick (and a one-sided thread refused); cuts (window, cooldown, too slow); crew proximity ×1.25 and a train (TRAIN ×2, to the crew only), the session crew total; night ×2; sectors (bank, Clean + Pace, a hit spoils Clean and costs a life until a clean sector); an unreported contact (unverified) vs a reported hit (confirmed: the car reacts); rejoin forfeits the chain; claims after the run are `no_run`; acceptance below the threshold |
 | `rooms::scoring::{tracker, ring}::tests`, `rooms::car_history::tests` | The server's pass view (crossing tick, side, clearance), contacts, the ring, the history |
-| `rooms::tests` | Through the room: a claim routed and its rejection in the player's frame, score syncs, `run_result` with the official score, verified runs to the sink (and an unverified one not) |
+| `rooms::tests` | Through the room: a claim routed and its rejection in the player's frame, score syncs, `run_result` with the official score, verified runs to the sink (and an unverified one not); a respawn where the car stopped is answered by the protected state, not the crashed one (no teleport) |
+| `rooms::plausibility::tests` | Placements: a crashed or unrelated car near the placement is in flight; the protected one answers it |
 | `tests/scoring.rs` | Over real sockets with the mobile link: 8 honest bots in a rush room for 30 s (every claim decided, none rejected); 3 cheats (one per kind) among 5 honest bots (every fabricated and mistimed claim refused, inflated ones refused unless genuinely close, the honest bots' all accepted); `acceptance_run_long` (ignored) |
 | `tests/scoring_alloc.rs` | 0 allocations (above) |
 | `tests/config.rs` | `[scoring]` in the example file equals the defaults |
