@@ -1,7 +1,8 @@
 class_name CameraRig
 extends Node3D
 ## Gameplay camera rig. Spec: Cameras (chase, far chase, hood, overhead, cockpit (plan
-## D11, WP4.7: before the cars have interiors, see docs/COCKPIT.md); spring follow,
+## D11, WP4.7: before the cars have interiors, see docs/COCKPIT.md; hidden from players
+## since 2026-10-01, CameraTuning.cockpit_player_enabled); spring follow,
 ## speed response, look-ahead, roll and shake, reduced motion, cycling, glare rule);
 ## Audio, haptics and game feel (shake on hits, FOV punch on boost); Accessibility ->
 ## Reduced motion; Performance budget (far plane just past the fog end).
@@ -216,10 +217,17 @@ func set_mode(new_mode: StringName) -> void:
 	_apply_mode_index(i)
 
 
-## Next mode in CameraTuning.modes (wrapping); saves the choice and emits
-## Events.camera_mode_changed.
-func cycle_mode() -> void:
-	var i := (_mode_i + 1) % tuning.modes.size()
+## Next mode players can pick (CameraTuning.player_modes(), in `modes` order, wrapping:
+## the C key and the HUD CAM button); `all_modes` also stops on modes hidden from players
+## (the cockpit while CameraTuning.cockpit_player_enabled is off: dev tools). Saves the
+## choice and emits Events.camera_mode_changed.
+func cycle_mode(all_modes: bool = false) -> void:
+	var n := tuning.modes.size()
+	var i := _mode_i
+	for step in n:
+		i = (_mode_i + 1 + step) % n
+		if all_modes or tuning.is_player_mode(StringName(tuning.modes[i])):
+			break
 	_apply_mode_index(i)
 	Settings.set_value(&"camera_mode", mode)
 	Events.camera_mode_changed.emit(mode)

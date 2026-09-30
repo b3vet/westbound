@@ -3,7 +3,10 @@ extends WBTest
 ## CONTROLS, AUDIO); every option of every row writes Settings through an iOS-id tap and
 ## is announced on Events.settings_changed (the systems apply it live) and shows as
 ## selected; a change made elsewhere shows at once; the chooser revisited from CONTROLS
-## (CHOOSE LAYOUT / BACK, reset when the panel closes); TILT is N/A without tilt; text fit
+## (CHOOSE LAYOUT / BACK, reset when the panel closes); DEFAULTS puts the CONTROLS rows
+## back (drag + manual, wheel look: plan D22 / D10, owner 2026-10-01); the camera row
+## offers only the modes players can pick (the cockpit is hidden, plan D11); TILT is N/A
+## without tilt; text fit
 ## on every page and the chooser (both text sizes, 1280x720 and a notched 1560x720, in
 ## the pause menu and on the title). Spec: UI → Screens → Settings; Controls → Settings
 ## and first run; Accessibility; Performance budget (quality tiers, battery saver).
@@ -116,7 +119,8 @@ func test_every_spec_setting_has_a_row_on_its_page() -> void:
 		ge(r.buttons.size(), 2, "%s is a choice" % key)
 	for r in sp.rows:
 		check(SPEC_ROWS.has(r.key), "%s is a setting the spec or the plan names" % r.key)
-	eq(sp.row(&"camera_mode").buttons.size(), t.camera.modes.size(), "every camera mode")
+	eq(sp.row(&"camera_mode").buttons.size(), t.camera.player_modes().size(), "every camera mode players can pick")
+	check(not sp.row(&"camera_mode").values.has(&"cockpit"), "the cockpit is hidden (owner, 2026-10-01)")
 	check(sp.row(&"camera_mode").wide, "the camera row spans the page")
 	eq(sp.row(&"quality_tier").buttons.size(), t.quality.tier_names.size(), "every quality tier")
 	eq(sp.row(&"steer_dead_zone").values.size(), t.meta.settings_dead_zones.size())
@@ -157,7 +161,7 @@ func test_every_option_writes_its_setting_live() -> void:
 func test_a_change_elsewhere_shows_at_once() -> void:
 	var sp := _screens().pause_screen.settings
 	Settings.set_value(&"camera_mode", &"hood")   # the C key
-	eq(sp.selected_index(&"camera_mode"), t.camera.modes.find("hood"))
+	eq(sp.selected_index(&"camera_mode"), t.camera.player_modes().find("hood"))
 	Settings.set_value(&"quality_tier", &"low")
 	eq(sp.selected_index(&"quality_tier"), 0)
 	check(_changed.has(&"quality_tier"), "the Quality autoload hears it (Events.settings_changed)")
@@ -178,16 +182,17 @@ func test_choose_layout_from_the_controls_page() -> void:
 	check(sp.chooser_open and sp.chooser.visible, "the chooser opens")
 	check(not sp.row(&"steering_mode").buttons[0].visible, "in place of the rows")
 	eq(sp.chooser_button.text, SettingsPanel.TEXT_BACK)
-	_tap(sp.chooser.option(1, 1))
-	eq(Settings.get_value(&"throttle_mode"), &"manual", "the chooser writes Settings")
+	eq(sp.chooser.selected_index(1), 1, "the default layout preselected: manual")
+	_tap(sp.chooser.option(1, 0))
+	eq(Settings.get_value(&"throttle_mode"), &"auto", "the chooser writes Settings")
 	check(p.settings_dirty, "saved with the other settings")
 	_tap(sp.chooser.option(2, 1))
 	eq(Settings.get_value(&"left_handed"), true)
-	eq(sp.chooser.sketch.throttle, &"manual", "the sketch follows")
+	eq(sp.chooser.sketch.throttle, &"auto", "the sketch follows")
 	check(sp.chooser.sketch.left_handed)
 	_tap(sp.chooser_button)
 	check(not sp.chooser.visible and sp.row(&"steering_mode").buttons[0].visible, "BACK: the rows again")
-	eq(sp.selected_index(&"throttle_mode"), 1, "and they show the chooser's answer")
+	eq(sp.selected_index(&"throttle_mode"), 0, "and they show the chooser's answer")
 	# A tab closes the chooser; closing the settings resets it.
 	sp.toggle_chooser()
 	_tap(sp.tabs[SettingsPanel.PAGE_GAME])
@@ -196,6 +201,35 @@ func test_choose_layout_from_the_controls_page() -> void:
 	check(sp.chooser_open)
 	p.close_settings()
 	check(not sp.chooser_open, "closing the settings resets the chooser view")
+
+
+func test_defaults_button_restores_the_controls_page() -> void:
+	var p := _screens().pause_screen
+	var sp := p.settings
+	check(not sp.defaults_button.visible, "DEFAULTS only on CONTROLS")
+	_tap(sp.tabs[SettingsPanel.PAGE_CONTROLS])
+	check(sp.defaults_button.visible)
+	# An old save's controls (the spec's old defaults) and a GAME setting.
+	Settings.set_value(&"throttle_mode", &"auto")
+	Settings.set_value(&"drag_visual", &"ring")
+	Settings.set_value(&"left_handed", true)
+	Settings.set_value(&"steer_sensitivity", 1.35)
+	Settings.set_value(&"units", &"mph")
+	p.settings_dirty = false
+	_changed.clear()
+	_tap(sp.defaults_button)
+	for r in sp.rows:
+		if r.page == SettingsPanel.PAGE_CONTROLS:
+			eq(Settings.get_value(r.key), Settings.DEFAULTS[r.key], "%s back to its default" % r.key)
+	eq(Settings.get_value(&"steering_mode"), &"drag")
+	eq(Settings.get_value(&"throttle_mode"), &"manual", "owner, 2026-10-01 (D22)")
+	eq(Settings.get_value(&"drag_visual"), &"wheel", "owner, 2026-10-01 (D10)")
+	eq(Settings.get_value(&"left_handed"), false)
+	eq(Settings.get_value(&"units"), &"mph", "other pages untouched")
+	check(_changed.has(&"throttle_mode") and _changed.has(&"drag_visual"), "announced (the systems follow)")
+	check(p.settings_dirty, "saved")
+	eq(sp.selected_index(&"throttle_mode"), 1, "the rows show it")
+	eq(sp.selected_index(&"drag_visual"), 1)
 
 
 func test_tilt_is_na_without_tilt() -> void:
@@ -301,8 +335,8 @@ func _fit_pages(host: Control, sp: SettingsPanel, safe: Rect2, what: String) -> 
 	Settings.set_value(&"left_handed", false)
 	gt(await _fit(host, safe, "%s chooser gyro+manual" % what), 6, "drawn")
 	sp.toggle_chooser()
-	Settings.set_value(&"steering_mode", &"drag")
-	Settings.set_value(&"throttle_mode", &"auto")
+	Settings.set_value(&"steering_mode", Settings.DEFAULTS[&"steering_mode"])
+	Settings.set_value(&"throttle_mode", Settings.DEFAULTS[&"throttle_mode"])
 
 
 func test_pause_settings_text_fits() -> void:

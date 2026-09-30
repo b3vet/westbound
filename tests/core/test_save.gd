@@ -1,7 +1,9 @@
 extends WBTest
 ## The `Save` autoload's behaviour on a private file: loading a legacy (v1) save keeps
 ## settings and personal bests and writes it back as v2, round trips, corrupt files,
-## a newer build's file (read-only), settings sanitized on load, the first-run flags,
+## a newer build's file (read-only), settings sanitized on load (a saved cockpit camera
+## loads as hood while it is hidden, plan D11), a save's controls kept across the
+## default change (plan D22, owner 2026-10-01), the first-run flags,
 ## autosave after a settings change (never while RUNNING), and the test-runner
 ## isolation (the autoload itself is in memory here). Spec: Save data; Controls →
 ## Settings and first run. WP8.1; docs/SAVE.md.
@@ -78,7 +80,7 @@ func test_fresh_install_then_round_trip() -> void:
 	eq(s.load_status, SaveStore.Status.FRESH)
 	check(s.chooser_pending() and s.warmup_pending(), "a fresh install: first run pending")
 	check(not FileAccess.file_exists(path), "nothing written until something happens")
-	Settings.set_value(&"throttle_mode", &"manual")
+	Settings.set_value(&"throttle_mode", &"auto")   # not the default
 	Settings.set_value(&"volume_music", 0.25)
 	s.mark_chooser_done()
 	check(s.submit_best_score(&"journey", 777), "a first best")
@@ -87,7 +89,7 @@ func test_fresh_install_then_round_trip() -> void:
 	Settings.restore_defaults()
 	var t := _save()
 	t.load_from_disk()
-	eq(Settings.get_value(&"throttle_mode"), &"manual")
+	eq(Settings.get_value(&"throttle_mode"), &"auto")
 	near(float(Settings.get_value(&"volume_music")), 0.25, 1e-9)
 	eq(t.best_score(&"journey"), 777)
 	eq(t.journey_count(&"journey"), 1)
@@ -142,7 +144,7 @@ func test_settings_are_sanitized_on_load() -> void:
 	var s := _save()
 	s.load_from_disk()
 	eq(Settings.get_value(&"steering_mode"), &"drag", "unknown choice -> default")
-	eq(Settings.get_value(&"throttle_mode"), &"auto", "wrong type -> default")
+	eq(Settings.get_value(&"throttle_mode"), Settings.DEFAULTS[&"throttle_mode"], "wrong type -> default")
 	eq(Settings.get_value(&"haptics"), true)
 	eq(Settings.get_value(&"text_scale"), 1.0)
 	near(float(Settings.get_value(&"volume_sfx")), 0.5, 1e-9)
@@ -150,6 +152,41 @@ func test_settings_are_sanitized_on_load() -> void:
 	s.save_to_disk()
 	var disk: Dictionary = SaveStore.read_json(path)
 	eq((disk["settings"] as Dictionary).get("future_key"), [1.0, 2.0], "a newer build's key is kept")
+
+
+func test_a_saved_cockpit_loads_as_hood() -> void:
+	var ct := Tuning.load_default().camera
+	check(not ct.cockpit_player_enabled, "the cockpit is hidden (owner, 2026-10-01)")
+	_write_raw(JSON.stringify({"version": 2, "settings": {"camera_mode": "cockpit"}}))
+	var s := _save()
+	s.load_from_disk()
+	eq(Settings.get_value(&"camera_mode"), StringName(ct.cockpit_fallback_mode), "the nearest mode players can pick")
+	eq(Settings.get_value(&"camera_mode"), &"hood")
+	_write_raw(JSON.stringify({"version": 2, "settings": {"camera_mode": "far"}}))
+	_save().load_from_disk()
+	eq(Settings.get_value(&"camera_mode"), &"far", "the other modes load as saved")
+
+
+func test_an_existing_save_keeps_its_controls() -> void:
+	# The new defaults (drag + manual, wheel look) are for fresh saves; a save written with
+	# the old ones keeps them (settings are stored whole: CHOOSE LAYOUT or DEFAULTS in the
+	# settings change them).
+	eq(Settings.DEFAULTS[&"throttle_mode"], &"manual", "plan D22 (owner, 2026-10-01)")
+	eq(Settings.DEFAULTS[&"drag_visual"], &"wheel", "plan D10 (owner, 2026-10-01)")
+	eq(Settings.DEFAULTS[&"steering_mode"], &"drag")
+	_write_raw(JSON.stringify({"version": 2, "settings": {"steering_mode": "drag", "throttle_mode": "auto",
+		"drag_visual": "ring"}}))
+	var s := _save()
+	s.load_from_disk()
+	eq(Settings.get_value(&"throttle_mode"), &"auto", "kept")
+	eq(Settings.get_value(&"drag_visual"), &"ring", "kept")
+	Settings.restore_defaults()
+	eq(Settings.get_value(&"throttle_mode"), &"manual", "restore_defaults: the new defaults")
+	eq(Settings.get_value(&"drag_visual"), &"wheel")
+	_write_raw(JSON.stringify({"version": 2, "settings": {"units": "mph"}}))
+	_save().load_from_disk()
+	eq(Settings.get_value(&"throttle_mode"), &"manual", "a save without the key: the new default")
+	eq(Settings.get_value(&"drag_visual"), &"wheel")
 
 
 func test_load_applies_settings_live() -> void:

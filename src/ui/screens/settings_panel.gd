@@ -9,11 +9,13 @@ extends Control
 ## docs/SCREENS.md → Settings; docs/SAVE.md → Settings.
 ##
 ## Three pages, switched by a row of tabs at the top of the panel's area:
-##   GAME      CAMERA (a full-width row: every CameraTuning mode), GRAPHICS (quality
-##             tier), BATTERY SAVER, TEXT SIZE, UNITS, REDUCED MOTION, HAPTICS
+##   GAME      CAMERA (a full-width row: the modes players can pick,
+##             CameraTuning.player_modes(); the cockpit is hidden, plan D11),
+##             GRAPHICS (quality tier), BATTERY SAVER, TEXT SIZE, UNITS, REDUCED MOTION, HAPTICS
 ##   CONTROLS  STEERING, THROTTLE, HAND, DRAG LOOK, CONTROLS SIZE, SENSITIVITY, DEAD ZONE,
 ##             CURVE; CHOOSE LAYOUT (right end of the tab row) swaps the rows for the
-##             first-run chooser (FirstRunChooser) and BACK brings them back
+##             first-run chooser (FirstRunChooser) and BACK brings them back; DEFAULTS
+##             (left of it) puts every CONTROLS row back to Settings.DEFAULTS
 ##   AUDIO     a volume row per bus (Master, Music, SFX, Engine, UI) and SOUND (mute)
 ## Each row is a label and a segmented choice of big OPTION buttons (touch_target_px
 ## tall), laid out in two columns (full-width rows first). A press writes the value
@@ -29,6 +31,7 @@ signal changed(key: StringName)
 const TEXT_GYRO := "TILT"
 const TEXT_CHOOSE := "CHOOSE LAYOUT"
 const TEXT_BACK := "BACK"
+const TEXT_DEFAULTS := "DEFAULTS"
 const PCT_FMT := "%d%%"
 const PAGE_GAME := 0
 const PAGE_CONTROLS := 1
@@ -56,6 +59,8 @@ var tabs: Array[ScreenButton] = []
 var chooser_button: ScreenButton
 var chooser: FirstRunChooser
 var chooser_open: bool = false
+## DEFAULTS (CONTROLS page): every CONTROLS row back to its default.
+var defaults_button: ScreenButton
 var _building_page: int = PAGE_GAME
 var _last_area := Rect2()
 
@@ -108,14 +113,17 @@ func build(t: HudTuning) -> void:
 			writes += 1
 			changed.emit(k))
 		add_child(chooser)
+		defaults_button = ScreenButton.make(TEXT_DEFAULTS, ScreenButton.Kind.NORMAL, 20)
+		defaults_button.name = "Defaults"
+		defaults_button.pressed.connect(restore_page_defaults.bind(PAGE_CONTROLS))
+		add_child(defaults_button)
 	var meta := MetaTuning.resolve()
 	_building_page = PAGE_GAME
 	var cam := Tuning.load_default().camera
 	var cam_captions: Array[String] = []
-	for m in cam.modes:
-		cam_captions.append(String(CAMERA_CAPTIONS.get(m, m.to_upper())))
 	var cam_values: Array = []
-	for m in cam.modes:
+	for m in cam.player_modes():
+		cam_captions.append(String(CAMERA_CAPTIONS.get(m, m.to_upper())))
 		cam_values.append(StringName(m))
 	_add(&"camera_mode", "CAMERA", cam_values, cam_captions).wide = true
 	var tiers: Array = []
@@ -183,6 +191,7 @@ func setup(s: HudStyle) -> void:
 	if chooser_button != null:
 		chooser_button.setup(s)
 		chooser.setup(s, tuning)
+		defaults_button.setup(s)
 
 
 func _enter_tree() -> void:
@@ -237,6 +246,17 @@ func show_page(p: int) -> void:
 	chooser_open = false
 	refresh()
 	_relayout()
+
+
+## DEFAULTS: every row of page `p` back to Settings.DEFAULTS (each change announced, so
+## every system and the chooser follow at once).
+func restore_page_defaults(p: int) -> void:
+	for r in rows:
+		if r.page == p and Settings.get_value(r.key) != Settings.DEFAULTS[r.key]:
+			writes += 1
+			Settings.set_value(r.key, Settings.DEFAULTS[r.key])
+			changed.emit(r.key)
+	refresh()
 
 
 ## CHOOSE LAYOUT <-> BACK: the first-run chooser in place of the CONTROLS rows.
@@ -320,6 +340,11 @@ func layout(area: Rect2) -> float:
 		chooser_button.visible = page == PAGE_CONTROLS
 		chooser_button.position = Vector2(area.end.x - cw, area.position.y)
 		chooser_button.size = Vector2(cw, rh)
+		var dw := maxf(tw, SocialUi.button_width(defaults_button, tuning))
+		dw = minf(dw, chooser_button.position.x - tabs_end - g)
+		defaults_button.visible = page == PAGE_CONTROLS and dw > 0.0
+		defaults_button.position = Vector2(chooser_button.position.x - g - dw, area.position.y)
+		defaults_button.size = Vector2(maxf(dw, 0.0), rh)
 		chooser.visible = chooser_open and page == PAGE_CONTROLS
 	var top := area.position.y + rh + g * 2.0
 	var body := Rect2(Vector2(area.position.x, top), Vector2(area.size.x, area.end.y - top))

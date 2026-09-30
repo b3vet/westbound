@@ -2,7 +2,9 @@ extends WBTest
 ## Cockpit camera (plan D11, WP4.7; docs/COCKPIT.md). Spec: Cameras (cycling and saved
 ## choice, speed response, look-ahead, roll, shake, FOV punch, reduced motion); Cars →
 ## Modular car convention (Markers/cam_cockpit, SteeringWheel rotating with steer);
-## Performance budget (draw calls, no StandardMaterial3D, no shadows).
+## Performance budget (draw calls, no StandardMaterial3D, no shadows). Hidden from
+## players since 2026-10-01 (owner; CameraTuning.cockpit_player_enabled): these tests
+## drive the mode directly (set_mode, cycle_mode(true)).
 
 const RIG_SCENE := "res://src/camera/camera_rig.tscn"
 const CAR_SCENE := "res://src/vehicle/player_car.tscn"
@@ -104,7 +106,7 @@ func _head_offset(rig: CameraRig) -> Vector3:
 
 # ---------------------------------------------------------------- Modes
 
-func test_cycle_includes_cockpit_and_wraps() -> void:
+func test_dev_cycle_includes_cockpit_and_wraps() -> void:
 	check(ct.mode_arrays_error().is_empty(), ct.mode_arrays_error())
 	eq(ct.modes[ct.modes.size() - 1], "cockpit", "cockpit appended last")
 	eq(ct.cockpit_index(), ct.modes.size() - 1)
@@ -113,13 +115,59 @@ func test_cycle_includes_cockpit_and_wraps() -> void:
 	var on_changed := func(m: StringName) -> void: seen.append(m)
 	Events.camera_mode_changed.connect(on_changed)
 	for i in ct.modes.size():
-		rig.cycle_mode()
+		rig.cycle_mode(true)
 		eq(Settings.get_value(&"camera_mode"), rig.mode, "saved")
 	Events.camera_mode_changed.disconnect(on_changed)
 	eq(seen, [&"far", &"hood", &"overhead", &"cockpit", &"chase"] as Array[StringName], "wraps")
 
 
-func test_saved_cockpit_restored_at_startup() -> void:
+func test_cockpit_hidden_from_players() -> void:
+	check(not ct.cockpit_player_enabled, "hidden until further notice (owner, 2026-10-01)")
+	eq(ct.player_modes(), PackedStringArray(["chase", "far", "hood", "overhead"]))
+	check(not ct.is_player_mode(&"cockpit"))
+	eq(ct.player_mode(&"cockpit"), &"hood", "a saved cockpit falls back to the other mounted view")
+	eq(ct.player_mode(&"overhead"), &"overhead")
+	eq(ct.player_mode(&"bogus"), StringName(ct.default_mode))
+	# The C key / HUD CAM cycle never stops on it, and leaves it for chase when a dev
+	# tool put the camera there.
+	var rig := _make_rig(_make_target(), _state(150.0), &"chase")
+	var seen: Array[StringName] = []
+	for i in ct.modes.size():
+		rig.cycle_mode()
+		seen.append(rig.mode)
+	eq(seen, [&"far", &"hood", &"overhead", &"chase", &"far"] as Array[StringName], "skips the cockpit")
+	rig.set_mode(&"cockpit")
+	check(rig.is_cockpit(), "still reachable directly (tests, dev tools)")
+	rig.cycle_mode()
+	eq(rig.mode, &"chase")
+	# A saved cockpit loads as hood.
+	Settings.from_dict({"camera_mode": "cockpit"})
+	eq(Settings.get_value(&"camera_mode"), &"hood")
+	eq(rig.mode, &"hood", "the rig follows the loaded value")
+
+
+func test_player_switch_brings_the_cockpit_back() -> void:
+	var on := ct.duplicate(true) as CameraTuning
+	on.cockpit_player_enabled = true
+	eq(on.mode_arrays_error(), "")
+	eq(on.player_modes(), ct.modes, "every mode again")
+	eq(on.player_mode(&"cockpit"), &"cockpit")
+	var rig: CameraRig = (load(RIG_SCENE) as PackedScene).instantiate()
+	rig.tuning = on
+	tree.root.add_child(rig)
+	_nodes.append(rig)
+	rig.set_physics_process(false)
+	rig.set_target(_make_target(), _state(150.0), _top())
+	rig.set_mode(&"overhead")
+	rig.cycle_mode()
+	eq(rig.mode, &"cockpit", "the player cycle reaches it")
+	var bad := ct.duplicate(true) as CameraTuning
+	bad.cockpit_fallback_mode = "cockpit"
+	ne(bad.mode_arrays_error(), "", "the fallback must be a mode players can pick")
+
+
+func test_cockpit_set_in_session_restored_at_startup() -> void:
+	# A dev tool's choice (Settings.set_value is not sanitized; loading a save is).
 	Settings.set_value(&"camera_mode", &"cockpit")
 	var rig: CameraRig = (load(RIG_SCENE) as PackedScene).instantiate()
 	tree.root.add_child(rig)
@@ -205,7 +253,7 @@ func test_body_hidden_in_cockpit_and_restored() -> void:
 	eq(rig.mode, &"chase")
 	check(car.visual.visible and car.shadow.visible, "restored when leaving cockpit")
 	for i in ct.modes.size() - 1:
-		rig.cycle_mode()
+		rig.cycle_mode(true)
 		eq(car.visual.visible, rig.mode != &"cockpit", "shown only outside cockpit (%s)" % rig.mode)
 	eq(rig.mode, &"cockpit")
 	check(not car.visual.visible, "hidden again")

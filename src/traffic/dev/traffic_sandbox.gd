@@ -889,7 +889,7 @@ func _build_ui() -> void:
 	p = _panel(Tab.VIEW)
 	_add(p, br, 0, &"cam", WIDE_BUTTON, _cycle_cam)
 	_add(p, br, 0, &"rig", WIDE_BUTTON, func() -> void:
-		rig.cycle_mode()
+		rig.cycle_mode(true)   # dev: every mode, the hidden cockpit included (plan D11)
 		_refresh_buttons())
 	_add(p, br, 0, &"view_reset", BUTTON, func() -> void: cam.reset_view())
 	_add(p, br, 0, &"labels", BUTTON, func() -> void:

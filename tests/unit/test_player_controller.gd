@@ -172,9 +172,9 @@ func test_gyro_falls_back_to_drag_when_unsupported() -> void:
 func test_follows_settings_until_pinned() -> void:
 	hub.use_settings()
 	eq(hub.steering_mode, PlayerInput.DRAG, "default drag")
-	eq(hub.throttle_mode, PlayerInput.AUTO, "default auto")
-	Settings.set_value(&"throttle_mode", &"manual")
-	eq(hub.throttle_mode, PlayerInput.MANUAL, "follows the setting")
+	eq(hub.throttle_mode, PlayerInput.MANUAL, "default manual (owner, 2026-10-01: plan D22)")
+	Settings.set_value(&"throttle_mode", &"auto")
+	eq(hub.throttle_mode, PlayerInput.AUTO, "follows the setting")
 	Settings.set_value(&"left_handed", true)
 	check(hub.layout.mirrored, "follows left-handed")
 	Settings.set_value(&"steering_mode", &"gyro")
