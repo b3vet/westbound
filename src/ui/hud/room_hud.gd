@@ -16,6 +16,14 @@ extends CanvasLayer
 ## feed under the score panel (where loop mode has no leg objective), clear of the thumb
 ## zones; the toast and the banner in the event stack's column. Labels change only when
 ## their text changes.
+##
+## N6.2 (multiplayer scoring): the crew line under the room line (CREW ×1.50 · 2 NEAR:
+## crewmates within 30 m, the factor on every scored event) with the TRAIN ×n badge beside
+## it after each link (the train counter), the session crew total in the room menu
+## (PLAYERS; spec: "shown in the room menu"), and the crash-out toast with the official
+## score. Train links and official sector bonuses go on the gameplay HUD's event stack
+## (RunRoom). Chat feed lines are kept clear of the event stack's column (a long name is
+## shortened on the feed; the nametag shows it whole).
 
 signal rejoin_pressed()
 signal leave_pressed()
@@ -32,6 +40,10 @@ const TEXT_RESULT_SUB := "SCORE %s  ·  %s  ·  %s  ·  RESPAWNING"
 const TEXT_UNVERIFIED := "  ·  UNVERIFIED"
 const TEXT_RECONNECTING := "RECONNECTING  ·  %d S"
 const TEXT_FEED := "%s  %s"
+const TEXT_CREW := "CREW ×%s"
+const TEXT_CREW_NEAR := "CREW ×%s  ·  %d NEAR"
+const TEXT_ELLIPSIS := "…"
+const TEXT_TRAIN := "TRAIN ×%d"
 const TEXT_KM := "%.1f KM"
 const TEXT_TIME := "%d:%02d"
 const SECONDS_PER_MINUTE := 60
@@ -57,6 +69,9 @@ var toast_title: ScreenText
 var toast_sub: ScreenText
 var banner: ScreenText
 var feed: Array[ScreenText] = []
+## N6.2: the crew line (factor and crewmates near) and the TRAIN ×n badge.
+var crew_line: ScreenText
+var train_badge: ScreenText
 
 var _pinned: bool = false
 var _full: Rect2 = Rect2(0.0, 0.0, 1280.0, 720.0)
@@ -67,6 +82,8 @@ var _reconnecting: bool = false
 var _line_key: int = -1
 var _banner_key: int = -1
 var _feed_left := PackedFloat32Array()
+var _crew_key: int = -1
+var _train_left_s: float = 0.0
 
 
 func _init() -> void:
@@ -97,6 +114,15 @@ func _init() -> void:
 	banner.outline = true
 	banner.visible = false
 	add_child(banner)
+	crew_line = ScreenText.make("", ScreenText.Face.LABEL, 16, ScreenText.Ink.MUTED)
+	crew_line.name = "CrewLine"
+	crew_line.outline = true
+	add_child(crew_line)
+	train_badge = ScreenText.make("", ScreenText.Face.DISPLAY, 20, ScreenText.Ink.GOLD)
+	train_badge.name = "TrainBadge"
+	train_badge.outline = true
+	train_badge.visible = false
+	add_child(train_badge)
 	menu = RoomMenu.new()
 	add_child(menu)
 	menu.chat_pressed.connect(func(item: Dictionary) -> void:
@@ -143,6 +169,8 @@ func setup(net_tuning: NetTuning, room_session: NetRoomSession) -> void:
 	for c in toast.get_children():
 		(c as ScreenText).setup(style)
 	line.size_px = net.room_font_px
+	crew_line.size_px = net.room_font_px
+	set_crew(0, 1.0)
 	menu.setup(style, hud, net, session)
 	if not session.room_changed.is_connected(refresh_room):
 		session.room_changed.connect(refresh_room)
@@ -185,6 +213,10 @@ func advance(dt: float) -> void:
 		_notice_left_s -= dt
 		if _notice_left_s <= 0.0 and not _reconnecting:
 			banner.visible = false
+	if _train_left_s > 0.0:
+		_train_left_s -= dt
+		if _train_left_s <= 0.0:
+			train_badge.visible = false
 	for i in feed.size():
 		if _feed_left[i] > 0.0:
 			_feed_left[i] -= dt
@@ -208,10 +240,10 @@ func advance(dt: float) -> void:
 		menu.refresh()
 
 
-## The server's run_result for this player: the crash-out toast (spec: 3 s). The score is
-## the server's official one (0 until N6) or `local_score` when higher.
-func show_result(result: Dictionary, local_score: int = 0) -> void:
-	var score := maxi(int(result.get("score", 0)), local_score)
+## The server's run_result for this player: the crash-out toast (spec: 3 s) with the
+## official score (N6: the server's banked total).
+func show_result(result: Dictionary) -> void:
+	var score := int(result.get("score", 0))
 	var dist := float(result.get("distance_m", 0)) / M_PER_KM
 	var secs := roundi(float(result.get("duration_ms", 0)) / MS_PER_S)
 	var sub := TEXT_RESULT_SUB % [HudFormat.thousands(score), TEXT_KM % dist,
@@ -223,6 +255,32 @@ func show_result(result: Dictionary, local_score: int = 0) -> void:
 	toast.visible = true
 	_toast_left_s = net.room_result_toast_s
 	_place_toast()
+
+
+## N6.2: the crew line: `near` crewmates in range and the factor they give. The label
+## changes only when a value does.
+func set_crew(near: int, factor: float) -> void:
+	var key := near * CREW_KEY_NEAR + roundi(factor * CREW_KEY_FACTOR)
+	if key != _crew_key:
+		_crew_key = key
+		var f := "%.2f" % factor
+		crew_line.text = TEXT_CREW_NEAR % [f, near] if near > 0 else TEXT_CREW % f
+		crew_line.set_ink(ScreenText.Ink.ACCENT if near > 0 else ScreenText.Ink.MUTED)
+		_place_crew()
+
+
+## N6.2: TRAIN ×link for NetTuning.train_show_s (the train counter).
+func show_train(link: int) -> void:
+	if link <= 0:
+		return
+	train_badge.text = TEXT_TRAIN % link
+	train_badge.visible = true
+	_place_crew()
+	_train_left_s = net.train_show_s
+
+
+func is_train_shown() -> bool:
+	return train_badge.visible
 
 
 func is_toast_shown() -> bool:
@@ -238,7 +296,7 @@ func add_feed(who: String, text: String, color: Color) -> void:
 		feed[i].modulate = feed[i - 1].modulate
 		feed[i].visible = feed[i - 1].visible
 		_feed_left[i] = _feed_left[i - 1]
-	feed[0].text = TEXT_FEED % [who, text]
+	feed[0].text = _fit_feed(who, text)
 	feed[0].modulate = color
 	feed[0].visible = true
 	_feed_left[0] = net.room_chat_show_s
@@ -295,7 +353,16 @@ func _relayout() -> void:
 	var y := _safe.position.y + m + hud.score_size_px.y * ts + g
 	line.position = Vector2(x, y)
 	line.size = line.get_combined_minimum_size()
-	_feed_top = y + maxf(line.size.y, HudDraw.cap_height(line.font_px()) * 2.0) + g
+	# N6.2: the crew line with the train badge beside it, the crew total, then the feed.
+	y += maxf(line.size.y, HudDraw.cap_height(line.font_px()) * 2.0)
+	_crew_top = y
+	_place_crew()
+	y += maxf(crew_line.size.y, train_badge.get_combined_minimum_size().y)
+	_feed_top = y + g
+	# Feed lines end before the event stack's column (HudLayout's, same canvas and text size).
+	var lay := HudLayout.new()
+	lay.build(hud, _full, _safe, null, ts)
+	_feed_max_w = maxf(lay.stack.position.x - x - g, 0.0)
 	_place_feed()
 	# Top-right, under the pause / camera buttons and the high-beam slot: REJOIN CREW and
 	# ROOM (the right thumb reaches them; clear of its zone at the bottom).
@@ -311,6 +378,37 @@ func _relayout() -> void:
 
 
 var _feed_top: float = 0.0
+var _crew_top: float = 0.0
+var _feed_max_w: float = INF
+
+
+## "name#1234  TEXT", the name shortened with an ellipsis until the line fits _feed_max_w.
+func _fit_feed(who: String, text: String) -> String:
+	var line_text := TEXT_FEED % [who, text]
+	var t := feed[0]
+	if style == null or t.style == null:
+		return line_text
+	var f := t.font()
+	var fs := t.font_px()
+	var name_text := who
+	while HudDraw.text_width(f, line_text, fs) > _feed_max_w and name_text.length() > 1:
+		name_text = name_text.left(name_text.length() - 1)
+		line_text = TEXT_FEED % [name_text + TEXT_ELLIPSIS, text]
+	return line_text
+
+
+## The crew line, and the train badge on its row after it (their centres level).
+func _place_crew() -> void:
+	if hud == null:
+		return
+	var x := _safe.position.x + hud.edge_margin_px
+	var a := crew_line.get_combined_minimum_size()
+	var b := train_badge.get_combined_minimum_size()
+	var row := maxf(a.y, b.y)
+	crew_line.size = a
+	crew_line.position = Vector2(x, _crew_top + (row - a.y) * 0.5)
+	train_badge.size = b
+	train_badge.position = Vector2(x + a.x + hud.spacing_grid_px * 2.0, _crew_top + (row - b.y) * 0.5)
 
 
 func _place_feed() -> void:
@@ -352,3 +450,7 @@ func _place_banner() -> void:
 ## the button width).
 const TOAST_TOP := 0.3   # lint: allow-number layout proportion
 const ROOM_SHARE := 0.6   # lint: allow-number layout proportion
+## Change keys of the crew line (packing its values into one int).
+const CREW_KEY_NEAR := 100000
+const CREW_KEY_FACTOR := 100.0   # lint: allow-number two decimals of the factor
+

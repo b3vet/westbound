@@ -35,6 +35,13 @@ extends RefCounted
 ##   respawns and teleports: the server sends each car once for the area around the
 ##   player. Every room_snapshot clears it (the server sends the whole area in the same
 ##   frame). NetTuning.room_network_traffic = false keeps the local director (dev).
+## - **Scoring (N6.2, NetScoreClient):** the run's own Scoring scores the network cars;
+##   every 120 Hz tick the new events are read (tick(): the tick before's, stamped with its
+##   room tick; frame(): the last tick's, before the run drains them) and turned into
+##   claims, sent from the frame. score_sync eases the HUD's banked total to the official
+##   one at banking moments (Hud.set_score_offset); the crew line (crewmates within 30 m,
+##   the factor), TRAIN ×n and official sector bonuses the run did not pay (event stack);
+##   the crash-out toast shows the official score; XP from the official score (Garage).
 
 const MS_PER_S := 1000.0   # lint: allow-number unit conversion
 ## Brake input above this reads as braking for the brake-light flag.
@@ -47,6 +54,8 @@ var view: RemoteCarView
 var hud: RoomHud
 ## N4.3's source once the server streams traffic (null: the local director).
 var net_traffic: NetworkTrafficSource
+## N6.2: claims, the official score, crew and trains.
+var score: NetScoreClient
 
 ## The pending start (the first placement, or a respawn's): road-space s (unwrapped), d, v.
 var start_valid: bool = false
@@ -65,7 +74,6 @@ var rejoin_requested: bool = false
 ## Ticks per second of the room (states' tick → seconds).
 var tick_rate: float = 20.0
 
-var _crash_banked: int = 0
 var _headlights: bool = false
 var _stats_frames: int = 0
 ## The network traffic rows of the dev HUD update every this many frames.
@@ -75,6 +83,18 @@ var demo_remotes: int = 0
 
 var _car_len: float = 4.5
 var _car_w: float = 1.9
+## N6.2: the run's events read so far this frame, and the room tick of the last 120 Hz
+## tick (its events are stamped with it).
+var _scan_from: int = 0
+var _tick_at: int = 0
+## N6.2: the official run (run_seq) XP was last awarded for (-1: none yet).
+var _xp_run_seq: int = -1
+## N6.2: the stamping clock (_room_now): its last value and when it was read (usec).
+var _now_tick: float = -1.0
+## N6.2: the room time of the car's latest simulated state (-1: not started); see
+## _advance_car_clock().
+var _car_clock: float = -1.0
+var _now_us: int = 0
 
 
 func _init(owner_run: Run, room_session: NetRoomSession, net_tuning: NetTuning = null) -> void:
@@ -90,6 +110,11 @@ func _init(owner_run: Run, room_session: NetRoomSession, net_tuning: NetTuning =
 	session.traffic_frame.connect(_on_traffic_frame)
 	session.rejoined.connect(_on_rejoined)
 	session.joined.connect(_on_rejoined)
+	var thread_m := owner_run.tuning.scoring.thread_clearance_m if owner_run.tuning != null else 1.5
+	score = NetScoreClient.new(session, net, thread_m)
+	score.train.connect(_on_train)
+	score.crew_train.connect(_on_crew_train)
+	score.sector_bonus.connect(_on_sector_bonus)
 	if _read_placement():
 		start_valid = true
 
@@ -117,6 +142,7 @@ func uninstall() -> void:
 		for c: Dictionary in s.get_connections():
 			if (c["callable"] as Callable).get_object() == self:
 				s.disconnect(c["callable"])
+	score.detach()
 	if view != null:
 		view.queue_free()
 		view = null
@@ -142,6 +168,11 @@ func on_run_started() -> void:
 		start_valid = false
 		crashed = false
 		rejoin_requested = false
+		_car_clock = _room_now()
+		_tick_at = _stamp()
+		_scan_from = run.events.size()
+		score.reset_run(_tick_at)
+		_set_score_offset(0)
 		protected_left_s = net.room_protection_s
 		run.fx.start_ghost(net.room_protection_s)
 		run.go()
@@ -172,6 +203,7 @@ func _begin_network_traffic() -> void:
 	net_traffic.set_headway_scale(t.director.headway_scale(run.loop.tuning.director_leg))
 	net_traffic.set_player_body(run.car.car.length_m, run.car.car.width_m)
 	net_traffic.set_headlights(_headlights)
+	score.wire_id = net_traffic.car_id   # N6.2: claims name the server's cars
 
 
 func _on_traffic_frame(f: NetServerFrame) -> void:
@@ -186,12 +218,18 @@ func _on_traffic_frame(f: NetServerFrame) -> void:
 ## Every room_snapshot (a join, a reconnect): the server sends the whole area of interest
 ## in the same frame (after this signal), so the network traffic starts over.
 func _on_rejoined(_room: NetRoomState) -> void:
+	_now_tick = -1.0   # N6.2: the clock restarts with the room's snapshot
+	_car_clock = -1.0
 	if net_traffic != null:
 		net_traffic.clear()
 
 
-## Per 120 Hz tick (RUNNING): protection counts down.
+## Per 120 Hz tick (RUNNING, before the tick's scoring): the tick before's events become
+## claims (stamped with its room tick), then protection counts down.
 func tick(dt: float) -> void:
+	_scan()
+	_advance_car_clock(dt)
+	_tick_at = _stamp()
 	if protected_left_s > 0.0:
 		protected_left_s = maxf(protected_left_s - dt, 0.0)
 
@@ -210,7 +248,6 @@ func on_hit(contact: HitDetection.Contact, lives_left: int) -> void:
 ## crash_respawn (3 s) later.
 func on_crash(contact: HitDetection.Contact) -> void:
 	crashed = true
-	_crash_banked = run.scoring.banked()
 	_send_hit(contact, 0)
 
 
@@ -247,6 +284,7 @@ func toggle_mute(player_id: int) -> void:
 
 ## Leaves the room (the HUD's LEAVE, the pause menu's QUIT): back to the online hub.
 func leave() -> void:
+	_award_left_run()
 	session.leave()
 	run.leave_room("")
 
@@ -256,13 +294,18 @@ func leave() -> void:
 ## Once per rendered frame (Run.frame): placements, the room clock, the upload, the
 ## remote cars, the HUD.
 func frame(real_dt: float) -> void:
+	_scan()   # the last tick's events, before the run drains them
+	score.flush()
 	if session.has_placement():
 		_apply_placement()
 	if demo_remotes > 0:
 		_demo_step(real_dt)
 	_follow_clock()
+	if run.state != Game.RUNNING or _car_clock < 0.0:
+		_car_clock = _room_now()   # no car simulation to follow: the room's clock
 	_upload()
 	_draw_remotes()
+	_follow_score(real_dt)
 	if hud != null:
 		hud.advance(real_dt)
 	DevStats.report(&"room_ping_ms", roundi(session.ping_ms()))
@@ -273,6 +316,8 @@ func frame(real_dt: float) -> void:
 		if _stats_frames % STATS_EVERY_FRAMES == 0:
 			net_traffic.stats.report_dev_stats()
 			NetTrafficStats.report_link(session.client.clock)
+	# The run drains its event buffer right after this (Run.frame): read from its start.
+	_scan_from = 0
 
 
 ## Takes the session's pending placement into start_* (s unwrapped next to the car, never
@@ -323,14 +368,14 @@ func _follow_clock() -> void:
 
 
 func _room_tick() -> int:
-	var now := session.server_tick()
+	var now := _car_clock if _car_clock >= 0.0 else _room_now()
 	return floori(now) if now >= 0.0 else 0
 
 
 ## One state per room tick, stamped with that tick: the car's state moved back to the
-## tick's instant along its velocity.
+## tick's instant along its velocity (N6.2: by the car's own clock, _car_clock).
 func _upload() -> void:
-	var now := session.server_tick()
+	var now := _car_clock
 	if now < 0.0 or run.car == null:
 		return
 	var at := floori(now)
@@ -406,11 +451,13 @@ func _draw_remotes() -> void:
 # ---------------------------------------------------------------- Session events
 
 func _on_run_result(result: Dictionary) -> void:
-	if hud == null:
-		return
 	var pid := int(result.get("player_id", -1))
 	if pid == session.room.you:
-		hud.show_result(result, _crash_banked)
+		_award_xp(int(result.get("run_seq", 0)), int(result.get("score", 0)), int(result.get("threads", 0)))
+	if hud == null:
+		return
+	if pid == session.room.you:
+		hud.show_result(result)
 	else:
 		var m := session.room.member(pid)
 		if m != null and String(result.get("end_reason", "")) == "crashed":
@@ -429,12 +476,141 @@ func _on_reconnecting(on: bool) -> void:
 
 
 func _on_left(_reason: String, message: String) -> void:
+	_award_left_run()
 	run.leave_room(message)
 
 
 func _on_notice(text: String) -> void:
 	if hud != null:
 		hud.show_notice(text)
+
+
+# ---------------------------------------------------------------- Scoring (N6.2)
+
+## The room clock this client stamps its states, hits and claims with: server_tick(), but
+## across a small step back of the estimate (the first Pong after a snapshot can land
+## behind the snapshot's own estimate) it keeps running at least (1 − clock_slew_max_rate)
+## as fast as the wall clock until the estimate catches up. Otherwise the stamps stall
+## while the car drives on, and two states a tick apart show the car moving farther than
+## its speed allows (the server's `distance` offence: the run goes unverified). A step
+## back larger than room_stamp_max_hold_ms is taken as it is (the stamps would otherwise run
+## ahead of the room). Reset by every snapshot.
+## The room time of the car's simulated state, advanced by exactly each sim tick's dt: the
+## car's position follows sim time, and after a frame hitch the physics catches up in bursts
+## (several ticks in one short frame) or falls behind (slow motion, pause). Stamped with the
+## wall clock, such a burst puts two states a tick apart farther than the car's speed allows
+## (the server's `distance` offence, measured live: +2.3 m at 51 m/s). It follows the room
+## clock (_room_now) at most clock_slew_max_rate faster or slower, and jumps to it when they
+## are more than room_stamp_max_hold_ms apart (a pause or slow motion: a jump forward only
+## shortens the implied speed). Stamps states, hits, run events and claims.
+func _advance_car_clock(dt: float) -> void:
+	var target := _room_now()
+	if target < 0.0:
+		_car_clock = -1.0
+		return
+	if _car_clock < 0.0:
+		_car_clock = target
+		return
+	_car_clock += dt * tick_rate
+	var diff := target - _car_clock
+	if absf(diff) > net.room_stamp_max_hold_ms / MS_PER_S * tick_rate:
+		_car_clock = target
+	else:
+		var step := net.clock_slew_max_rate * dt * tick_rate
+		_car_clock += clampf(diff, -step, step)
+
+
+func _room_now() -> float:
+	var now := session.server_tick()
+	if now < 0.0:
+		_now_tick = -1.0
+		return now
+	var us := session.time.now_usec()
+	if _now_tick >= 0.0 and now < _now_tick:
+		var least := _now_tick + float(us - _now_us) / NetRoomSession.USEC_PER_S * tick_rate \
+			* (1.0 - net.clock_slew_max_rate)
+		if least - now <= net.room_stamp_max_hold_ms / MS_PER_S * tick_rate:
+			now = maxf(now, least)
+	_now_tick = now
+	_now_us = us
+	return now
+
+
+## The room tick a 120 Hz tick happening now belongs to: the first at or after it (a room
+## tick's state describes the car at that tick).
+func _stamp() -> int:
+	var now := _car_clock if _car_clock >= 0.0 else _room_now()
+	return ceili(now) if now >= 0.0 else 0
+
+
+## The run's events not read yet (the claims), and the local total after them.
+func _scan() -> void:
+	if run.scoring == null or run.car == null or run.sim == null:
+		return
+	var ev := run.events
+	var to := ev.size()
+	if _scan_from > to:
+		_scan_from = 0
+	score.observe(ev, _scan_from, to, _tick_at, run.car.state.d, run.sim.state,
+		run.scoring.banked() + run.scoring.chain())
+	_scan_from = to
+
+
+## Per frame: the crew around the car, the official correction easing, the HUDs.
+func _follow_score(real_dt: float) -> void:
+	var road := run.loop.road if run.loop != null else null
+	if road != null and run.car != null and session.server_tick() >= 0.0:
+		score.update_crew(session.remotes, session.room, road.wrap_s(run.car.state.s), road.length())
+	score.advance(real_dt)
+	_set_score_offset(score.display_offset())
+	if hud != null:
+		hud.set_crew(score.crew_in_range, score.crew_factor)
+	DevStats.report(&"room_claims_sent", score.claims_sent)
+	DevStats.report(&"room_claims_rejected", score.claims_rejected)
+	DevStats.report(&"room_score_offset", score.pending_offset)
+
+
+func _set_score_offset(points: int) -> void:
+	var h := run.hud as Hud
+	if h != null:
+		h.set_score_offset(points)
+
+
+func _on_train(link: int, points: int) -> void:
+	if hud != null:
+		hud.show_train(link)
+	var h := run.hud as Hud
+	if h != null:
+		h.push_event(RoomHud.TEXT_TRAIN % link, Hud.PLUS + HudFormat.thousands(points), HudEventStack.Role.GOLD)
+
+
+func _on_crew_train(player_id: int, link: int) -> void:
+	var m := session.room.member(player_id)
+	if hud != null and m != null:
+		hud.add_feed(m.full_name(), RoomHud.TEXT_TRAIN % link, _crew_color(m))
+
+
+func _on_sector_bonus(kind: StringName, points: int, _sector: int) -> void:
+	var h := run.hud as Hud
+	if h != null:
+		h.push_event(String(kind).to_upper(), Hud.PLUS + HudFormat.thousands(points), HudEventStack.Role.GOLD)
+
+
+## XP for an official run (spec: the garage's driver level from the banked score; MP-D9
+## left room runs without it until N6), once per run, as single-player does (record_best).
+func _award_xp(run_seq: int, official: int, threads: int) -> void:
+	if run_seq == _xp_run_seq:
+		return
+	_xp_run_seq = run_seq
+	if run.record_best:
+		Garage.award_room_run(official, threads)
+
+
+## Leaving mid-run: the room's run_result does not reach a client that left, so the run's
+## XP comes from the last official banked total (score_sync).
+func _award_left_run() -> void:
+	if score.official_run_seq >= 0 and score.official_run_seq != _xp_run_seq and not crashed:
+		_award_xp(score.official_run_seq, score.official_banked, 0)
 
 
 func _crew_color(m: NetRoomMember) -> Color:
@@ -448,7 +624,10 @@ func _crew_color(m: NetRoomMember) -> Color:
 const DEMO_MEMBERS: Array = [["Dusty", 1234, "WB", 0], ["Kai", 55, "JDM", 1], ["NightOwl", 420, "", 2],
 	["Mara", 9, "WB", 0], ["Rook", 7777, "JDM", 1], ["Vega", 31, "", 3], ["Ash", 808, "WB", 0]]
 ## Demo cars around yours: metres ahead, lanes to the right (one within 15 m: translucent).
-const DEMO_OFFSETS: Array = [[9.0, 1], [34.0, -1], [62.0, 0], [115.0, 1], [170.0, -1], [230.0, 0], [290.0, 1]]
+## N6.2: Mara (the second crewmate) 22 m behind: two crewmates within 30 m with --remotes=4+.
+const DEMO_OFFSETS: Array = [[9.0, 1], [34.0, -1], [62.0, 0], [-22.0, 1], [170.0, -1], [230.0, 0], [290.0, 1]]
+## N6.2: the demo crew's session total (snaps).
+const DEMO_CREW_TOTAL := 48250
 const DEMO_TICK := 1000
 const DEMO_YOU := 7
 const DEMO_BACK_TICKS := 4
@@ -457,7 +636,9 @@ const DEMO_CREWS := 4
 
 ## Dev (snaps, `--room=demo`): the run drives in a room without a server: `--remotes=N`
 ## (default 3) players around the car, a quick chat on the second one's nametag,
-## `--room_toast=1` the crash-out toast, `--room_menu=chat|players` the room menu open.
+## `--room_toast=1` the crash-out toast, `--room_menu=chat|players` the room menu open;
+## N6.2: `--train=N` a TRAIN ×N link (badge and event stack), `--sector=clean` an official
+## sector bonus on the event stack.
 static func snap_room(r: Run, args: Dictionary) -> void:
 	var nt := NetTuning.load_default()
 	var road := r.loop.road
@@ -472,7 +653,7 @@ static func snap_room(r: Run, args: Dictionary) -> void:
 		"crew_tag": "WB", "crew_slot": 0, "flags": {"host": n == 0, "disconnected": false}})
 	var crews: Array[Dictionary] = []
 	for slot in DEMO_CREWS:
-		crews.append({"crew_slot": slot, "color": slot, "session_total": 0})
+		crews.append({"crew_slot": slot, "color": slot, "session_total": DEMO_CREW_TOTAL if slot == 0 else 0})
 	var lt := r.loop.tuning
 	rs.enter_demo({"room_id": 1, "code": "K7QX2M", "you": DEMO_YOU, "tick": DEMO_TICK,
 		"settings": {"visibility": "private", "max_players": nt.room_max_remotes + 1, "density": "normal",
@@ -504,8 +685,17 @@ static func snap_room(r: Run, args: Dictionary) -> void:
 	if n > 1:
 		r.room.hud.add_feed(rs.room.member(1).full_name(), NetRoomChat.PHRASE_TEXT[0], nt.room_crew_colors[1])
 	if str(args.get("room_toast", "")) == "1":
-		r.room.hud.show_result({"player_id": DEMO_YOU, "score": 0, "distance_m": 4210, "duration_ms": 131000,
-			"flags": {"verified": true, "leaderboard_eligible": true}}, 48250)
+		r.room.hud.show_result({"player_id": DEMO_YOU, "score": 48250, "distance_m": 4210, "duration_ms": 131000,
+			"flags": {"verified": true, "leaderboard_eligible": true}})
+	var train := int(args.get("train", 0))
+	if train > 0:
+		for k in train - 1:
+			r.room.score.on_message({"type": "score_event", "tick": DEMO_TICK, "player_id": DEMO_YOU, "kind": "train",
+				"points": 25 * (k + 2), "multiplier_gain_milli": 2000, "link": k + 2, "sector": 0, "ref_id": 41})
+	var sector := str(args.get("sector", ""))
+	if not sector.is_empty():
+		r.room.score.on_message({"type": "score_event", "tick": DEMO_TICK, "player_id": DEMO_YOU,
+			"kind": "sector_" + sector, "points": 5000, "multiplier_gain_milli": 0, "link": 0, "sector": 2, "ref_id": 0})
 	match str(args.get("room_menu", "")):
 		"chat":
 			r.room.hud.menu.open(RoomMenu.Tab.CHAT)

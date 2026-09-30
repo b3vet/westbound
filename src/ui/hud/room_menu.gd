@@ -8,7 +8,8 @@ extends Control
 ## docs/ROOMS_CLIENT.md → Room HUD. WP N5.2.
 ##
 ## Two tabs on one panel: CHAT (a 3 x 3 grid: the six phrases, HONK, two emotes) and
-## PLAYERS (a button per other player, a tap mutes / unmutes them; LEAVE ROOM). Every
+## PLAYERS (a button per other player, a tap mutes / unmutes them; LEAVE ROOM; N6.2: the
+## session crew total beside it, spec: "shown in the room menu"). Every
 ## button is a ScreenButton at least touch_target_px tall: emulated mouse events, never a
 ## raw touch index. Emits intents only; RoomHud forwards them. Built once; hidden =
 ## `visible = false`.
@@ -33,6 +34,7 @@ const TEXT_SUB := "%s  ·  %s  ·  %s"
 const TEXT_PRIVATE := "PRIVATE"
 const TEXT_PUBLIC := "PUBLIC"
 const TEXT_WAIT := "WAIT"
+const TEXT_CREW_TOTAL := "CREW TOTAL %s"
 ## Grid columns (chat) and player columns.
 const CHAT_COLS := 3
 const PLAYER_COLS := 2
@@ -52,6 +54,8 @@ var chat_tab: ScreenButton
 var players_tab: ScreenButton
 var close_button: ScreenButton
 var leave_button: ScreenButton
+## N6.2: the session crew total (PLAYERS, beside LEAVE ROOM).
+var crew_total: ScreenText
 var chat_buttons: Array[ScreenButton] = []
 var player_buttons: Array[ScreenButton] = []
 ## Player id per player button (-1 = unused).
@@ -94,6 +98,9 @@ func _init() -> void:
 	player_ids.resize(NetCodec.MAX_ROOM_PLAYERS)
 	player_ids.fill(-1)
 	leave_button = _button(TEXT_LEAVE, ScreenButton.Kind.DANGER, leave_pressed.emit)
+	crew_total = ScreenText.make("", ScreenText.Face.LABEL, 20, ScreenText.Ink.GOLD)
+	crew_total.name = "CrewTotal"
+	panel.add_child(crew_total)
 
 
 func _button(label: String, kind: ScreenButton.Kind, action: Callable) -> ScreenButton:
@@ -144,6 +151,7 @@ func show_tab(which: Tab) -> void:
 	for i in player_buttons.size():
 		player_buttons[i].visible = which == Tab.PLAYERS and player_ids[i] >= 0
 	leave_button.visible = which == Tab.PLAYERS
+	crew_total.visible = which == Tab.PLAYERS
 	_layout()
 
 
@@ -160,6 +168,8 @@ func refresh() -> void:
 	if r.version == _version:
 		return
 	_version = r.version
+	var me := r.me()
+	crew_total.text = TEXT_CREW_TOTAL % HudFormat.thousands(int(r.crew_totals.get(me.crew_slot, 0)) if me != null else 0)
 	title.text = TEXT_ROOM % r.code
 	sub.text = TEXT_SUB % [TEXT_PUBLIC if r.is_public() else TEXT_PRIVATE, r.density.to_upper(),
 		r.time_mode.to_upper()]
@@ -264,6 +274,9 @@ func _layout() -> void:
 		k += 1
 	leave_button.size = Vector2(cw, th)
 	leave_button.position = Vector2(pad, top + float(rows) * (th + g))
+	var cs := crew_total.get_combined_minimum_size()
+	crew_total.size = cs
+	crew_total.position = Vector2(pad + cw + g, leave_button.position.y + (th - cs.y) * 0.5)
 
 
 ## The header's tab and close buttons: a share of the panel's inner width each.
