@@ -99,9 +99,9 @@ Everything in the Findings below is fixed (DETERMINISM.md): the simulation's tra
 
 | Driver | Seconds | Result | Wall (no export) |
 | --- | --- | --- | --- |
-| `script` | 300 | **IDENTICAL 300 / 300 s** (score 17,088, 64 hits, 27 cars; `DT libm` differs on 8 functions, `DT detmath` identical, `VehicleParams` 46 / 46) | 4 min 8 s |
-| `bot` | 300 | **IDENTICAL 300 / 300 s** (score 12,856, 1 hit, 49 cars at 12.1 km) | 3 min 30 s |
-| `bot --replay` | 300 | **IDENTICAL 300 / 300 s**, and the two replays are byte-identical (41,267 bytes): the native verifier accepts both (`playback=resim`, recomputed 12,856 = claimed). A web client's replay verified by the native server-side verifier | web 112 s (quiet box) |
+| `script` | 300 | **IDENTICAL 300 / 300 s** (score 28,278, 47 hits, 25 cars; `DT libm` differs on 8 functions, `DT detmath` identical, `VehicleParams` 46 / 46) | 4 min 31 s |
+| `bot` | 300 | **IDENTICAL 300 / 300 s** (score 12,856, 1 hit, 49 cars at 12.1 km; before the final merge) | 3 min 30 s |
+| `bot --replay` | 300 | **IDENTICAL 300 / 300 s**, and the two replays are byte-identical (50,551 bytes): the native verifier accepts both (`playback=resim`, recomputed 20,948 = claimed). A web client's replay verified by the native server-side verifier | 4 min 40 s (web 112 s on a quiet box) |
 
 (Linux x86-64 headless debug build vs the web release build in headless Chromium, on a shared 4-core box at load 7–8.) **Gate M8 is met bit for bit** for native vs wasm; phones are expected to match (no FMA contraction in the official iOS / Android templates; DETERMINISM.md) but were not measured.
 

@@ -90,12 +90,14 @@ Honest runs (`soak_long_honest_runs_are_all_accepted`, verified on this machine;
 
 | Driver | Seed | Car | Driven | Hits | Input rows | Replay | Per 10 min | Verdict | Score (recomputed = claimed) | Verify |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| weaving, boosting bot | 20260929 | falcon_gt | 639 s (crash) | 2 | 76,395 | 86.9 KB | 79.7 KB | accepted | 51,762 | 66 s |
-| PassabilityDriver | 20260929 | night_viper | 660 s | 0 | 79,053 | 86.0 KB | 76.4 KB | accepted | 54,757 | 63 s |
-| weaving, boosting bot | 424242 | night_viper | 660 s | 0 | 77,912 | 97.3 KB | 86.4 KB | accepted | 49,327 | 58 s |
-| PassabilityDriver | 424242 | brute_v8 | 660 s | 0 | 35,783 | 42.3 KB | 37.6 KB | accepted | 51,977 | 64 s |
-| weaving, boosting bot | 9001 | brute_v8 | 660 s | 0 | 44,715 | 65.1 KB | 57.8 KB | accepted | 43,776 | 63 s |
-| PassabilityDriver | 9001 | falcon_gt | 660 s | 0 | 79,200 | 77.3 KB | 68.6 KB | accepted | 45,960 | 63 s |
+| weaving, boosting bot | 20260929 | falcon_gt | 660 s | 0 | 78,973 | 68.6 KB | 60.9 KB | accepted | 52,107 | 64 s |
+| PassabilityDriver | 20260929 | night_viper | 660 s | 0 | 79,053 | 79.8 KB | 70.9 KB | accepted | 45,941 | 60 s |
+| weaving, boosting bot | 424242 | night_viper | 660 s | 0 | 77,891 | 87.9 KB | 78.0 KB | accepted | 52,105 | 59 s |
+| PassabilityDriver | 424242 | brute_v8 | 660 s | 0 | 79,200 | 40.8 KB | 36.2 KB | accepted | 52,023 | 59 s |
+| weaving, boosting bot | 9001 | brute_v8 | 660 s | 0 | 68,711 | 55.3 KB | 49.1 KB | accepted | 49,195 | 64 s |
+| PassabilityDriver | 9001 | falcon_gt | 660 s | 0 | 79,200 | 66.6 KB | 59.1 KB | accepted | 48,999 | 64 s |
+
+(The final tree, after merging the integration branch. An earlier run of the same soak, before the director's batch fix, also accepted 6 of 6, one of them a 639 s run that ended at its crash with 2 hits.)
 
 **6 of 6 honest runs accepted** (N8.1: 0 of 5), every sample re-simulated exactly, every traffic fingerprint matched, the score exactly the client's. `PassabilityDriver` (`tests/verifier/passability_driver.gd`) is the reacting driver: every 0.5 s it runs `Passability.check_player` from the car's exact state, takes the path toward a random preferred lane and steers the real car along it (SandboxBot's cascade), so a 1-ulp difference anywhere would flip its decisions within seconds. The five N8.1 soak runs (`soak_five_honest_bot_runs`) are also all accepted re-simulated. Tampering: edited samples (teleport, lane jump) and edited inputs are `path_mismatch`; inputs out of range `malformed`; the kinematic playback still catches the teleport and the lateral speed by its physics limits. A Daily replay is now verified on its own date's seed (the N8.1 verifier left `daily_date` empty, so a Daily replay would have been re-run on the verifier's today); a date that does not give the run's seed is `seed_mismatch`.
 
@@ -105,9 +107,9 @@ Honest runs (`soak_long_honest_runs_are_all_accepted`, verified on this machine;
 
 | Driver | Result | WP8.4 before |
 | --- | --- | --- |
-| `script` (open-loop inputs) | **IDENTICAL, 300 of 300 s** bit for bit (score 17,088, 64 hits, 27 cars at 300 s) | 18 s, then the car's bits drifted |
-| `bot` (SandboxBot, closed loop) | **IDENTICAL, 300 of 300 s** (score 12,856, 1 hit, 49 cars at 12.1 km) | 19 s, traffic another traffic from 26 s |
-| `bot --replay` (each side records its replay with the run's real lives; the **native verifier re-simulates the web client's replay**) | **IDENTICAL 300 of 300 s; both replays byte-identical (41,267 bytes) and accepted** by the native verifier (recomputed 12,856 = claimed, `playback=resim`) | (no replays) |
+| `script` (open-loop inputs) | **IDENTICAL, 300 of 300 s** bit for bit (score 28,278, 47 hits, 25 cars at 300 s) | 18 s, then the car's bits drifted |
+| `bot` (SandboxBot, closed loop) | **IDENTICAL, 300 of 300 s** (score 12,856, 1 hit, 49 cars at 12.1 km; measured before the final merge) | 19 s, traffic another traffic from 26 s |
+| `bot --replay` (each side records its replay with the run's real lives; the **native verifier re-simulates the web client's replay**) | **IDENTICAL 300 of 300 s; both replays byte-identical (50,551 bytes) and accepted** by the native verifier (recomputed 20,948 = claimed, `playback=resim`) | (no replays) |
 
 The `DT libm` probe still differs on 8 of 10 functions (the platform libraries are what they were); the new `DT detmath` probe is identical on all 10, and the car's `VehicleParams` are identical (46 of 46; `cap_time_s` differed before). Wall time without the export: the web side of a 300 s run takes 112 s on a quiet box (boot included) and 170–210 s at load 7–8, the native side 30 s, a verification about 30 s. For CI (≤ 3 min wall) the handoff proposes `--seconds=180` (about 1.5–2.5 min).
 

@@ -107,7 +107,7 @@ Integers are varints: unsigned LEB128 (7 bits per byte, low first, high bit = mo
 | Run | Bytes | Per 10 minutes |
 | --- | --- | --- |
 | N8.1: five 4-minute weaving, boosting bot runs in real traffic (soak, no inputs) | 14–22 KB | 35–54 KB |
-| N8.2: six 10.6–11-minute honest runs, the weaving bot and PassabilityDriver (both steer on every tick; 36k–79k input rows) | 42–97 KB | **38–86 KB** |
+| N8.2: six 11-minute honest runs, the weaving bot and PassabilityDriver (both steer on every tick; 69k–79k input rows) | 41–88 KB | **36–78 KB** |
 | N8.2 synthetic: 10 minutes of tilt steering as GyroControl makes it (a noisy reading per 60 Hz frame, filtered every tick: 22k input rows; fast tier) | 64 KB | 64 KB |
 | N8.2 adversarial: fresh noise on every tick, unfiltered (no control produces it; soak, printed) | 151 KB | 151 KB |
 
@@ -189,7 +189,7 @@ The claims and the seed are the server's (the run row); left out, the header's. 
 
 ## Honest replays (measured)
 
-**N8.2: 100 % of honest replays accepted.** With the input stream the verifier re-simulates the run bit for bit (DETERMINISM.md → Replays). Six honest runs of 10.6–11 minutes (`soak_long_honest_runs_are_all_accepted`: the weaving, boosting bot and the reacting PassabilityDriver on seeds 20260929, 424242 and 9001, three cars): **6 of 6 accepted**, every sample exact, every traffic fingerprint matched, the recomputed score equal to the claim (0.000 %), 58–66 s to verify each (about 10× real time). The five N8.1 runs below are accepted too when re-simulated (`soak_five_honest_bot_runs`). A web (wasm) client's replay verified by the native verifier: DETERMINISM.md → Cross-platform.
+**N8.2: 100 % of honest replays accepted.** With the input stream the verifier re-simulates the run bit for bit (DETERMINISM.md → Replays). Six honest runs of 11 minutes (`soak_long_honest_runs_are_all_accepted`: the weaving, boosting bot and the reacting PassabilityDriver on seeds 20260929, 424242 and 9001, three cars): **6 of 6 accepted**, every sample exact, every traffic fingerprint matched, the recomputed score equal to the claim (0.000 %), 59–64 s to verify each (about 10× real time). The five N8.1 runs below are accepted too when re-simulated (`soak_five_honest_bot_runs`). A web (wasm) client's replay verified by the native verifier: DETERMINISM.md → Cross-platform.
 
 The rest of this section is the N8.1 measurement, which still describes the **kinematic playback** (replays without inputs).
 
