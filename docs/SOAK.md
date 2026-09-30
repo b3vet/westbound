@@ -395,6 +395,50 @@ On the way (each a full 1,000 km canyon soak or a 2,000 km all-pieces soak, the 
 
 WP6.3's all-pieces soak had 195 collision pairs and 1 impossible window in its canyon runs (docs/SET_PIECES.md); the intermediate WP6.8 all-pieces soaks had 0 collisions and 1–3 traffic windows (a toll's booth traffic merging into a drop, a two-lane tunnel slow wall, the bot's forced exit), fixed as above.
 
+## WP6.11: the MP-D5 lane-drop queue safety in single-player
+
+WP6.11 ported the server's three safety extensions (look-through, predicted braking leaders, anticipation; docs/TRAFFIC.md, *Lane-drop queue safety*) into `TrafficSim`, on by default. Before = the integration branch at WP6.11's start (d707ed0), after = the final WP6.11 tree (merged with N4.2), same seeds, the 4-core container shared with other agents (load 6-10), `nice`.
+
+**Canyon** (`tools/soak.sh --km=500 --shards=4 --canyon`, 18 runs, 504 km, 3.8 simulated hours each; plus a second seed with `--seed=20261001 --no-windows`):
+
+| | Before | After | Second seed: before / after |
+| --- | --- | --- | --- |
+| Gates (collisions, signal, unsignaled, no-ambush, decel, brake flags, rear-end of a normal player, impossible (traffic), off-road, closed areas) | all 0, GATE PASSED | **all 0, GATE PASSED** | all 0 / all 0 |
+| Impossible windows | 0 | 0 | (not checked) |
+| `standstill_beside_fast` | 28 (3 runs) | **0** | 0 / 60 (3 runs) |
+| Signals / cancels (unsafe) | 14,163 / 575 (431) | 13,974 / 646 (502) | 13,557 / 488 → 13,844 / 693 |
+| Mandatory merges | 2,126 | 2,173 | 2,071 / 2,116 |
+| Density per km per lane, lane changes per vehicle-minute | 10.83, 1.534 | 10.75, 1.510 | 10.50, 1.520 / 10.69, 1.526 |
+| Peak active, bot checks without a path | 70, 2 | 70, 2 | |
+
+So over 1,008 km of canyon the standstill samples are 28 before and 60 after, each a platoon at the end of a dropping lane (15-30 one-second samples per event, 3 events each way); WP6.8 measured 71 per 1,008 km on its tree. **On the way:** N4.1's version of the prediction (every new leader, not only braking ones, with the ordinary IDM parameters) gave 109 and 22 (131 per 1,008 km, 8 events) and more cancels; each of its three flags alone gave 27 (prediction), 38 (look-through), 0 (anticipation) on the first seed. WP6.11 changed the prediction to braking leaders and to the car's own IDM (TRAFFIC.md), which brought it back.
+
+**All pieces** (`tools/soak.sh --km=500 --shards=4 --all-pieces`, 18 runs: 280 km on 3 lanes, 112 on 2, 112 on 4):
+
+| | Before | After |
+| --- | --- | --- |
+| Gates | all 0, GATE PASSED | **all 0, GATE PASSED** |
+| Impossible windows | 1, player-induced (contact at t0) | 1, player-induced |
+| Contacts with the player | 1 episode (1 rear-end, 0 of a normally driving player) | 2 episodes (1 rear-end, 0 of a normally driving player) |
+| `standstill_beside_fast` | 12 | 31 (3 lanes) |
+| Signals / cancels / merges | 13,772 / 708 / 574 | 13,893 / 777 / 612 |
+| Set pieces spawned / passed / unmet | 85 / 67 / 0 | 88 / 64 / 2 |
+| Bot checks without a path | 5 | 21 |
+
+**Density at leg 8** (the D11 survey, `--density --lanes=3,4 --legs=8 --profile=scripted --run-legs=4`; its procedural road has no lane drops), window density per km per lane:
+
+| | 4 seeds: before → after | 8 seeds: before → after |
+| --- | --- | --- |
+| 3 lanes | 15.35 (85 %) → 13.49 (75 %) | 15.33 (85 %) → **14.53 (81 %), −5.2 %** |
+| 4 lanes | 15.44 (86 %) → 15.71 (87 %) | 15.20 (84 %) → **15.73 (87 %), +3.5 %** |
+| Traffic speed per lane, 3 lanes (8 seeds) | | [142, 128, 105] → [143, 129, 111] km/h |
+
+The 4- and 8-seed cells differ by up to 7 %, so the survey's chaos at this size is several percent; the 8-seed numbers are the better estimate: fewer vehicles in the 3-lane window (the right lane flows faster), more on 4 lanes. WP6.9 took −0.2 % and dropped variants at −5 to −8 %; this one is a safety change the orchestrator decided (MP-D5), so it is reported, not tuned away.
+
+**Tick cost** (the soak's own `sim_usec_per_tick`, before and after run side by side twice, 4 legs each, `--no-windows`): canyon runs 2 and 6 **+7 to +10 %** (200 → 214-217 µs, 180-185 → 193-203 µs, the same vehicle counts); farmland runs 0 and 1 +21 to +29 % per tick with 3-13 % more vehicles in the window, **+12 to +23 % per vehicle**. The D11 survey (side by side): 3 lanes 341 → 360 µs (+6 %), 4 lanes 417 → 452 µs (+8 %). The calls are guarded so the common case (a leader in lane, not braking) costs a branch; what is left is `_predicted_leaders_safe` in MOBIL's checks (every signalling car every model tick) and the anticipation behind braking leaders.
+
+**The metrics baseline was rewritten** (`tools/soak.sh --update-baseline`): the model change moves all 16 reference traces, and `set_pieces_per_leg` went from 4 to 3 pieces in 128 legs (0.0312 → 0.0234, −25 %, beyond the ±15 % gate for a count that small). The rest moved by less than 5 %: density 10.32 → 10.64 per km per lane (+3.1 %), gaps 8.70 → 9.05 per km (+4.0 %), lane changes 1.319 → 1.255 per vehicle-minute (−4.8 %), lane speeds 141.0 / 129.0 / 113.8 → 142.3 / 128.4 / 115.0 km/h.
+
 ## WP6.1 after the WP6.2 merge (the final soak)
 
 WP6.2 changed the traffic (intensity waves, set pieces, lane drops), so the WP6.1 gate was run again on the merged tree, same seed (20260928) and `tools/soak.sh --km=10000 --shards=4`. The classification rule is unchanged (pre-registered above).

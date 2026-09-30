@@ -27,8 +27,10 @@ extends SpawnSource
 ## from the last tick, then IDM toward its leader (the same leader search by lateral
 ## overlap as TrafficSim, the local player included as a participant, the profile's
 ## parameters, the leg's headway scale and the racers' weaving T / s0 / b toward traffic),
-## the road's lane-drop harmonisation zones (WP6.8, mirrored), the brake tap when the
-## player cuts in, hard brakes and the clamp. It runs up to the
+## the road's lane-drop harmonisation zones (WP6.8, mirrored), the MP-D5 lane-drop queue
+## safety on the following side (WP6.11: looking through a leader that signals or moves out
+## of the path, from its intent; braking for a leader's stopping point), the brake tap when
+## the player cuts in, hard brakes and the clamp. It runs up to the
 ## integer part of `server_now()`; the published state is that tick's state carried
 ## ballistically to the fraction, so it moves smoothly between ticks and matches the
 ## server's discrete trajectory when the model agrees. MOBIL, lane splitting, lane-drop
@@ -84,6 +86,8 @@ var _cid := PackedInt32Array()
 var _ms := PackedFloat64Array()
 var _mv := PackedFloat64Array()
 var _ma := PackedFloat64Array()
+var _ma_held := PackedFloat64Array()  # the acceleration this model tick integrated with (the server's
+                                      # state.accel of a leader when its followers are evaluated)
 var _base_d := PackedFloat64Array()   # lateral position outside a lane change
 var _v0e := PackedFloat64Array()      # estimated desired speed
 var _bias := PackedFloat64Array()     # estimated unexplained acceleration
@@ -207,6 +211,8 @@ var _v_merge: float
 var _sync_lead: float
 var _sync_len: float
 var _sync_back: float
+var _look_through := false   # MP-D5 (TrafficTuning.look_through_leaving_leaders)
+var _anticipate := false     # MP-D5 (TrafficTuning.anticipate_leader_braking)
 
 
 func _init(net_tuning: NetTuning, traffic_tuning: TrafficTuning, road_path: RoadPath,
@@ -229,6 +235,7 @@ func _init(net_tuning: NetTuning, traffic_tuning: TrafficTuning, road_path: Road
 	_ms.resize(_cap)
 	_mv.resize(_cap)
 	_ma.resize(_cap)
+	_ma_held.resize(_cap)
 	_base_d.resize(_cap)
 	_v0e.resize(_cap)
 	_bias.resize(_cap)
@@ -506,6 +513,7 @@ func _model_step(out_events: ScoreEventBuffer) -> void:
 		if i == _P:
 			continue
 		var a := _ma[i]
+		_ma_held[i] = a
 		var v := _mv[i]
 		var s := _ms[i]
 		var nv := v + a * dt
@@ -560,6 +568,7 @@ func _accel_pass(advance: bool, out: ScoreEventBuffer) -> void:
 				lead = j
 				break
 			kk += 1
+		var lead_k := kk
 		var free := Idm.free_accel(vi, v0, _pa[p], _pdl[p])
 		var a := free
 		var gap := INF
@@ -571,6 +580,13 @@ func _accel_pass(advance: bool, out: ScoreEventBuffer) -> void:
 			else:
 				a = Idm.accel(vi, v0, gap, vi - _kv[lead], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p],
 					_gap_floor)
+			# MP-D5 (TrafficSim._step_accel's order): past a leader leaving the path, the
+			# next one counts too; and the leader's own stopping point.
+			# (The guards skip the calls for a leader in lane and not braking.)
+			if _look_through and lead != _P and _lc[lead] == 1:
+				a = minf(a, _look_through_accel(i, lead, lead_k, lo, hi, vi, v0, p, tk))
+			if _anticipate and ((lead != _P and _ma_held[lead] < 0.0) or _kv[lead] <= 0.0):
+				a = minf(a, _anticipation_accel(lead, gap, vi, p))
 		a = minf(a, drop_a)
 		if advance:
 			_int_sum[i] += free - a
@@ -595,6 +611,65 @@ func _accel_pass(advance: bool, out: ScoreEventBuffer) -> void:
 		if a < -_max_decel:
 			a = -_max_decel
 		_ma[i] = a
+
+
+## TrafficSim._look_through_accel on the physical paths (MP-D5): while the leader `l` (at
+## order position `lk`) signals or moves out of [lo, hi] at tick `tk`, the next vehicle on
+## the path beyond it counts too (the most restrictive IDM acceleration; -INF on overlap).
+func _look_through_accel(i: int, l: int, lk: int, lo: float, hi: float, vi: float, v0: float, p: int,
+		tk: float) -> float:
+	var si := _ks[i]
+	var a := INF
+	var cur := l
+	var kk := lk + 1
+	while _leaving_path(cur, lo, hi, tk):
+		var nxt := -1
+		while kk < _n:
+			var j := _ord[kk]
+			kk += 1
+			if j == i or _ks[j] - si > _look:
+				break
+			if _klo[j] < hi and _khi[j] > lo:
+				nxt = j
+				break
+		if nxt < 0:
+			break
+		var gap := _ks[nxt] - si - _khl[nxt] - _khl[i]
+		if gap <= 0.0:
+			return -INF
+		if _pweave[p] == 1 and nxt != _P:
+			a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _wb[p], _pT[p] * _wTk[p], _ws0[p], _pdl[p],
+				_gap_floor))
+		else:
+			a = minf(a, Idm.accel(vi, v0, gap, vi - _kv[nxt], _pa[p], _pb[p], _pT[p], _ps0[p], _pdl[p], _gap_floor))
+		cur = nxt
+	return a
+
+
+## TrafficSim._anticipation_accel (MP-D5) with the acceleration the leader's model held
+## over this tick (the server's state.accel when it evaluates the follower; the player
+## holds its speed).
+func _anticipation_accel(l: int, gap: float, vi: float, p: int) -> float:
+	var vl := _kv[l]
+	var al := 0.0 if l == _P else _ma_held[l]
+	var stop_l := 0.0
+	if al < 0.0:
+		stop_l = vl * vl / (-2.0 * al)
+	elif vl > 0.0:
+		return INF
+	var room := gap - _ps0[p] + stop_l
+	var a_stop := -(vi * vi) / (2.0 * room) if room > 0.0 else -INF
+	return a_stop if a_stop < -_pb[p] else INF
+
+
+## TrafficSim._leaving_path from the car's intent: a lane change signalled or moving at
+## tick `tk` (the blinker on, not cancelled) whose target body does not overlap [lo, hi].
+func _leaving_path(j: int, lo: float, hi: float, tk: float) -> bool:
+	if j == _P or _lc[j] == 0 or tk < _lc_blink[j] or tk >= _lc_cancel[j]:
+		return false
+	var hw := state.width[j] * 0.5
+	var t := _lc_to[j]
+	return not (t - hw < hi and t + hw > lo)
 
 
 # ---------------------------------------------------------------- Messages
@@ -659,6 +734,7 @@ func _spawn_from(f: NetServerFrame, k: int, frame_tick: int, player_s: float, no
 	_ms[i] = s + v * dt_k
 	_mv[i] = v
 	_ma[i] = 0.0
+	_ma_held[i] = 0.0
 	_base_d[i] = d
 	_lc[i] = 0
 	var phase := f.sp_lc_phase[k]
@@ -728,6 +804,12 @@ func _intent_from(f: NetServerFrame, k: int, now: float) -> void:
 			var after := _lat_at(i, now)
 			corrector.add_offset(i, 0.0, before - after, _visible(i), true, now)
 			stats.unsignaled_lateral += 1
+			# The server's car never left its line: the history from the cancel on must not
+			# hold the move either, or the next correction dated there reads the move as a
+			# lateral error and shifts the car's line by it (WP6.11: an unsignaled 8 cm slide).
+			for t in range(maxi(f.in_start_tick[k], model_tick - corrector.hist_n + 1), model_tick + 1):
+				if corrector.lookup(i, t):
+					corrector.record(i, t, corrector.q_s, corrector.q_v, _lat_at(i, float(t)))
 		INTENT_HAZARD:
 			_haz_until[i] = maxf(_haz_until[i], start + dur_t)
 		INTENT_HORN:
@@ -1262,6 +1344,8 @@ func _cache_tuning() -> void:
 	_tap_s = t.brake_tap_s
 	_cut_in_m = t.cut_in_brake_tap_distance_m
 	_react_cool = t.reaction_cooldown_s
+	_look_through = t.look_through_leaving_leaders
+	_anticipate = t.anticipate_leader_braking
 	var n := net
 	_stale_t = n.traffic_stale_car_s / tick_dt
 	_max_catchup = maxi(n.traffic_max_catchup_ticks, 1)

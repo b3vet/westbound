@@ -150,8 +150,10 @@ fn soak_hour_rush() {
     assert_stable(&soak(Density::Rush, 103, 3600.0));
 }
 
-/// Not a gate: the same rush hour with the server's three safety extensions off (the
-/// GDScript model's rules alone), to measure what they prevent. Prints the counts.
+/// Not a gate: the same rush hour with the three MP-D5 safety extensions explicitly off
+/// (the model before WP6.11 ported them to `traffic_sim.gd`, where they are on by default
+/// too), to measure what they prevent. `SimConfig::multiplayer` takes the switches from
+/// `MpTrafficRules` only, so clearing them here is enough. Prints the counts.
 #[test]
 #[ignore = "diagnostic; one simulated hour"]
 fn soak_hour_rush_without_mp_extensions() {

@@ -401,6 +401,17 @@ func test_cancels_before_and_after_the_move() -> void:
 		prev_d = row[1]
 	near(r.src.state.d[slot], from, EPS, "back in its lane")
 	eq(r.src.stats.late_cancels, 1)
+	# WP6.11: a correction dated after the cancel (the server's car on its line all along)
+	# must not read the abandoned move as a lateral error: the car stays on its line, no
+	# unsignaled slide.
+	check(r.src.corrector.lookup(slot, 125), "tick 125 in the history")
+	near(r.src.corrector.q_d, from, EPS, "the history holds the car's line after the cancel")
+	_apply(r, [{"type": "traffic_correction", "tick": 125, "cars": [_corr_msg(23, r.src.corrector.q_s, from,
+		r.src.corrector.q_v)]}])
+	var unsignaled := r.src.stats.unsignaled_lateral
+	for row: Array in _watch(r, slot, TICK_SUB * 20):
+		near(row[1], from, 0.01, "no lateral shift after the correction (%.2f)" % row[0])
+	eq(r.src.stats.unsignaled_lateral, unsignaled, "no new unsignaled slide")
 
 
 func test_hazard_hard_brake_and_local_hit() -> void:
@@ -694,14 +705,22 @@ func test_client_tick_cost() -> void:
 
 ## 10+ simulated minutes of the loop at the acceptance link (150 ± 30 ms, 2 % loss on the
 ## stream), a weaving player at 150–190 km/h: 0 visible teleports; correction sizes reported
-## and held to the spec's bounds; late intents under 1 per 10 minutes.
+## and held to the spec's bounds; late intents under 1 per 10 minutes. No spawn dropped for
+## the client's capacity while the fake's area holds no more cars than that (MP-D8: beyond
+## it they are dropped and counted; the fake's single-player director can overfill the
+## city's area, which the server's ring at normal density does not: docs/NET_TRAFFIC.md).
 func soak_network_traffic_ten_minutes() -> void:
 	for seed_value: int in [31, 32]:
 		var r := NetTrafficRig.on_loop(seed_value, 500.0, 170.0, true)
 		r.bot.set_weave(3.0, 8.0)
 		var t0 := Time.get_ticks_msec()
-		r.run(630.0)
+		var area_max := 0
+		for k in 630:
+			r.run(1.0)
+			area_max = maxi(area_max, _authority_area_count(r))
 		print("  soak seed %d (%d ms wall): %s" % [seed_value, Time.get_ticks_msec() - t0, r.summary()])
+		print("  soak seed %d: the fake's area held at most %d cars (client capacity %d), %d spawns dropped" % [
+			seed_value, area_max, r.harness.client_state.capacity, r.stats().dropped_full])
 		print("  soak seed %d: blinker lead min %.3f s, unsignaled ticks %d, rig jump max %.4f m, truth after 60 s: median %.3f p99 %.3f" % [
 			seed_value, r.blinker_lead_min_s, r.unsignaled_ticks, r.jump_max_m,
 			r.truth_late.percentile(NetTrafficStats.P50), r.truth_late.percentile(NetTrafficStats.P99)])
@@ -713,4 +732,20 @@ func soak_network_traffic_ten_minutes() -> void:
 		lt(float(s.late_intents), 1.0, "late intents under 1 per 10 minutes")
 		eq(r.unsignaled_ticks, 0)
 		eq(r.harness.authority.move_tick_mismatches, 0)
-		eq(s.dropped_full, 0)
+		if area_max <= r.harness.client_state.capacity:
+			eq(s.dropped_full, 0, "nothing dropped while the area fits the client")
+
+
+## Cars the fake authority has in the client's area (with the hysteresis), sampled.
+func _authority_area_count(r: NetTrafficRig) -> int:
+	var a := r.harness.authority
+	var ts := a.sim.state
+	var p := a.player.s
+	var net := tuning.net
+	var lo := p - net.traffic_aoi_behind_m - net.traffic_aoi_hysteresis_m
+	var hi := p + net.traffic_aoi_ahead_m + net.traffic_aoi_hysteresis_m
+	var n := 0
+	for i in ts.capacity:
+		if ts.active[i] == 1 and ts.s[i] >= lo and ts.s[i] <= hi:
+			n += 1
+	return n

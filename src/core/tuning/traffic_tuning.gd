@@ -128,6 +128,23 @@ extends Resource
 ## or a slow car can no longer hide a fast car behind it.
 @export var mobil_follower_horizon_s: float = 5.0   # not in spec: 1 s signal + 3 s move + 1 s
 
+@export_group("Lane-drop queue safety (MP-D5, WP6.11; not in spec)")
+## Three safety extensions found by the server's rush-hour soaks (N4.1) at lane-drop
+## queues, ported so single-player, the server and the client's network model run one
+## model (docs/TRAFFIC.md, *Lane-drop queue safety*). Off = the model before WP6.11.
+## A leader signalling or moving to a target off the car's path does not hide what is
+## ahead of it: following (IDM) and MOBIL's own-safety check also judge the next vehicle
+## on the path beyond it (a cut-out revealing a stopped queue).
+@export var look_through_leaving_leaders: bool = true   # not in spec
+## MOBIL's own-safety check also judges each new leader extrapolated with its current
+## deceleration to when the car is in the lane (signal time + half the minimum move time),
+## against the car holding its speed (a stale decision behind a leader braking into a queue).
+@export var predict_leader_braking: bool = true   # not in spec
+## When stopping s0 behind the leader's own stopping point (at its current deceleration)
+## needs more than the profile's comfortable b, the follower brakes for it now, never
+## beyond the clamp (a racer closing on a car braking at the clamp into a queue).
+@export var anticipate_leader_braking: bool = true   # not in spec
+
 @export_group("Readable braking")
 @export var brake_light_decel_mps2: float = 1.0
 @export var brake_light_strong_decel_mps2: float = 4.0
