@@ -1,4 +1,5 @@
 # westbound-server configuration: every key with its default value.
+# (Deploys: the Server and Verifier workflows redeploy their Coolify resources; docs/OPERATIONS.md.)
 # Pass a file with `--config path` or `WB_CONFIG=path`; keys it leaves out keep
 # their defaults. Any key can be overridden from the environment as
 # WB_<SECTION>__<KEY> (double underscore), e.g. WB_LIMITS__MAX_CONNECTIONS=200.
