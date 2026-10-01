@@ -71,11 +71,11 @@ if [[ "$template" == *.zip ]]; then
 elif [[ "$template" != official ]]; then
   want_hash="$(tools/web_template/build.sh --hash)"
   if [[ ! -s "$slim_dir/web_nothreads_$mode.zip" ]]; then
-    why="not built (tools/web_template/build.sh$([[ $mode == debug ]] && echo ' --debug'))"
+    why="not built (tools/web_template/build.sh$([[ $mode == debug ]] && echo ' --debug' || true))"
   elif ! grep -q "\"config_hash\": \"$want_hash\"" "$slim_dir/template.json" 2>/dev/null; then
     why="built for another config (rebuild: tools/web_template/build.sh)"
   elif ! tools/godot.sh --headless --path . --script res://tools/web_template/detect_classes.gd -- --check >"$log" 2>&1; then
-    why="the game uses classes it lacks: $(grep -o 'the game uses .*' "$log" | head -3 | tr '\n' ';')"
+    why="the game uses classes it lacks: $(grep -o 'the game uses .*' "$log" | head -3 | tr '\n' ';' || true)"
   else
     use_slim=1
   fi
