@@ -212,7 +212,7 @@ The preview is the real run (`run.tscn`) in the matching state, with the screen 
 
 ## Account (N1.2)
 
-Pause → SETTINGS → ACCOUNT (shown only when an online session exists: web builds and release exports; native dev runs are offline unless `--server=`). The `ProfilePanel` shows `name#tag` and online status, rename with inline server errors, TRY AGAIN / NEW ACCOUNT when signed out or failed, "Sign in with Apple / Google — coming soon" (MP-D2) and DELETE ACCOUNT with a confirm step. See docs/NET_CLIENT.md.
+Pause → SETTINGS → ACCOUNT (shown only when an online session exists: web builds and release exports; native dev runs are offline unless `--server=`). The `ProfilePanel` shows `name#tag` and online status, rename with inline server errors, TRY AGAIN / NEW ACCOUNT when signed out or failed, SIGN IN WITH APPLE / GOOGLE (N11: link or sign in, the signed-in state with the masked address and the unlink confirm, the conflict chooser KEEP THIS DEVICE'S PROGRESS / USE THE CLOUD PROGRESS / CANCEL, the cloud save line) and DELETE ACCOUNT with a confirm step. See docs/NET_CLIENT.md → Sign in with Apple / Google.
 
 ## Leaderboards (N7.2)
 

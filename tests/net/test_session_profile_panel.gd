@@ -101,17 +101,26 @@ func test_shows_name_tag_and_status() -> void:
 	eq(panel.name_edit.max_length, session.tuning.display_name_max_chars)
 
 
-func test_touch_targets_and_coming_soon() -> void:
+func test_touch_targets_and_provider_states() -> void:
 	await _online()
 	for c: Control in [panel.name_edit, panel.save_button, panel.apple_button, panel.google_button,
 			panel.delete_button]:
 		ge(c.size.y, hud.touch_target_px, "%s touch target" % c.name)
 		check(AREA.grow(1.0).encloses(c.get_rect()), "%s inside the area" % c.name)
+	# N11: a native build without the sign-in plugins (headless tests): NOT IN THIS BUILD.
 	for b: ScreenButton in [panel.apple_button, panel.google_button]:
-		check(b.disabled, "%s disabled (MP-D2)" % b.text)
-		eq(b.note, ProfilePanel.TEXT_SOON)
+		check(b.disabled, "%s disabled without a plugin" % b.text)
+		eq(b.note, ProfilePanel.TEXT_NOT_HERE)
+	var before := fake.requests.size()
 	_tap(panel.apple_button)
-	eq(fake.requests.size(), 1, "coming soon: tapping does nothing (only the launch's request)")
+	eq(fake.requests.size(), before, "a disabled provider: tapping does nothing")
+	# A server without the providers set up: NOT SET UP.
+	fake.providers_enabled = {"apple": false, "google": false}
+	await session.load_providers(true)
+	panel.refresh()
+	for b: ScreenButton in [panel.apple_button, panel.google_button]:
+		eq(b.note, ProfilePanel.TEXT_NOT_SET_UP)
+		check(b.disabled)
 
 
 func test_rename_shows_server_errors_inline_and_succeeds() -> void:

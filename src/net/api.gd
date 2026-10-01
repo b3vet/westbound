@@ -31,9 +31,17 @@ const PATH_REFRESH := "/auth/refresh"
 const PATH_LOGOUT := "/auth/logout"
 const PATH_ME := "/me"
 const PATH_ACCOUNT := "/account"
+## N11: Sign in with Apple / Google, cloud save (docs/SERVER.md).
+const PATH_PROVIDERS := "/auth/providers"
+const PATH_NONCE := "/auth/nonce"
+const PATH_SIGNIN := "/auth/signin/"
+const PATH_LINK := "/auth/link/"
+const PATH_UNLINK := "/auth/unlink/"
+const PATH_SAVE := "/save"
 
 const HTTP_BAD_REQUEST := 400
 const HTTP_UNAUTHORIZED := 401
+const HTTP_CONFLICT := 409
 const HTTP_TOO_MANY := 429
 const HTTP_SERVER_ERROR := 500
 const HTTP_OK_MIN := 200
@@ -105,25 +113,77 @@ func delete_account() -> NetApiResult:
 	return await request(HTTPClient.METHOD_DELETE, PATH_ACCOUNT, null, AUTH)
 
 
+# ---------------------------------------------------------------- Identity and cloud save (N11)
+
+## GET /auth/providers: {apple: {enabled, client_id, redirect_uri}, google: {enabled,
+## client_id}, nonce_required, cloud_save: {enabled, max_bytes}}.
+func get_providers() -> NetApiResult:
+	return await request(HTTPClient.METHOD_GET, PATH_PROVIDERS)
+
+
+## POST /auth/nonce: {nonce, expires_at}.
+func get_nonce() -> NetApiResult:
+	return await request(HTTPClient.METHOD_POST, PATH_NONCE)
+
+
+## The body of a sign-in or link: the provider's ID token, the nonce, Apple's code.
+static func identity_body(id_token: String, nonce: String, authorization_code: String = "") -> Dictionary:
+	var b := {"id_token": id_token, "nonce": nonce}
+	if not authorization_code.is_empty():
+		b["authorization_code"] = authorization_code
+	return b
+
+
+## POST /auth/signin/{provider}: the session fields, `device_secret`, `profile`, `created`.
+## One attempt: an ID token is single-purpose and the player is waiting.
+func provider_sign_in(provider: String, body: Dictionary) -> NetApiResult:
+	return await request(HTTPClient.METHOD_POST, PATH_SIGNIN + provider, body, NO_RETRY)
+
+
+## POST /auth/link/{provider} (bearer): the profile, or 409 `identity_in_use` with
+## `conflict` {provider, current, other}.
+func link_provider(provider: String, body: Dictionary) -> NetApiResult:
+	return await request(HTTPClient.METHOD_POST, PATH_LINK + provider, body, AUTH | NO_RETRY)
+
+
+## POST /auth/unlink/{provider} (bearer): the profile, or `last_sign_in_method` / `not_linked`.
+func unlink_provider(provider: String) -> NetApiResult:
+	return await request(HTTPClient.METHOD_POST, PATH_UNLINK + provider, null, AUTH)
+
+
+## GET /save (bearer): {revision (0 = none), updated_at, bytes, data}.
+func get_save() -> NetApiResult:
+	return await request(HTTPClient.METHOD_GET, PATH_SAVE, null, AUTH)
+
+
+## PUT /save (bearer) with If-Match: {revision, updated_at, bytes}, or 409
+## `revision_conflict` with the server's copy in `save`.
+func put_save(data: Dictionary, revision: int) -> NetApiResult:
+	return await request(HTTPClient.METHOD_PUT, PATH_SAVE, {"data": data}, AUTH,
+			PackedStringArray(["If-Match: \"%d\"" % revision]))
+
+
 # ---------------------------------------------------------------- Core
 
 ## One API call: `body` (a Dictionary, or null for none) is sent as JSON; a
 ## PackedByteArray is sent as is, `application/octet-stream` (the replay upload, N8.1).
-func request(method: int, path: String, body: Variant = null, flags: int = 0) -> NetApiResult:
+func request(method: int, path: String, body: Variant = null, flags: int = 0,
+		extra_headers: PackedStringArray = PackedStringArray()) -> NetApiResult:
 	if base_url.is_empty():
 		return NetApiResult.failure(0, NetApiResult.OFFLINE, "online features are off")
-	var r := await _send(method, path, body, flags)
+	var r := await _send(method, path, body, flags, extra_headers)
 	if (flags & AUTH) != 0 and not r.ok and r.status == HTTP_UNAUTHORIZED \
 			and RENEWABLE.has(r.error) and refresh_access.is_valid():
 		var refreshed: bool = await refresh_access.call()
 		if refreshed:
-			var again := await _send(method, path, body, flags)
+			var again := await _send(method, path, body, flags, extra_headers)
 			again.attempts += r.attempts
 			return again
 	return r
 
 
-func _send(method: int, path: String, body: Variant, flags: int) -> NetApiResult:
+func _send(method: int, path: String, body: Variant, flags: int,
+		extra_headers: PackedStringArray = PackedStringArray()) -> NetApiResult:
 	var url := base_url + path
 	var raw := body is PackedByteArray
 	var body_text := "" if body == null or raw else JSON.stringify(body)
@@ -131,6 +191,7 @@ func _send(method: int, path: String, body: Variant, flags: int) -> NetApiResult
 	var attempt := 0
 	while true:
 		var headers := PackedStringArray(["Accept: application/json"])
+		headers.append_array(extra_headers)
 		if raw:
 			headers.append("Content-Type: application/octet-stream")
 		elif body != null:

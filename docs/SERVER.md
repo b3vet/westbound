@@ -127,7 +127,8 @@ N10.3 adds housekeeping for the small data volume (see "Housekeeping (N10.3)" an
 | `GET /api/v1/echo-check` | public | A small HTML page, used to check a phone (see "Verify a phone connects"): runs the echo on `/ws/echo`, then sends a token-less `Hello` to `/ws` and shows the gateway's `Error` (`map_mismatch` or `auth_failed`) |
 | `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files: `deeplinks.dir` wins, else generated from the configured app ids (N9.3), else built-in empty placeholders. See "Invite links and deep links" |
 | `GET /r/{code}` | public | N9.3: the invite page for a room or party code (opens the web build with `?room=<code>`; store links). See "Invite links and deep links" |
-| `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API" |
+| `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API"; N11 Apple / Google: see "Sign in with Apple / Google" |
+| `GET /api/v1/save`, `PUT /api/v1/save` | public | N11 cloud save: see "Cloud save" |
 | `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
 | `POST /api/v1/runs/{run_id}/replay` | public | The replay upload (binary body): see "Replays and verification" |
 | `/api/v1/friends*`, `/api/v1/blocks*`, `/api/v1/presence`, `/api/v1/crews*`, `/api/v1/reports` | public | Friends, blocks, presence, crews, reports: see "Social API" |
@@ -188,6 +189,7 @@ Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` 
   - `0005` (N8.1) turns `replays` into the verification queue (see "Replays and verification → Tables").
   - `0006` (N10.1) creates `shadow_contacts` (see "Load test, shadow collisions and admin stats → Shadow collisions").
   - `0007` (N10.3) moves set-aside replay jobs (`failed` with `"unverifiable": true`) to the new status `set_aside` (see "Replays and verification → The queue").
+  - `0008` (N11) creates `identity_links`, `device_secrets` and `cloud_saves` (see "Sign in with Apple / Google → Tables" and "Cloud save").
 
 Queries written with `sqlx::query!` are checked at compile time against `westbound-server/.sqlx/`, and CI builds with `SQLX_OFFLINE=true`. After you add or change a `query!`, or change the schema, regenerate that data:
 
@@ -353,13 +355,13 @@ More live checks:
 
 ## Accounts API
 
-N1.1 implements device accounts only (MP-D2). All routes are under `/api/v1`, take and return JSON, and are covered by CORS for the web build.
+N1.1 implemented device accounts (MP-D2); N11 adds Sign in with Apple / Google (next section) and per-device credentials. All routes are under `/api/v1`, take and return JSON, and are covered by CORS for the web build.
 
 ### Tokens and secrets
 
 | Thing | Form | Lifetime | Stored as |
 | --- | --- | --- | --- |
-| Device secret | 32 random bytes, base64url (43 chars) | Forever (per account) | HMAC-SHA256 with the server pepper. Returned once, by `POST /auth/device` |
+| Device secret | 32 random bytes, base64url (43 chars) | Forever (per account) | HMAC-SHA256 with the server pepper. Returned once, by `POST /auth/device`; N11: a provider sign-in returns one for that device (`device_secrets`, at most `identity.max_device_secrets` per account, the least recently used dropped) |
 | Access token | JWT HS256. Claims: `sub` (account id string), `iat`, `exp`, `jti`, `ver` (token version), `iss` `westbound`, `aud` `westbound-api` | 1 h | Not stored |
 | Refresh token | 32 random bytes, base64url (43 chars) | 30 days, renewed by each rotation. Single use | SHA-256 |
 
@@ -410,7 +412,7 @@ Every error is JSON:
 | 413 | `body_too_large` | The body is over `http.max_body_bytes` (4 KB) |
 | 415 | `unsupported_media_type` | The body is not `Content-Type: application/json` |
 | 429 | `rate_limited` | With `retry_after_secs` and a `Retry-After` header (exposed to CORS) |
-| 501 | `provider_not_enabled` | Apple / Google routes (MP-D2) |
+| 501 | `provider_not_enabled` | Apple / Google routes while that provider has no client ids (N11) |
 | 500 | `internal` | Details are logged, never returned |
 
 ### Routes
@@ -488,13 +490,12 @@ Every error is JSON:
 - In one transaction, deletes the account, its refresh tokens, its runs, its leaderboard entries and its runs' replays (the replay files go after commit).
 - N9.1, in the same transaction: friendships and requests, blocks both ways, and the crew membership (see "Social API → Account deletion"). Reports are kept with the account's side nulled.
 - Friends watching the account's presence see it go offline at once, and its open WebSocket session is closed (`auth_failed`) without waiting for the ban sweep.
-- Still to come in `accounts::delete`: Apple token revocation (MP-D2).
+- N11, in the same transaction: the cloud save, `identity_links` and `device_secrets`. After the commit, the player's Sign in with Apple grant is **revoked** with Apple when one is stored and the Apple key is configured (best effort, logged; see "Sign in with Apple / Google → Apple revocation"). The admin CLI's `admin delete` does not revoke yet (it has no HTTP client): an open item.
 - Logs `account_delete` to `admin_log` with the account id and row counts only.
 
-**`POST /api/v1/auth/link/{apple,google}`, `POST /api/v1/auth/signin/{apple,google}`**
+**`POST /api/v1/auth/device/login`** also accepts a device secret from `device_secrets` (N11: a provider sign-in on another device).
 
-- Response `501 provider_not_enabled` until MP-D2.
-- The `apple_sub` / `google_sub` columns are already in the schema.
+**Apple / Google** (`/auth/providers`, `/auth/nonce`, `/auth/signin/{provider}`, `/auth/link/{provider}`, `/auth/unlink/{provider}`): see the next section.
 
 ### Profanity filter
 
@@ -523,7 +524,9 @@ Rate limits use `tower_governor`. Each bucket refills evenly over its window, wi
 | Routes | Key | Default |
 | --- | --- | --- |
 | `POST /auth/device` | client IP | 5 per hour, burst 5 |
-| other `/auth/*` | client IP | 30 per minute, burst 10 |
+| other `/auth/*` (incl. N11 `providers`, `nonce`, `signin/*`) | client IP | 30 per minute, burst 10 |
+| N11 `POST /auth/link/*`, `/auth/unlink/*`, `GET /save` | account | under the account limit below |
+| N11 `PUT /save` (also) | account | `cloud_save.writes_per_hour` 120, burst 30 |
 | `/me`, `/account`, `/boards/*`, `/runs*`, the social routes (and later authenticated routes) | account | 120 per minute, burst 30 |
 | `POST /runs`, `POST /runs/legacy` (also) | account | 30 per hour, burst 10 |
 | `POST /friends/requests`, `POST /blocks`, `POST /crews`, `POST /crews/join`, `POST /reports` (also) | account | 60 per hour, burst 20 |
@@ -574,6 +577,135 @@ westbound-server admin remove-entry journey 2026-W40 42
 
 - `config/dev.toml` sets `server.env = "dev"`, so no secrets are needed.
 - The Docker image defaults to `production`. For `deploy/local-tls.sh` and `docker compose`, pass `WB_SERVER__ENV=dev`, or real `WB_AUTH__JWT_SECRET` and `WB_AUTH__DEVICE_SECRET_PEPPER` values.
+
+## Sign in with Apple / Google (N11)
+
+WP N11, in `crates/server/src/identity/`: `mod.rs` (the verifier, `Identity`), `jwks.rs` (the providers' keys), `nonce.rs`, `apple.rs` (client secret, code exchange, revocation), `seal.rs` (tokens at rest), `store.rs` (the tables), `routes.rs`. Spec: multiplayer handoff → "Accounts and authentication" (Sign in with Apple / Google; account deletion with Apple revocation); plan MP-D2. The owner's setup: OPERATIONS.md → "Sign in with Apple / Google". Tests: `tests/identity.rs` (a fake provider on loopback: a JWKS issuer signing with test-only keys in `tests/data/idp_rsa_{a,b}.der`, Apple's token and revoke endpoints checking the client secret against `apple_test_key.p8`).
+
+**Off until configured.** A provider is enabled when its client ids are set (`identity.google_client_ids`, `identity.apple_client_ids`). Without them every route for it answers `501 provider_not_enabled` (MP-D2's shape), and `GET /auth/providers` says `enabled: false`.
+
+### ID tokens
+
+The client gets an ID token (a JWT) from the provider's own sheet and sends it with the nonce. The server accepts it only when:
+
+- it is RS256-signed by a key in the provider's JWKS (`identity.google_jwks_url`, `identity.apple_jwks_url`; see "Keys");
+- `iss` is the provider (`identity.google_issuers`: both `https://accounts.google.com` and `accounts.google.com`; `identity.apple_issuer`);
+- `aud` is one of that provider's client ids (web, iOS, Android); a list `aud` needs one of them;
+- `exp` is in the future and `iat` not in the future, on the server clock with `identity.clock_skew_secs` (60 s) of leeway;
+- `nonce` is a nonce this server issued (`POST /auth/nonce`), unexpired (`identity.nonce_ttl_secs`, 600 s), and the token's `nonce` claim is it or its SHA-256 (hex or base64url: Apple's native convention). Required unless `identity.require_nonce = false`;
+- `sub` is non-empty (at most 255 bytes) and the token at most `identity.max_id_token_bytes`.
+
+**Email.** Neither the address nor the name is stored. A masked hint (`j***@gmail.com`) is kept for the account screen when the address is verified; Apple's `email_verified` / `is_private_email` may arrive as booleans or as `"true"` / `"false"`, and a Hide My Email address (`…@privaterelay.appleid.com` or `is_private_email`) shows as "private email" with no hint.
+
+**Nonces** are stateless: `base64url(16 random bytes ‖ expiry ‖ 16-byte HMAC)` under a key derived from the pepper. They are not single-use: the conflict flow sends the same token to `/link` and then `/signin`.
+
+### Keys (JWKS)
+
+Fetched with `reqwest` (rustls, bundled roots), cached for the response's `Cache-Control: max-age` clamped to `identity.jwks_cache_min_secs ..= jwks_cache_max_secs` (5 min to 24 h). An unknown `kid` (key rotation) refetches at most once per `identity.jwks_refetch_min_secs` (60 s), so made-up kids cannot become a stream of fetches. When a fetch fails, the old keys keep working (stale-if-error) and the next try waits the same interval; with no usable key the answer is `503 provider_unavailable`, never "invalid token". Outbound calls time out after `identity.http_timeout_ms` and never follow redirects.
+
+### Routes
+
+**`GET /api/v1/auth/providers`** (public): what the client may offer; no secrets.
+
+```json
+{"apple": {"enabled": true, "client_id": "com.sipsakrandevu.westbound.web", "redirect_uri": "https://b3vet.github.io/westbound/"},
+ "google": {"enabled": true, "client_id": "1234-abc.apps.googleusercontent.com"},
+ "nonce_required": true,
+ "cloud_save": {"enabled": true, "max_bytes": 65536}}
+```
+
+**`POST /api/v1/auth/nonce`**: `{"nonce": "…", "expires_at": 1790000600}`.
+
+**`POST /api/v1/auth/signin/{apple,google}`** (no bearer). Body: `{"id_token": "…", "nonce": "…", "authorization_code": "…"}` (the code: Apple only, optional; see "Apple revocation").
+
+- The identity's account, or a **new account** with a generated name when the identity has none (`201`, `"created": true`; else `200`).
+- The answer is a device sign-in's (`account_id`, the access and refresh tokens, `profile`) plus `device_secret` for **this device** (shown once; stored hashed in `device_secrets`, or as the new account's first secret) and `created`. The device then renews exactly like a device account (`/auth/device/login`).
+- A banned account: `403 banned`. The lookup and the creation run in one `BEGIN IMMEDIATE` transaction: two first sign-ins with one identity cannot make two accounts.
+
+**`POST /api/v1/auth/link/{apple,google}`** (bearer; same body): adds the identity to the caller's account, so its progress is kept. Answers the profile.
+
+- Already linked to the caller: `200` (idempotent; the hint is refreshed).
+- The identity belongs to **another account**: `409 identity_in_use` with both accounts' summaries, so the client can ask which to keep:
+
+```json
+{"error": "identity_in_use", "message": "…",
+ "conflict": {"provider": "google",
+   "current": {"account_id": "57", "full_name": "DustyComet#0311", "created_at": …, "last_seen": …,
+               "linked": {"apple": false, "google": false}, "runs": 3, "best_score": 41000, "cloud_save": null},
+   "other":   {"account_id": "42", "full_name": "Şahin 34#0042", …, "runs": 120, "best_score": 2010000,
+               "cloud_save": {"revision": 7, "updated_at": …, "bytes": 3120, "xp": 374522, "runs": 57}}}}
+```
+
+  To switch, the client calls sign-in with the same token (accounts are never merged: the spec's "merging accounts is out of scope for v1"; the *save* is merged by the client, SAVE.md → Cloud sync). `cloud_save.xp` / `runs` are `stats.xp` / `stats.runs` of the stored document (read with SQLite's `json_extract`; the server does not otherwise look inside saves).
+- The caller already has a different identity of that provider: `409 provider_already_linked`.
+
+**`POST /api/v1/auth/unlink/{apple,google}`** (bearer, no body): removes it; answers the profile. `404 not_linked`; `409 last_sign_in_method` when it would leave the account no way in (no other provider and no device credential on the server). Unlinking Apple revokes the stored Apple grant.
+
+**Profile.** `GET /me` and every answer carrying a profile now include `identities`: `[{"provider": "google", "email_hint": "j***@gmail.com", "private_email": false, "linked_at": …}]` (`linked` stays as it was).
+
+**Errors** (all `{error, message}`): `400 invalid_nonce`, `401 invalid_id_token` (signature, issuer, audience, claims, malformed), `401 id_token_expired`, `403 banned`, `404 not_found` (an unknown provider) / `not_linked`, `409 identity_in_use` / `provider_already_linked` / `last_sign_in_method`, `501 provider_not_enabled`, `503 provider_unavailable`.
+
+### Apple revocation
+
+Apple requires apps that support account creation and deletion to revoke the user's Sign in with Apple tokens on deletion. Revocation needs a token Apple issued to us (the ID token is not one), so:
+
+- At sign-in or link with Apple, when the client sends `authorization_code` and the key is configured (`identity.apple_team_id`, `apple_key_id`, `apple_private_key` or `apple_private_key_file`), the server exchanges the code at `identity.apple_token_url` (with the web Services ID's `apple_web_redirect_uri` for the web client) and keeps the **refresh token sealed** in `identity_links.apple_refresh_sealed` with the `aud` it was issued to (`apple_client_id`). A refused exchange is logged and the sign-in goes on.
+- `DELETE /account` and `POST /auth/unlink/apple` post it to `identity.apple_revoke_url` (`token_type_hint=refresh_token`).
+- Both calls authenticate with a **client secret**: an ES256 JWT signed with the `.p8` key, `kid` = key id, `iss` = team id, `aud` = Apple's issuer, `sub` = the client id, valid 5 minutes, made per call.
+- Without the key both steps are skipped: sign-in works, revocation is a logged no-op (`Apple grant not revoked: no Apple key configured`). The key is checked at startup (a test signature), so a bad one stops the server rather than failing at the first deletion.
+- **Sealing:** `version ‖ 16-byte nonce ‖ ciphertext ‖ 16-byte tag`; the keystream is HMAC-SHA256 in counter mode, the tag an HMAC over the rest (encrypt-then-MAC), both keys derived from the pepper. A leaked database alone does not reveal the tokens.
+
+### Tables
+
+| Table | Columns | Notes |
+| --- | --- | --- |
+| `accounts` | `apple_sub`, `google_sub` (0001, `UNIQUE`) | The identity's subject: one Apple and one Google identity per account, each on at most one account |
+| `identity_links` | `account_id`, `provider`, `email_hint`, `private_email`, `linked_at`, `last_used_at`, `apple_client_id`, `apple_refresh_sealed` | One row per linked identity; deleted with the account |
+| `device_secrets` | `secret_hash` (HMAC like `device_secret_hash`), `account_id`, `created_at`, `last_used_at` | Per-device credentials from provider sign-ins |
+
+### Configuration (`[identity]`)
+
+| Key | Env | Default | |
+| --- | --- | --- | --- |
+| `identity.google_client_ids` | `WB_IDENTITY__GOOGLE_CLIENT_IDS` (comma-separated) | `[]` (off) | Accepted `aud`s: Web, iOS, Android OAuth clients |
+| `identity.google_web_client_id` | `WB_IDENTITY__GOOGLE_WEB_CLIENT_ID` | `""` = the first | The web build's |
+| `identity.google_issuers`, `google_jwks_url` | | Google's | |
+| `identity.apple_client_ids` | `WB_IDENTITY__APPLE_CLIENT_IDS` | `[]` (off) | The Services ID (web) and the bundle id (iOS) |
+| `identity.apple_web_client_id`, `apple_web_redirect_uri` | `WB_IDENTITY__APPLE_WEB_…` | `""` | The web build's Services ID (default the first) and its registered return URL |
+| `identity.apple_issuer`, `apple_jwks_url`, `apple_token_url`, `apple_revoke_url` | | Apple's | https only (http on a loopback host, for tests) |
+| `identity.apple_team_id`, `apple_key_id` | `WB_IDENTITY__APPLE_TEAM_ID`, `…_KEY_ID` | `""` | 10-character Apple ids |
+| `identity.apple_private_key` | `WB_IDENTITY__APPLE_PRIVATE_KEY` (**secret**, redacted in `check-config`) | `""` | The `.p8` PEM; literal `\n` read as newlines |
+| `identity.apple_private_key_file` | `WB_IDENTITY__APPLE_PRIVATE_KEY_FILE` | `""` | Or a path to the `.p8` |
+| `identity.require_nonce` | | `true` | |
+| `identity.nonce_ttl_secs` | | 600 | |
+| `identity.clock_skew_secs` | | 60 | |
+| `identity.jwks_cache_min_secs`, `jwks_cache_max_secs`, `jwks_refetch_min_secs` | | 300, 86400, 60 | |
+| `identity.http_timeout_ms` | | 5000 | JWKS, Apple token / revoke |
+| `identity.max_device_secrets` | | 10 | Per account |
+| `identity.max_id_token_bytes` | | 4096 | |
+
+## Cloud save (N11)
+
+WP N11, `crates/server/src/save.rs`. The local save follows the player between devices; the merge rules are the client's (SAVE.md → Cloud sync): the server stores the document it is given, whole, and never merges. Tests: `tests/cloud_save.rs`.
+
+**`GET /api/v1/save`** (bearer): `{"revision": 7, "updated_at": 1790000000, "bytes": 3120, "data": {…}}`, or `{"revision": 0, "updated_at": null, "bytes": 0, "data": null}` when the account has none. `ETag: "7"`, `Cache-Control: no-store`.
+
+**`PUT /api/v1/save`** (bearer) with `If-Match: "<the revision it replaces>"` (`"0"` for the first) and `{"data": {…}}`:
+
+- `200 {"revision": 8, "updated_at": …, "bytes": …}` and `ETag: "8"`;
+- `409 revision_conflict` when the revision moved on (another device wrote first), with the server's copy in `save` (`{revision, updated_at, bytes, data}`) so the client merges and tries again;
+- `428 precondition_required` without `If-Match`; `400 invalid_body` when `data` is not an object; `413 save_too_large` (with `max_bytes`) over `cloud_save.max_bytes`;
+- `501 cloud_save_not_enabled` when `cloud_save.enabled = false`.
+
+The read and the write run in one `BEGIN IMMEDIATE` transaction, so two devices writing on the same revision cannot both win. CORS allows `PUT` and `If-Match` and exposes `ETag` for the web build.
+
+**Storage and disk.** `cloud_saves (account_id PRIMARY KEY, revision, data TEXT, bytes, updated_at)`: one row per account, replaced on each write; old revisions are not kept. The size cap (64 KB; the local save is a few KB) is also the per-account disk cap. Same database: the nightly backups, restores and `DELETE /account` cover it.
+
+| Key | Env | Default | |
+| --- | --- | --- | --- |
+| `cloud_save.enabled` | `WB_CLOUD_SAVE__ENABLED` | `true` | |
+| `cloud_save.max_bytes` | `WB_CLOUD_SAVE__MAX_BYTES` | 65536 | 1 KB to 1 MB |
+| `cloud_save.writes_per_hour`, `writes_burst` | `WB_CLOUD_SAVE__WRITES_PER_HOUR`, `…_BURST` | 120, 30 | `PUT` per account, on top of the account limit |
 
 ## Leaderboards & runs API
 

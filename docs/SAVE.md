@@ -45,6 +45,7 @@ The local save, every player setting, the first-run chooser and the empty-road w
 | `stats`, `unlocks`, `garage` | WP8.2 (driver XP and level, lifetime stats incl. the Daily streak, unlocks, the car/paint/rims selection); additive, no version bump | [GARAGE.md](GARAGE.md) |
 | `achievements` | WP8.3: `{unlocked: {id: UTC day}, progress: {metric: value}, mirrored: {id: true}}`; additive | [ACHIEVEMENTS.md](ACHIEVEMENTS.md) |
 | `daily` | WP8.4 (`DailyGhostStore`) | `ghosts`: the index of the Daily Drive ghosts on the device, `{date: {score, ticks, car, bytes}}` (the best run per UTC date; today and yesterday kept). The Daily streak stays in `stats` (WP8.2). [DAILY.md](DAILY.md) |
+| `sync` | N11 (`Save`) | `{garage_at, settings_at}`: when this device last changed the garage selection and a setting (unix seconds), for cloud sync's merge ([Cloud sync](#cloud-sync)) |
 | any new one | its WP, via `section()` | achievements (WP8.3) can take their own |
 
 **Ghosts** (WP8.4, 20 Hz samples) are not inside `save.json` (that file is rewritten on every settings change): each is its own file, `user://daily/<date>.ghost` (`DailyGhost`, written temp + read back + rename like `SaveStore`), and only the index is in `daily`. See [DAILY.md → Ghost file and storage](DAILY.md#ghost-file-and-storage).
@@ -149,6 +150,44 @@ Every setting the spec names, where it lives, its default (`Settings.DEFAULTS`),
 | `tests/ui/test_first_run.gd` | the chooser on a fresh save's PLAY, DRIVE, SKIP (defaults), Esc, DAILY DRIVE, never twice, never when off, DRIVE on the thumb side (mirrored), the sketch, text fit for all four layouts |
 | `tests/run/test_first_run_warmup.gd` | 20 s of no vehicles on either carriageway (three seeds), the fade-in beyond the fog, SKIP, countdown and pause not counted, only the first Journey from the title, results kept off the leaderboards, QUIT keeps it pending, off in tests, not on a direct boot, deterministic, title → chooser → warm-up |
 
+## Cloud sync
+
+WP N11. When the player has signed in with Apple or Google (docs/NET_CLIENT.md → Sign in with Apple / Google), this save follows them between devices: `NetCloudSave` (`src/net/cloud_save.gd`, a child of the session) keeps it in sync with one cloud copy per account on the server (`GET/PUT /api/v1/save`, docs/SERVER.md → Cloud save). The server stores the copy whole and never merges: every rule below lives in `SaveMerge` (`src/core/save/save_merge.gd`, pure functions). A device account without a provider does not sync (it cannot move between devices).
+
+**When.** After a sign-in (the app's start included) and an account switch; when a provider gets linked; on coming back to the app (resume, a tab shown) when the last sync is older than `cloud_resume_min_s` (5 min); `cloud_after_run_delay_s` (20 s) after a run's results, debounced (quick retries make one upload). **Never mid-run:** a due sync waits until the run leaves RUNNING, and a download that arrives during a run waits too (the account screen says UPDATES AFTER THIS RUN).
+
+**How (one sync).** `GET /save` → merge the cloud copy into the local document → if the result differs from the local document, put it in place (`Save.apply_cloud`) → if the merged cloud copy differs from the server's, `PUT` it with `If-Match: "<revision>"`. A `409` (another device wrote first) carries the server's copy: merge again and retry, up to `cloud_conflict_rounds` (3). Failures are states, never errors: offline, 5xx and 429 retry after `cloud_retry_s` (30 s), doubling to `cloud_retry_max_s` (15 min); a refused save (too large, a newer build's cloud copy) pauses until the next trigger.
+
+**Merge rules** (`SaveMerge.merge`, per section):
+
+| Section | Rule |
+| --- | --- |
+| `bests` | max per mode |
+| `journeys` | per mode: `count` max, `best_time_s` and `best_distance_m` min |
+| `stats` | per counter: numbers max (`xp`, `runs`, `threads`, `best_leg`, the Daily streak counters), booleans or (`coast`, `backfilled`) |
+| `unlocks` | union; the earliest run count when both have one |
+| `achievements` | `unlocked`: union, the earliest day; `progress`: max per metric; `mirrored` (the platform mirror state) stays on the device and never goes up |
+| `first_run` | done on any device = done |
+| `garage` | the whole selection (car, per-car paint and rims) from whichever side changed it last (`sync.garage_at`); a tie keeps the device's |
+| `settings` | **this device wins.** Only the synced settings go up; a device that never changed a setting (`sync.settings_at` 0: a fresh install) takes the cloud's on its first sync |
+| `daily`, `dev` | device-only (the Daily Drive ghosts are files on the device) |
+| other (a newer build's) | kept; the device's copy first |
+
+**Which settings sync.** Preferences that follow the player: `throttle_mode`, `left_handed`, `steer_sensitivity`, `steer_dead_zone`, `steer_curve`, `drag_visual`, `units`, `camera_mode`, `reduced_motion` (`SaveMerge.SYNCED_SETTINGS`). Device-specific ones never leave the device: `quality_tier`, `battery_saver`, `controls_scale`, `text_scale`, `steering_mode` (tilt depends on the hardware), `haptics`, every volume and `audio_muted`.
+
+**The `sync` section** (new, additive; no version bump): `garage_at` and `settings_at`, unix seconds of this device's last garage choice and settings change. `Save` stamps them: a settings change on `Events.settings_changed` (never while loading or applying a download), a garage change when the save is written and the `garage` section differs from the last load or write. They are the inputs of the garage and settings rules above.
+
+**The conflict chooser.** Signing in with an identity that already has its own account offers KEEP THIS DEVICE'S PROGRESS (`SaveMerge.Mode.KEEP_LOCAL`: switch to that account and merge as above, but this device's garage and settings win) or USE THE CLOUD PROGRESS (`Mode.USE_CLOUD`: the cloud's progress and synced settings replace this device's; device settings and sections stay). Either way the device switches to that account: accounts are never merged, saves are.
+
+**Never loses data.**
+
+- The merge only adds progress (max / union); `tests/core/test_save_merge.gd` checks that over random pairs nothing from either side is lost, and that merging is symmetric for progress and idempotent.
+- Before a download is put in place, `Save.apply_cloud` keeps the previous document: in memory (`Save.cloud_backup`) and on disk next to the save, `user://save_before_cloud.json` (`SaveStore`: atomic, with its own `.bak`). USE THE CLOUD PROGRESS is the one choice that drops local progress, and that file holds it.
+- A newer build's cloud copy (its `version` above this build's) is never merged or overwritten (`cloud_save_newer`), and a read-only local save (a newer build's, see Migrations) is never uploaded over.
+- Downloads are put in place section by section into the same dictionaries (a system holding a section, like the Daily Drive's ghost index, stays live), then `Save.loaded` fires so the achievements and the garage read it again.
+
+**Tests:** `tests/core/test_save_merge.gd` (every rule, the modes, round trips, idempotence, nothing lost), `tests/core/test_save_cloud.gd` (the stamps, `apply_cloud` in place with its backup, never mid-run or read-only), `tests/net/test_cloud_save.gd` (the sync against the fake server: off without a provider, first upload, a second device merging both ways, the chooser's modes, a 409 merged and retried, offline backoff, never mid-run, newer and oversized saves refused, the triggers).
+
 ## Other storage (not in this save)
 
 | What | Where | Owner |
@@ -157,5 +196,7 @@ Every setting the spec names, where it lives, its default (`Settings.DEFAULTS`),
 | Offline run queue, legacy-upload flags | native: `user://net/runs.dat`; web: `localStorage["westbound.net.v1.runs"]` (per server: a name suffix) | `NetRunsClient` (N7) |
 | Daily Drive ghosts (the index is in `daily`) | `user://daily/<date>.ghost` (web: IndexedDB via `/userfs`) | `DailyGhostStore` (WP8.4) |
 | Stored replays awaiting upload | native: `user://net/replay_<key>.dat`; web: `localStorage["westbound.net.v1.replay_<key>"]` | `NetRunsClient` (N8.1) |
+| The save before the last cloud download | `user://save_before_cloud.json` (+ `.bak`) | `Save.apply_cloud` (N11, [Cloud sync](#cloud-sync)) |
+| The cloud copy of this save | the server (`GET/PUT /api/v1/save`) | `NetCloudSave` (N11) |
 
 These keep their own files and formats (atomic temp + rename natively); nothing in WP8.1 reads or writes them.

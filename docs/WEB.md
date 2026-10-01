@@ -314,6 +314,17 @@ Also passed with the slim engine (this WP): every web smoke (default `--gzip`, `
 - A debug web export (`tools/export_web.sh --debug`) fails the default smoke on both engines: `Run._ready → enter_menu → CrashSequence.reset()` runs before `CrashSequence.setup()` built the body pool, so `_park` assigns to null bodies (three `SCRIPT ERROR`s at boot, `src/run/crash_sequence.gd:457` and `:260`). Release builds skip the error silently. The slim debug template itself (21.9 MiB, 6.0 MiB gzip) behaves exactly like the official one there.
 - Greek and Cyrillic names render as missing-glyph boxes on the web on both engines: Chakra Petch has no such glyphs and a browser build has no system fallback fonts. Latin with diacritics (Turkish included) and Thai render.
 
+## Sign-in (N11)
+
+Sign in with Apple and Google on the web go through the custom shell (`platform/web/shell.html`), `window.wbIdentity`, driven by `NetWebIdentity` (`src/net/web_identity.gd`; docs/NET_CLIENT.md → Sign in with Apple / Google).
+
+- **Loaded only when configured.** The client ids come from the server (`GET /api/v1/auth/providers`), not the build: `configure(provider, config)` is called after that answer, and only an enabled provider's script is added (`https://accounts.google.com/gsi/client`, Apple's `appleid.auth.js`). A server without providers never loads either, and the boot is unchanged.
+- **Why a sheet over the canvas.** Both providers open a popup, and browsers allow popups only inside a real click. A tap on the game's canvas is not one: the engine handles input on its next frame, outside the DOM event. So `begin(provider, nonce)` shows a small sheet (`#wb-signin`, inside `#wb-rotor`, so it rotates with the game in portrait) with the provider's own button: Google's rendered button (`google.accounts.id.renderButton`, with the nonce passed to `initialize`), or a Sign in with Apple button that calls `AppleID.auth.signIn()` (`usePopup: true`, the nonce, scope `email`). The player's click there opens the popup; CANCEL closes the sheet. Closing Apple's popup keeps the sheet open to try again.
+- **Result.** `poll()` returns `''` while open, then once `{"state":"done","id_token":…,"code":…}` (Apple's authorization code goes to the server for the revocation grant), `{"state":"cancelled"}` or `{"state":"error","error":…}` (`sdk_load_failed`, `popup_blocked`, …). Nothing in the page stores or logs a token.
+- **Rotation and input.** The sheet's own buttons get the browser's native hit testing (the shell's coordinate rewrite only changes what the engine reads); Google's button is an iframe.
+- **Without the custom shell** (Godot's default page) `wbIdentity` is missing: the providers show NOT IN THIS BUILD.
+- **Origins.** Google needs `https://b3vet.github.io` as an authorized JavaScript origin; Apple needs the Services ID's domain `b3vet.github.io` and return URL `https://b3vet.github.io/westbound/` (OPERATIONS.md → Sign in with Apple / Google).
+
 ## Next steps (not done here)
 
 1. ~~A smaller engine~~: done in WP9.9 ([Slim engine](#slim-engine)).
