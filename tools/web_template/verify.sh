@@ -7,7 +7,9 @@
 # and imported file of index.pck and music.pck) in headless Chromium twice: on the
 # official 4.7 template and on the slim one, with the same packs. Fails when the slim
 # engine fails anything the official one does not (a disabled class a script or a
-# resource needs). Also writes tools/web_template/removed_classes.txt: the classes the
+# resource needs). Then the names check (web_names.gd: player names with diacritics,
+# Turkish casing, Thai, fallback glyphs in the game's theme): the shaped widths and the
+# screenshot pixels must match. Also writes tools/web_template/removed_classes.txt: the classes the
 # official engine has and the slim one lacks, which `detect_classes.gd --check`
 # (tools/export_web.sh, CI) compares with what the game uses from then on.
 # Needs a Web export in --pck-dir (tools/export_web.sh; either template) and `npm ci`
@@ -47,6 +49,8 @@ for side in official custom; do
   cp "$pck_dir/index.pck" "$work/$side/"
   [[ -f "$pck_dir/music.pck" ]] && cp "$pck_dir/music.pck" "$work/$side/"
   nice node tools/web_template/probe.mjs --dir "$work/$side" --out "$work/$side.log" || status=2
+  nice node tools/web_template/probe.mjs --dir "$work/$side" --out "$work/${side}_names.log" --names \
+    --screenshot "$work/${side}_names.png" || status=2
 done
 [[ $status -eq 0 ]] || { echo "verify.sh: a probe did not finish (logs in $work)" >&2; exit 2; }
 
@@ -69,6 +73,14 @@ fi
 if [[ -s "$work/official.issues" ]]; then
   echo "verify.sh: both templates report ($(wc -l <"$work/official.issues") lines, see $work/official.issues):"
   head -5 "$work/official.issues" | sed 's/^/  /'
+fi
+
+if ! diff <(grep '^PROBE text ' "$work/official_names.log") <(grep '^PROBE text ' "$work/custom_names.log") >"$work/names.diff"; then
+  echo "verify.sh: names shape differently (see $work/names.diff)"; status=1
+elif ! cmp -s "$work/official_names.png" "$work/custom_names.png"; then
+  echo "verify.sh: names render differently: compare $work/official_names.png and $work/custom_names.png"; status=1
+else
+  echo "verify.sh: names: same widths, same pixels ($(grep -c '^PROBE text ' "$work/custom_names.log") lines)"
 fi
 
 removed="tools/web_template/removed_classes.txt"
