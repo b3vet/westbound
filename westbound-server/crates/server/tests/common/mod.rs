@@ -74,6 +74,8 @@ pub fn test_config(dir: &TempDir) -> Config {
     r.runs_burst = 100_000;
     r.social_per_hour = 100_000;
     r.social_burst = 100_000;
+    c.cloud_save.writes_per_hour = 100_000;
+    c.cloud_save.writes_burst = 100_000;
     // N10.2: every test client is 127.0.0.1; the per-IP limits have their own tests.
     r.ip_per_minute = 1_000_000;
     r.ip_burst = 100_000;

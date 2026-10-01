@@ -30,7 +30,10 @@ pub async fn get_me(State(state): State<AppState>, auth: Authed) -> ApiResult<Js
     let acc = accounts::get(&state.db, auth.account_id)
         .await?
         .ok_or_else(gone)?;
-    Ok(Json(acc.profile(now, state.auth.rename_cooldown_secs)))
+    Ok(Json(
+        acc.profile_with_identities(&state.db, now, state.auth.rename_cooldown_secs)
+            .await?,
+    ))
 }
 
 /// Maps rename failures to API errors (shared with the admin CLI's messages).
@@ -78,17 +81,21 @@ pub async fn patch_me(
     // Cached board tops show display names.
     state.boards.invalidate_all();
     tracing::info!(account_id = acc.id, "display name changed");
-    Ok(Json(acc.profile(now, cooldown)))
+    Ok(Json(
+        acc.profile_with_identities(&state.db, now, cooldown)
+            .await?,
+    ))
 }
 
 /// `DELETE /api/v1/account`: deletes the account and all of its data (also allowed
-/// while banned). 204.
+/// while banned). 204. N11: then revokes the player's Sign in with Apple grant when one
+/// is stored and the Apple key is configured (best effort; a no-op otherwise).
 pub async fn delete_account(
     State(state): State<AppState>,
     AuthedAllowBanned(auth): AuthedAllowBanned,
 ) -> ApiResult<StatusCode> {
     let now = state.clock.now();
-    let report = accounts::delete(
+    let deleted = accounts::delete_with_grant(
         &state.db,
         state.boards.config(),
         auth.account_id,
@@ -96,8 +103,11 @@ pub async fn delete_account(
         now,
     )
     .await?;
-    if report.accounts == 0 {
+    if deleted.report.accounts == 0 {
         return Err(gone());
+    }
+    if let Some(grant) = &deleted.apple_grant {
+        state.identity.revoke_apple(grant, now).await;
     }
     state.boards.invalidate_all();
     // Friends see the account go offline and stop watching it now; its open session (if

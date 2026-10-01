@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO device_secrets (secret_hash, account_id, created_at, last_used_at)\n         VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "a50a04c51ece415206154b13ecff706a213269b331594c03063a2fef6c1b3b27"
+}

@@ -1,0 +1,35 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT apple_sub IS NOT NULL AS \"apple!: bool\",\n                  google_sub IS NOT NULL AS \"google!: bool\",\n                  (device_secret_hash IS NOT NULL\n                   OR EXISTS (SELECT 1 FROM device_secrets WHERE account_id = accounts.id))\n                      AS \"device!: bool\"\n           FROM accounts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "apple!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "google!: bool",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "device!: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2834944b7289c4a354a77918bb88f7c9d8348a0a85a7cb34ff06149d44e6e466"
+}

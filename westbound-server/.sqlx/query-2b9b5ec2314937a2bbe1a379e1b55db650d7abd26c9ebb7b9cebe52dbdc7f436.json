@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE device_secrets SET last_used_at = ? WHERE secret_hash = ? AND account_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2b9b5ec2314937a2bbe1a379e1b55db650d7abd26c9ebb7b9cebe52dbdc7f436"
+}

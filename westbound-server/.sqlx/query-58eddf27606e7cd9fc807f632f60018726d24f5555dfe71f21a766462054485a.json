@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM device_secrets WHERE account_id = ?1 AND secret_hash NOT IN\n             (SELECT secret_hash FROM device_secrets WHERE account_id = ?1\n              ORDER BY last_used_at DESC, created_at DESC LIMIT ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "58eddf27606e7cd9fc807f632f60018726d24f5555dfe71f21a766462054485a"
+}

@@ -70,6 +70,10 @@ pub struct Config {
     pub admin: AdminConfig,
     /// N10.3: disk hygiene on the data volume (pruning, free space, WAL, backup age).
     pub housekeeping: HousekeepingConfig,
+    /// N11: Sign in with Apple / Google (off until the client ids are set).
+    pub identity: IdentityConfig,
+    /// N11: one cloud save per account (`GET/PUT /api/v1/save`).
+    pub cloud_save: CloudSaveConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -241,6 +245,80 @@ pub struct RateLimitsConfig {
     /// N10.2: WebSocket upgrades (`/ws`, `/ws/echo`) per client IP.
     pub ws_connect_per_minute: u32,
     pub ws_connect_burst: u32,
+}
+
+/// N11 (docs/SERVER.md → Sign in with Apple / Google): the identity providers. A provider
+/// is enabled when its client ids are set; with none, its routes answer 501
+/// `provider_not_enabled` (the MP-D2 shapes). Every value is public except the Apple key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// Google OAuth client ids accepted as the ID token's `aud`: the Web client, later the
+    /// iOS and Android ones. Empty = Google sign-in off.
+    pub google_client_ids: Vec<String>,
+    /// The client id the web build initialises Google Identity Services with (public, in
+    /// `GET /auth/providers`). Empty = the first of `google_client_ids`.
+    pub google_web_client_id: String,
+    /// Accepted `iss` values (Google issues both spellings).
+    pub google_issuers: Vec<String>,
+    /// Google's signing keys (JWKS).
+    pub google_jwks_url: String,
+    /// Apple client ids accepted as `aud`: the Services ID (web) and the app's bundle id
+    /// (iOS). Empty = Apple sign-in off.
+    pub apple_client_ids: Vec<String>,
+    /// The Services ID the web build uses with Sign in with Apple JS. Empty = the first of
+    /// `apple_client_ids`.
+    pub apple_web_client_id: String,
+    /// The return URL registered on the Services ID (Apple JS needs one even in popup
+    /// mode; an https page on a verified domain), e.g. the web build's URL.
+    pub apple_web_redirect_uri: String,
+    pub apple_issuer: String,
+    pub apple_jwks_url: String,
+    /// Apple's token endpoint (authorization code → refresh token, kept for revocation).
+    pub apple_token_url: String,
+    /// Apple's revoke endpoint (account deletion, unlink).
+    pub apple_revoke_url: String,
+    /// Apple Developer team id (10 characters). With `apple_key_id` and the key, the
+    /// server exchanges codes and revokes tokens; without them it still signs players in.
+    pub apple_team_id: String,
+    /// The Sign in with Apple key's id (10 characters).
+    pub apple_key_id: String,
+    /// The `.p8` key (PKCS#8 PEM). Environment only (`WB_IDENTITY__APPLE_PRIVATE_KEY`);
+    /// literal `\n` sequences are read as newlines.
+    pub apple_private_key: Secret,
+    /// Or a path to the `.p8` file (a mounted secret). Ignored when `apple_private_key` is set.
+    pub apple_private_key_file: String,
+    /// The ID token's `nonce` must be one this server issued (`POST /auth/nonce`).
+    pub require_nonce: bool,
+    /// How long an issued nonce stays valid.
+    pub nonce_ttl_secs: u64,
+    /// Leeway for `exp` / `iat` against the server clock.
+    pub clock_skew_secs: u64,
+    /// JWKS caching: the provider's `Cache-Control: max-age`, clamped to this range.
+    pub jwks_cache_min_secs: u64,
+    pub jwks_cache_max_secs: u64,
+    /// An unknown `kid` (key rotation) refetches the keys at most this often.
+    pub jwks_refetch_min_secs: u64,
+    /// Outbound HTTP timeout (JWKS, Apple token and revoke).
+    pub http_timeout_ms: u64,
+    /// Device credentials kept per account (one per signed-in device; the least recently
+    /// used goes first).
+    pub max_device_secrets: u32,
+    /// Longest ID token accepted.
+    pub max_id_token_bytes: usize,
+}
+
+/// N11 (docs/SERVER.md → Cloud save): one JSON document per account, replaced whole.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CloudSaveConfig {
+    pub enabled: bool,
+    /// Largest stored document (bytes of its JSON); the local save is a few KB.
+    pub max_bytes: usize,
+    /// `PUT /api/v1/save` per account, on top of the account limit: this many per hour,
+    /// `writes_burst` at once.
+    pub writes_per_hour: u32,
+    pub writes_burst: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -906,6 +984,116 @@ impl Default for AuthConfig {
     }
 }
 
+/// Google's and Apple's published endpoints.
+pub const GOOGLE_ISSUERS: [&str; 2] = ["https://accounts.google.com", "accounts.google.com"];
+pub const GOOGLE_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
+pub const APPLE_ISSUER: &str = "https://appleid.apple.com";
+pub const APPLE_JWKS_URL: &str = "https://appleid.apple.com/auth/keys";
+pub const APPLE_TOKEN_URL: &str = "https://appleid.apple.com/auth/token";
+pub const APPLE_REVOKE_URL: &str = "https://appleid.apple.com/auth/revoke";
+/// Apple team and key ids are 10 characters.
+const APPLE_ID_LEN: usize = 10;
+/// Bounds for `identity.*` numbers.
+const MAX_NONCE_TTL_SECS: u64 = 3_600;
+const MAX_CLOCK_SKEW_SECS: u64 = 600;
+const MIN_ID_TOKEN_BYTES: usize = 512;
+const MAX_ID_TOKEN_BYTES: usize = 16 * 1024;
+const MAX_DEVICE_SECRETS: u32 = 100;
+/// `cloud_save.max_bytes` bounds.
+const MIN_CLOUD_SAVE_BYTES: usize = 1_024;
+const MAX_CLOUD_SAVE_BYTES: usize = 1024 * 1024;
+
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self {
+            google_client_ids: Vec::new(),
+            google_web_client_id: String::new(),
+            google_issuers: GOOGLE_ISSUERS.map(String::from).to_vec(),
+            google_jwks_url: GOOGLE_JWKS_URL.into(),
+            apple_client_ids: Vec::new(),
+            apple_web_client_id: String::new(),
+            apple_web_redirect_uri: String::new(),
+            apple_issuer: APPLE_ISSUER.into(),
+            apple_jwks_url: APPLE_JWKS_URL.into(),
+            apple_token_url: APPLE_TOKEN_URL.into(),
+            apple_revoke_url: APPLE_REVOKE_URL.into(),
+            apple_team_id: String::new(),
+            apple_key_id: String::new(),
+            apple_private_key: Secret::default(),
+            apple_private_key_file: String::new(),
+            require_nonce: true,
+            nonce_ttl_secs: 600,
+            clock_skew_secs: 60,
+            jwks_cache_min_secs: 300,
+            jwks_cache_max_secs: 86_400,
+            jwks_refetch_min_secs: 60,
+            http_timeout_ms: 5_000,
+            max_device_secrets: 10,
+            max_id_token_bytes: 4_096,
+        }
+    }
+}
+
+impl IdentityConfig {
+    pub fn google_enabled(&self) -> bool {
+        !self.google_client_ids.is_empty()
+    }
+
+    pub fn apple_enabled(&self) -> bool {
+        !self.apple_client_ids.is_empty()
+    }
+
+    /// The Google client id for the web build ("" = none).
+    pub fn google_web_client(&self) -> &str {
+        if self.google_web_client_id.is_empty() {
+            self.google_client_ids.first().map_or("", String::as_str)
+        } else {
+            &self.google_web_client_id
+        }
+    }
+
+    /// The Apple Services ID for the web build ("" = none).
+    pub fn apple_web_client(&self) -> &str {
+        if self.apple_web_client_id.is_empty() {
+            self.apple_client_ids.first().map_or("", String::as_str)
+        } else {
+            &self.apple_web_client_id
+        }
+    }
+
+    /// Whether a key for Apple's token and revoke endpoints is configured.
+    pub fn apple_key_configured(&self) -> bool {
+        !self.apple_team_id.is_empty()
+            && !self.apple_key_id.is_empty()
+            && (!self.apple_private_key.is_empty() || !self.apple_private_key_file.is_empty())
+    }
+
+    /// The `.p8` PEM: `apple_private_key` (literal `\n` sequences read as newlines), else
+    /// the file. None when neither is set.
+    pub fn apple_private_key_pem(&self) -> anyhow::Result<Option<String>> {
+        if !self.apple_private_key.is_empty() {
+            return Ok(Some(self.apple_private_key.expose().replace("\\n", "\n")));
+        }
+        if self.apple_private_key_file.is_empty() {
+            return Ok(None);
+        }
+        let pem = std::fs::read_to_string(&self.apple_private_key_file)
+            .with_context(|| format!("reading {}", self.apple_private_key_file))?;
+        Ok(Some(pem))
+    }
+}
+
+impl Default for CloudSaveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_bytes: 64 * 1024,
+            writes_per_hour: 120,
+            writes_burst: 30,
+        }
+    }
+}
+
 impl Default for RateLimitsConfig {
     fn default() -> Self {
         Self {
@@ -1539,6 +1727,126 @@ impl Config {
         self.validate_housekeeping(errs);
         self.validate_rooms(errs);
         self.validate_scoring(errs);
+        self.validate_identity(errs);
+    }
+
+    /// N11: `[identity]` and `[cloud_save]`.
+    fn validate_identity(&self, errs: &mut Vec<String>) {
+        let i = &self.identity;
+        for (key, list) in [
+            ("identity.google_client_ids", &i.google_client_ids),
+            ("identity.apple_client_ids", &i.apple_client_ids),
+            ("identity.google_issuers", &i.google_issuers),
+        ] {
+            if list.iter().any(|v| v.trim().is_empty() || v.trim() != v) {
+                errs.push(format!(
+                    "{key} entries must be non-empty, without spaces around them"
+                ));
+            }
+        }
+        if !i.google_web_client_id.is_empty()
+            && !i.google_client_ids.contains(&i.google_web_client_id)
+        {
+            errs.push(
+                "identity.google_web_client_id must be one of identity.google_client_ids".into(),
+            );
+        }
+        if !i.apple_web_client_id.is_empty() && !i.apple_client_ids.contains(&i.apple_web_client_id)
+        {
+            errs.push(
+                "identity.apple_web_client_id must be one of identity.apple_client_ids".into(),
+            );
+        }
+        if !i.apple_web_redirect_uri.is_empty()
+            && !is_https_or_loopback_url(&i.apple_web_redirect_uri)
+        {
+            errs.push("identity.apple_web_redirect_uri must be an https URL".into());
+        }
+        for (key, u) in [
+            ("identity.google_jwks_url", &i.google_jwks_url),
+            ("identity.apple_jwks_url", &i.apple_jwks_url),
+            ("identity.apple_token_url", &i.apple_token_url),
+            ("identity.apple_revoke_url", &i.apple_revoke_url),
+        ] {
+            if !is_https_or_loopback_url(u) {
+                errs.push(format!(
+                    "{key} must be an https URL (http only on a loopback host, for tests)"
+                ));
+            }
+        }
+        if i.apple_issuer.trim().is_empty() || (i.google_enabled() && i.google_issuers.is_empty()) {
+            errs.push("identity.apple_issuer and identity.google_issuers must be set".into());
+        }
+        let any_key = !i.apple_team_id.is_empty()
+            || !i.apple_key_id.is_empty()
+            || !i.apple_private_key.is_empty()
+            || !i.apple_private_key_file.is_empty();
+        if any_key {
+            let id_ok =
+                |s: &str| s.len() == APPLE_ID_LEN && s.chars().all(|c| c.is_ascii_alphanumeric());
+            if !id_ok(&i.apple_team_id) || !id_ok(&i.apple_key_id) {
+                errs.push(
+                    "identity.apple_team_id and identity.apple_key_id must both be 10-character Apple ids"
+                        .into(),
+                );
+            }
+            match i.apple_private_key_pem() {
+                Ok(Some(pem)) => {
+                    if let Err(e) = crate::identity::apple::parse_p8(&pem) {
+                        errs.push(format!("identity.apple_private_key: {e}"));
+                    }
+                }
+                Ok(None) => errs.push(
+                    "identity.apple_private_key (or apple_private_key_file) is required with the Apple team and key ids"
+                        .into(),
+                ),
+                Err(e) => errs.push(format!("identity.apple_private_key_file: {e:#}")),
+            }
+            if !i.apple_enabled() {
+                errs.push("identity.apple_client_ids must be set to use the Apple key".into());
+            }
+        }
+        if i.nonce_ttl_secs == 0 || i.nonce_ttl_secs > MAX_NONCE_TTL_SECS {
+            errs.push(format!(
+                "identity.nonce_ttl_secs must be 1..={MAX_NONCE_TTL_SECS}"
+            ));
+        }
+        if i.clock_skew_secs > MAX_CLOCK_SKEW_SECS {
+            errs.push(format!(
+                "identity.clock_skew_secs must be at most {MAX_CLOCK_SKEW_SECS}"
+            ));
+        }
+        if i.jwks_cache_min_secs == 0
+            || i.jwks_cache_max_secs < i.jwks_cache_min_secs
+            || i.jwks_refetch_min_secs == 0
+        {
+            errs.push(
+                "identity.jwks_cache_min_secs and jwks_refetch_min_secs must be at least 1, jwks_cache_max_secs at least jwks_cache_min_secs"
+                    .into(),
+            );
+        }
+        if i.http_timeout_ms == 0 {
+            errs.push("identity.http_timeout_ms must be at least 1".into());
+        }
+        if i.max_device_secrets == 0 || i.max_device_secrets > MAX_DEVICE_SECRETS {
+            errs.push(format!(
+                "identity.max_device_secrets must be 1..={MAX_DEVICE_SECRETS}"
+            ));
+        }
+        if !(MIN_ID_TOKEN_BYTES..=MAX_ID_TOKEN_BYTES).contains(&i.max_id_token_bytes) {
+            errs.push(format!(
+                "identity.max_id_token_bytes must be {MIN_ID_TOKEN_BYTES}..={MAX_ID_TOKEN_BYTES}"
+            ));
+        }
+        let c = &self.cloud_save;
+        if !(MIN_CLOUD_SAVE_BYTES..=MAX_CLOUD_SAVE_BYTES).contains(&c.max_bytes) {
+            errs.push(format!(
+                "cloud_save.max_bytes must be {MIN_CLOUD_SAVE_BYTES}..={MAX_CLOUD_SAVE_BYTES}"
+            ));
+        }
+        if self.rate_limits.enabled && (c.writes_per_hour == 0 || c.writes_burst == 0) {
+            errs.push("cloud_save.writes_per_hour and writes_burst must be at least 1".into());
+        }
     }
 
     fn validate_leaderboards(&self, errs: &mut Vec<String>) {
@@ -1896,6 +2204,7 @@ impl Config {
             &mut c.auth.jwt_secret,
             &mut c.auth.device_secret_pepper,
             &mut c.admin.token,
+            &mut c.identity.apple_private_key,
         ] {
             if !secret.is_empty() {
                 *secret = Secret::new("<redacted>");
@@ -1911,6 +2220,20 @@ fn is_origin(s: &str) -> bool {
         .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"));
     matches!(rest, Some(r) if !r.is_empty() && !r.contains('/') && !r.contains(char::is_whitespace))
+}
+
+/// `https://host/...`, or `http://` on a loopback host (tests and local fakes).
+fn is_https_or_loopback_url(u: &str) -> bool {
+    if u.contains(char::is_whitespace) {
+        return false;
+    }
+    if let Some(rest) = u.strip_prefix("https://") {
+        return !rest.is_empty() && !rest.starts_with('/');
+    }
+    u.strip_prefix("http://").is_some_and(|rest| {
+        let host = rest.split(['/', ':']).next().unwrap_or("");
+        host == "127.0.0.1" || host == "localhost" || rest.starts_with("[::1]")
+    })
 }
 
 /// Bytes in a SHA-256 certificate fingerprint (`deeplinks.android_cert_sha256`).

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT google_sub FROM accounts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "google_sub",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "google_sub"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "299efc5d496f88c7bed4f5241d9e2c40db4c7e3c8231066de26272d68b8211cf"
+}
