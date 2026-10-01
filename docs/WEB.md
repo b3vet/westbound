@@ -308,6 +308,7 @@ Also passed with the slim engine (this WP): every web smoke (default `--gzip`, `
 ### Found on the way (not changed: outside this WP)
 
 - The web pack contains four scripts that cannot compile there, on either engine: `assets/cars/car_import.gd` (an `EditorScenePostImport`) and the dev previews `src/road/dev/road_preview.gd`, `roadside_preview.gd`, `lane_change_road_path.gd` (they use `StraightRoadPath`/`ArcRoadPath`, which live outside the export). Those preview scenes are broken in the web build.
+- A debug web export (`tools/export_web.sh --debug`) fails the default smoke on both engines: `Run._ready → enter_menu → CrashSequence.reset()` runs before `CrashSequence.setup()` built the body pool, so `_park` assigns to null bodies (three `SCRIPT ERROR`s at boot, `src/run/crash_sequence.gd:457` and `:260`). Release builds skip the error silently. The slim debug template itself (21.9 MiB, 6.0 MiB gzip) behaves exactly like the official one there.
 - Greek and Cyrillic names render as missing-glyph boxes on the web on both engines: Chakra Petch has no such glyphs and a browser build has no system fallback fonts. Latin with diacritics (Turkish included) and Thai render.
 
 ## Next steps (not done here)
