@@ -13,7 +13,9 @@ extends Node
 ## nearest, so voices don't jump. Doppler comes from AudioMath.doppler_pitch on the
 ## road-space offset and relative velocity. Positions are render space (the road
 ## sample + the floating origin); the camera is the listener.
-## Allocation-free per frame (arrays sized in bind()).
+## Allocation-free per frame (arrays sized in bind()). Silent hum voices are paused, or
+## on the web (`stop_silent`) stopped after loop_stop_hold_s, like EngineAudio's loops
+## (docs/AUDIO.md → Loops on the web).
 
 signal air_brake(slot: int, world_pos: Vector3)
 
@@ -29,6 +31,10 @@ var hum: Array[AudioStreamPlayer3D] = []
 var hum_slot := PackedInt32Array()
 var hum_vehicle := PackedInt32Array()
 var hum_gain := PackedFloat64Array()
+## Silent hum voices are stopped (after the hold) instead of paused: the web
+## (AudioTuning.stops_silent_loops; tests set it).
+var stop_silent: bool = false
+var _hum_silent_s := PackedFloat64Array()
 ## Air-brake memory per slot.
 var _prev_flags := PackedInt32Array()
 var _prev_vid := PackedInt32Array()
@@ -41,6 +47,7 @@ var _clock: float = 0.0
 
 func setup(t: AudioTuning, bank: AudioBank) -> void:
 	tuning = t
+	stop_silent = t.stops_silent_loops()
 	if not hum.is_empty():
 		return
 	for i in t.tire_hum_voices:
@@ -58,6 +65,7 @@ func setup(t: AudioTuning, bank: AudioBank) -> void:
 	hum_slot.resize(hum.size())
 	hum_vehicle.resize(hum.size())
 	hum_gain.resize(hum.size())
+	_hum_silent_s.resize(hum.size())
 	_near_slot.resize(hum.size())
 	_near_dist.resize(hum.size())
 	for i in hum.size():
@@ -270,9 +278,18 @@ func _fade_hum(dt: float) -> void:
 			p.position = slot_position(s)
 		hum_gain[v] = move_toward(hum_gain[v], target, step * maxf(target, db_to_linear(t.tire_hum_db)))
 		if hum_gain[v] <= t.silent_gain:
-			if p.playing and not p.stream_paused:
+			p.volume_db = linear_to_db(t.silent_gain)
+			if not p.playing:
+				_hum_silent_s[v] = 0.0
+			elif stop_silent:
+				_hum_silent_s[v] += dt
+				if _hum_silent_s[v] >= t.loop_stop_hold_s:
+					p.stop()
+					_hum_silent_s[v] = 0.0
+			elif not p.stream_paused:
 				p.stream_paused = true
 			continue
+		_hum_silent_s[v] = 0.0
 		p.volume_db = linear_to_db(hum_gain[v])
 		p.pitch_scale = pitch
 		if not p.playing:
@@ -296,7 +313,16 @@ func _track(pool: VoicePool) -> void:
 		p.pitch_scale = pool.base_pitch[k] * doppler(s)
 
 
+## Pauses the hum voices (the game is paused); _fade_hum resumes them. Where silent
+## loops are stopped (the web), a pause stops them instead.
 func set_paused(paused: bool) -> void:
-	for p in hum:
-		if paused:
+	for v in hum.size():
+		var p := hum[v]
+		if not paused:
+			continue
+		if stop_silent:
+			if p.playing:
+				p.stop()
+			_hum_silent_s[v] = 0.0
+		else:
 			p.stream_paused = true
