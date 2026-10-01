@@ -221,6 +221,8 @@ Release export, gzip like Pages; timings from `smoke.mjs --gzip --network 4g --s
 | | Official template | Slim template | Change |
 | --- | --- | --- | --- |
 | `index.wasm` raw / gzip | 37.7 / 9.6 MiB (9.71 MiB on the wire) | **23.0 / 6.0 MiB** (6.07 on the wire) | −39 % / −37 % |
+| of which: modules and features off (no class profile) | | 28.4 / 7.3 MiB | −9.3 / −2.4 MiB |
+| of which: the class profile on top | | 23.0 / 6.0 MiB | −5.4 / −1.2 MiB |
 | `index.js` raw / gzip | 273 / 67 KiB | 249 / 62 KiB | |
 | `index.pck`, `music.pck` | 5.1 / 3.3 MiB, 3.7 / 3.5 MiB | unchanged | |
 | Transfer to the title (`export_web.sh`) | 13.1 MiB | **9.4 MiB** | −28 % (inside the 12 MiB budget) |
