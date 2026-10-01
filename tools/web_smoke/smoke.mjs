@@ -12,6 +12,7 @@
 //        [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt ms>] [--json out.json]
 //        [--audio-unlock [click|tap|key]] [--stale]
 //        [--device NAME | --portrait | --landscape] [--tap-play] [--dpr N]
+//        [--audio-loops SECONDS]
 //
 // --query: the page's query string (default server=off; e.g. the loop test mode:
 // "mode=loop&server=off&at=city&bot=keep"). --expect: a console line must match
@@ -57,6 +58,14 @@
 // start"). Before any browser work the smoke runs tools/web_smoke/layout_test.mjs (the
 // shell's rotation math in node).
 //
+// --audio-loops SECONDS (docs/AUDIO.md → Loops on the web): --tap-play, then drive for
+// SECONDS (gas on and off every few seconds, a pause and resume now and then) and watch
+// Godot's Web Audio sample nodes (the server exposes the engine's GodotAudio object to
+// the probe by patching index.js in memory). Fails when a looping sample (engine,
+// intake, wind, tire hum) is ever paused (Godot 4.7 restarts it past its end on
+// resume, where WebKit never plays or ends it), when a resume starts one past its end,
+// when an unpaused loop stops restarting (stuck), or when no loop ever played.
+//
 // Needs `npm ci` in tools/web_smoke once. Browser: Playwright's Chromium
 // (`npx playwright install chromium`), or CHROMIUM_PATH=/path/to/chrome.
 import fs from 'node:fs';
@@ -100,6 +109,7 @@ function parseArgs(argv) {
     expectRotated: null,
     tapPlay: false,
     dpr: null,
+    audioLoops: 0,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s, 2);
@@ -135,6 +145,7 @@ function parseArgs(argv) {
       case '--landscape': opts.device = 'iPhone 14 landscape'; opts.expectRotated = false; opts.tapPlay = true; break;
       case '--tap-play': opts.tapPlay = true; break;
       case '--dpr': opts.dpr = Number(value()); break;
+      case '--audio-loops': opts.audioLoops = Number(value()); opts.tapPlay = true; break;
       case '--audio-unlock': {
         // Optional value: the next argument when it names a gesture.
         let g = inline;
@@ -147,7 +158,7 @@ function parseArgs(argv) {
         break;
       }
       case '-h': case '--help':
-        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...] [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt>] [--json out.json] [--audio-unlock [click|tap|key]] [--stale] [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE] [--device NAME | --portrait | --landscape] [--tap-play] [--dpr N]');
+        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...] [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt>] [--json out.json] [--audio-unlock [click|tap|key]] [--stale] [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE] [--device NAME | --portrait | --landscape] [--tap-play] [--dpr N] [--audio-loops SECONDS]');
         process.exit(0);
       default:
         console.error(`smoke: unknown argument ${argv[i]}`);
@@ -164,6 +175,10 @@ function parseArgs(argv) {
   }
   if (opts.dpr != null && !(opts.dpr > 0)) {
     console.error('smoke: --dpr takes a positive pixel ratio');
+    process.exit(2);
+  }
+  if (!(opts.audioLoops >= 0)) {
+    console.error('smoke: --audio-loops takes seconds');
     process.exit(2);
   }
   if (opts.tapPlay && opts.audioUnlock) {
@@ -194,7 +209,10 @@ const MIME = {
 // the browser cache after a deploy); the custom shell must reload once.
 const STALE_BUILD = 'ffffffffffff';
 
-function serve(root, gzip, stale) {
+// --audio-loops: index.js with the engine's GodotAudio object on window (see auditLoops).
+const GODOT_AUDIO_HOOK = ['GodotAudio.samples=new Map;', 'window.__wbGodotAudio=GodotAudio;GodotAudio.samples=new Map;'];
+
+function serve(root, gzip, stale, exposeAudio = false) {
   const gzCache = new Map();
   const sent = new Map();   // path -> bytes on the wire
   const urls = [];          // every GET, with its query
@@ -221,12 +239,19 @@ function serve(root, gzip, stale) {
     const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
     const headers = { 'Content-Type': type, 'Cache-Control': 'no-store' };
     let body = null;
+    let raw = null;
+    if (exposeAudio && path.basename(file) === 'index.js') {
+      raw = Buffer.from(fs.readFileSync(file, 'utf8').replace(GODOT_AUDIO_HOOK[0], GODOT_AUDIO_HOOK[1]));
+    }
     if (gzip && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
-      if (!gzCache.has(file)) gzCache.set(file, zlib.gzipSync(fs.readFileSync(file), { level: 6 }));
+      if (!gzCache.has(file)) gzCache.set(file, zlib.gzipSync(raw || fs.readFileSync(file), { level: 6 }));
       body = gzCache.get(file);
       headers['Content-Encoding'] = 'gzip';
       headers['Vary'] = 'Accept-Encoding';
       headers['Content-Length'] = body.length;
+    } else if (raw) {
+      body = raw;
+      headers['Content-Length'] = raw.length;
     } else {
       headers['Content-Length'] = fs.statSync(file).size;
     }
@@ -530,7 +555,11 @@ async function main() {
   console.log('smoke: layout math (tools/web_smoke/layout_test.mjs) passes');
   if (opts.tapPlay && !/(^|&)probe=ui(&|$)/.test(opts.query)) opts.query = `${opts.query}&probe=ui`.replace(/^&/, '');
 
-  const { server, sent, urls } = await serve(root, opts.gzip, opts.stale);
+  if (opts.audioLoops > 0 && !fs.readFileSync(path.join(root, 'index.js'), 'utf8').includes(GODOT_AUDIO_HOOK[0])) {
+    console.error(`smoke: --audio-loops: index.js has no "${GODOT_AUDIO_HOOK[0]}" to hook (a new Godot web engine?)`);
+    process.exit(1);
+  }
+  const { server, sent, urls } = await serve(root, opts.gzip, opts.stale, opts.audioLoops > 0);
   // The custom shell's build id (tools/export_web.sh fills it; '' with Godot's shell).
   const shellBuild = (/const build = '([0-9a-f]{8,})'/.exec(fs.readFileSync(path.join(root, 'index.html'), 'utf8')) || [])[1] || '';
   // ?server=off: the smoke test never creates accounts on the production server (N1.2).
@@ -559,6 +588,7 @@ async function main() {
     });
     const page = await context.newPage();
     await page.addInitScript(pageProbe);
+    if (opts.audioLoops > 0) await page.addInitScript(audioLoopsProbe);
     if (opts.network) {
       const cdp = await context.newCDPSession(page);
       await cdp.send('Network.enable');
@@ -633,6 +663,7 @@ async function main() {
     if (!failures.length && opts.audioUnlock) await audioUnlock(page, opts, consoleLines, failures);
     if (!failures.length && (opts.tapPlay || opts.expectRotated != null)) await checkLayout(page, opts, consoleLines, failures);
     if (!failures.length && opts.tapPlay) await tapPlay(page, opts, consoleLines, failures);
+    if (!failures.length && opts.audioLoops > 0) await auditLoops(page, opts, failures);
     if (!failures.length) checkCaching(opts, urls, consoleLines, shellBuild, failures);
 
     if (!failures.length && opts.waitFor) {
@@ -948,4 +979,86 @@ async function tapPlay(page, opts, consoleLines, failures) {
     return;
   }
   console.log('smoke: the tap on PLAY started a run');
+}
+
+
+// --audio-loops: runs in the page before its scripts. Once the engine has created its
+// audio (window.__wbGodotAudio, from the patched index.js), wraps GodotAudio.SampleNode
+// to count, for looping samples only: pauses (Godot 4.7's resume starts them at the
+// wall time since their last full restart, never wrapped to the buffer), resumes that
+// start past the buffer's end, and sources started; once a second it counts loops that
+// are neither paused nor restarted within their duration (stuck: silent for good while
+// the engine thinks they play). Results in window.__wbLoops.
+function audioLoopsProbe() {
+  const stats = { loopStarts: 0, loopPauses: 0, pastEnd: 0, stuck: 0, stuckMax: 0, loops: 0 };
+  window.__wbLoops = stats;
+  const looping = (node) => { try { return node.getSample().loopMode !== 'disabled'; } catch { return false; } };
+  const hook = () => {
+    const GA = window.__wbGodotAudio;
+    if (!GA || !GA.SampleNode || !GA.ctx) { setTimeout(hook, 100); return; }
+    const P = GA.SampleNode.prototype;
+    const mark = (node) => { node.__wbAt = GA.ctx.currentTime; };
+    const start = P.start;
+    P.start = function (...a) { const r = start.apply(this, a); if (looping(this)) { stats.loopStarts++; mark(this); } return r; };
+    const restart = P._restart;
+    P._restart = function (...a) {
+      if (looping(this)) {
+        const off = this.offset + (this.isPaused ? this.pauseTime : 0);
+        const buffer = this.getSample()._audioBuffer;
+        if (this.isPaused && buffer && off >= buffer.duration) stats.pastEnd++;
+      }
+      const r = restart.apply(this, a);
+      if (looping(this)) mark(this);
+      return r;
+    };
+    const pause = P.pause;
+    P.pause = function (enable = true, ...a) { if (enable && looping(this)) stats.loopPauses++; return pause.call(this, enable, ...a); };
+    setInterval(() => {
+      let stuck = 0;
+      let loops = 0;
+      for (const node of GA.sampleNodes.values()) {
+        if (!looping(node) || !node.isStarted || node.isPaused) continue;
+        loops++;
+        const buffer = node.getSample()._audioBuffer;
+        const rate = Math.max(node._source && node._source.playbackRate ? node._source.playbackRate.value : 1, 0.25);
+        if (buffer && node.__wbAt !== undefined && GA.ctx.state === 'running' && GA.ctx.currentTime - node.__wbAt > buffer.duration / rate + 1.5) stuck++;
+      }
+      stats.stuck = stuck;
+      stats.loops = Math.max(stats.loops, loops);
+      stats.stuckMax = Math.max(stats.stuckMax, stuck);
+    }, 1000);
+  };
+  hook();
+}
+
+// --audio-loops: drives the run for opts.audioLoops seconds (gas on and off every
+// 3 s, a pause and resume every 20 s; the run may crash, which is fine) and checks the
+// counters of audioLoopsProbe.
+async function auditLoops(page, opts, failures) {
+  console.log(`smoke: audio loops: driving ${opts.audioLoops} s with gas on/off and pauses`);
+  const end = Date.now() + opts.audioLoops * 1000;
+  let sec = 0;
+  let gas = false;
+  while (Date.now() < end && !failures.length) {
+    await page.waitForTimeout(1000);
+    sec++;
+    if (sec % 3 === 0) {
+      gas = !gas;
+      if (gas) await page.keyboard.down('ArrowUp');
+      else await page.keyboard.up('ArrowUp');
+    }
+    if (sec % 20 === 10 || sec % 20 === 13) await page.keyboard.press('p');
+  }
+  if (gas) await page.keyboard.up('ArrowUp');
+  const st = await page.evaluate(() => window.__wbLoops || null);
+  if (!st) {
+    failures.push('audio loops: the probe never ran');
+    return;
+  }
+  console.log(`smoke: audio loops: ${st.loopStarts} loop starts, up to ${st.loops} playing, ${st.loopPauses} loop pauses, ` +
+    `${st.pastEnd} resumes past the end, ${st.stuckMax} stuck at most (${st.stuck} now)`);
+  if (st.loopStarts === 0) failures.push('audio loops: no looping sample ever started (engine, wind)');
+  if (st.loopPauses > 0) failures.push(`audio loops: ${st.loopPauses} pauses of looping samples (Godot 4.7's web resume can leave them silent for good)`);
+  if (st.pastEnd > 0) failures.push(`audio loops: ${st.pastEnd} loop resumes started past the buffer's end`);
+  if (st.stuckMax > 0) failures.push(`audio loops: ${st.stuckMax} looping samples stuck (unpaused, no restart within their duration)`);
 }

@@ -24,6 +24,13 @@
 //! N10.2: operations: the admin API and the full admin CLI, the planned restart (notice,
 //! drain, room handover, close 1012), backups with verification, an off-site hook and
 //! restore, per-IP and per-account rate limits, request ids, and the ops metrics.
+//! N10.3: housekeeping on the small data volume: at most 3 daily backups, the backup age
+//! check, free-space guard, row retention (shadow contacts, admin log, handled reports,
+//! old board periods, runs without entries), WAL checkpoints and VACUUM, disk metrics,
+//! and the `set_aside` replay status with its purge.
+//! N11: Sign in with Apple / Google (`identity`: ID tokens checked against the providers'
+//! JWKS, nonces, link / unlink / sign-in, Apple token revocation; off until configured),
+//! per-device credentials, and the cloud save (`save`: one JSON document per account).
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Architecture", "Server tech stack",
 //! "Resource budget and deployment"; docs/MULTIPLAYER_PLAN.md → N0, MP-D1.
 
@@ -42,7 +49,9 @@ pub mod error;
 pub mod gateway;
 pub mod handover;
 pub mod healthcheck;
+pub mod housekeeping;
 pub mod http;
+pub mod identity;
 pub mod leaderboards;
 pub mod map;
 pub mod metrics;
@@ -57,6 +66,7 @@ pub mod ratelimit;
 pub mod replays;
 pub mod rooms;
 pub mod runs;
+pub mod save;
 pub mod sessions;
 pub mod shutdown;
 pub mod social;

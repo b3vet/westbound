@@ -54,6 +54,23 @@ func test_boots_and_runs_five_seconds_at_4x() -> void:
 	eq(DevStats.get_value(DevStats.VEHICLES), sb.sim.state.count, "vehicle count in DevStats")
 
 
+## WP9.10: the sandbox's dev buttons and panels keep to the HUD's safe area
+## (ScreenInsets, WP9.7), so on a phone nothing sits under the camera cutout.
+func test_safe_area_is_the_huds() -> void:
+	var sb := await _boot()
+	var full: Rect2 = sb.get_viewport().get_visible_rect()
+	var safe := ScreenInsets.canvas_safe_rect(full)
+	eq(sb.safe_rect(), safe, "the sandbox: ScreenInsets, as the HUD")
+	eq(sb.overlay.safe_rect, safe, "the overlay's side panel")
+	var bars := sb.find_children("*", "DriveControls", true, false)
+	gt(bars.size(), 1, "tabs bar and panels")
+	for dc: DriveControls in bars:
+		eq(dc.safe_rect(), safe, "%s: ScreenInsets" % dc.name)
+	var slider := sb.get_node(^"SkyTSlider/Panel") as Control
+	await tree.process_frame
+	ge(slider.get_global_rect().position.x, safe.position.x, "the sky_t slider inside the safe area")
+
+
 func test_time_scale_bounds_and_frame_cap() -> void:
 	var sb := await _boot()
 	sb.time_scale = 0.1

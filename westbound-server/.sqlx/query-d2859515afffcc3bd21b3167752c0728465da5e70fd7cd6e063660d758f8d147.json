@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO cloud_saves (account_id, revision, data, bytes, updated_at)\n         VALUES (?, ?, ?, ?, ?)\n         ON CONFLICT (account_id) DO UPDATE SET\n             revision = excluded.revision, data = excluded.data,\n             bytes = excluded.bytes, updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "d2859515afffcc3bd21b3167752c0728465da5e70fd7cd6e063660d758f8d147"
+}

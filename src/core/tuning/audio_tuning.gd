@@ -60,8 +60,16 @@ const PATH := "res://data/tuning/audio.tres"
 ## Fade times (s): in at the countdown, out on the crash and at the results.
 @export var engine_fade_in_s: float = 0.6   # not in spec
 @export var engine_fade_out_s: float = 0.8   # not in spec
-## Voices below this linear gain are paused (they cost nothing).
+## Voices below this linear gain are paused (they cost nothing), or stopped on the web.
 @export var silent_gain: float = 0.001   # not in spec
+## The web plays the loops (engine, intake, wind, tire hum) as Web Audio samples, and
+## Godot 4.7's sample pause/unpause can restart a loop past its end, where WebKit never
+## plays or ends it: the loop goes silent for good (docs/AUDIO.md → Loops on the web).
+## So on the web a silent loop is stopped instead of paused, once it has been silent
+## this long (s; so a gain hovering at silence doesn't restart it every frame), and
+## play() starts it again when it is heard.
+@export var loop_stop_on_web: bool = true   # not in spec
+@export var loop_stop_hold_s: float = 0.5   # not in spec
 
 @export_group("Boost and intake")
 @export var intake_db: float = -3.0   # not in spec
@@ -217,6 +225,11 @@ func wind_full_mps() -> float:
 
 func tire_hum_full_mps() -> float:
 	return Units.kmh_to_mps(tire_hum_full_kmh)
+
+
+## True where silent loops are stopped rather than paused (the web; loop_stop_on_web).
+func stops_silent_loops() -> bool:
+	return loop_stop_on_web and OS.has_feature("web")
 
 
 static func load_default() -> AudioTuning:

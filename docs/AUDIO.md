@@ -33,7 +33,7 @@ WP7A (plan WP7.1 engine and wind, WP7.2 pass and traffic audio, WP7.3 music and 
 - **Volumes.** Each bus has a base level in `AudioTuning` (`*_db`) and a player setting (`volume_master`, `volume_music`, `volume_sfx`, `volume_engine`, `volume_ui`: linear 0 to 1). The result is `base + linear_to_db(setting)`, gliding over `volume_glide_s`. A setting of 0 mutes the bus. `audio_muted` mutes Master; the M key (`PlayerInput.mute_toggled`) flips it. All six keys persist with the other settings.
 - **Night.** `night_started` fades the Music low-pass (20 kHz down to `night_lowpass_hz`, an exponential sweep) and the reverb in over `night_fade_s`. `dawn_started(duration)` fades them out over the dawn (capped at `night_fade_s`). `morning_reached` snaps them off. Effects are disabled whenever they are at 0.
 - **Tunnels.** `TunnelLight.factor_at(player.s)` gives the same smooth 0 to 1 at the portals that the lighting uses (it reads the road's `TUNNEL` features). It sets the SFX and Engine reverb wet level (`tunnel_reverb_wet` × factor). Outside tunnels the effect is off.
-- **Web.** The web build is single-threaded, so Godot plays one-shots and loops as **Web Audio samples**. Samples get bus volume and mute, pan and pitch, but **no bus effects**, so the tunnel reverb is native-only. Music uses stream playback on the web (`music_stream_on_web`). That keeps the night filter working and avoids decoding a whole 3-minute track into a PCM buffer. Godot resumes the browser's AudioContext on the first input event. Nothing here plays before the countdown except music, which the browser holds until that gesture (WP9.2 polishes the unlock).
+- **Web.** The web build is single-threaded, so Godot plays one-shots and loops as **Web Audio samples** (and never pauses a loop there: see [Loops on the web](#loops-on-the-web)). Samples get bus volume and mute, pan and pitch, but **no bus effects**, so the tunnel reverb is native-only. Music uses stream playback on the web (`music_stream_on_web`). That keeps the night filter working and avoids decoding a whole 3-minute track into a PCM buffer. Godot resumes the browser's AudioContext on the first input event. Nothing here plays before the countdown except music, which the browser holds until that gesture (WP9.2 polishes the unlock).
 
 ## Settings
 
@@ -42,7 +42,7 @@ The in-run settings panel (`src/ui/screens/settings_panel.gd`) has two pages, **
 ## Engine and wind
 
 - `engine_step_rpm = [900, 1575, 2450, 3500, 4900, 7000]`. Each step is exact: 22050 × 120 / rpm is a whole number of samples per 4-stroke cycle, so the synthesized loops are seamless.
-- **Weights.** An equal-power crossfade (cos and sin) runs between the two steps around the smoothed rpm. A second equal-power blend over the smoothed throttle (`throttle − brake`, with a dead band) splits on-throttle from off-throttle. The level ramps by `engine_idle_db` from idle to redline. Each loop's pitch is rpm / step rpm, clamped to 0.5–2. Voices with no gain are paused, so at most 4 engine loops mix at once.
+- **Weights.** An equal-power crossfade (cos and sin) runs between the two steps around the smoothed rpm. A second equal-power blend over the smoothed throttle (`throttle − brake`, with a dead band) splits on-throttle from off-throttle. The level ramps by `engine_idle_db` from idle to redline. Each loop's pitch is rpm / step rpm, clamped to 0.5–2. Voices with no gain are paused (on the web: stopped, see [Loops on the web](#loops-on-the-web)), so at most 4 engine loops mix at once.
 - **Gear shifts.** An upshift (`VehicleState.gear` rises) dips the level by `engine_shift_dip_db` and recovers over `engine_shift_dip_s`. The gearbox itself drops the rpm, so the pitch falls on its own. `Events.gear_shifted` is never emitted by gameplay today, so the engine reads the gear from the state.
 - **Fades.** The engine fades in during the countdown and driving, and fades out on the crash and at the results.
 - **Wind.** The wind loop plays on SFX. Its level runs from `wind_min_db` at `wind_min_kmh` to `wind_max_db` at `wind_full_kmh`, its pitch rises with speed, and boosting adds `wind_boost_db`.
@@ -82,12 +82,30 @@ Every handler starts its sound inside the signal callback, so the sound starts i
 | Flat one-shots (`AudioStreamPlayer`) | 10 | stingers, chimes, impacts, zip, thump, boost whoosh |
 | Positional one-shots (`AudioStreamPlayer3D`) | 6 | whooshes, horns, hiss, scrape |
 | Cap across one-shots | 16 (`max_voices`) | A new sound steals the lowest-priority, oldest voice at or below its own priority; otherwise it drops. Priorities: hit 10 > stinger 9 > whoosh / thump 8 > zip 7 > chime 6 > boost / scrape 5 > horn 4 > hiss 3 |
-| Engine loops | 12 players, ≤ 4 audible | Zero-gain loops are paused |
-| Intake, wind | 2 | Paused when silent |
-| Tire hum (3D loops) | 3 | Paused when silent |
+| Engine loops | 12 players, ≤ 4 audible | Zero-gain loops are paused (web: stopped after `loop_stop_hold_s`) |
+| Intake, wind | 2 | Paused when silent (web: stopped) |
+| Tire hum (3D loops) | 3 | Paused when silent (web: stopped) |
 | Music | 1 | |
 
 Worst case: 16 one-shots + 4 engine + 2 + 3 + 1 = **26 mixing voices**; typical is about 10. Every player is created once in `setup()`, and no node is created per event or per frame (a test checks the node count over 200 event bursts). Per-frame code allocates nothing: the traffic scan and nearest-car insertion use fixed arrays. Godot itself creates a short-lived stream-playback object per `play()`; it is freed when the sound ends.
+
+## Loops on the web
+
+**The bug (owner report, web build on an iPhone and desktop): the engine and the wind stopped for good after a few minutes of play; one-shots and music kept going.**
+
+**Cause: Godot 4.7's Web Audio sample pause/resume** (`GodotAudio.SampleNode` in the engine's `godot.js`). On the web every loop player (engine steps, intake, wind, tire hum) is a Web Audio *sample*, and Godot loops a sample by starting a fresh `AudioBufferSourceNode` from the source's `ended` event. `EngineAudio` paused a loop whenever its gain reached 0 (a step the rpm left, the off-throttle side at full throttle, the wind below 40 km/h, everything at a crash, the pause menu) and resumed it when heard again. The engine's resume has two defects:
+
+1. `_pause()` stores `pauseTime = ctx.currentTime - _sourceStartTime`, but `_sourceStartTime` is only reset by a full restart (the `ended` path), not by a resume. So after one pause/resume the next pause measures from the old start, **paused time included**, and the value is never wrapped to the buffer (nor scaled by the pitch).
+2. `_restart()` starts the new source at `offset + pauseTime`, which is soon past the end of a 2 s (engine) or 4 s (wind) buffer.
+
+Chrome clamps such a start to the end and fires `ended` at once, so its loop restarts (a hiccup). **WebKit (Safari, and every browser on iOS) neither plays nor ends a source started past its end**: no `ended`, so no restart, and Godot still reports the player as playing. The loop is silent until it happens to be paused and resumed again, and that resume starts even further past the end (`pauseTime` keeps growing with every minute since the last full restart), so after a few minutes of play the loops are silent for good. The wind and the dominant engine step are the first to go: at speed they are never paused, so nothing retries them. Measured in Playwright's WebKit with a probe on `GodotAudio.SampleNode`: after a pause, the wind was resumed at 6.2 s into its 4 s buffer and an engine loop at 36.9 s into its 2 s buffer, and neither sounded or restarted again while driving (tens of seconds, until the next crash paused them).
+
+**Fix: on the web a loop is never paused.** `AudioTuning.loop_stop_on_web` (on) makes `EngineAudio` and `TrafficAudio` stop a silent loop instead, once it has been silent for `loop_stop_hold_s` (0.5 s; a gain that hovers at silence then doesn't restart the loop every frame, and each `play()` sets up a Vorbis decoder), and `play()` it again when it is heard. The game pause stops the loops too; they start again on resume. A fresh `play()` starts the source at 0 and Godot's `ended` restart path resets its clock, so the broken resume is never used. Native builds keep pausing (they mix in the engine, where pause works). In WebKit the fixed build drove 8 minutes with pauses and 15 crash/retry cycles: no paused loop, none stuck; in Chromium the smoke below reports 0 loop pauses and 0 resumes past the end (the unfixed build: 62 pauses, 18 resumes past the end in 60 s).
+
+**Checks.**
+
+- `tests/audio/test_audio_loops.gd`: with the web mode forced (`stop_silent`), no loop is ever paused, silent loops stop after the hold and start again when heard, the pause stops them, short silences don't restart them; in both modes, through a real Run with a weaving bot that lifts off the throttle, boosts, gets hit, crashes, sees the results and retries, with pauses, slow motion, night and dawn and jumps to the next checkpoint (leg changes), every loop that should be heard is playing every frame and the engine and wind are heard while driving (`test_loops_survive_a_run_with_every_event`, 13 s per mode; `soak_loops_survive_minutes_with_every_event`, 12 minutes per mode). The web-mode checks fail on the old pause behaviour.
+- `node tools/web_smoke/smoke.mjs --landscape --dpr 1 --audio-loops 60`: starts a run, drives it with the gas on and off and the pause key, and watches the engine's sample nodes (the smoke serves an `index.js` that exposes `GodotAudio` to its probe). It fails on any pause of a looping sample, a resume past the end, a stuck loop, or no loop at all.
 
 ## Assets
 
@@ -135,6 +153,8 @@ Regenerate with `pip install numpy soundfile`, then `python3 tools/audio/gen_aud
 - the voice cap and priority stealing;
 - no new nodes or leftover objects per event;
 - the run attaching the audio.
+
+`tests/audio/test_audio_loops.gd` covers the loops over long runs and on the web (see [Loops on the web](#loops-on-the-web)).
 
 `tests/audio/test_audio_settings.gd` covers the AUDIO page of the in-run settings: the tabs, the rows, taps writing Settings, and text fit at both text sizes on the plain and the notched canvas.
 

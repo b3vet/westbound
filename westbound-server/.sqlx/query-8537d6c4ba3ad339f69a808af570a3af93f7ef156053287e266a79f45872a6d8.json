@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT apple_sub FROM accounts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "apple_sub",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "apple_sub"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "8537d6c4ba3ad339f69a808af570a3af93f7ef156053287e266a79f45872a6d8"
+}

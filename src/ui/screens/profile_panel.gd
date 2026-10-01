@@ -10,9 +10,17 @@ extends Control
 ## Left: the player card (name#tag, online status and what it means), then RENAME (a
 ## text field, SAVE, and the server's answer inline) or, when not signed in, TRY AGAIN
 ## (and NEW ACCOUNT when the stored account was refused). Right: SIGN IN WITH APPLE /
-## GOOGLE (disabled, COMING SOON), then DELETE ACCOUNT with a confirm step (DELETE
+## GOOGLE, the cloud save line, then DELETE ACCOUNT with a confirm step (DELETE
 ## FOREVER / CANCEL). Everything talks to a NetSession (NetSession.current unless
 ## bound) and follows its signals; nothing here blocks the game.
+##
+## N11 (docs/NET_CLIENT.md → Account screen): a provider button signs in (links the
+## identity to this account, or signs in when there is none here); a linked one shows
+## SIGNED IN WITH … with the masked address and opens the unlink confirm. A provider the
+## server has not set up shows NOT SET UP; one this build cannot open (no native plugin
+## yet) NOT IN THIS BUILD. When the identity has its own account the column becomes the
+## chooser: both accounts (name, level, runs), KEEP THIS DEVICE'S PROGRESS / USE THE CLOUD
+## PROGRESS / CANCEL. Under the buttons, the cloud save's state (NetCloudSave).
 ##
 ## N9.2: a tab row on top (ACCOUNT / FRIENDS / CREW, shown when a session exists) swaps
 ## this view for the FriendsPanel or the CrewPanel in the same area, with the page
@@ -27,12 +35,49 @@ extends Control
 
 const TEXT_PLAYER := "PLAYER"
 const TEXT_RENAME := "RENAME"
-const TEXT_LINK := "LINK ACCOUNT"
 const TEXT_ACCOUNT := "ACCOUNT"
 const TEXT_SAVE := "SAVE"
 const TEXT_APPLE := "SIGN IN WITH APPLE"
 const TEXT_GOOGLE := "SIGN IN WITH GOOGLE"
-const TEXT_SOON := "COMING SOON"
+## N11: the provider buttons' other states (notes under the label).
+const TEXT_SIGN_IN_CAPTION := "SIGN IN"
+const TEXT_APPLE_LINKED := "SIGNED IN WITH APPLE"
+const TEXT_GOOGLE_LINKED := "SIGNED IN WITH GOOGLE"
+const TEXT_NOT_SET_UP := "NOT SET UP"
+const TEXT_NOT_HERE := "NOT IN THIS BUILD"
+const TEXT_CHECKING := "CHECKING"
+const TEXT_PRIVATE := "PRIVATE EMAIL"
+const TEXT_TAP_UNLINK := "TAP TO UNLINK"
+const TEXT_OPENING := "Opening %s..."
+const TEXT_SIGNED_IN := "Signed in. Your progress is saved to the cloud."
+const TEXT_CANCELLED := "Sign-in cancelled."
+const TEXT_CONFLICT_TITLE := "THAT %s ACCOUNT HAS ITS OWN PROGRESS"
+const TEXT_SIDE_DEVICE := "THIS DEVICE · LEVEL %d · %d RUNS"
+const TEXT_SIDE_CLOUD := "CLOUD · LEVEL %d · %d RUNS"
+const TEXT_SIDE_EMPTY := "CLOUD · NO SAVE YET"
+const TEXT_CONFLICT_NOTE := "Either way, you switch to that account."
+const TEXT_KEEP := "KEEP THIS DEVICE'S PROGRESS"
+const TEXT_USE_CLOUD := "USE THE CLOUD PROGRESS"
+const TEXT_SWITCHING := "Switching..."
+const TEXT_SWITCHED := "Switched to %s."
+const TEXT_UNCHANGED := "Nothing changed."
+const TEXT_UNLINK_Q := "Unlink %s? You stay signed in here."
+const TEXT_UNLINK_LAST := "Then only this device can open the account."
+const TEXT_UNLINK := "UNLINK"
+const TEXT_UNLINKED := "%s unlinked."
+const TEXT_CLOUD_LINE := "CLOUD SAVE · %s"
+const TEXT_CLOUD_OFF := "OFF UNTIL YOU SIGN IN"
+const TEXT_CLOUD_ON := "ON"
+const TEXT_CLOUD_SYNCING := "SYNCING"
+const TEXT_CLOUD_SYNCED := "SYNCED"
+const TEXT_CLOUD_SYNCED_AGO := "SYNCED %d MIN AGO"
+const TEXT_CLOUD_WAITING := "UPDATES AFTER THIS RUN"
+const TEXT_CLOUD_OFFLINE := "OFFLINE, WILL RETRY"
+const TEXT_CLOUD_ERROR := "PAUSED"
+const PROVIDER_NAMES := {"apple": "Apple", "google": "Google"}
+## The longest masked address shown (longer ones are cut with "...").
+const HINT_MAX_CHARS := 22
+const S_PER_MIN := 60.0
 const TEXT_DELETE := "DELETE ACCOUNT"
 const TEXT_DELETE_FOREVER := "DELETE FOREVER"
 const TEXT_CANCEL := "CANCEL"
@@ -67,6 +112,8 @@ const STATUS_LABEL := {
 	NetSession.Status.DISABLED: "ONLINE OFF",
 }
 const NOTE_ONLINE := "Device account, saved on this device."
+## N11: signed in with a provider.
+const NOTE_PROVIDER := "Signed in with %s. Plays on any device."
 const NOTE_NOT_SAVED := "Not saved on this device (private browsing?)"
 const NOTE_CONNECTING := "Signing in..."
 const NOTE_OFFLINE := "Can't reach the server. Retrying by itself."
@@ -76,6 +123,8 @@ const NOTE_NO_SESSION := "Online play is not available in this build."
 
 ## Name line size (display face) and body lines, canvas px at 100% text size.
 const NAME_PX := 32
+## The name's size steps down by this to fit the column (_fit_name).
+const NAME_STEP_PX := 2
 const LABEL_PX := 16
 const BODY_PX := 16
 ## The rename row: SAVE's share of the column.
@@ -98,6 +147,9 @@ var social: NetSocialClient
 var view: View = View.ACCOUNT
 var confirming: bool = false
 var busy: bool = false
+## N11: the conflict chooser is showing / the provider whose unlink is being confirmed.
+var choosing: bool = false
+var unlinking: String = ""
 
 var card: ScreenPanel
 var caption: ScreenText
@@ -121,6 +173,22 @@ var confirm_text_2: ScreenText
 var confirm_button: ScreenButton
 var cancel_button: ScreenButton
 var delete_note: ScreenText
+## N11 widgets.
+var identity_note: ScreenText
+var cloud_text: ScreenText
+var conflict_title: ScreenText
+var conflict_device: ScreenText
+var conflict_device_name: ScreenText
+var conflict_cloud: ScreenText
+var conflict_cloud_name: ScreenText
+var conflict_note: ScreenText
+var keep_button: ScreenButton
+var use_cloud_button: ScreenButton
+var conflict_cancel_button: ScreenButton
+var unlink_text_1: ScreenText
+var unlink_text_2: ScreenText
+var unlink_button: ScreenButton
+var unlink_cancel_button: ScreenButton
 var tabs: Array[ScreenButton] = []
 var friends: FriendsPanel
 var crew: CrewPanel
@@ -154,12 +222,31 @@ func _init() -> void:
 	rename_note = _text("", ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.MUTED)
 	retry_button = _button(TEXT_RETRY, ScreenButton.Kind.NORMAL, retry)
 	new_account_button = _button(TEXT_NEW_ACCOUNT, ScreenButton.Kind.NORMAL, new_account)
-	link_caption = _text(TEXT_LINK, ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.MUTED)
-	apple_button = _button(TEXT_APPLE, ScreenButton.Kind.NORMAL, Callable())
-	google_button = _button(TEXT_GOOGLE, ScreenButton.Kind.NORMAL, Callable())
-	for b: ScreenButton in [apple_button, google_button]:
-		b.disabled = true
-		b.note = TEXT_SOON
+	link_caption = _text(TEXT_SIGN_IN_CAPTION, ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.MUTED)
+	apple_button = _button(TEXT_APPLE, ScreenButton.Kind.NORMAL, tap_provider.bind(NetIdentityProvider.APPLE))
+	google_button = _button(TEXT_GOOGLE, ScreenButton.Kind.NORMAL, tap_provider.bind(NetIdentityProvider.GOOGLE))
+	apple_button.name = "AppleButton"
+	google_button.name = "GoogleButton"
+	identity_note = _text("", ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.MUTED)
+	cloud_text = _text("", ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.MUTED)
+	conflict_title = _text("", ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.GOLD)
+	conflict_device = _text("", ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.MUTED)
+	conflict_device_name = _text("", ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.TEXT)
+	conflict_cloud = _text("", ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.MUTED)
+	conflict_cloud_name = _text("", ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.TEXT)
+	conflict_note = _text(TEXT_CONFLICT_NOTE, ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.MUTED)
+	keep_button = _button(TEXT_KEEP, ScreenButton.Kind.PRIMARY, resolve_conflict.bind(true))
+	keep_button.name = "KeepButton"
+	use_cloud_button = _button(TEXT_USE_CLOUD, ScreenButton.Kind.NORMAL, resolve_conflict.bind(false))
+	use_cloud_button.name = "UseCloudButton"
+	conflict_cancel_button = _button(TEXT_CANCEL, ScreenButton.Kind.NORMAL, cancel_conflict)
+	conflict_cancel_button.name = "ConflictCancel"
+	unlink_text_1 = _text("", ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.TEXT)
+	unlink_text_2 = _text(TEXT_UNLINK_LAST, ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.MUTED)
+	unlink_button = _button(TEXT_UNLINK, ScreenButton.Kind.DANGER, confirm_unlink)
+	unlink_button.name = "UnlinkButton"
+	unlink_cancel_button = _button(TEXT_CANCEL, ScreenButton.Kind.NORMAL, cancel_unlink)
+	unlink_cancel_button.name = "UnlinkCancel"
 	account_caption = _text(TEXT_ACCOUNT, ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.MUTED)
 	delete_button = _button(TEXT_DELETE, ScreenButton.Kind.DANGER, ask_delete)
 	confirm_text_1 = _text(TEXT_CONFIRM_1, ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.HOT)
@@ -244,7 +331,10 @@ func _connect(on: bool) -> void:
 	if session == null or not is_instance_valid(session):
 		return
 	var sigs: Array[Signal] = [session.status_changed, session.profile_changed, session.signed_in,
-			session.signed_out, session.banned]
+			session.signed_out, session.banned, session.providers_loaded, session.account_switched]
+	if session.cloud != null:
+		sigs.append(session.cloud.status_changed)
+		sigs.append(session.cloud.synced)
 	for sig in sigs:
 		if on and not sig.is_connected(_on_session_signal):
 			sig.connect(_on_session_signal)
@@ -265,9 +355,15 @@ func open() -> void:
 	friends.visible = false
 	crew.visible = false
 	confirming = false
+	unlinking = ""
+	var s := _session()
+	choosing = s != null and not s.pending_conflict.is_empty()
 	rename_note.text = ""
 	delete_note.text = ""
+	identity_note.text = ""
 	name_edit.text = ""
+	if s != null:
+		s.load_providers()
 	refresh()
 
 
@@ -328,6 +424,182 @@ func confirm_delete() -> void:
 	else:
 		_note(delete_note, NetSession.error_text(r, s.now_unix()), ScreenText.Ink.HOT)
 	refresh()
+
+
+# ---------------------------------------------------------------- Sign in with Apple / Google (N11)
+
+## A provider button: sign in (not linked) or the unlink confirm (linked).
+func tap_provider(provider: String) -> void:
+	var s := _session()
+	if s == null or busy:
+		return
+	if s.profile != null and s.profile.is_linked(provider) and s.status == NetSession.Status.ONLINE:
+		unlinking = provider
+		confirming = false
+		identity_note.text = ""
+		refresh()
+		return
+	busy = true
+	_note(identity_note, TEXT_OPENING % String(PROVIDER_NAMES.get(provider, provider)), ScreenText.Ink.MUTED)
+	refresh()
+	var r: NetApiResult = await s.sign_in_with(provider)
+	busy = false
+	if r.ok:
+		_note(identity_note, TEXT_SIGNED_IN, ScreenText.Ink.ACCENT)
+	elif r.error == NetSession.ERR_IDENTITY_IN_USE:
+		choosing = true
+		identity_note.text = ""
+	elif r.error == NetIdentityResult.CANCELLED:
+		_note(identity_note, TEXT_CANCELLED, ScreenText.Ink.MUTED)
+	else:
+		_note(identity_note, NetSession.error_text(r, s.now_unix()), ScreenText.Ink.HOT)
+	refresh()
+
+
+## The chooser: switch to the identity's account, keeping this device's progress (merged
+## in) or using the cloud's.
+func resolve_conflict(keep_device: bool) -> void:
+	var s := _session()
+	if s == null or busy:
+		return
+	busy = true
+	_note(identity_note, TEXT_SWITCHING, ScreenText.Ink.MUTED)
+	refresh()
+	var r: NetApiResult = await s.resolve_conflict(keep_device)
+	busy = false
+	if r.ok:
+		choosing = false
+		var who := s.profile.full_name if s.profile != null else ""
+		_note(identity_note, TEXT_SWITCHED % who, ScreenText.Ink.ACCENT)
+	else:
+		_note(identity_note, NetSession.error_text(r, s.now_unix()), ScreenText.Ink.HOT)
+		if r.error == "id_token_expired" or r.error == "invalid_nonce" or r.error == NetSession.ERR_NO_CONFLICT:
+			s.cancel_conflict()
+			choosing = false
+	refresh()
+
+
+func cancel_conflict() -> void:
+	var s := _session()
+	if s != null:
+		s.cancel_conflict()
+	choosing = false
+	_note(identity_note, TEXT_UNCHANGED, ScreenText.Ink.MUTED)
+	refresh()
+
+
+func confirm_unlink() -> void:
+	var s := _session()
+	if s == null or busy or unlinking.is_empty():
+		return
+	var provider := unlinking
+	busy = true
+	refresh()
+	var r: NetApiResult = await s.unlink(provider)
+	busy = false
+	unlinking = ""
+	if r.ok:
+		_note(identity_note, TEXT_UNLINKED % String(PROVIDER_NAMES.get(provider, provider)), ScreenText.Ink.ACCENT)
+	else:
+		_note(identity_note, NetSession.error_text(r, s.now_unix()), ScreenText.Ink.HOT)
+	refresh()
+
+
+func cancel_unlink() -> void:
+	unlinking = ""
+	refresh()
+
+
+## A provider button's label, note and whether it can be tapped.
+func _provider_button(b: ScreenButton, provider: String, s: NetSession) -> void:
+	var linked := s != null and s.profile != null and s.profile.is_linked(provider) \
+			and s.status != NetSession.Status.SIGNED_OUT
+	var apple := provider == NetIdentityProvider.APPLE
+	b.text = (TEXT_APPLE_LINKED if apple else TEXT_GOOGLE_LINKED) if linked else (TEXT_APPLE if apple else TEXT_GOOGLE)
+	b.selected = linked
+	if s == null:
+		b.note = TEXT_NOT_SET_UP
+		b.disabled = true
+		return
+	if linked:
+		var hint := s.profile.email_hint(provider)
+		b.note = TEXT_PRIVATE if s.profile.private_email(provider) else (short_hint(hint) if not hint.is_empty() else TEXT_TAP_UNLINK)
+		b.disabled = busy or s.status != NetSession.Status.ONLINE
+		return
+	if s.provider_config.is_empty():
+		b.note = TEXT_CHECKING
+		b.disabled = true
+	elif not s.provider_enabled(provider):
+		b.note = TEXT_NOT_SET_UP
+		b.disabled = true
+	elif not s.provider_available(provider):
+		b.note = TEXT_NOT_HERE
+		b.disabled = true
+	else:
+		b.note = ""
+		var can := s.status == NetSession.Status.ONLINE or s.status == NetSession.Status.SIGNED_OUT \
+				or s.status == NetSession.Status.FAILED
+		b.disabled = busy or not can or s.identity_busy()
+
+
+## A masked address short enough for a button note.
+static func short_hint(hint: String) -> String:
+	if hint.length() <= HINT_MAX_CHARS:
+		return hint.to_upper()
+	return (hint.left(HINT_MAX_CHARS - 3) + "...").to_upper()
+
+
+## The chooser's two lines: this device's account and progress, the identity's.
+func _conflict_lines(s: NetSession) -> void:
+	var c := s.pending_conflict
+	var p := str(c.get("provider", ""))
+	conflict_title.text = TEXT_CONFLICT_TITLE % String(PROVIDER_NAMES.get(p, p)).to_upper()
+	var cur: Variant = c.get("current", {})
+	var other: Variant = c.get("other", {})
+	var has_target := s.cloud != null and s.cloud.target != null
+	var local := SaveMerge.summary(s.cloud.target.snapshot() if has_target else Save.snapshot())
+	var prog := Garage.tuning()
+	conflict_device.text = TEXT_SIDE_DEVICE % [Progression.level_for_xp(int(local[SaveMerge.STAT_XP]), prog),
+			int(local[SaveMerge.STAT_RUNS])]
+	conflict_device_name.text = _name_of(cur)
+	var cs: Variant = (other as Dictionary).get("cloud_save") if other is Dictionary else null
+	if cs is Dictionary:
+		var xp := _whole((cs as Dictionary).get("xp"))
+		conflict_cloud.text = TEXT_SIDE_CLOUD % [Progression.level_for_xp(xp, prog), _whole((cs as Dictionary).get("runs"))]
+	else:
+		conflict_cloud.text = TEXT_SIDE_EMPTY
+	conflict_cloud_name.text = _name_of(other)
+
+
+## A JSON number as a whole number (0 for null or anything else).
+static func _whole(v: Variant) -> int:
+	return int(v) if (v is int or v is float) and is_finite(float(v)) else 0
+
+
+static func _name_of(side: Variant) -> String:
+	if side is Dictionary:
+		return NetApiResult.as_id((side as Dictionary).get("full_name", ""))
+	return ""
+
+
+## The cloud save line.
+func _cloud_line(s: NetSession) -> String:
+	var c: NetCloudSave = s.cloud if s != null else null
+	if c == null or not c.enabled():
+		return TEXT_CLOUD_LINE % TEXT_CLOUD_OFF
+	match c.status:
+		NetCloudSave.Status.SYNCING:
+			return TEXT_CLOUD_LINE % TEXT_CLOUD_SYNCING
+		NetCloudSave.Status.WAITING:
+			return TEXT_CLOUD_LINE % TEXT_CLOUD_WAITING
+		NetCloudSave.Status.OFFLINE:
+			return TEXT_CLOUD_LINE % TEXT_CLOUD_OFFLINE
+		NetCloudSave.Status.ERROR:
+			return TEXT_CLOUD_LINE % TEXT_CLOUD_ERROR
+		NetCloudSave.Status.SYNCED:
+			var mins := floori((s.now_unix() - float(c.last_sync_unix)) / S_PER_MIN)
+			return TEXT_CLOUD_LINE % (TEXT_CLOUD_SYNCED if mins < 1 else TEXT_CLOUD_SYNCED_AGO % mins)
+	return TEXT_CLOUD_LINE % TEXT_CLOUD_ON
 
 
 func retry() -> void:
@@ -434,6 +706,29 @@ func refresh() -> void:
 	var nt: NetTuning = s.tuning if s != null else null
 	name_edit.max_length = nt.display_name_max_chars if nt != null else 0
 	name_edit.net_tuning = nt
+	_provider_button(apple_button, NetIdentityProvider.APPLE, s)
+	_provider_button(google_button, NetIdentityProvider.GOOGLE, s)
+	if choosing and (s == null or s.pending_conflict.is_empty()):
+		choosing = false
+	if choosing:
+		_conflict_lines(s)
+	cloud_text.text = _cloud_line(s)
+	var cloud_ink := ScreenText.Ink.MUTED
+	if s != null and s.cloud != null and s.cloud.status == NetCloudSave.Status.SYNCED:
+		cloud_ink = ScreenText.Ink.ACCENT
+	elif s != null and s.cloud != null and s.cloud.status == NetCloudSave.Status.ERROR:
+		cloud_ink = ScreenText.Ink.HOT
+	cloud_text.set_ink(cloud_ink)
+	if unlinking != "":
+		var pname := String(PROVIDER_NAMES.get(unlinking, unlinking))
+		unlink_text_1.text = TEXT_UNLINK_Q % pname
+		var others := s != null and s.profile != null and ((unlinking == "apple" and s.profile.linked_google)
+				or (unlinking == "google" and s.profile.linked_apple))
+		unlink_text_2.text = "" if others else TEXT_UNLINK_LAST
+	keep_button.disabled = busy
+	use_cloud_button.disabled = busy
+	conflict_cancel_button.disabled = busy
+	unlink_button.disabled = busy
 	var tabbed := s != null
 	for i in tabs.size():
 		tabs[i].visible = tabbed
@@ -444,9 +739,31 @@ func refresh() -> void:
 	if not tabbed:
 		view = View.ACCOUNT
 	var acct := view == View.ACCOUNT
-	for ci: CanvasItem in [card, caption, name_text, tag_text, status_text, status_note, link_caption,
-			apple_button, google_button]:
+	for ci: CanvasItem in [card, caption, name_text, tag_text, status_text, status_note]:
 		ci.visible = acct
+	# The right column: the chooser, the unlink confirm, or the buttons and the account's
+	# deletion.
+	var normal := acct and not choosing and unlinking.is_empty()
+	for ci: CanvasItem in [link_caption, apple_button, google_button, cloud_text]:
+		ci.visible = normal
+	identity_note.visible = acct and not identity_note.text.is_empty()
+	for ci: CanvasItem in [conflict_title, conflict_device, conflict_device_name, conflict_cloud,
+			conflict_cloud_name, conflict_note, keep_button,
+			use_cloud_button, conflict_cancel_button]:
+		ci.visible = acct and choosing
+	for ci: CanvasItem in [unlink_text_1, unlink_button, unlink_cancel_button]:
+		ci.visible = acct and not choosing and not unlinking.is_empty()
+	unlink_text_2.visible = acct and not choosing and not unlinking.is_empty() and not unlink_text_2.text.is_empty()
+	if choosing:
+		for ci: CanvasItem in [rename_caption, name_edit, save_button, rename_note, retry_button,
+				new_account_button]:
+			ci.visible = false
+	if not normal:
+		delete_button.visible = false
+		account_caption.visible = false
+		delete_note.visible = false
+		for ci: CanvasItem in [confirm_text_1, confirm_text_2, confirm_button, cancel_button]:
+			ci.visible = false
 	if not acct:
 		for ci in _account_items():
 			ci.visible = false
@@ -458,7 +775,9 @@ func _account_items() -> Array[CanvasItem]:
 	return [card, caption, name_text, tag_text, status_text, status_note, rename_caption, name_edit,
 			save_button, rename_note, retry_button, new_account_button, link_caption, apple_button,
 			google_button, account_caption, delete_button, confirm_text_1, confirm_text_2, confirm_button,
-			cancel_button, delete_note]
+			cancel_button, delete_note, identity_note, cloud_text, conflict_title, conflict_device,
+			conflict_device_name, conflict_cloud, conflict_cloud_name, conflict_note, keep_button, use_cloud_button, conflict_cancel_button,
+			unlink_text_1, unlink_text_2, unlink_button, unlink_cancel_button]
 
 
 func _note_quiet(t: ScreenText, value: String, ink: ScreenText.Ink) -> void:
@@ -471,7 +790,11 @@ static func _status_note(s: NetSession, st: NetSession.Status) -> String:
 		return NOTE_NO_SESSION
 	match st:
 		NetSession.Status.ONLINE:
-			return NOTE_ONLINE if s.storage_ok else NOTE_NOT_SAVED
+			if not s.storage_ok:
+				return NOTE_NOT_SAVED
+			if s.profile != null and s.profile.has_provider():
+				return NOTE_PROVIDER % ("Apple" if s.profile.linked_apple else "Google")
+			return NOTE_ONLINE
 		NetSession.Status.CONNECTING, NetSession.Status.IDLE:
 			return NOTE_CONNECTING
 		NetSession.Status.OFFLINE:
@@ -549,6 +872,7 @@ func _layout() -> void:
 	var y := top
 	# Player card.
 	var cs := caption.get_combined_minimum_size()
+	_fit_name(cw - gap * 2.0 - g * 0.5)
 	var ns := name_text.get_combined_minimum_size()
 	var ss := status_text.get_combined_minimum_size()
 	var sn := status_note.get_combined_minimum_size()
@@ -566,8 +890,14 @@ func _layout() -> void:
 	card.position = Vector2(lx, y)
 	card.size = Vector2(cw, cy - y)
 	y = cy + gap
-	# Rename, or the sign-in actions.
-	if name_edit.visible:
+	# The chooser's CANCEL and notes take the left column (the right one holds both
+	# accounts and the two choices); otherwise rename, or the sign-in actions.
+	if choosing:
+		_place(conflict_cancel_button, Vector2(lx, y), Vector2(cw, th))
+		y += th + g
+		y = _line(conflict_note, lx, y, cw)
+		_line(identity_note, lx, y, cw)
+	elif name_edit.visible:
 		var rs := rename_caption.get_combined_minimum_size()
 		_place(rename_caption, Vector2(lx, y), rs)
 		y += rs.y
@@ -586,8 +916,28 @@ func _layout() -> void:
 		new_account_button.size = Vector2(bw, th)
 		y += th + g
 	_place(rename_note, Vector2(lx, y), Vector2(cw, rename_note.get_combined_minimum_size().y))
-	# Right column: linking (coming soon), then the account's deletion.
+	# Right column: the chooser, or the unlink confirm, or sign-in and the account's deletion.
 	var ry := top
+	if choosing:
+		for t: ScreenText in [conflict_title, conflict_device, conflict_device_name, conflict_cloud,
+				conflict_cloud_name]:
+			ry = _line(t, rx, ry, cw)
+		ry += g
+		for b: ScreenButton in [keep_button, use_cloud_button]:
+			_place(b, Vector2(rx, ry), Vector2(cw, th))
+			ry += th + g
+		return
+	if not unlinking.is_empty():
+		ry = _line(unlink_text_1, rx, ry, cw)
+		if unlink_text_2.visible:
+			ry = _line(unlink_text_2, rx, ry, cw)
+		ry += g
+		var bw3 := (cw - g) * 0.5
+		_place(unlink_button, Vector2(rx, ry), Vector2(bw3, th))
+		_place(unlink_cancel_button, Vector2(rx + bw3 + g, ry), Vector2(bw3, th))
+		ry += th + g
+		_line(identity_note, rx, ry, cw)
+		return
 	var ls := link_caption.get_combined_minimum_size()
 	_place(link_caption, Vector2(rx, ry), ls)
 	ry += ls.y
@@ -595,6 +945,9 @@ func _layout() -> void:
 		b.position = Vector2(rx, ry)
 		b.size = Vector2(cw, th)
 		ry += th + g
+	ry = _line(cloud_text, rx, ry, cw)
+	if identity_note.visible:
+		ry = _line(identity_note, rx, ry, cw)
 	ry += g
 	var acs := account_caption.get_combined_minimum_size()
 	_place(account_caption, Vector2(rx, ry), acs)
@@ -616,6 +969,29 @@ func _layout() -> void:
 		delete_button.size = Vector2(cw, th)
 		ry += th + g
 	_place(delete_note, Vector2(rx, ry), Vector2(cw, delete_note.get_combined_minimum_size().y))
+
+
+## The name and its tag in one line of `width`: the widest names (16 W's at 125 % text)
+## step the name size down until they fit (never below the body size).
+func _fit_name(width: float) -> void:
+	var px := NAME_PX
+	while true:
+		for st: ScreenText in [name_text, tag_text]:
+			if st.size_px != px:
+				st.size_px = px
+				st.update_minimum_size()
+				st.queue_redraw()
+		var w := name_text.get_combined_minimum_size().x + tag_text.get_combined_minimum_size().x
+		if w <= width or px <= BODY_PX:
+			return
+		px -= NAME_STEP_PX
+
+
+## Places a text line at (x, y), `w` wide; returns the y under it.
+static func _line(t: ScreenText, x: float, y: float, w: float) -> float:
+	var h := t.get_combined_minimum_size().y
+	_place(t, Vector2(x, y), Vector2(w, h))
+	return y + h
 
 
 static func _place(c: Control, at: Vector2, sz: Vector2) -> void:

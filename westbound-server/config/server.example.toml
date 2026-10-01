@@ -63,7 +63,15 @@ enabled = true
 dir = "/data/backups"
 # UTC, HH:MM.
 time_utc = "03:17"
-retention_days = 7
+# N10.3: how many dated daily backups stay on the volume (1..=31; the disk is small, keep
+# history off-site). After each good backup the older ones beyond this go; the newest is
+# never deleted, and a failed or skipped backup deletes nothing.
+retention_days = 3
+# N10.3: the newest backup older than this is stale (wb_backup_stale, a warning).
+max_age_hours = 26
+# N10.3: manual / pre-deploy .db files in dir and the <db>.before-restore-* copies go this
+# many days after they were written (0 keeps them); stray .tmp files after a day.
+other_retention_days = 7
 # N10.2: open each backup read-only and run PRAGMA integrity_check.
 verify = true
 # N10.2: optional off-site hook after each good backup: argv, "{file}" = the backup path,
@@ -311,6 +319,9 @@ poll_interval_secs = 30
 keep_top_n = 100
 # The retention sweep (and orphan files) runs this often.
 cleanup_interval_secs = 3600
+# N10.3: set-aside replays (no verifier has their build) lose their file this many days
+# after the upload; their runs stay "verifying". 0 keeps them (admin replay-purge-set-aside).
+set_aside_retention_days = 30
 
 [rooms]
 # Rooms and players (docs/SERVER.md → "Rooms"). The room cap is limits.max_rooms.
@@ -436,3 +447,86 @@ bind = "127.0.0.1:9091"
 token = ""
 # How long an `admin` command waits for the running server.
 request_timeout_ms = 10000
+
+[housekeeping]
+# N10.3: the data volume is small; everything the server writes there is capped
+# (docs/OPERATIONS.md → Disk space). Retentions are in days; 0 keeps the rows.
+enabled = true
+# The daily pass (row pruning, old backups and copies, a VACUUM when worth it), UTC HH:MM,
+# after the nightly backup.
+time_utc = "03:47"
+# The disk check: sizes and free space (wb_disk_*), the newest backup's age, a WAL
+# checkpoint.
+check_interval_secs = 300
+# Below this much free space: a warning, wb_disk_low = 1, the nightly backup skips and
+# replay uploads answer 503 (the game retries them later).
+min_free_mb = 500
+shadow_contacts_days = 30
+admin_log_days = 365
+# Handled reports only.
+reports_days = 365
+# Daily Drive days and Journey weeks that ended longer ago lose their board entries
+# (seasons and all-time stay).
+board_periods_days = 90
+# Runs holding no board entry (not legacy uploads, not runs waiting for their replay).
+runs_days = 90
+# Rows per delete, and the pause between full batches.
+batch_rows = 500
+batch_pause_ms = 50
+# VACUUM when this share of the file is free pages (0 = never), the file is at most
+# vacuum_max_mb and there is room for two copies plus min_free_mb.
+vacuum_min_free_pct = 25
+vacuum_max_mb = 1024
+
+[identity]
+# N11: Sign in with Apple / Google (docs/OPERATIONS.md → Sign in with Apple / Google has the
+# owner's steps). A provider is on when its client ids are set; otherwise its routes answer
+# 501 provider_not_enabled. Lists from the environment are comma-separated:
+#   WB_IDENTITY__GOOGLE_CLIENT_IDS=1234-abc.apps.googleusercontent.com
+# Google OAuth client ids accepted as the ID token's audience (Web; later iOS, Android).
+google_client_ids = []
+# The one the web build uses ("" = the first above).
+google_web_client_id = ""
+google_issuers = ["https://accounts.google.com", "accounts.google.com"]
+google_jwks_url = "https://www.googleapis.com/oauth2/v3/certs"
+# Apple: the Services ID (web) and the app's bundle id (iOS).
+apple_client_ids = []
+# The Services ID the web build uses ("" = the first above), and its registered return URL.
+apple_web_client_id = ""
+apple_web_redirect_uri = ""
+apple_issuer = "https://appleid.apple.com"
+apple_jwks_url = "https://appleid.apple.com/auth/keys"
+apple_token_url = "https://appleid.apple.com/auth/token"
+apple_revoke_url = "https://appleid.apple.com/auth/revoke"
+# For revoking Apple grants on account deletion (Apple requires it): the team id, the
+# Sign in with Apple key's id, and the key (.p8 PEM) from the environment
+# (WB_IDENTITY__APPLE_PRIVATE_KEY, "\n" escapes allowed) or a mounted file. Without them,
+# sign-in works and revocation is skipped.
+apple_team_id = ""
+apple_key_id = ""
+apple_private_key = ""
+apple_private_key_file = ""
+# The ID token must carry a nonce from POST /api/v1/auth/nonce, valid this long.
+require_nonce = true
+nonce_ttl_secs = 600
+# Leeway for exp / iat.
+clock_skew_secs = 60
+# Signing keys are cached for the provider's max-age within these bounds; an unknown key
+# id refetches at most this often.
+jwks_cache_min_secs = 300
+jwks_cache_max_secs = 86400
+jwks_refetch_min_secs = 60
+# Outbound calls (JWKS, Apple token / revoke).
+http_timeout_ms = 5000
+# Device credentials kept per account (one per signed-in device).
+max_device_secrets = 10
+max_id_token_bytes = 4096
+
+[cloud_save]
+# N11: GET/PUT /api/v1/save, one JSON document per account (no old revisions kept).
+enabled = true
+# The largest document; also the per-account disk cap.
+max_bytes = 65536
+# Writes per account, on top of the account limit.
+writes_per_hour = 120
+writes_burst = 30

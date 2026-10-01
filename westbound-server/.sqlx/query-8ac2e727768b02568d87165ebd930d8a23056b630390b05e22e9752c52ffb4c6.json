@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE accounts SET google_sub = ? WHERE id = ? AND google_sub IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8ac2e727768b02568d87165ebd930d8a23056b630390b05e22e9752c52ffb4c6"
+}

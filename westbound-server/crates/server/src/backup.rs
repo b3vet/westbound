@@ -8,6 +8,14 @@
 //! `{file}`), the last success is in `/metrics`, and [`restore`] puts a backup in place of
 //! the live database (the server stopped): the current file is kept beside it, the copy is
 //! verified, migrations run. Runbook: docs/OPERATIONS.md → Backups.
+//!
+//! N10.3 (the volume is small): `backup.retention_days` is a **count** of dated daily
+//! backups (default 3): after a good backup the older ones beyond it go, newest kept first
+//! and the one just written never deleted; a failed or skipped run deletes nothing.
+//! Before writing, the run checks the volume has room for a copy of the database plus
+//! `housekeeping.min_free_mb` and skips (an error, `wb_backups_skipped_total`) when not.
+//! [`status`] reads the newest backup's age for the stale check (`backup.max_age_hours`),
+//! and [`prune_other`] ages out manual backups and the copies a restore left.
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -25,7 +33,13 @@ use crate::metrics::Metrics;
 
 const FILE_PREFIX: &str = "westbound-";
 const FILE_SUFFIX: &str = ".db";
+const TMP_SUFFIX: &str = ".tmp";
 const SECS_PER_MINUTE: i64 = 60;
+const SECS_PER_HOUR: i64 = 3_600;
+/// A leftover `.tmp` (an interrupted backup) older than this is deleted.
+const TMP_MAX_AGE_SECS: i64 = SECS_PER_DAY;
+/// What a restore calls the database it moved aside: `<db>.before-restore-<unix secs>`.
+pub const BEFORE_RESTORE: &str = ".before-restore-";
 
 /// `westbound-YYYY-MM-DD.db` for the UTC date of `unix_secs`.
 pub fn dated_file_name(unix_secs: i64) -> String {
@@ -63,44 +77,213 @@ pub async fn run_once(pool: &SqlitePool, cfg: &BackupConfig, now: i64) -> anyhow
         }
     }
     tokio::fs::rename(&tmp, &dest).await?;
-    let removed = prune(&cfg.dir, cfg.retention_days, now)?;
+    let removed = prune(&cfg.dir, cfg.retention_days, Some(&dest))?;
     let detail = format!("removed {} old", removed.len());
     crate::db::admin_log(pool, "system", "backup", &name, &detail).await?;
     Ok(dest)
 }
 
-/// Deletes `westbound-YYYY-MM-DD.db` files dated `retention_days` or more days
-/// before `now`'s date (so exactly `retention_days` dated files remain). Other
-/// files are left alone.
-pub fn prune(dir: &Path, retention_days: u32, now: i64) -> std::io::Result<Vec<PathBuf>> {
-    let today = now.div_euclid(SECS_PER_DAY);
-    let mut removed = Vec::new();
+/// The date of a `westbound-YYYY-MM-DD.db` name (days since the epoch).
+fn dated(name: &str) -> Option<i64> {
+    name.strip_prefix(FILE_PREFIX)
+        .and_then(|r| r.strip_suffix(FILE_SUFFIX))
+        .and_then(clock::parse_date_days)
+}
+
+/// Keeps the newest `keep` dated backups (`westbound-YYYY-MM-DD.db`, by date) and deletes
+/// the older ones; `protect` (the backup just written) is never deleted, whatever its
+/// date. `keep` 0 is treated as 1: the newest backup always stays. Other files are left
+/// alone. Returns the deleted paths, sorted.
+pub fn prune(dir: &Path, keep: u32, protect: Option<&Path>) -> std::io::Result<Vec<PathBuf>> {
+    let mut files: Vec<(i64, PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let Some(date) = name
-            .strip_prefix(FILE_PREFIX)
-            .and_then(|r| r.strip_suffix(FILE_SUFFIX))
-        else {
+        let Some(day) = name.to_str().and_then(dated) else {
             continue;
         };
-        let Some(days) = clock::parse_date_days(date) else {
+        if entry.file_type()?.is_file() {
+            files.push((day, entry.path()));
+        }
+    }
+    // Newest first.
+    files.sort_by(|a, b| b.cmp(a));
+    let keep = usize::try_from(keep.max(1)).unwrap_or(usize::MAX);
+    let mut removed = Vec::new();
+    for (_, path) in files.into_iter().skip(keep) {
+        if protect.is_some_and(|p| p == path) {
             continue;
+        }
+        std::fs::remove_file(&path)?;
+        removed.push(path);
+    }
+    removed.sort();
+    Ok(removed)
+}
+
+/// N10.3: ages out what else holds a database copy on the volume, `max_age_days` after it
+/// was written (0: nothing): non-dated `.db` files in the backup directory (manual and
+/// pre-deploy backups, by modification time) and `<db>.before-restore-<unix secs>` beside
+/// the database (with its `-wal` / `-shm`, by the time in the name). Leftover `.tmp` files
+/// in the backup directory go after a day regardless. Returns the deleted paths, sorted.
+pub fn prune_other(
+    dir: &Path,
+    db_path: &Path,
+    max_age_days: u32,
+    now: i64,
+) -> std::io::Result<Vec<PathBuf>> {
+    let max_age = i64::from(max_age_days) * SECS_PER_DAY;
+    let mut removed = Vec::new();
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry?;
+                let meta = entry.metadata()?;
+                if !meta.is_file() {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let age = now - modified_unix(&meta);
+                let old_tmp = name.ends_with(TMP_SUFFIX) && age >= TMP_MAX_AGE_SECS;
+                let old_manual = max_age_days > 0
+                    && name.ends_with(FILE_SUFFIX)
+                    && dated(&name).is_none()
+                    && age >= max_age;
+                if old_tmp || old_manual {
+                    remove_existing(entry.path(), &mut removed)?;
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    if let (true, Some(parent), Some(db_name)) =
+        (max_age_days > 0, db_path.parent(), db_path.file_name())
+    {
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
         };
-        if today - days >= i64::from(retention_days) {
-            std::fs::remove_file(entry.path())?;
-            removed.push(entry.path());
+        let prefix = format!("{}{BEFORE_RESTORE}", db_name.to_string_lossy());
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Some(rest) = name.strip_prefix(&prefix) else {
+                    continue;
+                };
+                let at = rest
+                    .trim_end_matches("-wal")
+                    .trim_end_matches("-shm")
+                    .parse::<i64>();
+                if at.is_ok_and(|at| now - at >= max_age) && entry.file_type()?.is_file() {
+                    remove_existing(entry.path(), &mut removed)?;
+                }
+            }
         }
     }
     removed.sort();
     Ok(removed)
 }
 
+fn remove_existing(path: PathBuf, removed: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    match std::fs::remove_file(&path) {
+        Ok(()) => {
+            removed.push(path);
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+fn modified_unix(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// N10.3: what the nightly backup needs from the volume before it writes: room for a copy
+/// of the database (its file and WAL) plus the housekeeping floor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiskGuard {
+    pub db_path: PathBuf,
+    pub min_free_bytes: u64,
+}
+
+impl DiskGuard {
+    /// `Err` with why when the backup would take the volume below the floor. Unknown free
+    /// space (not Linux, no such directory) lets the backup run.
+    pub fn check(&self, backup_dir: &Path) -> Result<(), String> {
+        let db = file_len(&self.db_path) + file_len(&crate::ops::wal_path(&self.db_path));
+        let need = db.saturating_add(self.min_free_bytes);
+        match crate::housekeeping::free_bytes(backup_dir) {
+            Some(free) if free < need => Err(format!(
+                "{free} bytes free on the volume; a backup needs {db} plus the {} byte floor \
+                 (housekeeping.min_free_mb)",
+                self.min_free_bytes
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+fn file_len(p: &Path) -> u64 {
+    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// N10.3: the dated backups and the newest one's age, for the stale check and
+/// `admin backups`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Status {
+    /// Oldest first.
+    pub files: Vec<BackupFile>,
+    pub total_bytes: u64,
+    /// Seconds since the newest dated backup was written (`None`: there is none).
+    pub newest_age_secs: Option<i64>,
+    /// The newest backup is older than `max_age_hours`, or there is none.
+    pub stale: bool,
+}
+
+impl Status {
+    /// The newest dated backup (by date).
+    pub fn newest(&self) -> Option<&BackupFile> {
+        self.files.last()
+    }
+}
+
+/// The dated backups in `dir` and whether the newest is older than `max_age_hours` at
+/// `now` (a missing directory: no backups).
+pub fn status(dir: &Path, now: i64, max_age_hours: u64) -> std::io::Result<Status> {
+    let files = match list(dir) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(e),
+    };
+    let total_bytes = files.iter().map(|f| f.bytes).sum();
+    let newest_age_secs = files
+        .iter()
+        .map(|f| f.modified_unix)
+        .max()
+        .map(|at| (now - at).max(0));
+    let max_age = i64::try_from(max_age_hours)
+        .unwrap_or(i64::MAX / SECS_PER_HOUR)
+        .saturating_mul(SECS_PER_HOUR);
+    Ok(Status {
+        stale: newest_age_secs.is_none_or(|age| age > max_age),
+        files,
+        total_bytes,
+        newest_age_secs,
+    })
+}
+
 /// The scheduled task: sleeps until `time_utc`, backs up, repeats until cancelled.
 pub async fn nightly(
     pool: SqlitePool,
     cfg: BackupConfig,
+    guard: DiskGuard,
     metrics: Arc<Metrics>,
     cancel: CancellationToken,
 ) {
@@ -115,17 +298,26 @@ pub async fn nightly(
             _ = cancel.cancelled() => return,
             _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
         }
-        run_and_record(&pool, &cfg, &metrics, clock::unix_now_secs()).await;
+        run_and_record(&pool, &cfg, &guard, &metrics, clock::unix_now_secs()).await;
     }
 }
 
-/// One scheduled backup with its metrics, logs and the off-site hook.
+/// One scheduled backup with its metrics, logs and the off-site hook. N10.3: skipped (an
+/// error log, `wb_backups_skipped_total` and `wb_backups_failed_total`, nothing deleted)
+/// when the volume has no room for it (`guard`).
 pub async fn run_and_record(
     pool: &SqlitePool,
     cfg: &BackupConfig,
+    guard: &DiskGuard,
     metrics: &Metrics,
     now: i64,
 ) -> Option<PathBuf> {
+    if let Err(why) = guard.check(&cfg.dir) {
+        Metrics::inc(&metrics.backups_skipped);
+        Metrics::inc(&metrics.backups_failed);
+        tracing::error!(reason = %why, "nightly backup skipped: not enough disk space");
+        return None;
+    }
     let t0 = Instant::now();
     match run_once(pool, cfg, now).await {
         Ok(path) => {
@@ -252,6 +444,8 @@ const UPLOAD_STDERR_TAIL: usize = 400;
 pub struct BackupFile {
     pub name: String,
     pub bytes: u64,
+    /// When it was written (its modification time, unix seconds).
+    pub modified_unix: i64,
 }
 
 /// The `westbound-YYYY-MM-DD.db` files in `dir`, oldest first (others are ignored).
@@ -260,16 +454,15 @@ pub fn list(dir: &Path) -> std::io::Result<Vec<BackupFile>> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        let dated = name
-            .strip_prefix(FILE_PREFIX)
-            .and_then(|r| r.strip_suffix(FILE_SUFFIX))
-            .and_then(clock::parse_date_days)
-            .is_some();
-        if dated {
-            out.push(BackupFile {
-                name,
-                bytes: entry.metadata()?.len(),
-            });
+        if dated(&name).is_some() {
+            let meta = entry.metadata()?;
+            if meta.is_file() {
+                out.push(BackupFile {
+                    name,
+                    bytes: meta.len(),
+                    modified_unix: modified_unix(&meta),
+                });
+            }
         }
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
@@ -448,30 +641,200 @@ mod tests {
         assert!(format!("{e:#}").contains("killed"), "{e:#}");
     }
 
+    fn names(paths: &[PathBuf]) -> Vec<String> {
+        paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn set_mtime(path: &Path, unix: i64) {
+        let t = std::time::UNIX_EPOCH + Duration::from_secs(u64::try_from(unix).unwrap());
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
+    }
+
     #[test]
-    fn prunes_old_dated_files_only() {
+    fn keeps_the_newest_dated_files_only() {
         let dir = tempfile::tempdir().unwrap();
-        let now = clock::parse_date_days("2026-09-29").unwrap() * SECS_PER_DAY + 5_000;
         for name in [
             "westbound-2026-09-29.db",
             "westbound-2026-09-23.db",
             "westbound-2026-09-22.db",
             "westbound-2026-08-01.db",
             "westbound-not-a-date.db",
+            "manual-2026-01-01.db",
             "notes.txt",
         ] {
             std::fs::write(dir.path().join(name), b"x").unwrap();
         }
-        let removed = prune(dir.path(), 7, now).unwrap();
-        let removed: Vec<String> = removed
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
+        // N10.3: a count, whatever the gaps between the dates.
+        let removed = prune(dir.path(), 3, None).unwrap();
+        assert_eq!(names(&removed), vec!["westbound-2026-08-01.db".to_string()]);
+        let removed = prune(dir.path(), 1, None).unwrap();
         assert_eq!(
-            removed,
-            vec!["westbound-2026-08-01.db", "westbound-2026-09-22.db"]
+            names(&removed),
+            vec!["westbound-2026-09-22.db", "westbound-2026-09-23.db"]
         );
-        assert!(dir.path().join("westbound-2026-09-23.db").exists());
-        assert!(dir.path().join("notes.txt").exists());
+        assert!(dir.path().join("westbound-2026-09-29.db").exists());
+        for other in [
+            "westbound-not-a-date.db",
+            "manual-2026-01-01.db",
+            "notes.txt",
+        ] {
+            assert!(dir.path().join(other).exists(), "{other}");
+        }
+        // 0 is read as 1: the newest backup always stays.
+        assert!(prune(dir.path(), 0, None).unwrap().is_empty());
+        // The file just written is never deleted, even with newer-dated files around (a
+        // clock that went back).
+        for name in ["westbound-2030-01-01.db", "westbound-2030-01-02.db"] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let just_written = dir.path().join("westbound-2026-09-29.db");
+        let removed = prune(dir.path(), 1, Some(&just_written)).unwrap();
+        assert_eq!(names(&removed), vec!["westbound-2030-01-01.db".to_string()]);
+        assert!(just_written.exists());
+    }
+
+    #[test]
+    fn prunes_other_copies_by_age() {
+        let dir = tempfile::tempdir().unwrap();
+        let backups = dir.path().join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        let db = dir.path().join("westbound.db");
+        let now = clock::unix_now_secs();
+        let day = SECS_PER_DAY;
+        let files = [
+            (backups.join("pre-deploy-old.db"), now - 8 * day),
+            (backups.join("manual-recent.db"), now - day),
+            (backups.join("westbound-2020-01-01.db"), now - 900 * day),
+            (backups.join("westbound-2026-09-29.db.tmp"), now - 2 * day),
+            (backups.join("westbound-2026-09-30.db.tmp"), now - 60),
+            (backups.join("notes.txt"), now - 900 * day),
+            (db.clone(), now - 900 * day),
+        ];
+        for (path, at) in &files {
+            std::fs::write(path, b"x").unwrap();
+            set_mtime(path, *at);
+        }
+        // Before-restore copies are aged by the time in their name (a rename keeps the
+        // database's own modification time).
+        let old = now - 8 * day;
+        let recent = now - day;
+        for name in [
+            format!("westbound.db.before-restore-{old}"),
+            format!("westbound.db.before-restore-{old}-wal"),
+            format!("westbound.db.before-restore-{recent}"),
+            "westbound.db.before-restore-garbage".to_string(),
+        ] {
+            std::fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let removed = prune_other(&backups, &db, 7, now).unwrap();
+        let mut expected = vec![
+            format!("westbound.db.before-restore-{old}"),
+            format!("westbound.db.before-restore-{old}-wal"),
+            "pre-deploy-old.db".to_string(),
+            "westbound-2026-09-29.db.tmp".to_string(),
+        ];
+        let mut got = names(&removed);
+        expected.sort();
+        got.sort();
+        assert_eq!(got, expected);
+        for kept in [
+            backups.join("manual-recent.db"),
+            backups.join("westbound-2020-01-01.db"),
+            backups.join("westbound-2026-09-30.db.tmp"),
+            backups.join("notes.txt"),
+            db.clone(),
+            dir.path()
+                .join(format!("westbound.db.before-restore-{recent}")),
+            dir.path().join("westbound.db.before-restore-garbage"),
+        ] {
+            assert!(kept.exists(), "{}", kept.display());
+        }
+        // 0 keeps them (stray .tmp files still go).
+        std::fs::write(backups.join("x.tmp"), b"x").unwrap();
+        set_mtime(&backups.join("x.tmp"), now - 2 * day);
+        let removed = prune_other(&backups, &db, 0, now).unwrap();
+        assert_eq!(names(&removed), vec!["x.tmp".to_string()]);
+        // A missing backup directory is nothing to prune.
+        assert!(prune_other(&dir.path().join("none"), &db, 7, now)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn status_reports_the_newest_backup_and_staleness() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = clock::unix_now_secs();
+        let none = status(&dir.path().join("missing"), now, 26).unwrap();
+        assert!(none.files.is_empty() && none.stale && none.newest_age_secs.is_none());
+        for (name, age_h) in [
+            ("westbound-2026-09-28.db", 50),
+            ("westbound-2026-09-29.db", 25),
+        ] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, b"abc").unwrap();
+            set_mtime(&p, now - age_h * SECS_PER_HOUR);
+        }
+        let s = status(dir.path(), now, 26).unwrap();
+        assert_eq!(s.files.len(), 2);
+        assert_eq!(s.total_bytes, 6);
+        assert_eq!(s.newest().unwrap().name, "westbound-2026-09-29.db");
+        assert_eq!(s.newest_age_secs, Some(25 * SECS_PER_HOUR));
+        assert!(!s.stale);
+        assert!(
+            status(dir.path(), now + 2 * SECS_PER_HOUR, 26)
+                .unwrap()
+                .stale
+        );
+    }
+
+    #[tokio::test]
+    async fn a_backup_without_room_is_skipped_and_deletes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = DbConfig {
+            path: dir.path().join("westbound.db"),
+            ..Default::default()
+        };
+        let pool = crate::db::connect(&db).await.unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        let cfg = BackupConfig {
+            dir: dir.path().join("backups"),
+            retention_days: 1,
+            ..Default::default()
+        };
+        std::fs::create_dir_all(&cfg.dir).unwrap();
+        let old = cfg.dir.join("westbound-2020-01-01.db");
+        std::fs::write(&old, b"good").unwrap();
+        let metrics = Metrics::default();
+        let full = DiskGuard {
+            db_path: db.path.clone(),
+            min_free_bytes: u64::MAX / 2,
+        };
+        let now = clock::unix_now_secs();
+        assert!(run_and_record(&pool, &cfg, &full, &metrics, now)
+            .await
+            .is_none());
+        assert_eq!(Metrics::get(&metrics.backups_skipped), 1);
+        assert_eq!(Metrics::get(&metrics.backups_failed), 1);
+        assert!(old.exists(), "a skipped backup deletes nothing");
+        assert_eq!(list(&cfg.dir).unwrap().len(), 1);
+        // With room it runs, and the older backup beyond the count goes.
+        let room = DiskGuard {
+            min_free_bytes: 0,
+            ..full
+        };
+        let path = run_and_record(&pool, &cfg, &room, &metrics, now)
+            .await
+            .unwrap();
+        assert!(path.exists() && !old.exists());
+        assert_eq!(Metrics::get(&metrics.backups_ok), 1);
+        crate::db::close(&pool).await;
     }
 }

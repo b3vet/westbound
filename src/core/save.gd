@@ -23,6 +23,12 @@ extends Node
 ## it on. The boot parameter `first_run` (`?first_run=` on the web, `--first_run=` on the
 ## command line) overrides that for the game: 0 = off, 1 = a fresh first run in memory
 ## (snaps and demos: the chooser and the warm-up, nothing written).
+##
+## N11 cloud sync (docs/SAVE.md → Cloud sync): the `sync` section records when this device
+## last changed a setting (`settings_at`) and the garage selection (`garage_at`), the
+## inputs of SaveMerge's "settings: this device wins once touched" and "garage: latest
+## wins" rules. apply_cloud() puts a merged document in place (NetCloudSave), keeping the
+## old one as a backup first.
 
 signal loaded()
 
@@ -66,9 +72,20 @@ var loaded_version: int = VERSION
 var dirty: bool = false
 ## Documents written (tests).
 var writes: int = 0
+## N11: () -> float unix seconds for the sync stamps (tests); invalid = the system clock.
+var unix_clock: Callable
+## N11: the document as it was before the last apply_cloud() (always kept in memory; on
+## disk too, next to the save, when persistent: cloud_backup_path()).
+var cloud_backup: Dictionary = {}
+
+## N11: the document before a cloud download goes next to the save, with this suffix
+## (`user://save_before_cloud.json`; docs/SAVE.md → Cloud sync).
+const CLOUD_BACKUP_SUFFIX := "_before_cloud.json"
 
 var _loading: bool = false
 var _flush_queued: bool = false
+## The garage section's canonical text at the last load / write (changes stamp garage_at).
+var _garage_seen: String = ""
 
 
 func _ready() -> void:
@@ -131,6 +148,7 @@ func load_from_disk() -> void:
 			data = SaveMigrations.migrate(doc)
 	Settings.from_dict(data[KEY_SETTINGS], true)
 	_loading = false
+	_garage_seen = _garage_text()
 	# A migrated or recovered document is written back at once in its new shape.
 	if persistent and not read_only and (loaded_version < VERSION or load_status == SaveStore.Status.BACKUP):
 		save_to_disk()
@@ -145,6 +163,7 @@ func save_to_disk() -> bool:
 	var merged: Dictionary = s if s is Dictionary else {}
 	merged.merge(Settings.to_dict(), true)
 	data[KEY_SETTINGS] = merged
+	_stamp_garage()
 	dirty = false
 	if not persistent or read_only or store == null:
 		return false
@@ -179,6 +198,7 @@ func reset_fresh() -> void:
 	_loading = false
 	dirty = false
 	read_only = false
+	_garage_seen = _garage_text()
 
 
 func _flush() -> void:
@@ -193,6 +213,7 @@ func _in_gameplay() -> bool:
 
 func _on_setting_changed(_key: StringName) -> void:
 	if not _loading:
+		section(SaveMerge.KEY_SYNC)[SaveMerge.SYNC_SETTINGS_AT] = _now()
 		request_save()
 
 
@@ -215,6 +236,74 @@ func _save_probe() -> void:
 			SaveStore.Status.keys()[load_status], persistent])
 	dev[KEY_PROBE] = n + 1
 	print("Save probe: wrote %d boot(s): %s" % [n + 1, save_to_disk()])
+
+
+# ---------------------------------------------------------------- Cloud sync (N11)
+
+## Whether a downloaded document may be put in place now: not during a run (never
+## change what the player drives mid-run) and not a read-only (newer) save.
+func can_apply_cloud() -> bool:
+	return not read_only and not _in_gameplay()
+
+
+## Puts `doc` (a SaveMerge result) in place of the current document: the current one is
+## kept as the backup first (cloud_backup; cloud_backup_path() on disk), the settings are applied
+## (systems follow live), the document is written, and `loaded` fires so the achievements
+## and the garage read it again. Returns false when it may not apply now.
+func apply_cloud(doc: Dictionary) -> bool:
+	if not can_apply_cloud():
+		return false
+	cloud_backup = data.duplicate(true)
+	if persistent:
+		SaveStore.new(cloud_backup_path()).save_doc(cloud_backup)
+	_loading = true
+	var next := SaveMigrations.normalize(doc.duplicate(true))
+	# In place: a system holding a section (the Daily Drive's ghost index) keeps a live one.
+	for key: Variant in next:
+		var cur: Variant = data.get(key)
+		if cur is Dictionary and next[key] is Dictionary:
+			(cur as Dictionary).clear()
+			(cur as Dictionary).merge(next[key] as Dictionary)
+		else:
+			data[key] = next[key]
+	Settings.from_dict(data[KEY_SETTINGS], false)
+	_loading = false
+	_garage_seen = _garage_text()
+	save_to_disk()
+	loaded.emit()
+	return true
+
+
+## Where apply_cloud() keeps the previous document on disk.
+func cloud_backup_path() -> String:
+	var base := store.path if store != null else PATH
+	return base.get_basename() + CLOUD_BACKUP_SUFFIX
+
+
+## The document as JSON-ready data (a deep copy, settings included).
+func snapshot() -> Dictionary:
+	var doc := data.duplicate(true)
+	var s: Variant = doc.get(KEY_SETTINGS, {})
+	var merged: Dictionary = s if s is Dictionary else {}
+	merged.merge(Settings.to_dict(), true)
+	doc[KEY_SETTINGS] = merged
+	return doc
+
+
+func _garage_text() -> String:
+	return SaveMerge.canonical(section(SaveMerge.KEY_GARAGE))
+
+
+## A garage selection changed since the last load or write: stamp it.
+func _stamp_garage() -> void:
+	var g := _garage_text()
+	if g != _garage_seen:
+		_garage_seen = g
+		section(SaveMerge.KEY_SYNC)[SaveMerge.SYNC_GARAGE_AT] = _now()
+
+
+func _now() -> int:
+	return int(unix_clock.call()) if unix_clock.is_valid() else int(Time.get_unix_time_from_system())
 
 
 # ---------------------------------------------------------------- Sections

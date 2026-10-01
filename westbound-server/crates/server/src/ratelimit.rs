@@ -236,6 +236,8 @@ pub struct RateLimiters {
     /// Social writes per account (N9.1: friend requests, blocks, crew create / join,
     /// reports), on top of `account`.
     pub social: Arc<LimiterConfig<AccountKey>>,
+    /// N11: cloud save writes per account (`cloud_save.writes_*`), on top of `account`.
+    pub cloud_save: Arc<LimiterConfig<AccountKey>>,
     /// N10.2: every route per client IP (`rate_limits.ip_*`).
     pub ip: Arc<LimiterConfig<IpKey>>,
     /// N10.2: WebSocket upgrades per client IP (`rate_limits.ws_connect_*`).
@@ -279,6 +281,11 @@ impl RateLimiters {
         let account = build_account(r.account_per_minute, SECS_PER_MINUTE, r.account_burst);
         let runs = build_account(r.runs_per_hour, SECS_PER_HOUR, r.runs_burst);
         let social = build_account(r.social_per_hour, SECS_PER_HOUR, r.social_burst);
+        let cloud_save = build_account(
+            cfg.cloud_save.writes_per_hour,
+            SECS_PER_HOUR,
+            cfg.cloud_save.writes_burst,
+        );
         Self {
             enabled: r.enabled,
             device_create: build_ip(
@@ -292,6 +299,7 @@ impl RateLimiters {
             account,
             runs,
             social,
+            cloud_save,
             proxies: trusted,
             metrics,
         }
@@ -331,6 +339,7 @@ impl RateLimiters {
             self.account.limiter(),
             self.runs.limiter(),
             self.social.limiter(),
+            self.cloud_save.limiter(),
         ] {
             l.retain_recent();
             l.shrink_to_fit();

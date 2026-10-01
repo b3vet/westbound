@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT apple_client_id, apple_refresh_sealed FROM identity_links\n         WHERE account_id = ? AND provider = 'apple'",
+  "describe": {
+    "columns": [
+      {
+        "name": "apple_client_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_links",
+            "name": "apple_client_id"
+          }
+        }
+      },
+      {
+        "name": "apple_refresh_sealed",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "identity_links",
+            "name": "apple_refresh_sealed"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "67e2ad90258ad5c6b53c7f4b88351f92e2c34d0953a55057f825436975524955"
+}

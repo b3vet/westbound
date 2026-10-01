@@ -1,7 +1,9 @@
 //! Admin commands behind `westbound-server admin ...`: ban, unban, force-rename, (N7.1)
 //! remove a run or a leaderboard entry, and (N9.1) list and handle reports, rename or
 //! disband a crew; (N10.2) player lookup by `name#tag` or id, ban reasons, player deletion,
-//! board recomputes, database stats, the admin log and the backup list. Each change is
+//! board recomputes, database stats, the admin log and the backup list; (N10.3) the
+//! set-aside replay jobs and their purge, the backups' freshness and the disk numbers.
+//! Each change is
 //! recorded in `admin_log` (actor `cli`). The live commands (rooms, notices, kicks) go
 //! through the running server's admin API (`admin_api.rs`). Spec:
 //! WESTBOUND_MULTIPLAYER_HANDOFF.md → "Moderation" (admin CLI: list reports, ban or unban
@@ -12,7 +14,7 @@ use anyhow::{bail, Context};
 use sqlx::SqlitePool;
 
 use crate::accounts::{self, PERMANENT_BAN_UNTIL};
-use crate::config::LeaderboardsConfig;
+use crate::config::{BackupConfig, Config, LeaderboardsConfig};
 use crate::leaderboards::{self, Board};
 use crate::names;
 use crate::profanity::ProfanityFilter;
@@ -127,37 +129,97 @@ pub async fn rename(pool: &SqlitePool, id: i64, name: &str, now: i64) -> anyhow:
     Ok(format!("account {id} renamed to {full}"))
 }
 
+/// The pre-N10.3 form of a set-aside job (`failed` with `"unverifiable": true`), which a
+/// worker from an older image may still write: counted and listed as `set_aside`.
+/// NULL-safe, so `NOT (...)` keeps rows without the key.
+const LEGACY_SET_ASIDE: &str = "status = 'failed' AND COALESCE(json_valid(result)
+     AND json_extract(result, '$.unverifiable') = 1, 0) = 1";
+
 /// Replay jobs (N8.1): `replays` lists the queue by status; `replay_requeue` puts a
 /// `failed` job (or with `run_id` any job whose file is still there) back to `pending`
 /// with its attempts reset. The server's worker picks it up within
-/// `replays.poll_interval_secs`.
+/// `replays.poll_interval_secs`. N10.3: set-aside jobs (no verifier here has their build)
+/// are `set_aside`, not `failed`, listed with their build and reason; those whose file
+/// was purged are counted apart.
 pub async fn replays(pool: &SqlitePool) -> anyhow::Result<String> {
-    let rows = sqlx::query!(
-        r#"SELECT status, COUNT(*) AS "n!: i64" FROM replays GROUP BY status ORDER BY status"#
-    )
+    let rows = sqlx::query_as::<_, (String, i64)>(sqlx::AssertSqlSafe(format!(
+        "SELECT CASE WHEN {LEGACY_SET_ASIDE} THEN 'set_aside' ELSE status END AS s, COUNT(*)
+         FROM replays WHERE NOT (status = 'set_aside' AND file_deleted_at IS NOT NULL)
+         GROUP BY s ORDER BY s"
+    )))
     .fetch_all(pool)
     .await?;
     let mut out: Vec<String> = rows
         .into_iter()
-        .map(|r| format!("{} {}", r.status, r.n))
+        .map(|(status, n)| format!("{status} {n}"))
         .collect();
-    let failed = sqlx::query!(
-        "SELECT run_id, attempts, result FROM replays WHERE status = 'failed' ORDER BY run_id LIMIT 20"
+    let purged: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM replays WHERE status = 'set_aside' AND file_deleted_at IS NOT NULL",
     )
+    .fetch_one(pool)
+    .await?;
+    if purged > 0 {
+        out.push(format!("set_aside_purged {purged}"));
+    }
+    let failed = sqlx::query_as::<_, (i64, i64, Option<String>)>(sqlx::AssertSqlSafe(format!(
+        "SELECT run_id, attempts, result FROM replays WHERE status = 'failed'
+           AND NOT ({LEGACY_SET_ASIDE}) ORDER BY run_id LIMIT {LIST_LIMIT}"
+    )))
     .fetch_all(pool)
     .await?;
-    for f in failed {
+    for (run_id, attempts, result) in failed {
         out.push(format!(
-            "failed run {} after {} attempts: {}",
-            f.run_id,
-            f.attempts,
-            f.result.unwrap_or_default()
+            "failed run {run_id} after {attempts} attempts: {}",
+            result.unwrap_or_default()
+        ));
+    }
+    let parked = sqlx::query_as::<_, (i64, i64, Option<String>)>(sqlx::AssertSqlSafe(format!(
+        "SELECT run_id, created_at, result FROM replays
+         WHERE file_deleted_at IS NULL AND (status = 'set_aside' OR ({LEGACY_SET_ASIDE}))
+         ORDER BY created_at, run_id LIMIT {LIST_LIMIT}"
+    )))
+    .fetch_all(pool)
+    .await?;
+    for (run_id, created_at, result) in parked {
+        let r: serde_json::Value = result
+            .as_deref()
+            .and_then(|t| serde_json::from_str(t).ok())
+            .unwrap_or_default();
+        out.push(format!(
+            "set aside run {run_id} (build {}, uploaded {created_at}): {}",
+            r["build"],
+            r["error"].as_str().unwrap_or("")
         ));
     }
     if out.is_empty() {
         return Ok("no replays".into());
     }
     Ok(out.join("\n"))
+}
+
+/// Jobs listed per kind by `admin replays`.
+const LIST_LIMIT: i64 = 20;
+
+/// N10.3: set-aside jobs uploaded more than `older_than_secs` ago lose their replay file;
+/// their runs stay "verifying" (the row stays `set_aside`, marked purged, so no worker
+/// start requeues it). Logged to the admin log.
+pub async fn replay_purge_set_aside(
+    pool: &SqlitePool,
+    older_than_secs: i64,
+    now: i64,
+) -> anyhow::Result<String> {
+    let n = crate::replays::retention::purge_set_aside(pool, now - older_than_secs, now).await?;
+    crate::db::admin_log(
+        pool,
+        ACTOR,
+        "replay_purge_set_aside",
+        "",
+        &format!("older_than_secs={older_than_secs} jobs={n}"),
+    )
+    .await?;
+    Ok(format!(
+        "{n} set-aside replay job(s) purged: files deleted, their runs stay verifying"
+    ))
 }
 
 pub async fn replay_requeue(pool: &SqlitePool, run_id: Option<i64>) -> anyhow::Result<String> {
@@ -648,24 +710,92 @@ pub async fn log(pool: &SqlitePool, limit: i64) -> anyhow::Result<String> {
         .join("\n"))
 }
 
-/// The dated backups in `dir`, oldest first, with sizes.
-pub fn backups(dir: &std::path::Path) -> anyhow::Result<String> {
-    if !dir.exists() {
-        return Ok(format!(
-            "no backups in {} (it does not exist yet)",
-            dir.display()
+/// The dated backups in `backup.dir`, oldest first, with sizes and ages; N10.3: how many
+/// are kept, the newest one's age against `backup.max_age_hours` (`ok` / `STALE`), and
+/// the volume's free space.
+pub fn backups(cfg: &BackupConfig, now: i64) -> anyhow::Result<String> {
+    let dir = &cfg.dir;
+    let s = crate::backup::status(dir, now, cfg.max_age_hours)
+        .with_context(|| format!("reading {}", dir.display()))?;
+    let mut out: Vec<String> = s
+        .files
+        .iter()
+        .map(|f| {
+            format!(
+                "{} {} bytes, written {} ({} h ago)",
+                f.name,
+                f.bytes,
+                f.modified_unix,
+                (now - f.modified_unix).max(0) / SECS_PER_HOUR
+            )
+        })
+        .collect();
+    if s.files.is_empty() {
+        out.push(if dir.exists() {
+            format!("no backups in {}", dir.display())
+        } else {
+            format!("no backups in {} (it does not exist yet)", dir.display())
+        });
+    }
+    out.push(format!(
+        "dated backups: {} (at most {} kept), {} bytes",
+        s.files.len(),
+        cfg.retention_days,
+        s.total_bytes
+    ));
+    let verdict = if s.stale { "STALE" } else { "ok" };
+    out.push(match (s.newest(), s.newest_age_secs) {
+        (Some(f), Some(age)) => format!(
+            "newest: {} {} h old: {verdict} (stale after {} h)",
+            f.name,
+            age / SECS_PER_HOUR,
+            cfg.max_age_hours
+        ),
+        _ => format!("newest: none: {verdict}"),
+    });
+    if let Some(v) = crate::housekeeping::volume_space(dir) {
+        out.push(format!(
+            "volume: {} of {} bytes free",
+            v.free_bytes, v.total_bytes
         ));
     }
-    let files = crate::backup::list(dir).with_context(|| format!("reading {}", dir.display()))?;
-    if files.is_empty() {
-        return Ok(format!("no backups in {}", dir.display()));
-    }
-    Ok(files
-        .iter()
-        .map(|f| format!("{} {}", f.name, f.bytes))
-        .collect::<Vec<_>>()
-        .join("\n"))
+    Ok(out.join("\n"))
 }
+
+/// N10.3: the disk numbers for `admin stats` (`key value` lines, like the rest).
+pub fn disk_stats(cfg: &Config, now: i64) -> String {
+    let u = crate::housekeeping::disk_usage(cfg);
+    let opt = |v: Option<u64>| v.map_or("-".to_string(), |v| v.to_string());
+    let mut out = vec![
+        format!("disk_data_dir {}", u.data_dir),
+        format!("disk_free_bytes {}", opt(u.free_bytes)),
+        format!("disk_total_bytes {}", opt(u.total_bytes)),
+        format!("disk_min_free_bytes {}", u.min_free_bytes),
+        format!("disk_low {}", u.low),
+        format!("disk_db_bytes {}", u.db_bytes),
+        format!("disk_wal_bytes {}", u.wal_bytes),
+        format!("disk_replays_bytes {}", u.replays_bytes),
+        format!("disk_replays_files {}", u.replays_files),
+        format!("disk_backups_bytes {}", u.backups_bytes),
+        format!("disk_other_bytes {}", u.other_bytes),
+        format!("disk_data_bytes {}", u.data_bytes),
+    ];
+    if let Ok(s) = crate::backup::status(&cfg.backup.dir, now, cfg.backup.max_age_hours) {
+        out.push(format!("backup_files {}", s.files.len()));
+        out.push(format!(
+            "backup_newest {}",
+            s.newest().map_or("-", |f| f.name.as_str())
+        ));
+        out.push(format!(
+            "backup_newest_age_secs {}",
+            s.newest_age_secs.map_or("-".to_string(), |a| a.to_string())
+        ));
+        out.push(format!("backup_stale {}", s.stale));
+    }
+    out.join("\n")
+}
+
+const SECS_PER_HOUR: i64 = 3_600;
 
 #[cfg(test)]
 mod tests {

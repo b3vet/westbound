@@ -68,6 +68,12 @@ pub struct Config {
     pub scoring: ScoringConfig,
     /// N10.2: the admin API (live rooms, notices, stats) the `admin` CLI talks to.
     pub admin: AdminConfig,
+    /// N10.3: disk hygiene on the data volume (pruning, free space, WAL, backup age).
+    pub housekeeping: HousekeepingConfig,
+    /// N11: Sign in with Apple / Google (off until the client ids are set).
+    pub identity: IdentityConfig,
+    /// N11: one cloud save per account (`GET/PUT /api/v1/save`).
+    pub cloud_save: CloudSaveConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -169,8 +175,18 @@ pub struct BackupConfig {
     pub dir: PathBuf,
     /// UTC wall-clock time of the nightly run, `HH:MM`.
     pub time_utc: String,
-    /// Dated files older than this many days are deleted after each run.
+    /// N10.3: how many dated daily backups (`westbound-YYYY-MM-DD.db`) the directory keeps:
+    /// after each good backup the older ones beyond this count go (newest first; the one
+    /// just written is never deleted, and a failed run deletes nothing). The key keeps its
+    /// N0 name: with one backup a day it is the days kept.
     pub retention_days: u32,
+    /// N10.3: the newest dated backup older than this is stale (`wb_backup_stale`, a
+    /// warning, `admin backups`). A day plus slack for the run itself.
+    pub max_age_hours: u64,
+    /// N10.3: other `.db` files in `dir` (manual and pre-deploy backups) and the
+    /// `<db>.before-restore-*` copies a restore leaves are deleted this many days after
+    /// they were written; leftover `.tmp` files after a day. 0 keeps them.
+    pub other_retention_days: u32,
     /// N10.2: after each backup, open it read-only and run `PRAGMA integrity_check`.
     pub verify: bool,
     /// N10.2: optional off-site hook, run after each good backup: argv, `{file}` is the
@@ -229,6 +245,80 @@ pub struct RateLimitsConfig {
     /// N10.2: WebSocket upgrades (`/ws`, `/ws/echo`) per client IP.
     pub ws_connect_per_minute: u32,
     pub ws_connect_burst: u32,
+}
+
+/// N11 (docs/SERVER.md → Sign in with Apple / Google): the identity providers. A provider
+/// is enabled when its client ids are set; with none, its routes answer 501
+/// `provider_not_enabled` (the MP-D2 shapes). Every value is public except the Apple key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IdentityConfig {
+    /// Google OAuth client ids accepted as the ID token's `aud`: the Web client, later the
+    /// iOS and Android ones. Empty = Google sign-in off.
+    pub google_client_ids: Vec<String>,
+    /// The client id the web build initialises Google Identity Services with (public, in
+    /// `GET /auth/providers`). Empty = the first of `google_client_ids`.
+    pub google_web_client_id: String,
+    /// Accepted `iss` values (Google issues both spellings).
+    pub google_issuers: Vec<String>,
+    /// Google's signing keys (JWKS).
+    pub google_jwks_url: String,
+    /// Apple client ids accepted as `aud`: the Services ID (web) and the app's bundle id
+    /// (iOS). Empty = Apple sign-in off.
+    pub apple_client_ids: Vec<String>,
+    /// The Services ID the web build uses with Sign in with Apple JS. Empty = the first of
+    /// `apple_client_ids`.
+    pub apple_web_client_id: String,
+    /// The return URL registered on the Services ID (Apple JS needs one even in popup
+    /// mode; an https page on a verified domain), e.g. the web build's URL.
+    pub apple_web_redirect_uri: String,
+    pub apple_issuer: String,
+    pub apple_jwks_url: String,
+    /// Apple's token endpoint (authorization code → refresh token, kept for revocation).
+    pub apple_token_url: String,
+    /// Apple's revoke endpoint (account deletion, unlink).
+    pub apple_revoke_url: String,
+    /// Apple Developer team id (10 characters). With `apple_key_id` and the key, the
+    /// server exchanges codes and revokes tokens; without them it still signs players in.
+    pub apple_team_id: String,
+    /// The Sign in with Apple key's id (10 characters).
+    pub apple_key_id: String,
+    /// The `.p8` key (PKCS#8 PEM). Environment only (`WB_IDENTITY__APPLE_PRIVATE_KEY`);
+    /// literal `\n` sequences are read as newlines.
+    pub apple_private_key: Secret,
+    /// Or a path to the `.p8` file (a mounted secret). Ignored when `apple_private_key` is set.
+    pub apple_private_key_file: String,
+    /// The ID token's `nonce` must be one this server issued (`POST /auth/nonce`).
+    pub require_nonce: bool,
+    /// How long an issued nonce stays valid.
+    pub nonce_ttl_secs: u64,
+    /// Leeway for `exp` / `iat` against the server clock.
+    pub clock_skew_secs: u64,
+    /// JWKS caching: the provider's `Cache-Control: max-age`, clamped to this range.
+    pub jwks_cache_min_secs: u64,
+    pub jwks_cache_max_secs: u64,
+    /// An unknown `kid` (key rotation) refetches the keys at most this often.
+    pub jwks_refetch_min_secs: u64,
+    /// Outbound HTTP timeout (JWKS, Apple token and revoke).
+    pub http_timeout_ms: u64,
+    /// Device credentials kept per account (one per signed-in device; the least recently
+    /// used goes first).
+    pub max_device_secrets: u32,
+    /// Longest ID token accepted.
+    pub max_id_token_bytes: usize,
+}
+
+/// N11 (docs/SERVER.md → Cloud save): one JSON document per account, replaced whole.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CloudSaveConfig {
+    pub enabled: bool,
+    /// Largest stored document (bytes of its JSON); the local save is a few KB.
+    pub max_bytes: usize,
+    /// `PUT /api/v1/save` per account, on top of the account limit: this many per hour,
+    /// `writes_burst` at once.
+    pub writes_per_hour: u32,
+    pub writes_burst: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -438,6 +528,50 @@ pub struct ReplaysConfig {
     pub keep_top_n: u32,
     /// How often the retention sweep runs (and finds orphan files).
     pub cleanup_interval_secs: u64,
+    /// N10.3: set-aside (unverifiable) jobs uploaded longer ago than this lose their file
+    /// in the retention sweep (their runs stay "verifying"; the row stays, `set_aside` with
+    /// `file_deleted_at`). 0 keeps them until `admin replay-purge-set-aside`.
+    pub set_aside_retention_days: u32,
+}
+
+/// `[housekeeping]` (N10.3): the data volume is small, so everything the server writes
+/// there is capped. docs/SERVER.md → "Housekeeping (N10.3)", docs/OPERATIONS.md → Disk
+/// space. Row retentions are in days; 0 keeps the rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HousekeepingConfig {
+    /// Run the checks and the daily pass inside `serve`.
+    pub enabled: bool,
+    /// UTC `HH:MM` of the daily pass (row pruning, the file prunes, a VACUUM when worth
+    /// it). After the nightly backup, so the backup still holds what the pass deletes.
+    pub time_utc: String,
+    /// The disk check: sizes and free space (`wb_disk_*`), the newest backup's age, a WAL
+    /// checkpoint.
+    pub check_interval_secs: u64,
+    /// Below this much free space on the data volume: a warning and `wb_disk_low`, the
+    /// nightly backup is skipped (with an error) and replay uploads answer 503.
+    pub min_free_mb: u64,
+    /// `shadow_contacts` rows older than this are deleted.
+    pub shadow_contacts_days: u32,
+    /// `admin_log` rows older than this are deleted.
+    pub admin_log_days: u32,
+    /// Handled `reports` older than this are deleted (unhandled ones stay).
+    pub reports_days: u32,
+    /// Past Daily Drive days and Journey weeks that ended longer ago than this lose their
+    /// leaderboard entries (seasons and all-time boards stay).
+    pub board_periods_days: u32,
+    /// Runs older than this that hold no leaderboard entry are deleted (legacy uploads and
+    /// runs still waiting for their replay stay).
+    pub runs_days: u32,
+    /// Rows deleted per statement, and the pause between two batches that deleted
+    /// something (other writers get the database in between).
+    pub batch_rows: u32,
+    pub batch_pause_ms: u64,
+    /// The daily pass runs `VACUUM` when at least this share of the database file is free
+    /// pages (0 = never), the file is at most `vacuum_max_mb` and the volume has room for
+    /// two copies plus `min_free_mb`.
+    pub vacuum_min_free_pct: u32,
+    pub vacuum_max_mb: u64,
 }
 
 /// Plausibility checks on single-player submissions (`POST /api/v1/runs`). Spec:
@@ -718,6 +852,14 @@ const LOG_FORMATS: &[&str] = &["text", "json"];
 /// `replays.max_bytes` bounds: a header's worth, and 64 MiB.
 const MIN_REPLAY_BYTES: u64 = 1_024;
 const MAX_REPLAY_BYTES: u64 = 64 * 1024 * 1024;
+/// N10.3: `backup.retention_days` upper bound (the volume is small; off-site copies keep
+/// history).
+pub const MAX_BACKUPS_KEPT: u32 = 31;
+pub const BYTES_PER_MB: u64 = 1_048_576;
+const MAX_HOUSEKEEPING_BATCH: u32 = 10_000;
+const MIN_RUNS_DAYS: u32 = 30;
+const MIN_ADMIN_LOG_DAYS: u32 = 30;
+const MIN_BOARD_PERIOD_DAYS: u32 = 8;
 const MIN_INVITE_CODE_LEN: u32 = 6;
 const MAX_INVITE_CODE_LEN: u32 = 16;
 /// A report's `context` must fit in a request body.
@@ -799,7 +941,9 @@ impl Default for BackupConfig {
             enabled: true,
             dir: "/data/backups".into(),
             time_utc: "03:17".into(),
-            retention_days: 7,
+            retention_days: 3,
+            max_age_hours: 26,
+            other_retention_days: 7,
             verify: true,
             upload_command: Vec::new(),
             upload_timeout_secs: 600,
@@ -836,6 +980,116 @@ impl Default for AuthConfig {
             access_token_ttl_secs: 3_600,
             refresh_token_ttl_secs: 30 * 86_400,
             rename_cooldown_secs: 30 * 86_400,
+        }
+    }
+}
+
+/// Google's and Apple's published endpoints.
+pub const GOOGLE_ISSUERS: [&str; 2] = ["https://accounts.google.com", "accounts.google.com"];
+pub const GOOGLE_JWKS_URL: &str = "https://www.googleapis.com/oauth2/v3/certs";
+pub const APPLE_ISSUER: &str = "https://appleid.apple.com";
+pub const APPLE_JWKS_URL: &str = "https://appleid.apple.com/auth/keys";
+pub const APPLE_TOKEN_URL: &str = "https://appleid.apple.com/auth/token";
+pub const APPLE_REVOKE_URL: &str = "https://appleid.apple.com/auth/revoke";
+/// Apple team and key ids are 10 characters.
+const APPLE_ID_LEN: usize = 10;
+/// Bounds for `identity.*` numbers.
+const MAX_NONCE_TTL_SECS: u64 = 3_600;
+const MAX_CLOCK_SKEW_SECS: u64 = 600;
+const MIN_ID_TOKEN_BYTES: usize = 512;
+const MAX_ID_TOKEN_BYTES: usize = 16 * 1024;
+const MAX_DEVICE_SECRETS: u32 = 100;
+/// `cloud_save.max_bytes` bounds.
+const MIN_CLOUD_SAVE_BYTES: usize = 1_024;
+const MAX_CLOUD_SAVE_BYTES: usize = 1024 * 1024;
+
+impl Default for IdentityConfig {
+    fn default() -> Self {
+        Self {
+            google_client_ids: Vec::new(),
+            google_web_client_id: String::new(),
+            google_issuers: GOOGLE_ISSUERS.map(String::from).to_vec(),
+            google_jwks_url: GOOGLE_JWKS_URL.into(),
+            apple_client_ids: Vec::new(),
+            apple_web_client_id: String::new(),
+            apple_web_redirect_uri: String::new(),
+            apple_issuer: APPLE_ISSUER.into(),
+            apple_jwks_url: APPLE_JWKS_URL.into(),
+            apple_token_url: APPLE_TOKEN_URL.into(),
+            apple_revoke_url: APPLE_REVOKE_URL.into(),
+            apple_team_id: String::new(),
+            apple_key_id: String::new(),
+            apple_private_key: Secret::default(),
+            apple_private_key_file: String::new(),
+            require_nonce: true,
+            nonce_ttl_secs: 600,
+            clock_skew_secs: 60,
+            jwks_cache_min_secs: 300,
+            jwks_cache_max_secs: 86_400,
+            jwks_refetch_min_secs: 60,
+            http_timeout_ms: 5_000,
+            max_device_secrets: 10,
+            max_id_token_bytes: 4_096,
+        }
+    }
+}
+
+impl IdentityConfig {
+    pub fn google_enabled(&self) -> bool {
+        !self.google_client_ids.is_empty()
+    }
+
+    pub fn apple_enabled(&self) -> bool {
+        !self.apple_client_ids.is_empty()
+    }
+
+    /// The Google client id for the web build ("" = none).
+    pub fn google_web_client(&self) -> &str {
+        if self.google_web_client_id.is_empty() {
+            self.google_client_ids.first().map_or("", String::as_str)
+        } else {
+            &self.google_web_client_id
+        }
+    }
+
+    /// The Apple Services ID for the web build ("" = none).
+    pub fn apple_web_client(&self) -> &str {
+        if self.apple_web_client_id.is_empty() {
+            self.apple_client_ids.first().map_or("", String::as_str)
+        } else {
+            &self.apple_web_client_id
+        }
+    }
+
+    /// Whether a key for Apple's token and revoke endpoints is configured.
+    pub fn apple_key_configured(&self) -> bool {
+        !self.apple_team_id.is_empty()
+            && !self.apple_key_id.is_empty()
+            && (!self.apple_private_key.is_empty() || !self.apple_private_key_file.is_empty())
+    }
+
+    /// The `.p8` PEM: `apple_private_key` (literal `\n` sequences read as newlines), else
+    /// the file. None when neither is set.
+    pub fn apple_private_key_pem(&self) -> anyhow::Result<Option<String>> {
+        if !self.apple_private_key.is_empty() {
+            return Ok(Some(self.apple_private_key.expose().replace("\\n", "\n")));
+        }
+        if self.apple_private_key_file.is_empty() {
+            return Ok(None);
+        }
+        let pem = std::fs::read_to_string(&self.apple_private_key_file)
+            .with_context(|| format!("reading {}", self.apple_private_key_file))?;
+        Ok(Some(pem))
+    }
+}
+
+impl Default for CloudSaveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_bytes: 64 * 1024,
+            writes_per_hour: 120,
+            writes_burst: 30,
         }
     }
 }
@@ -937,7 +1191,35 @@ impl Default for ReplaysConfig {
             poll_interval_secs: 30,
             keep_top_n: 100,
             cleanup_interval_secs: 3_600,
+            set_aside_retention_days: 30,
         }
+    }
+}
+
+impl Default for HousekeepingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            time_utc: "03:47".into(),
+            check_interval_secs: 300,
+            min_free_mb: 500,
+            shadow_contacts_days: 30,
+            admin_log_days: 365,
+            reports_days: 365,
+            board_periods_days: 90,
+            runs_days: 90,
+            batch_rows: 500,
+            batch_pause_ms: 50,
+            vacuum_min_free_pct: 25,
+            vacuum_max_mb: 1_024,
+        }
+    }
+}
+
+impl HousekeepingConfig {
+    /// `min_free_mb` in bytes.
+    pub fn min_free_bytes(&self) -> u64 {
+        self.min_free_mb.saturating_mul(BYTES_PER_MB)
     }
 }
 
@@ -1365,8 +1647,13 @@ impl Config {
                     self.backup.time_utc
                 ));
             }
-            if self.backup.retention_days == 0 {
-                errs.push("backup.retention_days must be at least 1".into());
+            if self.backup.retention_days == 0 || self.backup.retention_days > MAX_BACKUPS_KEPT {
+                errs.push(format!(
+                    "backup.retention_days (daily backups kept) must be 1..={MAX_BACKUPS_KEPT}"
+                ));
+            }
+            if self.backup.max_age_hours == 0 {
+                errs.push("backup.max_age_hours must be at least 1".into());
             }
         }
         let a = &self.auth;
@@ -1437,8 +1724,129 @@ impl Config {
         self.validate_social(errs);
         self.validate_deeplinks(errs);
         self.validate_replays(errs);
+        self.validate_housekeeping(errs);
         self.validate_rooms(errs);
         self.validate_scoring(errs);
+        self.validate_identity(errs);
+    }
+
+    /// N11: `[identity]` and `[cloud_save]`.
+    fn validate_identity(&self, errs: &mut Vec<String>) {
+        let i = &self.identity;
+        for (key, list) in [
+            ("identity.google_client_ids", &i.google_client_ids),
+            ("identity.apple_client_ids", &i.apple_client_ids),
+            ("identity.google_issuers", &i.google_issuers),
+        ] {
+            if list.iter().any(|v| v.trim().is_empty() || v.trim() != v) {
+                errs.push(format!(
+                    "{key} entries must be non-empty, without spaces around them"
+                ));
+            }
+        }
+        if !i.google_web_client_id.is_empty()
+            && !i.google_client_ids.contains(&i.google_web_client_id)
+        {
+            errs.push(
+                "identity.google_web_client_id must be one of identity.google_client_ids".into(),
+            );
+        }
+        if !i.apple_web_client_id.is_empty() && !i.apple_client_ids.contains(&i.apple_web_client_id)
+        {
+            errs.push(
+                "identity.apple_web_client_id must be one of identity.apple_client_ids".into(),
+            );
+        }
+        if !i.apple_web_redirect_uri.is_empty()
+            && !is_https_or_loopback_url(&i.apple_web_redirect_uri)
+        {
+            errs.push("identity.apple_web_redirect_uri must be an https URL".into());
+        }
+        for (key, u) in [
+            ("identity.google_jwks_url", &i.google_jwks_url),
+            ("identity.apple_jwks_url", &i.apple_jwks_url),
+            ("identity.apple_token_url", &i.apple_token_url),
+            ("identity.apple_revoke_url", &i.apple_revoke_url),
+        ] {
+            if !is_https_or_loopback_url(u) {
+                errs.push(format!(
+                    "{key} must be an https URL (http only on a loopback host, for tests)"
+                ));
+            }
+        }
+        if i.apple_issuer.trim().is_empty() || (i.google_enabled() && i.google_issuers.is_empty()) {
+            errs.push("identity.apple_issuer and identity.google_issuers must be set".into());
+        }
+        let any_key = !i.apple_team_id.is_empty()
+            || !i.apple_key_id.is_empty()
+            || !i.apple_private_key.is_empty()
+            || !i.apple_private_key_file.is_empty();
+        if any_key {
+            let id_ok =
+                |s: &str| s.len() == APPLE_ID_LEN && s.chars().all(|c| c.is_ascii_alphanumeric());
+            if !id_ok(&i.apple_team_id) || !id_ok(&i.apple_key_id) {
+                errs.push(
+                    "identity.apple_team_id and identity.apple_key_id must both be 10-character Apple ids"
+                        .into(),
+                );
+            }
+            match i.apple_private_key_pem() {
+                Ok(Some(pem)) => {
+                    if let Err(e) = crate::identity::apple::parse_p8(&pem) {
+                        errs.push(format!("identity.apple_private_key: {e}"));
+                    }
+                }
+                Ok(None) => errs.push(
+                    "identity.apple_private_key (or apple_private_key_file) is required with the Apple team and key ids"
+                        .into(),
+                ),
+                Err(e) => errs.push(format!("identity.apple_private_key_file: {e:#}")),
+            }
+            if !i.apple_enabled() {
+                errs.push("identity.apple_client_ids must be set to use the Apple key".into());
+            }
+        }
+        if i.nonce_ttl_secs == 0 || i.nonce_ttl_secs > MAX_NONCE_TTL_SECS {
+            errs.push(format!(
+                "identity.nonce_ttl_secs must be 1..={MAX_NONCE_TTL_SECS}"
+            ));
+        }
+        if i.clock_skew_secs > MAX_CLOCK_SKEW_SECS {
+            errs.push(format!(
+                "identity.clock_skew_secs must be at most {MAX_CLOCK_SKEW_SECS}"
+            ));
+        }
+        if i.jwks_cache_min_secs == 0
+            || i.jwks_cache_max_secs < i.jwks_cache_min_secs
+            || i.jwks_refetch_min_secs == 0
+        {
+            errs.push(
+                "identity.jwks_cache_min_secs and jwks_refetch_min_secs must be at least 1, jwks_cache_max_secs at least jwks_cache_min_secs"
+                    .into(),
+            );
+        }
+        if i.http_timeout_ms == 0 {
+            errs.push("identity.http_timeout_ms must be at least 1".into());
+        }
+        if i.max_device_secrets == 0 || i.max_device_secrets > MAX_DEVICE_SECRETS {
+            errs.push(format!(
+                "identity.max_device_secrets must be 1..={MAX_DEVICE_SECRETS}"
+            ));
+        }
+        if !(MIN_ID_TOKEN_BYTES..=MAX_ID_TOKEN_BYTES).contains(&i.max_id_token_bytes) {
+            errs.push(format!(
+                "identity.max_id_token_bytes must be {MIN_ID_TOKEN_BYTES}..={MAX_ID_TOKEN_BYTES}"
+            ));
+        }
+        let c = &self.cloud_save;
+        if !(MIN_CLOUD_SAVE_BYTES..=MAX_CLOUD_SAVE_BYTES).contains(&c.max_bytes) {
+            errs.push(format!(
+                "cloud_save.max_bytes must be {MIN_CLOUD_SAVE_BYTES}..={MAX_CLOUD_SAVE_BYTES}"
+            ));
+        }
+        if self.rate_limits.enabled && (c.writes_per_hour == 0 || c.writes_burst == 0) {
+            errs.push("cloud_save.writes_per_hour and writes_burst must be at least 1".into());
+        }
     }
 
     fn validate_leaderboards(&self, errs: &mut Vec<String>) {
@@ -1510,6 +1918,45 @@ impl Config {
         ] {
             if v == 0 {
                 errs.push(format!("replays.{name} must be at least 1"));
+            }
+        }
+    }
+
+    /// N10.3: `[housekeeping]`.
+    fn validate_housekeeping(&self, errs: &mut Vec<String>) {
+        let h = &self.housekeeping;
+        if h.enabled && parse_hh_mm(&h.time_utc).is_none() {
+            errs.push(format!(
+                "housekeeping.time_utc `{}` must be HH:MM (UTC)",
+                h.time_utc
+            ));
+        }
+        if h.check_interval_secs == 0 {
+            errs.push("housekeeping.check_interval_secs must be at least 1".into());
+        }
+        if h.batch_rows == 0 || h.batch_rows > MAX_HOUSEKEEPING_BATCH {
+            errs.push(format!(
+                "housekeeping.batch_rows must be 1..={MAX_HOUSEKEEPING_BATCH}"
+            ));
+        }
+        if h.vacuum_min_free_pct > 100 {
+            errs.push("housekeeping.vacuum_min_free_pct must be 0..=100".into());
+        }
+        // Rows the server still needs: a run's idempotent answer and the recent history,
+        // the admin log of recent moderation, the current Journey week.
+        for (key, days, min) in [
+            ("runs_days", h.runs_days, MIN_RUNS_DAYS),
+            ("admin_log_days", h.admin_log_days, MIN_ADMIN_LOG_DAYS),
+            (
+                "board_periods_days",
+                h.board_periods_days,
+                MIN_BOARD_PERIOD_DAYS,
+            ),
+        ] {
+            if days != 0 && days < min {
+                errs.push(format!(
+                    "housekeeping.{key} must be 0 (keep) or at least {min}"
+                ));
             }
         }
     }
@@ -1757,6 +2204,7 @@ impl Config {
             &mut c.auth.jwt_secret,
             &mut c.auth.device_secret_pepper,
             &mut c.admin.token,
+            &mut c.identity.apple_private_key,
         ] {
             if !secret.is_empty() {
                 *secret = Secret::new("<redacted>");
@@ -1772,6 +2220,20 @@ fn is_origin(s: &str) -> bool {
         .strip_prefix("https://")
         .or_else(|| s.strip_prefix("http://"));
     matches!(rest, Some(r) if !r.is_empty() && !r.contains('/') && !r.contains(char::is_whitespace))
+}
+
+/// `https://host/...`, or `http://` on a loopback host (tests and local fakes).
+fn is_https_or_loopback_url(u: &str) -> bool {
+    if u.contains(char::is_whitespace) {
+        return false;
+    }
+    if let Some(rest) = u.strip_prefix("https://") {
+        return !rest.is_empty() && !rest.starts_with('/');
+    }
+    u.strip_prefix("http://").is_some_and(|rest| {
+        let host = rest.split(['/', ':']).next().unwrap_or("");
+        host == "127.0.0.1" || host == "localhost" || rest.starts_with("[::1]")
+    })
 }
 
 /// Bytes in a SHA-256 certificate fingerprint (`deeplinks.android_cert_sha256`).

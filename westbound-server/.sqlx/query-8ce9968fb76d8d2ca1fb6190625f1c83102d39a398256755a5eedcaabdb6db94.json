@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT 1 AS one FROM accounts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "one",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8ce9968fb76d8d2ca1fb6190625f1c83102d39a398256755a5eedcaabdb6db94"
+}

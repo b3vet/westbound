@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM identity_links WHERE account_id = ? AND provider = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a3b04297521d48c929d56d0a7418eda171c2d4d9437920e7fb56f7808cdd1dc5"
+}

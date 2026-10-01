@@ -87,6 +87,8 @@ pub struct AppState {
     pub room_creates: Arc<AccountBuckets>,
     /// When the state was built (uptime in the admin stats).
     pub started: std::time::Instant,
+    /// N11: the identity providers (ID-token verifiers, nonces, Apple revocation).
+    pub identity: Arc<crate::identity::Identity>,
 }
 
 impl AppState {
@@ -119,6 +121,10 @@ impl AppState {
             tracing::warn!("server.env = dev: using the public development auth secrets");
         }
         let auth = Arc::new(AuthKeys::from_config(&config));
+        let identity = Arc::new(
+            crate::identity::Identity::from_config(&config, &auth, clock.clone())
+                .context("the identity providers")?,
+        );
         let metrics = Arc::new(Metrics::default());
         let rate_limiters = RateLimiters::new(&config, auth.clone(), metrics.clone());
         let map = crate::map::builtin().context("the built-in loop map")?;
@@ -188,6 +194,7 @@ impl AppState {
             background,
             room_creates,
             started: std::time::Instant::now(),
+            identity,
         })
     }
 
@@ -237,28 +244,52 @@ fn accounts_router(state: &AppState) -> Router<AppState> {
         )
         .route("/api/v1/auth/refresh", post(auth::routes::refresh))
         .route("/api/v1/auth/logout", post(auth::routes::logout))
+        // N11: Sign in with Apple / Google (501 provider_not_enabled until configured).
         .route(
-            "/api/v1/auth/link/apple",
-            post(auth::routes::apple_not_enabled),
+            "/api/v1/auth/providers",
+            get(crate::identity::routes::get_providers),
         )
         .route(
-            "/api/v1/auth/signin/apple",
-            post(auth::routes::apple_not_enabled),
+            "/api/v1/auth/nonce",
+            post(crate::identity::routes::post_nonce),
         )
         .route(
-            "/api/v1/auth/link/google",
-            post(auth::routes::google_not_enabled),
-        )
-        .route(
-            "/api/v1/auth/signin/google",
-            post(auth::routes::google_not_enabled),
+            "/api/v1/auth/signin/{provider}",
+            post(crate::identity::routes::signin),
         );
     let account_routes = Router::new()
         .route("/api/v1/me", get(profile::get_me).patch(profile::patch_me))
         .route(
             "/api/v1/account",
             axum::routing::delete(profile::delete_account),
+        )
+        .route(
+            "/api/v1/auth/link/{provider}",
+            post(crate::identity::routes::link),
+        )
+        .route(
+            "/api/v1/auth/unlink/{provider}",
+            post(crate::identity::routes::unlink),
         );
+    // N11: the cloud save. Writes also under their own limit and a larger body limit.
+    let save_routes = Router::new().route(
+        "/api/v1/save",
+        get(crate::save::get_save).merge({
+            let put = axum::routing::put(crate::save::put_save).layer(DefaultBodyLimit::max(
+                state.config.cloud_save.max_bytes + crate::save::BODY_SLACK_BYTES,
+            ));
+            if rl.enabled {
+                put.layer(rl.layer(&rl.cloud_save))
+            } else {
+                put
+            }
+        }),
+    );
+    let save_routes = if rl.enabled {
+        save_routes.layer(rl.layer(&rl.account))
+    } else {
+        save_routes
+    };
     // N7.1: boards read under the account limit; run submissions also under their own.
     let board_routes = Router::new().route(
         "/api/v1/boards/{board}",
@@ -301,6 +332,7 @@ fn accounts_router(state: &AppState) -> Router<AppState> {
         .merge(board_routes)
         .merge(run_routes)
         .merge(social_routes)
+        .merge(save_routes)
         .layer(DefaultBodyLimit::max(state.config.http.max_body_bytes))
 }
 
@@ -443,15 +475,18 @@ fn cors_layer(cfg: &Config) -> CorsLayer {
             Method::GET,
             Method::POST,
             Method::PATCH,
+            Method::PUT,
             Method::DELETE,
             Method::OPTIONS,
         ])
         .allow_headers([
             axum::http::header::AUTHORIZATION,
             axum::http::header::CONTENT_TYPE,
+            // N11: the cloud save's optimistic concurrency.
+            axum::http::header::IF_MATCH,
         ])
-        // 429s carry it; the web build reads it cross-origin.
-        .expose_headers([axum::http::header::RETRY_AFTER])
+        // 429s carry it; the web build reads it cross-origin. N11: the save's ETag.
+        .expose_headers([axum::http::header::RETRY_AFTER, axum::http::header::ETAG])
 }
 
 async fn method_not_allowed() -> Response {
@@ -606,9 +641,16 @@ impl Server {
             state.db.clone(),
             replays.clone(),
             state.clock.clone(),
+            state.metrics.clone(),
             cancel.clone(),
         ));
         let probe_task = tokio::spawn(crate::ops::db_probe(state.clone()));
+        // N10.3: the disk check and the daily pass on the data volume.
+        let housekeeping_task = state
+            .config
+            .housekeeping
+            .enabled
+            .then(|| tokio::spawn(crate::housekeeping::periodic(state.clone())));
         let admin_task = admin_listener.map(|l| {
             let app = crate::admin_api::router(state.clone());
             let cancel = cancel.clone();
@@ -676,6 +718,9 @@ impl Server {
             t.abort();
         }
         probe_task.abort();
+        if let Some(t) = housekeeping_task {
+            t.abort();
+        }
         maintenance_task.abort();
         ban_sweep_task.abort();
         retention_task.abort();

@@ -92,6 +92,13 @@ N10.2 adds operations (see "Operations (N10.2)" and the owner's runbook [`OPERAT
 - a rate-limit review (per IP on every route and upgrade, `room_create` per account) with the full table;
 - request ids, JSON logs in the image, and metrics for the database, queues, backups, restarts, errors and the process.
 
+N10.3 adds housekeeping for the small data volume (see "Housekeeping (N10.3)" and OPERATIONS.md → Disk space):
+
+- at most **3 daily backups** (`backup.retention_days` is now a count), a stale-backup check (`backup.max_age_hours`, 26 h), manual backups and restore leftovers aged out, and backups that skip instead of filling the disk;
+- a disk check every 5 minutes: free space and what the database, WAL, replays and backups take (`wb_disk_*`, the `disk` section of the admin stats, `admin stats`), a low-space floor (`housekeeping.min_free_mb`, 500 MB), and a WAL checkpoint;
+- a daily pass: `shadow_contacts` (30 days), `admin_log` (365 days), handled reports (365 days), past Daily Drive days and Journey weeks (90 days), runs holding no board entry (90 days), the expired handover file, and a `VACUUM` when a large share of the file is free;
+- replay files: set-aside jobs get their own status (`set_aside`, migration `0007`) and lose their file after 30 days (`admin replay-purge-set-aside` by hand); only a **current** top 100 keeps a verified replay.
+
 | Path | What |
 | --- | --- |
 | `westbound-server/crates/server/` | The binary (`westbound-server`) and its library, with integration tests in `tests/` |
@@ -120,7 +127,8 @@ N10.2 adds operations (see "Operations (N10.2)" and the owner's runbook [`OPERAT
 | `GET /api/v1/echo-check` | public | A small HTML page, used to check a phone (see "Verify a phone connects"): runs the echo on `/ws/echo`, then sends a token-less `Hello` to `/ws` and shows the gateway's `Error` (`map_mismatch` or `auth_failed`) |
 | `GET /.well-known/apple-app-site-association`, `GET /.well-known/assetlinks.json` | public | Deep-link files: `deeplinks.dir` wins, else generated from the configured app ids (N9.3), else built-in empty placeholders. See "Invite links and deep links" |
 | `GET /r/{code}` | public | N9.3: the invite page for a room or party code (opens the web build with `?room=<code>`; store links). See "Invite links and deep links" |
-| `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API" |
+| `/api/v1/auth/*`, `/api/v1/me`, `/api/v1/account` | public | Accounts: see "Accounts API"; N11 Apple / Google: see "Sign in with Apple / Google" |
+| `GET /api/v1/save`, `PUT /api/v1/save` | public | N11 cloud save: see "Cloud save" |
 | `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
 | `POST /api/v1/runs/{run_id}/replay` | public | The replay upload (binary body): see "Replays and verification" |
 | `/api/v1/friends*`, `/api/v1/blocks*`, `/api/v1/presence`, `/api/v1/crews*`, `/api/v1/reports` | public | Friends, blocks, presence, crews, reports: see "Social API" |
@@ -159,6 +167,8 @@ Subcommands:
 | `admin remove-entry <board> <period> <account_id>` | Deletes one leaderboard entry (crew id on `loop_crew`) |
 | `admin replays` | The replay queue: jobs per status, and the failed ones with their last error |
 | `admin replay-requeue [<run_id>]` | Puts every `failed` replay job (or that run's job) back to `pending` with fresh attempts |
+| `admin replay-purge-set-aside [--older-than 30d]` | N10.3: deletes the files of `set_aside` jobs uploaded longer ago; their runs stay "verifying" |
+| `admin housekeeping` | N10.3: runs the daily housekeeping pass and the replay sweep now and prints what they did |
 | `admin reports [--unhandled] [--limit N]` | Lists player reports, newest first (see "Social API → Admin commands") |
 | `admin report-handle <id>` | Marks a report handled |
 | `admin crew-rename <crew_id> [<name>] [--tag <tag>]` | Force-renames a crew and/or changes its tag |
@@ -178,6 +188,8 @@ Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` 
   - `0004` (N9.1) creates `friends`, `blocks`, `crews`, `crew_members` and `reports` (see "Social API → Tables").
   - `0005` (N8.1) turns `replays` into the verification queue (see "Replays and verification → Tables").
   - `0006` (N10.1) creates `shadow_contacts` (see "Load test, shadow collisions and admin stats → Shadow collisions").
+  - `0007` (N10.3) moves set-aside replay jobs (`failed` with `"unverifiable": true`) to the new status `set_aside` (see "Replays and verification → The queue").
+  - `0008` (N11) creates `identity_links`, `device_secrets` and `cloud_saves` (see "Sign in with Apple / Google → Tables" and "Cloud save").
 
 Queries written with `sqlx::query!` are checked at compile time against `westbound-server/.sqlx/`, and CI builds with `SQLX_OFFLINE=true`. After you add or change a `query!`, or change the schema, regenerate that data:
 
@@ -343,13 +355,13 @@ More live checks:
 
 ## Accounts API
 
-N1.1 implements device accounts only (MP-D2). All routes are under `/api/v1`, take and return JSON, and are covered by CORS for the web build.
+N1.1 implemented device accounts (MP-D2); N11 adds Sign in with Apple / Google (next section) and per-device credentials. All routes are under `/api/v1`, take and return JSON, and are covered by CORS for the web build.
 
 ### Tokens and secrets
 
 | Thing | Form | Lifetime | Stored as |
 | --- | --- | --- | --- |
-| Device secret | 32 random bytes, base64url (43 chars) | Forever (per account) | HMAC-SHA256 with the server pepper. Returned once, by `POST /auth/device` |
+| Device secret | 32 random bytes, base64url (43 chars) | Forever (per account) | HMAC-SHA256 with the server pepper. Returned once, by `POST /auth/device`; N11: a provider sign-in returns one for that device (`device_secrets`, at most `identity.max_device_secrets` per account, the least recently used dropped) |
 | Access token | JWT HS256. Claims: `sub` (account id string), `iat`, `exp`, `jti`, `ver` (token version), `iss` `westbound`, `aud` `westbound-api` | 1 h | Not stored |
 | Refresh token | 32 random bytes, base64url (43 chars) | 30 days, renewed by each rotation. Single use | SHA-256 |
 
@@ -400,7 +412,7 @@ Every error is JSON:
 | 413 | `body_too_large` | The body is over `http.max_body_bytes` (4 KB) |
 | 415 | `unsupported_media_type` | The body is not `Content-Type: application/json` |
 | 429 | `rate_limited` | With `retry_after_secs` and a `Retry-After` header (exposed to CORS) |
-| 501 | `provider_not_enabled` | Apple / Google routes (MP-D2) |
+| 501 | `provider_not_enabled` | Apple / Google routes while that provider has no client ids (N11) |
 | 500 | `internal` | Details are logged, never returned |
 
 ### Routes
@@ -478,13 +490,12 @@ Every error is JSON:
 - In one transaction, deletes the account, its refresh tokens, its runs, its leaderboard entries and its runs' replays (the replay files go after commit).
 - N9.1, in the same transaction: friendships and requests, blocks both ways, and the crew membership (see "Social API → Account deletion"). Reports are kept with the account's side nulled.
 - Friends watching the account's presence see it go offline at once, and its open WebSocket session is closed (`auth_failed`) without waiting for the ban sweep.
-- Still to come in `accounts::delete`: Apple token revocation (MP-D2).
+- N11, in the same transaction: the cloud save, `identity_links` and `device_secrets`. After the commit, the player's Sign in with Apple grant is **revoked** with Apple when one is stored and the Apple key is configured (best effort, logged; see "Sign in with Apple / Google → Apple revocation"). The admin CLI's `admin delete` does not revoke yet (it has no HTTP client): an open item.
 - Logs `account_delete` to `admin_log` with the account id and row counts only.
 
-**`POST /api/v1/auth/link/{apple,google}`, `POST /api/v1/auth/signin/{apple,google}`**
+**`POST /api/v1/auth/device/login`** also accepts a device secret from `device_secrets` (N11: a provider sign-in on another device).
 
-- Response `501 provider_not_enabled` until MP-D2.
-- The `apple_sub` / `google_sub` columns are already in the schema.
+**Apple / Google** (`/auth/providers`, `/auth/nonce`, `/auth/signin/{provider}`, `/auth/link/{provider}`, `/auth/unlink/{provider}`): see the next section.
 
 ### Profanity filter
 
@@ -513,7 +524,9 @@ Rate limits use `tower_governor`. Each bucket refills evenly over its window, wi
 | Routes | Key | Default |
 | --- | --- | --- |
 | `POST /auth/device` | client IP | 5 per hour, burst 5 |
-| other `/auth/*` | client IP | 30 per minute, burst 10 |
+| other `/auth/*` (incl. N11 `providers`, `nonce`, `signin/*`) | client IP | 30 per minute, burst 10 |
+| N11 `POST /auth/link/*`, `/auth/unlink/*`, `GET /save` | account | under the account limit below |
+| N11 `PUT /save` (also) | account | `cloud_save.writes_per_hour` 120, burst 30 |
 | `/me`, `/account`, `/boards/*`, `/runs*`, the social routes (and later authenticated routes) | account | 120 per minute, burst 30 |
 | `POST /runs`, `POST /runs/legacy` (also) | account | 30 per hour, burst 10 |
 | `POST /friends/requests`, `POST /blocks`, `POST /crews`, `POST /crews/join`, `POST /reports` (also) | account | 60 per hour, burst 20 |
@@ -564,6 +577,135 @@ westbound-server admin remove-entry journey 2026-W40 42
 
 - `config/dev.toml` sets `server.env = "dev"`, so no secrets are needed.
 - The Docker image defaults to `production`. For `deploy/local-tls.sh` and `docker compose`, pass `WB_SERVER__ENV=dev`, or real `WB_AUTH__JWT_SECRET` and `WB_AUTH__DEVICE_SECRET_PEPPER` values.
+
+## Sign in with Apple / Google (N11)
+
+WP N11, in `crates/server/src/identity/`: `mod.rs` (the verifier, `Identity`), `jwks.rs` (the providers' keys), `nonce.rs`, `apple.rs` (client secret, code exchange, revocation), `seal.rs` (tokens at rest), `store.rs` (the tables), `routes.rs`. Spec: multiplayer handoff → "Accounts and authentication" (Sign in with Apple / Google; account deletion with Apple revocation); plan MP-D2. The owner's setup: OPERATIONS.md → "Sign in with Apple / Google". Tests: `tests/identity.rs` (a fake provider on loopback: a JWKS issuer signing with test-only keys in `tests/data/idp_rsa_{a,b}.der`, Apple's token and revoke endpoints checking the client secret against `apple_test_key.p8`).
+
+**Off until configured.** A provider is enabled when its client ids are set (`identity.google_client_ids`, `identity.apple_client_ids`). Without them every route for it answers `501 provider_not_enabled` (MP-D2's shape), and `GET /auth/providers` says `enabled: false`.
+
+### ID tokens
+
+The client gets an ID token (a JWT) from the provider's own sheet and sends it with the nonce. The server accepts it only when:
+
+- it is RS256-signed by a key in the provider's JWKS (`identity.google_jwks_url`, `identity.apple_jwks_url`; see "Keys");
+- `iss` is the provider (`identity.google_issuers`: both `https://accounts.google.com` and `accounts.google.com`; `identity.apple_issuer`);
+- `aud` is one of that provider's client ids (web, iOS, Android); a list `aud` needs one of them;
+- `exp` is in the future and `iat` not in the future, on the server clock with `identity.clock_skew_secs` (60 s) of leeway;
+- `nonce` is a nonce this server issued (`POST /auth/nonce`), unexpired (`identity.nonce_ttl_secs`, 600 s), and the token's `nonce` claim is it or its SHA-256 (hex or base64url: Apple's native convention). Required unless `identity.require_nonce = false`;
+- `sub` is non-empty (at most 255 bytes) and the token at most `identity.max_id_token_bytes`.
+
+**Email.** Neither the address nor the name is stored. A masked hint (`j***@gmail.com`) is kept for the account screen when the address is verified; Apple's `email_verified` / `is_private_email` may arrive as booleans or as `"true"` / `"false"`, and a Hide My Email address (`…@privaterelay.appleid.com` or `is_private_email`) shows as "private email" with no hint.
+
+**Nonces** are stateless: `base64url(16 random bytes ‖ expiry ‖ 16-byte HMAC)` under a key derived from the pepper. They are not single-use: the conflict flow sends the same token to `/link` and then `/signin`.
+
+### Keys (JWKS)
+
+Fetched with `reqwest` (rustls, bundled roots), cached for the response's `Cache-Control: max-age` clamped to `identity.jwks_cache_min_secs ..= jwks_cache_max_secs` (5 min to 24 h). An unknown `kid` (key rotation) refetches at most once per `identity.jwks_refetch_min_secs` (60 s), so made-up kids cannot become a stream of fetches. When a fetch fails, the old keys keep working (stale-if-error) and the next try waits the same interval; with no usable key the answer is `503 provider_unavailable`, never "invalid token". Outbound calls time out after `identity.http_timeout_ms` and never follow redirects.
+
+### Routes
+
+**`GET /api/v1/auth/providers`** (public): what the client may offer; no secrets.
+
+```json
+{"apple": {"enabled": true, "client_id": "com.sipsakrandevu.westbound.web", "redirect_uri": "https://b3vet.github.io/westbound/"},
+ "google": {"enabled": true, "client_id": "1234-abc.apps.googleusercontent.com"},
+ "nonce_required": true,
+ "cloud_save": {"enabled": true, "max_bytes": 65536}}
+```
+
+**`POST /api/v1/auth/nonce`**: `{"nonce": "…", "expires_at": 1790000600}`.
+
+**`POST /api/v1/auth/signin/{apple,google}`** (no bearer). Body: `{"id_token": "…", "nonce": "…", "authorization_code": "…"}` (the code: Apple only, optional; see "Apple revocation").
+
+- The identity's account, or a **new account** with a generated name when the identity has none (`201`, `"created": true`; else `200`).
+- The answer is a device sign-in's (`account_id`, the access and refresh tokens, `profile`) plus `device_secret` for **this device** (shown once; stored hashed in `device_secrets`, or as the new account's first secret) and `created`. The device then renews exactly like a device account (`/auth/device/login`).
+- A banned account: `403 banned`. The lookup and the creation run in one `BEGIN IMMEDIATE` transaction: two first sign-ins with one identity cannot make two accounts.
+
+**`POST /api/v1/auth/link/{apple,google}`** (bearer; same body): adds the identity to the caller's account, so its progress is kept. Answers the profile.
+
+- Already linked to the caller: `200` (idempotent; the hint is refreshed).
+- The identity belongs to **another account**: `409 identity_in_use` with both accounts' summaries, so the client can ask which to keep:
+
+```json
+{"error": "identity_in_use", "message": "…",
+ "conflict": {"provider": "google",
+   "current": {"account_id": "57", "full_name": "DustyComet#0311", "created_at": …, "last_seen": …,
+               "linked": {"apple": false, "google": false}, "runs": 3, "best_score": 41000, "cloud_save": null},
+   "other":   {"account_id": "42", "full_name": "Şahin 34#0042", …, "runs": 120, "best_score": 2010000,
+               "cloud_save": {"revision": 7, "updated_at": …, "bytes": 3120, "xp": 374522, "runs": 57}}}}
+```
+
+  To switch, the client calls sign-in with the same token (accounts are never merged: the spec's "merging accounts is out of scope for v1"; the *save* is merged by the client, SAVE.md → Cloud sync). `cloud_save.xp` / `runs` are `stats.xp` / `stats.runs` of the stored document (read with SQLite's `json_extract`; the server does not otherwise look inside saves).
+- The caller already has a different identity of that provider: `409 provider_already_linked`.
+
+**`POST /api/v1/auth/unlink/{apple,google}`** (bearer, no body): removes it; answers the profile. `404 not_linked`; `409 last_sign_in_method` when it would leave the account no way in (no other provider and no device credential on the server). Unlinking Apple revokes the stored Apple grant.
+
+**Profile.** `GET /me` and every answer carrying a profile now include `identities`: `[{"provider": "google", "email_hint": "j***@gmail.com", "private_email": false, "linked_at": …}]` (`linked` stays as it was).
+
+**Errors** (all `{error, message}`): `400 invalid_nonce`, `401 invalid_id_token` (signature, issuer, audience, claims, malformed), `401 id_token_expired`, `403 banned`, `404 not_found` (an unknown provider) / `not_linked`, `409 identity_in_use` / `provider_already_linked` / `last_sign_in_method`, `501 provider_not_enabled`, `503 provider_unavailable`.
+
+### Apple revocation
+
+Apple requires apps that support account creation and deletion to revoke the user's Sign in with Apple tokens on deletion. Revocation needs a token Apple issued to us (the ID token is not one), so:
+
+- At sign-in or link with Apple, when the client sends `authorization_code` and the key is configured (`identity.apple_team_id`, `apple_key_id`, `apple_private_key` or `apple_private_key_file`), the server exchanges the code at `identity.apple_token_url` (with the web Services ID's `apple_web_redirect_uri` for the web client) and keeps the **refresh token sealed** in `identity_links.apple_refresh_sealed` with the `aud` it was issued to (`apple_client_id`). A refused exchange is logged and the sign-in goes on.
+- `DELETE /account` and `POST /auth/unlink/apple` post it to `identity.apple_revoke_url` (`token_type_hint=refresh_token`).
+- Both calls authenticate with a **client secret**: an ES256 JWT signed with the `.p8` key, `kid` = key id, `iss` = team id, `aud` = Apple's issuer, `sub` = the client id, valid 5 minutes, made per call.
+- Without the key both steps are skipped: sign-in works, revocation is a logged no-op (`Apple grant not revoked: no Apple key configured`). The key is checked at startup (a test signature), so a bad one stops the server rather than failing at the first deletion.
+- **Sealing:** `version ‖ 16-byte nonce ‖ ciphertext ‖ 16-byte tag`; the keystream is HMAC-SHA256 in counter mode, the tag an HMAC over the rest (encrypt-then-MAC), both keys derived from the pepper. A leaked database alone does not reveal the tokens.
+
+### Tables
+
+| Table | Columns | Notes |
+| --- | --- | --- |
+| `accounts` | `apple_sub`, `google_sub` (0001, `UNIQUE`) | The identity's subject: one Apple and one Google identity per account, each on at most one account |
+| `identity_links` | `account_id`, `provider`, `email_hint`, `private_email`, `linked_at`, `last_used_at`, `apple_client_id`, `apple_refresh_sealed` | One row per linked identity; deleted with the account |
+| `device_secrets` | `secret_hash` (HMAC like `device_secret_hash`), `account_id`, `created_at`, `last_used_at` | Per-device credentials from provider sign-ins |
+
+### Configuration (`[identity]`)
+
+| Key | Env | Default | |
+| --- | --- | --- | --- |
+| `identity.google_client_ids` | `WB_IDENTITY__GOOGLE_CLIENT_IDS` (comma-separated) | `[]` (off) | Accepted `aud`s: Web, iOS, Android OAuth clients |
+| `identity.google_web_client_id` | `WB_IDENTITY__GOOGLE_WEB_CLIENT_ID` | `""` = the first | The web build's |
+| `identity.google_issuers`, `google_jwks_url` | | Google's | |
+| `identity.apple_client_ids` | `WB_IDENTITY__APPLE_CLIENT_IDS` | `[]` (off) | The Services ID (web) and the bundle id (iOS) |
+| `identity.apple_web_client_id`, `apple_web_redirect_uri` | `WB_IDENTITY__APPLE_WEB_…` | `""` | The web build's Services ID (default the first) and its registered return URL |
+| `identity.apple_issuer`, `apple_jwks_url`, `apple_token_url`, `apple_revoke_url` | | Apple's | https only (http on a loopback host, for tests) |
+| `identity.apple_team_id`, `apple_key_id` | `WB_IDENTITY__APPLE_TEAM_ID`, `…_KEY_ID` | `""` | 10-character Apple ids |
+| `identity.apple_private_key` | `WB_IDENTITY__APPLE_PRIVATE_KEY` (**secret**, redacted in `check-config`) | `""` | The `.p8` PEM; literal `\n` read as newlines |
+| `identity.apple_private_key_file` | `WB_IDENTITY__APPLE_PRIVATE_KEY_FILE` | `""` | Or a path to the `.p8` |
+| `identity.require_nonce` | | `true` | |
+| `identity.nonce_ttl_secs` | | 600 | |
+| `identity.clock_skew_secs` | | 60 | |
+| `identity.jwks_cache_min_secs`, `jwks_cache_max_secs`, `jwks_refetch_min_secs` | | 300, 86400, 60 | |
+| `identity.http_timeout_ms` | | 5000 | JWKS, Apple token / revoke |
+| `identity.max_device_secrets` | | 10 | Per account |
+| `identity.max_id_token_bytes` | | 4096 | |
+
+## Cloud save (N11)
+
+WP N11, `crates/server/src/save.rs`. The local save follows the player between devices; the merge rules are the client's (SAVE.md → Cloud sync): the server stores the document it is given, whole, and never merges. Tests: `tests/cloud_save.rs`.
+
+**`GET /api/v1/save`** (bearer): `{"revision": 7, "updated_at": 1790000000, "bytes": 3120, "data": {…}}`, or `{"revision": 0, "updated_at": null, "bytes": 0, "data": null}` when the account has none. `ETag: "7"`, `Cache-Control: no-store`.
+
+**`PUT /api/v1/save`** (bearer) with `If-Match: "<the revision it replaces>"` (`"0"` for the first) and `{"data": {…}}`:
+
+- `200 {"revision": 8, "updated_at": …, "bytes": …}` and `ETag: "8"`;
+- `409 revision_conflict` when the revision moved on (another device wrote first), with the server's copy in `save` (`{revision, updated_at, bytes, data}`) so the client merges and tries again;
+- `428 precondition_required` without `If-Match`; `400 invalid_body` when `data` is not an object; `413 save_too_large` (with `max_bytes`) over `cloud_save.max_bytes`;
+- `501 cloud_save_not_enabled` when `cloud_save.enabled = false`.
+
+The read and the write run in one `BEGIN IMMEDIATE` transaction, so two devices writing on the same revision cannot both win. CORS allows `PUT` and `If-Match` and exposes `ETag` for the web build.
+
+**Storage and disk.** `cloud_saves (account_id PRIMARY KEY, revision, data TEXT, bytes, updated_at)`: one row per account, replaced on each write; old revisions are not kept. The size cap (64 KB; the local save is a few KB) is also the per-account disk cap. Same database: the nightly backups, restores and `DELETE /account` cover it.
+
+| Key | Env | Default | |
+| --- | --- | --- | --- |
+| `cloud_save.enabled` | `WB_CLOUD_SAVE__ENABLED` | `true` | |
+| `cloud_save.max_bytes` | `WB_CLOUD_SAVE__MAX_BYTES` | 65536 | 1 KB to 1 MB |
+| `cloud_save.writes_per_hour`, `writes_burst` | `WB_CLOUD_SAVE__WRITES_PER_HOUR`, `…_BURST` | 120, 30 | `PUT` per account, on top of the account limit |
 
 ## Leaderboards & runs API
 
@@ -788,7 +930,7 @@ The file is written to a temporary name and renamed into place under the databas
 2. Run `replays.verifier_command` with its placeholders filled in: `{replay}` (the file), `{out}` (`<dir>/work/<run_id>.json`), `{run_id}`, `{seed}`, `{mode}`, `{build}`, `{claimed_score}` (the run's score), `{claimed_hits}` (the run's `stats.hits`). Standard input is closed; the output is kept for the log. Past `job_timeout_secs` (30 min) the process is killed.
 3. Exit 0 with `{"accepted": true, ...}` in `{out}`, or exit 1 with `accepted: false`: the verdict. `state.boards.set_run_verification(run_id, Accepted | Rejected)`, the job becomes `done` with `verdict` and `result` (the verifier's JSON), a `replay verified` log line (run, verdict, reason, recomputed and claimed score, diff, unreported hits, violations, where traffic diverged, seconds), then retention.
 4. Anything else is a failed attempt (another exit status, a missing or contradicting result, a timeout, a missing file): the job goes back to `pending` after `retry_delay_secs` (5 min), or becomes `failed` after `max_attempts` (3). A `failed` job's run stays "verifying"; `admin replays` shows why and `admin replay-requeue` retries it.
-5. **N8.3, set aside** (build parity): a job this worker cannot verify is not retried against the same verifier. It becomes `failed` at once with `{"error": ..., "unverifiable": true, "build": N}` as its result (a `replay cannot be verified by this verifier; set aside` warning), the run stays "verifying" and the file is kept. That is: (a) the command names a per-build file that is not there: an argv entry made from a `{build}` template that is an absolute path (`/verifier/{build}/westbound`) and does not exist; nothing is run; (b) the verifier's "cannot verify" (exit 3 with a result `error`: another tuning under the same build number, a replay without inputs under `--require-inputs=1`, an unknown car). **Every worker start** (`run`) puts those jobs back to `pending` with their attempts reset (a `replay jobs set aside as unverifiable were requeued` line): a new verifier image may have their build. Other `failed` jobs wait for `admin replay-requeue`. (Exit 3 without a result stays an ordinary failed attempt.)
+5. **N8.3, set aside** (build parity): a job this worker cannot verify is not retried against the same verifier. It becomes `set_aside` (N10.3; before, `failed`) at once with `{"error": ..., "unverifiable": true, "build": N}` as its result (a `replay cannot be verified by this verifier; set aside` warning), the run stays "verifying" and the file is kept. That is: (a) the command names a per-build file that is not there: an argv entry made from a `{build}` template that is an absolute path (`/verifier/{build}/westbound`) and does not exist; nothing is run; (b) the verifier's "cannot verify" (exit 3 with a result `error`: another tuning under the same build number, a replay without inputs under `--require-inputs=1`, an unknown car). **Every worker start** (`run`) puts those jobs back to `pending` with their attempts reset (a `replay jobs set aside as unverifiable were requeued` line): a new verifier image may have their build. Other `failed` jobs wait for `admin replay-requeue`. (Exit 3 without a result stays an ordinary failed attempt.)
 
 An upload wakes the worker at once; otherwise it looks every `poll_interval_secs` (30 s). On start, jobs a stopped worker left `running` go back to `pending` (the lost attempt counts). Exactly one worker may run against a database: either the in-server one or one `verify-worker`.
 
@@ -796,9 +938,11 @@ An upload wakes the worker at once; otherwise it looks every `poll_interval_secs
 
 ### Retention
 
-- **After a verdict:** a `done` job's file is deleted unless its run ranks within `keep_top_n` (100) on some board and period right now; a rejected run holds no entries, so its file always goes. The row stays with `file_deleted_at`.
-- **Every `cleanup_interval_secs` (1 h):** kept files are checked again (a run that fell out of every top 100 loses its file), and files in `replays.dir` and its `work/` older than an hour that no job needs are deleted (stray `.wbr`, temporary uploads, result files).
+- **After a verdict:** a `done` job's file is deleted unless its run ranks within `keep_top_n` (100) on some board in a **current** period right now (N10.3: the day, ISO week or season containing now, or all-time; a past Daily Drive day no longer keeps its top 100's files, so the kept files stay bounded); a rejected run holds no entries, so its file always goes. The row stays with `file_deleted_at`.
+- **Every `cleanup_interval_secs` (1 h):** kept files are checked again (a run that fell out of every current top 100 loses its file), and files in `replays.dir` and its `work/` older than an hour that no job needs are deleted (stray `.wbr`, temporary uploads, result files).
+- **N10.3, set aside:** a `set_aside` job keeps its file for `set_aside_retention_days` (30) after the upload; then the sweep deletes the file, sets `file_deleted_at` and adds `purged_at` to the result. The row stays `set_aside` (no worker start requeues it) and the run stays "verifying". `admin replay-purge-set-aside --older-than 7d` does the same by hand.
 - `pending`, `running` and `failed` jobs keep their files. Deleting a run (`admin remove-run`) or an account deletes its replays and files.
+- Uploads answer **503 `storage_low`** (with `Retry-After`) while the data volume is below `housekeeping.min_free_mb`; the game keeps the replay and retries.
 
 ### Tables
 
@@ -808,7 +952,7 @@ An upload wakes the worker at once; otherwise it looks every `poll_interval_secs
 | --- | --- |
 | `run_id` | primary key, the run (cascade on delete) |
 | `file_path` | `<replays.dir>/<run_id>.wbr` |
-| `status` | `pending`, `running`, `done`, `failed` |
+| `status` | `pending`, `running`, `done`, `failed`, `set_aside` (N10.3: no verifier here has the job's build; requeued at every worker start) |
 | `result` | the verifier's result JSON (`done`), or `{"error": ...}` (the last failed attempt) |
 | `created_at`, `size_bytes` | the upload |
 | `attempts`, `not_before`, `started_at`, `finished_at` | the queue |
@@ -830,8 +974,9 @@ Index `replays_queue (status, not_before, created_at, run_id)` serves the worker
 | `job_timeout_secs` | `1800` | A verifier run is killed after this long |
 | `max_attempts` / `retry_delay_secs` | `3` / `300` | Failed attempts before `failed`, and the wait between them |
 | `poll_interval_secs` | `30` | The idle worker's check (uploads wake it at once) |
-| `keep_top_n` | `100` | Verified replays of runs ranked within this keep their files |
+| `keep_top_n` | `100` | Verified replays of runs ranked within this in a current period keep their files |
 | `cleanup_interval_secs` | `3600` | The retention sweep |
+| `set_aside_retention_days` | `30` | N10.3: set-aside replays lose their file this long after the upload (runs stay "verifying"); 0 keeps them |
 
 ### Running the verifier (build parity, the 1 GB cap, Coolify)
 
@@ -1730,7 +1875,7 @@ At rush (300 s): 42.8 % of the core, tick p99 ≤ 2 ms, 100.9 MB, 5.61 KB/s wors
 - **Where it goes:** `wb_room_shadow_*` metrics (contacts, pair-ticks, player-ticks, disagreement and speed histograms); one row per contact in **`shadow_contacts`** (room, tick, the two accounts ordered, speed, disagreement, closing speed, depth, ticks, time; written off the room task, at most 64 writes in flight, the rest dropped and counted); a sample in the log.
 - **Traffic contacts:** each server-detected contact nobody reported (`hits_unreported`, N6.1) and each reported traffic hit the server saw nothing for (`hits_refused`, "the reverse") is a shadow record too, logged with its numbers (car, tick, depth, speeds).
 - **Log sampling:** a room logs its first shadow record and then one in `scoring.shadow_log_every` (10), at INFO with target `wb::shadow` (`kind` = `player_contact`, `unreported_contact` or `refused_hit`, plus `sample`, the room's record count). `RUST_LOG=info,wb::shadow=off` silences them; the counters and the table keep everything.
-- **Retention:** rows are kept (a contact is small; the load test wrote 6,569 for 27 bot-hours). Pruning is an open item for the admin CLI.
+- **Retention:** N10.3: rows older than `housekeeping.shadow_contacts_days` (30) are deleted by the daily housekeeping pass, in batches (the load test wrote 6,569 rows for 27 bot-hours, about 240 per player-hour).
 
 ### Admin stats
 
@@ -1743,6 +1888,7 @@ At rush (300 s): 42.8 % of the core, tick p99 ≤ 2 ms, 100.9 MB, 5.61 KB/s wors
 | `rooms` | rooms, seats, ticks, tick mean over the window, p50 / p99 (bucket bounds since the start), max, the ticks' share of a core |
 | `netcode` | claims accepted / rejected and the acceptance, offences by kind, hits confirmed / refused / unreported (and per player-hour), placements, crash-outs |
 | `shadow` | player-hours covered, contacts and contacts per player-hour, pair-ticks, the disagreement and speed histograms (`[bound, count]`, the last bound `null`), rows written / dropped, and `last_day` / `last_week` from `shadow_contacts` (contacts, pairs, mean speed km/h, mean and max disagreement, contacts over 1 m, mean length in ticks) |
+| `disk` | N10.3: `data_dir`, `free_bytes`, `total_bytes`, `min_free_bytes`, `low`, `db_bytes`, `wal_bytes`, `shm_bytes`, `replays_bytes`, `replays_files`, `backups_bytes`, `data_bytes`, `other_bytes`, `backup_files`, `backups_kept_max`, `backup_newest`, `backup_newest_age_s`, `backup_stale` (`null` if the walk failed) |
 
 The load test prints it at the end of a run; `westbound-server admin stats` could print it with a `--full` flag (not added: the CLI is N10.2's).
 
@@ -1807,13 +1953,15 @@ A second loopback listener, `admin.bind` (`127.0.0.1:9091`), **on only when `adm
 | `crew-rename`, `crew-disband` | As before (N9.1) |
 | `remove-run RUN`, `remove-entry BOARD PERIOD ID` | As before (N7.1); the running server's cached tops are dropped at once when the API is on |
 | `recompute BOARD PERIOD` | Rebuilds a board period from the runs (each player's best eligible run; on `loop_crew` each crew's sum), in one transaction |
-| `replays`, `replay-requeue [RUN]` | The replay queue (N8.1) |
+| `replays`, `replay-requeue [RUN]` | The replay queue (N8.1); N10.3: `set_aside` jobs are counted and listed apart (build, upload time, reason), purged ones as `set_aside_purged` |
+| `replay-purge-set-aside [--older-than 30d]` | N10.3: deletes the files of set-aside jobs uploaded longer ago (`30m`, `12h`, `7d`, `2w`); their runs stay "verifying" |
+| `housekeeping` | N10.3: the daily housekeeping pass and the replay sweep, now; prints the counts |
 | `rooms` | *live*: one line per room: id, code, visibility, players, density, night, accounts |
 | `room-close CODE [-m "message"]` | *live*: closes a room with a message |
 | `notice "text" [--kind maintenance] [--seconds 600]` | *live*: a notice to every connected player |
-| `stats` | Database stats (accounts, new / seen in 24 h and 7 d, bans, runs by mode, entries, crews, friendships, reports, replay queue, DB size, the last backup) plus the live ones when the server answers |
+| `stats` | Database stats (accounts, new / seen in 24 h and 7 d, bans, runs by mode, entries, crews, friendships, reports, replay queue, DB size, the last backup), N10.3's `disk_*` and `backup_*` lines, plus the live ones when the server answers |
 | `log [--limit N]` | The admin log, newest first |
-| `backups` | The dated backups in `backup.dir` with sizes |
+| `backups` | The dated backups in `backup.dir` with sizes and ages; N10.3: how many are kept, `newest: <file> <h> h old: ok` or `STALE`, the volume's free space |
 
 Top-level: `backup PATH` (now verified), `verify-backup PATH` (integrity check and the migrations it holds), `restore BACKUP [--force]` (below).
 
@@ -1857,7 +2005,7 @@ Plus the per-message size cap (16 KB, close 1009), the 64-frame outbound queue (
 
 ### Backups
 
-- **Nightly** (as before): `VACUUM INTO` a `.tmp` file, then (N10.2, `backup.verify`) the copy is opened read-only and `PRAGMA integrity_check` must say `ok`, then it is renamed to `westbound-YYYY-MM-DD.db`; files older than `backup.retention_days` go. A copy that fails the check is deleted and the run counts as failed (`wb_backups_failed_total`, `wb_backup_verify_failed_total`).
+- **Nightly** (as before): `VACUUM INTO` a `.tmp` file, then (N10.2, `backup.verify`) the copy is opened read-only and `PRAGMA integrity_check` must say `ok`, then it is renamed to `westbound-YYYY-MM-DD.db`; N10.3: only the newest `backup.retention_days` (3) dated files stay (a count, newest kept, the new one never deleted; a failed or skipped run deletes nothing). A copy that fails the check is deleted and the run counts as failed (`wb_backups_failed_total`, `wb_backup_verify_failed_total`).
 - **Metrics:** `wb_backup_last_success_timestamp_seconds`, `wb_backup_last_size_bytes`, `wb_backup_last_duration_seconds` (since the process started).
 - **Off-site hook** (optional, `backup.upload_command`): after each good backup the server runs this argv, `{file}` replaced by the backup's path, no shell, killed after `backup.upload_timeout_secs`; exit 0 counts in `wb_backup_uploads_ok_total`, anything else in `_failed_total` and an ERROR log. The runtime image has no shell or tools, so the command must be a static binary on the volume (for example `rclone`); OPERATIONS.md has the recipe. No cloud credentials are in the repository.
 - **Restore** (`westbound-server restore BACKUP`): refuses while anything answers on `server.bind` (stop the server first; `--force` overrides), verifies the backup, moves the current database and its `-wal` / `-shm` aside to `<db>.before-restore-<unix secs>` (nothing is deleted), copies the backup into place, applies newer migrations and logs `restore` to `admin_log`. Tested: `backup.rs` (backup → change → restore brings the old rows back), `ops.rs` `a_backup_restores_into_a_fresh_server` (a device account signs in on a fresh server restored from the backup), `cli.rs` (refusals).
@@ -1881,12 +2029,71 @@ Plus the per-message size cap (16 KB, close 1009), the 64-frame outbound queue (
 | `wb_backup_last_success_timestamp_seconds`, `wb_backup_last_size_bytes`, `wb_backup_last_duration_seconds`, `wb_backup_verify_failed_total`, `wb_backup_uploads_ok_total`, `wb_backup_uploads_failed_total` | Backups |
 | `wb_db_probe_seconds`, `wb_db_probe_failures_total` | A timed query through the pool every `metrics.db_probe_interval_secs` (15 s): database latency |
 | `wb_db_file_bytes`, `wb_db_wal_bytes`, `wb_db_pool_connections`, `wb_db_pool_idle` | Database sizes and pool |
-| `wb_replay_jobs{status}` | Replay queue depth (`pending`) and the other states |
+| `wb_replay_jobs{status}` | Replay queue depth (`pending`) and the other states; N10.3 adds `set_aside` (parked jobs still holding their file) |
 | `wb_reports_unhandled` | The moderation queue |
 | `wb_log_events_total{level}` | Every WARN and ERROR logged (one alert covers every logged failure) |
+| `wb_disk_free_bytes`, `wb_disk_total_bytes`, `wb_disk_low` | N10.3: the data volume and the low-space flag (`housekeeping.min_free_mb`) |
+| `wb_disk_data_bytes`, `wb_disk_replays_bytes`, `wb_disk_replays_files`, `wb_disk_backups_bytes`, `wb_disk_other_bytes` | N10.3: what the data directory holds (the database is `wb_db_file_bytes` + `wb_db_wal_bytes`) |
+| `wb_backup_files`, `wb_backup_newest_timestamp_seconds`, `wb_backup_newest_age_seconds`, `wb_backup_stale`, `wb_backups_skipped_total` | N10.3: the dated backups on the volume (survives restarts, unlike `wb_backup_last_success_timestamp_seconds`), staleness past `backup.max_age_hours`, backups skipped for want of space (also in `wb_backups_failed_total`) |
+| `wb_housekeeping_rows_deleted_total{table}`, `wb_housekeeping_last_run_timestamp_seconds`, `wb_housekeeping_failures_total`, `wb_db_wal_checkpoints_total`, `wb_db_vacuums_total` | N10.3: the housekeeping (tables `shadow_contacts`, `admin_log`, `reports`, `leaderboard_entries`, `runs`, `replays_set_aside`) |
 | `process_cpu_seconds_total`, `process_resident_memory_bytes`, `process_threads`, `process_open_fds`, `process_start_time_seconds` | The process (from `/proc`) |
 
 Coverage by area: rooms (`wb_rooms`, `wb_room_seats`, joins, reconnects, placements), ticks (`wb_room_tick_seconds` histogram), bytes (`wb_ws_bytes_in_total` / `_out_total`, frames), claims (`wb_room_claims_total{verdict,reason}`), offences (`wb_room_offences_total{kind}`), DB latency (above), queue depths (replays, reports, `wb_room_dropped_total{reason="queue_full"}`), errors (`wb_log_events_total`, `wb_http_requests_total{class="5xx"}`, `wb_ws_handshakes_total{result="internal"}`).
+
+## Housekeeping (N10.3)
+
+WP N10.3, `crates/server/src/housekeeping.rs` (with `backup.rs`, `replays/retention.rs`, `metrics.rs`, `metrics_admin.rs`, `admin.rs`). The owner's server has a small disk ("keep at most 3 daily backups"), so everything the server writes under `/data` is capped. The owner's view, with the expected sizes: [OPERATIONS.md → Disk space](OPERATIONS.md#disk-space). Tests: `tests/housekeeping.rs`, `tests/replays.rs` (set aside, current periods, 503), `tests/cli.rs` (the N10.3 part), `tests/config.rs`, unit tests in `backup.rs`.
+
+What lives on the volume and what caps it:
+
+| What | Cap |
+| --- | --- |
+| `westbound.db` | The row retentions below; a `VACUUM` when worth it |
+| `westbound.db-wal`, `-shm` | `PRAGMA wal_checkpoint(TRUNCATE)` at every disk check (5 min) and at shutdown |
+| `backups/westbound-YYYY-MM-DD.db` | `backup.retention_days` (3) files, a count |
+| `backups/*.db` (manual, pre-deploy), `westbound.db.before-restore-*` | `backup.other_retention_days` (7 days); stray `backups/*.tmp` after a day |
+| `replays/*.wbr` | Verified: only while in a current top 100. Set aside: `replays.set_aside_retention_days` (30). Pending: until verified (needs the verifier running). Uploads wait (503) below the floor |
+| `replays/work/`, stray uploads | The hourly sweep (an hour) |
+| `room-handover.json` | Overwritten at each restart; deleted once expired (daily pass) |
+| `well-known/`, `bin/` (an off-site `rclone`) | The owner's files, counted in `wb_disk_other_bytes` |
+| Logs | Not on the volume: stdout, kept by Docker on the host (OPERATIONS.md → Disk space) |
+
+**The disk check** (every `check_interval_secs`, 300; the first at startup, with the file prunes so a lower `backup.retention_days` takes effect at the deploy): walks the data directory (and the replay and backup directories when they are elsewhere) and reads the volume's free space (`statvfs`, for the server's user) into the `wb_disk_*` gauges; below `min_free_mb` it sets `wb_disk_low` and logs `disk space low on the data volume` (repeated every 6 h while it holds); then the backups' freshness (`wb_backup_*`; `the newest backup is stale` past `backup.max_age_hours`, repeated every 6 h; a volume with no backup at all only once the server has been up that long); then a WAL checkpoint.
+
+**The daily pass** (`time_utc`, 03:47 UTC, after the 03:17 backup so the backup still holds what it deletes; `admin housekeeping` by hand). Each step runs even if another failed; failures are logged and counted (`wb_housekeeping_failures_total`); a `housekeeping pass` INFO line and an `admin_log` row (`system housekeeping`) carry the counts. Deletes go in batches of `batch_rows` (500) with `batch_pause_ms` (50) between full batches, so other writers get the database in between:
+
+1. `shadow_contacts` older than `shadow_contacts_days` (30);
+2. `admin_log` older than `admin_log_days` (365);
+3. handled `reports` older than `reports_days` (365); unhandled ones stay;
+4. `leaderboard_entries` of Daily Drive days and Journey weeks older than `board_periods_days` (90; the period containing that day stays); Loop seasons and all-time boards stay. The running server drops its board cache after;
+5. `runs` older than `runs_days` (90) that hold no board entry, walking the table by id. Kept whatever their age: legacy uploads (their row is the once-per-board rule), runs still `pending` (waiting for their replay), runs whose replay file is still there. A run's idempotent answer is only needed for minutes. Consequence: after a removal (`admin remove-run`) or a `recompute`, a board can only fall back to runs from the last 90 days or ones that hold another entry;
+6. the dated backups down to their count, other copies past their age (as at startup);
+7. `room-handover.json` once it has expired;
+8. `VACUUM` when at least `vacuum_min_free_pct` (25 %) of the file is free pages, the file is at most `vacuum_max_mb` (1024) and the volume has room for two copies plus `min_free_mb`; then a WAL checkpoint (`wb_db_vacuums_total`). After pruning, freed pages are reused by new rows anyway, so the file stops growing even without a VACUUM; the VACUUM only gives space back after a large prune.
+
+Expired refresh tokens are deleted hourly (`app::maintenance`, as before); accounts are never deleted by age.
+
+**Low space** (free below `min_free_mb`): the nightly backup is skipped with an ERROR `nightly backup skipped: not enough disk space` (`wb_backups_skipped_total` and `wb_backups_failed_total`; nothing is deleted), and it also skips when the free space minus a copy of the database (file + WAL) would fall below the floor; replay uploads answer 503 `storage_low` (`Retry-After: 3600`; the game retries). Everything else keeps working.
+
+### Configuration
+
+`[housekeeping]` (env `WB_HOUSEKEEPING__<KEY>`); retentions in days, 0 keeps the rows:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | The disk check and the daily pass inside `serve` (`admin housekeeping` works either way) |
+| `time_utc` | `03:47` | The daily pass, UTC `HH:MM` |
+| `check_interval_secs` | `300` | The disk check |
+| `min_free_mb` | `500` | The low-space floor (backups skip, replay uploads wait, `wb_disk_low`) |
+| `shadow_contacts_days` | `30` | `shadow_contacts` rows |
+| `admin_log_days` | `365` | `admin_log` rows (0, or at least 30) |
+| `reports_days` | `365` | Handled reports |
+| `board_periods_days` | `90` | Past Daily Drive days and Journey weeks (0, or at least 8) |
+| `runs_days` | `90` | Runs holding no board entry (0, or at least 30) |
+| `batch_rows` / `batch_pause_ms` | `500` / `50` | Rows per delete (1..=10000), the pause between full batches |
+| `vacuum_min_free_pct` / `vacuum_max_mb` | `25` / `1024` | When a `VACUUM` is worth it (0 % = never) and the largest file it rewrites |
+
+With `backup.retention_days`, `backup.max_age_hours`, `backup.other_retention_days` (Configuration reference) and `replays.set_aside_retention_days` (Replays → Configuration).
 
 ## Configuration reference
 
@@ -1924,7 +2131,9 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `backup.enabled` | `WB_BACKUP__ENABLED` | `true` | Nightly backup task |
 | `backup.dir` | `WB_BACKUP__DIR` | `/data/backups` | Where dated backups go |
 | `backup.time_utc` | `WB_BACKUP__TIME_UTC` | `03:17` | Nightly run time, UTC `HH:MM` |
-| `backup.retention_days` | `WB_BACKUP__RETENTION_DAYS` | `7` | Dated files kept |
+| `backup.retention_days` | `WB_BACKUP__RETENTION_DAYS` | `3` | N10.3: **how many** dated daily backups stay (1..=31): after each good backup the older ones beyond this go, newest first kept, the new one never deleted; a failed or skipped backup deletes nothing (was: days, 7) |
+| `backup.max_age_hours` | `WB_BACKUP__MAX_AGE_HOURS` | `26` | N10.3: the newest dated backup older than this is stale (`wb_backup_stale`, a warning, `admin backups`) |
+| `backup.other_retention_days` | `WB_BACKUP__OTHER_RETENTION_DAYS` | `7` | N10.3: other `.db` files in `backup.dir` (manual, pre-deploy) and `<db>.before-restore-*` are deleted this long after they were written; 0 keeps them. Stray `.tmp` files go after a day |
 | `backup.verify` | `WB_BACKUP__VERIFY` | `true` | N10.2: integrity check of each backup before it replaces anything |
 | `backup.upload_command` | `WB_BACKUP__UPLOAD_COMMAND` | empty | N10.2: off-site hook after each good backup: argv (comma-separated in the env), `{file}` = the backup |
 | `backup.upload_timeout_secs` | `WB_BACKUP__UPLOAD_TIMEOUT_SECS` | `600` | The hook is killed after this long |
@@ -1960,6 +2169,7 @@ Configuration is layered: defaults, then the TOML file (`--config` / `WB_CONFIG`
 | `deeplinks.app_store_url` / `play_store_url` / `app_scheme` | `WB_DEEPLINKS__APP_STORE_URL`, `…__PLAY_STORE_URL`, `…__APP_SCHEME` | empty | N9.3: the invite page's store links ("coming soon" while empty) and OPEN THE APP |
 | `leaderboards.*`, `runs.*` | `WB_LEADERBOARDS__…`, `WB_RUNS__…` | see "Leaderboards & runs API → Configuration" | Views, cache, replay trigger, legacy caps; plausibility thresholds |
 | `replays.*` | `WB_REPLAYS__…` | see "Replays and verification → Configuration" | Replay files, size cap, the verifier command, the queue, retention |
+| `housekeeping.*` | `WB_HOUSEKEEPING__…` | see "Housekeeping (N10.3) → Configuration" | Disk check, low-space floor, row retention, batches, VACUUM |
 | `rate_limits.social_per_hour` / `_burst` | `WB_RATE_LIMITS__SOCIAL_PER_HOUR` / `__SOCIAL_BURST` | `60` / `20` | Social writes per account, on top of the account limit (see "Social API") |
 | `social.*` | `WB_SOCIAL__…` | see "Social API → Configuration" | Friend, request and block caps; crew size and invite codes; the report limit |
 | `rooms.*` | `WB_ROOMS__…` | see "Rooms → Configuration" | Seats, holds and delays, spawns, the room clock, room queues, plausibility limits, room traffic |
@@ -2033,7 +2243,7 @@ Deploying with Docker Compose works too: create the resource from `westbound-ser
 
 - **Nightly:** at `backup.time_utc` (UTC), the server writes `/data/backups/westbound-YYYY-MM-DD.db`.
   - The copy is taken online with `VACUUM INTO`, written to a `.tmp` file and then renamed.
-  - Dated files older than `backup.retention_days` (7) are deleted.
+  - Only the newest `backup.retention_days` (3, N10.3: a count) dated files stay; manual copies go after `backup.other_retention_days` (7). A backup is skipped (an error, `wb_backups_skipped_total`) when the volume has no room for a copy of the database plus `housekeeping.min_free_mb`.
   - Each run is logged, recorded in `admin_log` and counted in `wb_backups_ok_total` / `wb_backups_failed_total`.
 - **Verified** (N10.2): each copy passes `PRAGMA integrity_check` before it replaces anything.
 - **Off the machine:** add Coolify's volume backups (Persistent Storage, then Backups), copy `/data/backups` elsewhere, or (N10.2) set the off-site hook `WB_BACKUP__UPLOAD_COMMAND` (OPERATIONS.md → Off-site copies).

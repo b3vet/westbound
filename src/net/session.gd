@@ -32,13 +32,29 @@ extends Node
 ## file (NetFileStore) until the Keychain / Keystore plugins land (MP-D2). One document
 ## per server, so a `?server=` link never sends this device's production secret
 ## anywhere else. Secrets and tokens are never printed.
-
+##
+## N11 (docs/NET_CLIENT.md → Sign in with Apple / Google): sign_in_with(provider) asks the
+## server for a nonce, opens the provider's sheet (`identity[provider]`: NetWebIdentity on
+## the web, NetNativeIdentity on iOS / Android, NetFakeIdentity in tests) and then links the
+## identity to this device's account (its progress is kept), or signs in with it when
+## there is no usable account here. When the identity already has its own account the
+## link answers `identity_in_use` with both accounts' summaries (`pending_conflict`); the
+## player picks (resolve_conflict(keep_device)) and the session switches to that account
+## with the same token: accounts are never merged (the spec's "merging accounts is out of
+## scope"); the save is, by NetCloudSave. A provider sign-in gives this device its own
+## device secret, stored like a device account's, so renewals work the same. unlink().
+## `cloud` (NetCloudSave) keeps the local save in sync while a provider is linked.
 signal signed_in(profile: NetProfile)
 signal signed_out()
 signal profile_changed(profile: NetProfile)
 ## `until_unix`: unix seconds (NetApiResult.BANNED_FOREVER = permanent).
 signal banned(until_unix: int)
 signal status_changed(status: Status)
+## N11: the session now belongs to another account (a provider sign-in or the conflict
+## chooser); `previous_account_id` is the one this device had ("" for none).
+signal account_switched(previous_account_id: String)
+## N11: GET /auth/providers answered (the account screen redraws its buttons).
+signal providers_loaded()
 signal _renew_done()
 
 enum Status { IDLE, CONNECTING, ONLINE, OFFLINE, SIGNED_OUT, BANNED, FAILED, DISABLED }
@@ -57,6 +73,10 @@ const DOC_VERSION := 1
 const ERR_NOT_SIGNED_IN := "not_signed_in"
 const ERR_BUSY := "busy"
 const ERR_INVALID_NAME := "invalid_name"
+## N11 codes.
+const ERR_PROVIDER_OFF := "provider_not_enabled"
+const ERR_IDENTITY_IN_USE := "identity_in_use"
+const ERR_NO_CONFLICT := "no_conflict"
 
 const SERVER_PARAM := "server"
 const SERVER_ARG := "--server="
@@ -72,6 +92,8 @@ static var current: NetSession
 
 ## Starts signing in when it enters the tree (off in tests: call start()).
 @export var auto_start: bool = true
+## N11: run the cloud save sync (`cloud`) while a provider is linked.
+@export var cloud_sync: bool = true
 
 var tuning: NetTuning
 var api: NetApi
@@ -91,6 +113,16 @@ var banned_until: int = 0
 var storage_ok: bool = true
 ## () -> float: wall-clock unix seconds (invalid = the system clock).
 var unix_clock: Callable
+## N11: provider id -> NetIdentityProvider (built for the platform in _ready(); tests set
+## their own).
+var identity: Dictionary = {}
+## N11: GET /auth/providers ({} until it answered).
+var provider_config: Dictionary = {}
+## N11: the `conflict` of the last link that answered identity_in_use ({provider, current,
+## other}); {} when none is waiting for the player.
+var pending_conflict: Dictionary = {}
+## N11: the cloud save sync (null when `cloud_sync` is off).
+var cloud: NetCloudSave
 
 var _configured: bool = false
 var _doc: Dictionary = {}
@@ -105,6 +137,10 @@ var _retry_delay_s: float = 0.0
 var _profile_fresh: bool = false
 ## A failed proactive refresh waits until then before the next try.
 var _next_renew_usec: int = 0
+## N11: a provider sheet or link is in progress; the identity body awaiting the chooser.
+var _identity_busy: bool = false
+var _pending_identity: Dictionary = {}
+var _providers_usec: int = -1
 
 
 func _init() -> void:
@@ -144,6 +180,7 @@ func _exit_tree() -> void:
 
 
 func _ready() -> void:
+	_build_cloud()
 	if not _configured:
 		var t := NetTuning.load_default()
 		var url := resolve_base_url(t, NetJsBridge.new(), OS.get_cmdline_user_args(),
@@ -156,6 +193,10 @@ func _ready() -> void:
 				current = null
 		else:
 			configure(NetHttpNode.new(self), platform_store(store_name(url, t)), t, null, url)
+	if identity.is_empty():
+		identity = platform_identity(tuning)
+	if cloud != null:
+		cloud.setup(self)
 	if auto_start:
 		start()
 
@@ -192,6 +233,12 @@ func retry() -> void:
 		_doc.erase(K_SIGNED_OUT)
 		_persist()
 	await _sign_in()
+
+
+func _build_cloud() -> void:
+	if cloud_sync and cloud == null:
+		cloud = NetCloudSave.new()
+		add_child(cloud)
 
 
 ## The player chose to start over after the stored account was refused (FAILED): forgets
@@ -415,7 +462,8 @@ func _adopt(r: NetApiResult, created: bool) -> NetApiResult:
 		profile = null
 	_doc[K_VERSION] = DOC_VERSION
 	_doc[K_ACCOUNT] = id
-	if created:
+	if not secret.is_empty():
+		# A new device account, or a provider sign-in's own credential for this device.
 		_doc[K_SECRET] = secret
 	_doc[K_REFRESH] = refresh
 	_doc[K_REFRESH_EXP] = r.int_field("refresh_expires_at")
@@ -531,6 +579,180 @@ func _set_status(s: Status) -> void:
 	status_changed.emit(s)
 
 
+# ---------------------------------------------------------------- Sign in with Apple / Google (N11)
+
+## The platform's provider sheets: the web shell's on the web, native plugins elsewhere.
+static func platform_identity(t: NetTuning) -> Dictionary:
+	var out := {}
+	for p: String in NetIdentityProvider.ALL:
+		var prov: NetIdentityProvider
+		if OS.has_feature("web"):
+			prov = NetWebIdentity.new(p)
+		else:
+			prov = NetNativeIdentity.new(p)
+		if t != null:
+			prov.timeout_s = t.identity_sign_in_timeout_s
+		out[p] = prov
+	return out
+
+
+## GET /auth/providers (cached `identity_config_cache_s`); configures the provider sheets
+## (the web shell loads a provider's SDK only now, and only when it is enabled).
+func load_providers(force: bool = false) -> void:
+	if base_url.is_empty():
+		return
+	var fresh := _providers_usec >= 0 and time.now_usec() - _providers_usec \
+			< roundi(tuning.identity_config_cache_s * USEC_PER_S)
+	if fresh and not force:
+		return
+	var r := await api.get_providers()
+	if not r.ok:
+		return
+	provider_config = r.data
+	_providers_usec = time.now_usec()
+	for p: String in identity:
+		var c: Variant = provider_config.get(p, {})
+		(identity[p] as NetIdentityProvider).configure(c if c is Dictionary else {})
+	providers_loaded.emit()
+
+
+## The server has the provider on (false until load_providers() answered).
+func provider_enabled(provider: String) -> bool:
+	var c: Variant = provider_config.get(provider, {})
+	return c is Dictionary and bool((c as Dictionary).get("enabled", false))
+
+
+## This build can show the provider's sheet (web shell configured / native plugin present).
+func provider_available(provider: String) -> bool:
+	var prov: Variant = identity.get(provider)
+	return prov is NetIdentityProvider and (prov as NetIdentityProvider).available()
+
+
+## The server's cloud save is on (assumed on until the providers config says otherwise).
+func cloud_save_on() -> bool:
+	var c: Variant = provider_config.get("cloud_save", {})
+	return not (c is Dictionary) or bool((c as Dictionary).get("enabled", true))
+
+
+func cloud_save_max_bytes() -> int:
+	var c: Variant = provider_config.get("cloud_save", {})
+	return int((c as Dictionary).get("max_bytes", 0)) if c is Dictionary else 0
+
+
+func identity_busy() -> bool:
+	return _identity_busy
+
+
+## Signs in with `provider` (see the class docs). The result: ok (linked, or signed in to
+## the identity's account), or `identity_in_use` with `pending_conflict` set (call
+## resolve_conflict or cancel_conflict), or another error (NetSession.error_text).
+func sign_in_with(provider: String) -> NetApiResult:
+	if _identity_busy or _busy:
+		return NetApiResult.failure(0, ERR_BUSY)
+	if base_url.is_empty():
+		return NetApiResult.failure(0, NetApiResult.OFFLINE)
+	if status == Status.BANNED:
+		# Not a way around a ban: a new identity would otherwise make a fresh account.
+		var b := NetApiResult.failure(0, NetApiResult.BANNED)
+		b.banned_until = banned_until
+		return b
+	_identity_busy = true
+	var r := await _sign_in_with(provider)
+	_identity_busy = false
+	return r
+
+
+func _sign_in_with(provider: String) -> NetApiResult:
+	await load_providers()
+	if not provider_enabled(provider):
+		return NetApiResult.failure(0, ERR_PROVIDER_OFF)
+	var prov: Variant = identity.get(provider)
+	if not (prov is NetIdentityProvider) or not (prov as NetIdentityProvider).available():
+		return NetApiResult.failure(0, NetIdentityResult.UNAVAILABLE)
+	var n := await api.get_nonce()
+	if not n.ok:
+		return n
+	var nonce := n.str_field("nonce")
+	var idr: NetIdentityResult = await (prov as NetIdentityProvider).sign_in(nonce)
+	if not idr.ok:
+		return NetApiResult.failure(0, idr.error)
+	var body := NetApi.identity_body(idr.id_token, nonce, idr.authorization_code)
+	pending_conflict = {}
+	_pending_identity = {}
+	if status == Status.ONLINE and _has_account():
+		var r := await api.link_provider(provider, body)
+		if r.ok:
+			_set_profile(r.data)
+			return r
+		if r.error == ERR_IDENTITY_IN_USE and r.data.get("conflict") is Dictionary:
+			pending_conflict = r.data["conflict"] as Dictionary
+			_pending_identity = {"provider": provider, "body": body}
+			return r
+		_note_failure(r)
+		return r
+	return await _provider_session(provider, body)
+
+
+## The player's answer to an identity_in_use: switch to the identity's account (accounts
+## are never merged). `keep_device`: this device's progress is merged into the cloud's with
+## this device's choices winning ("keep this device's progress"); false: the cloud's
+## progress replaces this device's, a local backup kept ("use the cloud progress").
+func resolve_conflict(keep_device: bool) -> NetApiResult:
+	if _pending_identity.is_empty():
+		return NetApiResult.failure(0, ERR_NO_CONFLICT)
+	if _identity_busy:
+		return NetApiResult.failure(0, ERR_BUSY)
+	_identity_busy = true
+	if cloud != null:
+		cloud.next_mode = SaveMerge.Mode.KEEP_LOCAL if keep_device else SaveMerge.Mode.USE_CLOUD
+	var r := await _provider_session(String(_pending_identity["provider"]),
+			_pending_identity["body"] as Dictionary)
+	if not r.ok and cloud != null:
+		cloud.next_mode = SaveMerge.Mode.MERGE
+	if r.ok:
+		cancel_conflict()
+	_identity_busy = false
+	return r
+
+
+## The player kept this device's account as it is (the identity stays with the other one).
+func cancel_conflict() -> void:
+	pending_conflict = {}
+	_pending_identity = {}
+
+
+## POST /auth/signin/{provider}: adopts the account (switching when it is another one).
+func _provider_session(provider: String, body: Dictionary) -> NetApiResult:
+	var previous := account_id()
+	var old_refresh := _refresh_token()
+	var r := await api.provider_sign_in(provider, body)
+	if r.ok:
+		r = _adopt(r, false)
+	if not r.ok:
+		if not r.is_transient():
+			_note_failure(r)
+		return r
+	_conclude(r)
+	if previous != account_id():
+		if not old_refresh.is_empty():
+			api.logout(old_refresh)   # best effort: the old device session ends
+		account_switched.emit(previous)
+	return r
+
+
+## Removes `provider` from the account (POST /auth/unlink): the new profile, or
+## `last_sign_in_method` / `not_linked`.
+func unlink(provider: String) -> NetApiResult:
+	if status != Status.ONLINE:
+		return NetApiResult.failure(0, ERR_NOT_SIGNED_IN)
+	var r := await api.unlink_provider(provider)
+	if r.ok:
+		_set_profile(r.data)
+	else:
+		_note_failure(r)
+	return r
+
+
 # ---------------------------------------------------------------- Config helpers
 
 ## The API base: the web page's `?server=`, else a `--server=` user argument (the dev
@@ -604,6 +826,24 @@ const TEXT := {
 	"token_revoked": "Your sign-in expired. Try again.",
 	"token_reused": "Your sign-in expired. Try again.",
 	"invalid_token": "Your sign-in expired. Try again.",
+	# N11: Sign in with Apple / Google.
+	"provider_not_enabled": "This sign-in isn't set up on the server yet.",
+	"provider_unavailable_here": "Not available in this build yet.",
+	"sign_in_timeout": "The sign-in took too long. Try again.",
+	"sign_in_failed": "The sign-in didn't finish. Try again.",
+	"sign_in_busy": "A sign-in is already open.",
+	"busy": "Still working on the last one.",
+	"invalid_id_token": "The sign-in wasn't accepted. Try again.",
+	"id_token_expired": "The sign-in expired. Try again.",
+	"invalid_nonce": "The sign-in expired. Try again.",
+	"provider_unavailable": "Sign-in is down right now. Try again soon.",
+	"provider_already_linked": "Another one is linked. Unlink it first.",
+	"last_sign_in_method": "Link another sign-in before removing this.",
+	"not_linked": "That sign-in isn't linked.",
+	"save_too_large": "Your save is too big for the cloud.",
+	"cloud_save_newer": "The cloud save is from a newer version.",
+	"cloud_save_not_enabled": "Cloud save is off on this server.",
+	"revision_conflict": "Another device is saving. Retrying soon.",
 }
 ## Player texts stay under about 50 characters (the panel's lines do not wrap).
 const TEXT_FALLBACK := "Something went wrong. Try again."

@@ -5,6 +5,11 @@ extends NetHttpBackend
 ## rotation with reuse detection (the whole family is revoked), device login, GET/PATCH
 ## /me with the name rules and the 30-day cooldown, logout, deletion and bans. Spec:
 ## multiplayer handoff → Accounts and authentication; Testing → Client. WP N1.2.
+## N11: Sign in with Apple / Google (GET /auth/providers, POST /auth/nonce, sign-in, link
+## with the `identity_in_use` conflict and both summaries, unlink with its last-method
+## rule, per-device credentials) and the cloud save (GET/PUT /save with If-Match and the
+## 409 carrying the server copy). ID tokens are NetFakeIdentity's
+## `fake.<provider>.<sub>.<nonce>`; the nonce must be one this fake issued.
 ##
 ## Test hooks:
 ##   offline = true                    every request fails with RESULT_CANT_CONNECT
@@ -12,6 +17,8 @@ extends NetHttpBackend
 ##   script(method, path, status, body, headers)   the next matching request gets this
 ##   script_failure(method, path, result)          ... or this transport failure
 ##   ban(id, until), expire_access_tokens(), now_s (the server's unix clock)
+##   N11: providers_enabled[p], cloud_save_enabled, save_max_bytes, put_save_direct(id, data)
+##   (another device wrote), link_direct(id, provider, sub)
 ##   requests (each: method, path, auth, body, content_type; `bytes` for binary bodies),
 ##   waits (backoff seconds asked for)
 ## `wait()` returns at once and advances `now_s`, so retries cost no real time.
@@ -48,7 +55,19 @@ var refresh_tokens: Dictionary = {}
 ## access token -> {account, exp, ver}
 var access_tokens: Dictionary = {}
 
+## N11: provider sign-in and cloud save.
+var providers_enabled: Dictionary = {"apple": true, "google": true}
+var cloud_save_enabled: bool = true
+var save_max_bytes: int = 65536
+## nonce -> expiry (unix seconds)
+var nonces: Dictionary = {}
+## "provider:sub" -> account id
+var subs: Dictionary = {}
+## account id -> {revision, updated_at, data}
+var saves: Dictionary = {}
+
 var _scripted: Array[Dictionary] = []
+var _headers: PackedStringArray = PackedStringArray()
 var _next_id: int = FIRST_ID
 var _serial: int = 0
 
@@ -126,8 +145,13 @@ func _dispatch(method: int, url: String, headers: PackedStringArray, body: Varia
 		elif h.to_lower().begins_with("content-type: "):
 			content_type = h.substr("content-type: ".length())
 	var raw := body is PackedByteArray
+	var if_match := ""
+	for h in headers:
+		if h.to_lower().begins_with("if-match: "):
+			if_match = h.substr("if-match: ".length())
+	_headers = headers
 	var rec := {"method": method, "path": path, "auth": auth, "body": "" if raw else String(body),
-			"content_type": content_type}
+			"content_type": content_type, "if_match": if_match}
 	if raw:
 		rec["bytes"] = body
 	requests.append(rec)
@@ -187,6 +211,9 @@ func _route(method: int, path: String, auth: String, body: String) -> NetHttpRes
 			return who as NetHttpResponse
 		_delete(String(who))
 		return NetHttpResponse.make(204)
+	var n11 := _route_identity(method, path, auth, b)
+	if n11 != null:
+		return n11
 	return _err(404, "not_found")
 
 
@@ -221,7 +248,10 @@ func _login(b: Dictionary) -> NetHttpResponse:
 	var secret: Variant = b.get("device_secret")
 	if not (id is String) or not (secret is String):
 		return _err(400, "invalid_body")
-	if not accounts.has(id) or (accounts[id] as Dictionary)["secret"] != secret:
+	if not accounts.has(id):
+		return _err(401, "invalid_credentials")
+	var acc_rec: Dictionary = accounts[id]
+	if acc_rec["secret"] != secret and not (acc_rec.get("secrets", []) as Array).has(secret):
 		return _err(401, "invalid_credentials")
 	var banned := _banned(String(id))
 	if banned != null:
@@ -294,6 +324,10 @@ func _rename(id: String, b: Dictionary) -> NetHttpResponse:
 
 func _delete(id: String) -> void:
 	accounts.erase(id)
+	saves.erase(id)
+	for k: String in subs.keys():
+		if subs[k] == id:
+			subs.erase(k)
 	for k: String in refresh_tokens.keys():
 		if (refresh_tokens[k] as Dictionary)["account"] == id:
 			refresh_tokens.erase(k)
@@ -351,7 +385,8 @@ func _profile(id: String) -> Dictionary:
 		"account_id": id, "display_name": acc["name"], "name_tag": acc["tag"],
 		"full_name": "%s#%04d" % [acc["name"], acc["tag"]],
 		"created_at": acc["created_at"], "name_changed_at": acc["name_changed_at"],
-		"next_rename_at": next, "linked": {"apple": false, "google": false},
+		"next_rename_at": next, "linked": {"apple": subs_of(id).has("apple"), "google": subs_of(id).has("google")},
+		"identities": _identities(id),
 	}
 
 
@@ -407,3 +442,212 @@ static func _json(text: String) -> Dictionary:
 	if j.parse(text) != OK or not (j.data is Dictionary):
 		return {}
 	return j.data as Dictionary
+
+
+# ---------------------------------------------------------------- N11: identity, cloud save
+
+## Puts a save on the server as if another device wrote it.
+func put_save_direct(id: String, data: Dictionary) -> int:
+	var cur: Dictionary = saves.get(id, {"revision": 0})
+	var rev := int(cur["revision"]) + 1
+	saves[id] = {"revision": rev, "updated_at": int(now_s), "data": data.duplicate(true)}
+	return rev
+
+
+## An account nobody signs in to here (another device's), named `display_name#tag`.
+func add_account(display_name: String, tag: int) -> String:
+	var id := str(_next_id)
+	_next_id += 1
+	accounts[id] = {"secret": _token("sec"), "name": display_name, "tag": tag, "created_at": int(now_s),
+		"name_changed_at": int(now_s), "renamed": false, "banned_until": 0, "ver": 0}
+	return id
+
+
+## Links an identity without a token (test setup).
+func link_direct(id: String, provider: String, sub: String) -> void:
+	subs["%s:%s" % [provider, sub]] = id
+
+
+## provider -> sub of an account's identities.
+func subs_of(id: String) -> Dictionary:
+	var out := {}
+	for k: String in subs:
+		if subs[k] == id:
+			var parts := k.split(":", true, 1)
+			out[parts[0]] = parts[1]
+	return out
+
+
+func _identities(id: String) -> Array:
+	var out: Array = []
+	var linked := subs_of(id)
+	for p: String in NetIdentityProvider.ALL:
+		if linked.has(p):
+			var hint: Variant = null
+			if p == "google":
+				hint = "p***@gmail.com"
+			out.append({"provider": p, "email_hint": hint, "private_email": p == "apple",
+					"linked_at": int(now_s)})
+	return out
+
+
+func _route_identity(method: int, path: String, auth: String, b: Dictionary) -> NetHttpResponse:
+	var post := method == HTTPClient.METHOD_POST
+	if method == HTTPClient.METHOD_GET and path == NetApi.PATH_PROVIDERS:
+		return _ok(200, {
+			"apple": {"enabled": bool(providers_enabled.get("apple", false)), "client_id": "com.fake.web",
+				"redirect_uri": "https://fake.test/"},
+			"google": {"enabled": bool(providers_enabled.get("google", false)), "client_id": "fake.apps.googleusercontent.com"},
+			"nonce_required": true,
+			"cloud_save": {"enabled": cloud_save_enabled, "max_bytes": save_max_bytes},
+		})
+	if post and path == NetApi.PATH_NONCE:
+		_serial += 1
+		var n := "n-%d" % _serial
+		nonces[n] = int(now_s) + 600
+		return _ok(200, {"nonce": n, "expires_at": nonces[n]})
+	for prefix: String in [NetApi.PATH_SIGNIN, NetApi.PATH_LINK, NetApi.PATH_UNLINK]:
+		if post and path.begins_with(prefix):
+			var p := path.substr(prefix.length())
+			if not NetIdentityProvider.ALL.has(p):
+				return _err(404, "not_found")
+			match prefix:
+				NetApi.PATH_SIGNIN:
+					return _provider_sign_in(p, b)
+				NetApi.PATH_LINK:
+					return _link(p, auth, b)
+				_:
+					return _unlink(p, auth)
+	if path == NetApi.PATH_SAVE and (method == HTTPClient.METHOD_GET or method == HTTPClient.METHOD_PUT):
+		var who: Variant = _authed(auth, false)
+		if who is NetHttpResponse:
+			return who as NetHttpResponse
+		if not cloud_save_enabled:
+			return _err(501, "cloud_save_not_enabled")
+		if method == HTTPClient.METHOD_GET:
+			return _ok(200, _save_body(String(who)))
+		return _put_save(String(who), b)
+	return null
+
+
+## The verified identity {sub} of a fake token, or the error response.
+func _verify(p: String, b: Dictionary) -> Variant:
+	if not bool(providers_enabled.get(p, false)):
+		return _err(501, "provider_not_enabled")
+	var t: Variant = b.get("id_token")
+	var n: Variant = b.get("nonce")
+	if not (t is String):
+		return _err(400, "invalid_body")
+	var parts := (t as String).split(".")
+	if parts.size() != 4 or parts[0] != "fake" or parts[1] != p or parts[2].is_empty():
+		return _err(401, "invalid_id_token")
+	if not (n is String) or parts[3] != n or not nonces.has(n) or int(nonces[n]) <= int(now_s):
+		return _err(400, "invalid_nonce")
+	return parts[2]
+
+
+func _provider_sign_in(p: String, b: Dictionary) -> NetHttpResponse:
+	var sub: Variant = _verify(p, b)
+	if sub is NetHttpResponse:
+		return sub as NetHttpResponse
+	var key := "%s:%s" % [p, sub]
+	var created := not subs.has(key)
+	var id := ""
+	var secret := _token("sec")
+	if created:
+		var made := _create()
+		id = str(JSON.parse_string(made.text())["account_id"])
+		(accounts[id] as Dictionary)["secret"] = secret
+		subs[key] = id
+	else:
+		id = String(subs[key])
+		var banned := _banned(id)
+		if banned != null:
+			return banned
+		var acc: Dictionary = accounts[id]
+		var extra: Array = acc.get("secrets", [])
+		extra.append(secret)
+		acc["secrets"] = extra
+	var out := _session(id, _token("fam"))
+	out["device_secret"] = secret
+	out["profile"] = _profile(id)
+	out["created"] = created
+	return _ok(201 if created else 200, out)
+
+
+func _link(p: String, auth: String, b: Dictionary) -> NetHttpResponse:
+	var who: Variant = _authed(auth, false)
+	if who is NetHttpResponse:
+		return who as NetHttpResponse
+	var me := String(who)
+	var sub: Variant = _verify(p, b)
+	if sub is NetHttpResponse:
+		return sub as NetHttpResponse
+	var key := "%s:%s" % [p, sub]
+	if subs.has(key) and subs[key] != me:
+		var e := _err_body("identity_in_use")
+		e["conflict"] = {"provider": p, "current": _summary(me), "other": _summary(String(subs[key]))}
+		return _ok(409, e)
+	if not subs.has(key) and subs_of(me).has(p):
+		return _err(409, "provider_already_linked")
+	subs[key] = me
+	return _ok(200, _profile(me))
+
+
+func _unlink(p: String, auth: String) -> NetHttpResponse:
+	var who: Variant = _authed(auth, false)
+	if who is NetHttpResponse:
+		return who as NetHttpResponse
+	var me := String(who)
+	var linked := subs_of(me)
+	if not linked.has(p):
+		return _err(404, "not_linked")
+	subs.erase("%s:%s" % [p, linked[p]])
+	return _ok(200, _profile(me))
+
+
+func _summary(id: String) -> Dictionary:
+	var acc: Dictionary = accounts[id]
+	var cs: Variant = null
+	if saves.has(id):
+		var sv: Dictionary = saves[id]
+		var data: Dictionary = sv["data"]
+		var st: Variant = data.get("stats", {})
+		var stats: Dictionary = st if st is Dictionary else {}
+		cs = {"revision": sv["revision"], "updated_at": sv["updated_at"], "bytes": JSON.stringify(data).length(),
+			"xp": stats.get("xp"), "runs": stats.get("runs")}
+	return {"account_id": id, "full_name": "%s#%04d" % [acc["name"], acc["tag"]],
+		"created_at": acc["created_at"], "last_seen": int(now_s),
+		"linked": {"apple": subs_of(id).has("apple"), "google": subs_of(id).has("google")},
+		"runs": 0, "best_score": 0, "cloud_save": cs}
+
+
+func _save_body(id: String) -> Dictionary:
+	if not saves.has(id):
+		return {"revision": 0, "updated_at": null, "bytes": 0, "data": null}
+	var sv: Dictionary = saves[id]
+	return {"revision": sv["revision"], "updated_at": sv["updated_at"],
+		"bytes": JSON.stringify(sv["data"]).length(), "data": (sv["data"] as Dictionary).duplicate(true)}
+
+
+func _put_save(id: String, b: Dictionary) -> NetHttpResponse:
+	var m := ""
+	for h in _headers:
+		if h.to_lower().begins_with("if-match: "):
+			m = h.substr("if-match: ".length()).strip_edges().trim_prefix("\"").trim_suffix("\"")
+	if not m.is_valid_int():
+		return _err(428, "precondition_required")
+	var data: Variant = b.get("data")
+	if not (data is Dictionary):
+		return _err(400, "invalid_body")
+	if JSON.stringify(data).length() > save_max_bytes:
+		var e := _err_body("save_too_large")
+		e["max_bytes"] = save_max_bytes
+		return _ok(413, e)
+	var cur := _save_body(id)
+	if int(cur["revision"]) != m.to_int():
+		var c := _err_body("revision_conflict")
+		c["save"] = cur
+		return _ok(409, c)
+	var rev := put_save_direct(id, data as Dictionary)
+	return _ok(200, {"revision": rev, "updated_at": int(now_s), "bytes": JSON.stringify(data).length()})

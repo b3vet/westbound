@@ -9,6 +9,7 @@ The tools the orchestrator and every WP run at merge time (plan §3, §4 merge g
 | `tools/parity.sh` | Do the Mobile and Compatibility renderers produce the same pixels for this scene? | visual WPs touching shaders, every gate |
 | `tools/snap.sh` | What does the scene look like on the Compatibility renderer, and on the Mobile renderer (`--renderer=mobile|both`, Mesa lavapipe)? | visual WPs, every gate |
 | `WBBench` (`tests/lib/bench.gd`) | Does a sim tick fit its CPU budget? | sim WPs (WP2.4 onward) |
+| `WBFrameBench` (`tests/lib/frame_bench.gd`) | Does a streamed system's worst (or p99.5) frame fit its budget, even on a loaded machine? | world streaming WPs (WP9.10 onward) |
 | `tools/drawcalls.sh` | How many draw calls, objects and primitives does a scene cost, split into 3D, each overlay and each top-level 3D node? | rendering WPs, perf gates (WP4.6) |
 
 ## tools/snap.sh — screenshots
@@ -169,6 +170,26 @@ func test_traffic_tick_budget() -> void:
 - Set the budget at about 3× the median you measure locally. It must still sit well inside the real frame share (e.g. traffic at 120 Hz has an 8.3 ms tick and shares it). A budget test catches order-of-magnitude regressions, not 10% drift.
 - Keep each fast-tier bench under about 0.5 s. Longer or more precise runs go in `soak_*` methods.
 - Allocation freedom is not measured here. That is WB104 plus review.
+
+## WBFrameBench — frame-cost tails under load
+
+`tests/lib/frame_bench.gd` (`class_name WBFrameBench`, WP9.10) for benches whose statistic is a tail (the p99.5 or the worst frame of a timed drive: prefetch and swap frames, placements, re-anchors). A single drive's tail is where one OS preemption shows: on a loaded box (parallel test runs, other agents) the landmarks' worst frame read 4.6 ms against a 0.6 ms norm, and the water ribbon's p99.5 4.7 ms against 0.5 ms.
+
+```gdscript
+func test_frame_cost_while_driving() -> void:
+	var usec := WBFrameBench.tail_within("water ribbon p99.5 frame (prefetch + swap)", _drive_at_top_speed,
+			WBFrameBench.P995, 1500.0)
+	le(usec, WBBench.budget(1500.0), "p99.5 water frame usec")
+
+## A fresh subject, its warm-up, then each timed frame's usec in order (same count every pass).
+func _drive_at_top_speed() -> PackedInt64Array:
+```
+
+- The drive runs `passes` (3) times on fresh subjects; each frame's cost is its **minimum over the passes**; the tail is taken over those minima. Load only adds time, so a spike must hit the same frame in every pass to count.
+- Over budget, the whole measurement runs once more (`attempts` 2) and the lower tail counts: the test fails only if both are over.
+- A real regression still fails: the benched work is deterministic by position and seed, so a frame that costs too much costs too much in every pass and attempt (`tests/unit/test_frame_bench.gd` proves both sides on synthetic drives). The log line keeps the single-pass tail next to the result, so drift under load stays visible.
+- `quantile`, `per_frame_min` and `measure_tail` are there for custom checks. Budgets stay what they were, and `WB_BENCH_SCALE` still applies.
+- Used by `test_ocean`, `test_landmarks`, `test_elevated`, `test_fog_cards` (`test_frame_cost_while_driving` / `test_update_view_cost`) and `test_roadside::test_worst_frame_spike`. Mean or median benches (`WBBench.usec_per_call`) are unaffected, since they already shrug off a hiccup.
 
 ## tools/check_warnings.sh — GDScript warnings as errors
 

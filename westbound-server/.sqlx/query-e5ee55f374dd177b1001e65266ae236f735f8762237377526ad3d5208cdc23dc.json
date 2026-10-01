@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO identity_links\n             (account_id, provider, email_hint, private_email, linked_at, last_used_at,\n              apple_client_id, apple_refresh_sealed)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?)\n         ON CONFLICT (account_id, provider) DO UPDATE SET\n             email_hint = excluded.email_hint,\n             private_email = excluded.private_email,\n             last_used_at = excluded.last_used_at,\n             apple_client_id = COALESCE(excluded.apple_client_id, apple_client_id),\n             apple_refresh_sealed = COALESCE(excluded.apple_refresh_sealed, apple_refresh_sealed)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "e5ee55f374dd177b1001e65266ae236f735f8762237377526ad3d5208cdc23dc"
+}

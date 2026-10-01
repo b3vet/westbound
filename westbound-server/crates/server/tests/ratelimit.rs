@@ -152,7 +152,7 @@ async fn auth_routes_are_limited_per_ip() {
     let r = app
         .raw(
             "POST",
-            "/api/v1/auth/link/apple",
+            "/api/v1/auth/signin/apple",
             PUBLIC_A,
             &h,
             body.clone(),
