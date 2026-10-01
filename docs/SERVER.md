@@ -2207,9 +2207,9 @@ The workflow runs only when `westbound-server/**` or the workflow file changes, 
 2. **`image`** (after `test`):
    - Builds the image with buildx and the GitHub Actions layer cache.
    - Smoke-tests it: runs it, curls the health route, runs `healthcheck` inside the container, then checks that `docker stop` exits 0.
-   - On pushes to `claude/game-implementation-phases-asl5jz` only, logs in to GHCR with `GITHUB_TOKEN` (`packages: write`) and pushes these tags:
+   - On pushes to `main` only (merged pull requests), logs in to GHCR with `GITHUB_TOKEN` (`packages: write`) and pushes these tags:
      - `ghcr.io/<owner, lowercased>/westbound-server:edge`
-     - `:claude-game-implementation-phases-asl5jz-<sha7>`
+     - `:main-<sha7>`
 
 ## Coolify setup
 

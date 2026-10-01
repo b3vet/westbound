@@ -25,7 +25,19 @@ name: Verifier
 on:
   push:
     branches:
+      - main
       - claude/game-implementation-phases-asl5jz
+    paths:
+      - "src/**"
+      - "data/**"
+      - "assets/**"
+      - "tools/verifier/**"
+      - "export_presets.cfg"
+      - "project.godot"
+      - "westbound-server/**"
+      - ".github/workflows/verifier.yml"
+  # Pull requests build and smoke-test the image without pushing it.
+  pull_request:
     paths:
       - "src/**"
       - "data/**"
@@ -50,7 +62,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PUSH_BRANCH: claude/game-implementation-phases-asl5jz
+  PUSH_BRANCH: main
   # Client builds kept in the image (the fresh one plus the newest older ones).
   KEEP_BUILDS: ${{ github.event.inputs.keep_builds || '3' }}
 
@@ -72,7 +84,7 @@ jobs:
           sha="${GITHUB_SHA::7}"
           image="ghcr.io/${owner}/westbound-verifier"
           push=false
-          if [[ "${GITHUB_REF_NAME}" == "${PUSH_BRANCH}" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" != "pull_request" && "${GITHUB_REF_NAME}" == "${PUSH_BRANCH}" ]]; then
             push=true
           fi
           {

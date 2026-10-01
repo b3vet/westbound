@@ -6,7 +6,7 @@ For the owner running `westbound-server` on Coolify. The technical reference is 
 
 | What | Where |
 | --- | --- |
-| Image | `ghcr.io/b3vet/westbound-server:edge` (CI pushes it from the `claude/game-implementation-phases-asl5jz` branch); rollback tags `claude-game-implementation-phases-asl5jz-<sha7>` |
+| Image | `ghcr.io/b3vet/westbound-server:edge` (CI pushes it from `main`, that is on every merged pull request); rollback tags `main-<sha7>` (older images: `claude-game-implementation-phases-asl5jz-<sha7>`) |
 | Replay verifier (N8.3) | `ghcr.io/b3vet/westbound-verifier:edge`, a second resource on the same volume: see "Replay verification" |
 | Public | `https://westbound.sipsakrandevu.com` → container port 8080 (`/api/*`, `/ws`, `/r/*`, `/.well-known/*`) |
 | Volume | `/data`: `westbound.db` (+ `-wal`, `-shm`), `backups/`, `well-known/`, `replays/`, `room-handover.json`. Small disk: everything the server writes there is capped (see "Disk space") |
@@ -44,7 +44,7 @@ Both workflows can redeploy their Coolify resource right after pushing a new ima
    - `COOLIFY_TOKEN`: the API token;
    - `COOLIFY_SERVER_WEBHOOK`: the server resource's URL;
    - `COOLIFY_VERIFIER_WEBHOOK`: the verifier resource's URL.
-4. **Check it works.** After the next push that touches `westbound-server/`, the **Server** workflow's last step, "Redeploy the server on Coolify", prints Coolify's answer. Coolify's Deployments tab shows a new deployment, and `/api/v1/health` reports the new `build`. The **Verifier** workflow's last step does the same for the verifier; it runs after pushes that touch the game or the server.
+4. **Check it works.** After the next merge into `main` that touches `westbound-server/`, the **Server** workflow's last step, "Redeploy the server on Coolify", prints Coolify's answer. Coolify's Deployments tab shows a new deployment, and `/api/v1/health` reports the new `build`. The **Verifier** workflow's last step does the same for the verifier; it runs after merges into `main` that touch the game or the server. Other branches and pull requests build and test both images without pushing or deploying them.
 
 The Coolify URL must be reachable from GitHub's runners (the public internet). A planned restart (60 s notice, room handover) happens on every automatic server deploy, exactly as with a manual one.
 

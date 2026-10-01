@@ -12,7 +12,7 @@ The spec is the source of truth for *what* to build. This plan covers only *how 
 | --- | --- |
 | Build order | **Parallel tracks.** The pure headless systems (`vehicle_physics`, `traffic_sim`/IDM/MOBIL, `scoring`, `sun_clock`, `passability`) start early, alongside the rendering milestones. Milestone *done* gates stay exactly as the spec defines them, in M0→M9 order. |
 | Team shape | One orchestrator (plans, briefs, reviews, merges, pushes) plus up to **5 parallel subagents** per wave. |
-| Git | All work lands on `claude/game-implementation-phases-asl5jz`. Each subagent works in its own git worktree. The orchestrator reviews and merges each work package, runs the full suite, then pushes. No PRs unless requested. |
+| Git | All work lands on `claude/game-implementation-phases-asl5jz`. Each subagent works in its own git worktree. The orchestrator reviews and merges each work package, runs the full suite, then pushes. The owner merges pull requests into `main`; `main` is the release branch (Pages, the server and verifier images, Coolify deploys). |
 | Gates | We **pause for the owner's device playtest at M1 (look/thermal), M2 (car feel) and M3 (traffic)**. At every other gate we continue, and device feedback is folded in asynchronously. |
 | Playtest vehicle | **Web builds on the iPhone's mobile browser** are the everyday loop. Native iOS builds (owner's Mac + iPhone) are for thermal and performance acceptance, gyro, haptics and platform services. |
 | Interim assets | Generated placeholders (code or Blender scripts), cool_drive's 3 cars, Chakra Petch (OFL), and **clearly CC0-licensed packs** (e.g. Kenney, CC0 on Freesound). Every third-party file is logged in `assets/LICENSES.md`. |

@@ -26,7 +26,7 @@ env:
   CARGO_TERM_COLOR: always
   # Compile-time checked queries use the committed metadata in westbound-server/.sqlx/.
   SQLX_OFFLINE: "true"
-  PUSH_BRANCH: claude/game-implementation-phases-asl5jz
+  PUSH_BRANCH: main
 
 jobs:
   test:

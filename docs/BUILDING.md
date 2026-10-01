@@ -129,12 +129,12 @@ repository variable `PAGES_ENABLED` is `true`, so the workflow stays green until
 
 1. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
    Pages on a private repo needs a paid plan (Pro/Team). On a free plan the repo must be public.
-2. **Settings → Environments → `github-pages` → Deployment branches and tags.** Add
-   the working branch (`claude/game-implementation-phases-asl5jz`). By default only the
-   default branch may deploy. The environment appears after step 1. If it doesn't,
-   create it with that name.
+2. **Settings → Environments → `github-pages` → Deployment branches and tags.** The
+   workflow deploys from the default branch (`main`), which the environment allows by
+   default. The environment appears after step 1. If it doesn't, create it with that name.
 3. **Settings → Secrets and variables → Actions → Variables → New repository variable:**
-   `PAGES_ENABLED` = `true`. Optionally add `PAGES_BRANCH` = the branch name, so pushes from
+   `PAGES_ENABLED` = `true`. Optionally add `PAGES_BRANCH` = a branch name to deploy
+   from that branch instead of `main` (add it to the environment in step 2). Pushes from
    other branches build and test without deploying.
 4. Push, or re-run the **Web** workflow (Actions → Web → Run workflow). The deploy
    job prints the URL, normally `https://b3vet.github.io/westbound/`.
