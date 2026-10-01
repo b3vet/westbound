@@ -364,8 +364,8 @@ clock_epoch_unix_ms = 0
 command_queue = 256
 join_timeout_ms = 2000
 # PlayerState plausibility (spec: speed <= top speed x 1.1 with boost; acceleration and
-# lateral movement within 1.2x the car's). The fastest car with boost: 285 km/h x 1.08.
-max_speed_kmh = 307.8
+# lateral movement within 1.2x the car's). The fastest car with boost: 292 km/h x 1.08.
+max_speed_kmh = 315.36
 speed_tolerance_pct = 10.0
 # Engine traction 9 + boost thrust 3 m/s^2; lateral movement (m/s).
 max_accel_mps2 = 12.0

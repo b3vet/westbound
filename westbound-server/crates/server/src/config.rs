@@ -690,7 +690,7 @@ pub struct RoomsConfig {
     pub command_queue: usize,
     /// A join waits this long for the room task's answer.
     pub join_timeout_ms: u64,
-    /// Fastest car's top speed with boost: night_viper 285 km/h × (1 + 8 %).
+    /// Fastest car's top speed with boost: afterglow 292 km/h × (1 + 8 %).
     pub max_speed_kmh: f64,
     /// Speed may exceed `max_speed_kmh` by this much (spec: × 1.1).
     pub speed_tolerance_pct: f64,
@@ -1248,7 +1248,7 @@ impl Default for RoomsConfig {
             clock_epoch_unix_ms: 0,
             command_queue: 256,
             join_timeout_ms: 2_000,
-            max_speed_kmh: 307.8,
+            max_speed_kmh: 315.36,
             speed_tolerance_pct: 10.0,
             max_accel_mps2: 12.0,
             max_lateral_speed_mps: 12.0,

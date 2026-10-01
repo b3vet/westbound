@@ -1511,7 +1511,7 @@ Logs at INFO: `room created` (id, code, settings), `room seat taken` / `taken ba
 | `traffic_aoi_*`, `traffic_near_*`, `traffic_far_hz`, `traffic_car_id_hold_ms` | see "Traffic streaming → Configuration" | The area of interest, correction rates and car-id hold (N4.2) |
 | `cycle_len_ms` / `day_len_ms` / `clock_epoch_unix_ms` | `1920000` / `1320000` / `0` | The room clock (loop.tres; spec 32 / 22 min) |
 | `command_queue` / `join_timeout_ms` | `256` / `2000` | Each room's queue; how long a join waits for the room (not in spec) |
-| `max_speed_kmh` / `speed_tolerance_pct` | `307.8` / `10.0` | The fastest car with boost; spec × 1.1 |
+| `max_speed_kmh` / `speed_tolerance_pct` | `315.36` / `10.0` | The fastest car with boost; spec × 1.1 |
 | `max_accel_mps2` / `max_lateral_speed_mps` / `capability_tolerance_pct` | `12.0` / `12.0` / `20.0` | The car's capability; spec × 1.2 |
 | `lateral_margin_m` / `position_slack_m` | `1.0` / `2.0` | Allowed overshoot of the barriers; slack on the distance checks (not in spec) |
 | `future_tolerance_ms` / `stale_state_ms` | `500` / `2000` | States stamped this far ahead are refused; this far behind, dropped (not in spec) |
