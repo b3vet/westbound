@@ -44,9 +44,17 @@ pub async fn probe_once(db: &SqlitePool, db_path: &Path, m: &Metrics) {
     Metrics::set(&m.db_pool_idle, db.num_idle() as u64);
     Metrics::set(&m.db_file_bytes, file_len(db_path));
     Metrics::set(&m.db_wal_bytes, file_len(&wal_path(db_path)));
-    match sqlx::query_as::<_, (String, i64)>("SELECT status, COUNT(*) FROM replays GROUP BY status")
-        .fetch_all(db)
-        .await
+    // N10.3: `set_aside` counts the parked jobs still holding their file (and the pre-N10.3
+    // form, `failed` with `"unverifiable": true`, that an older verifier may still write).
+    match sqlx::query_as::<_, (String, i64)>(
+        "SELECT CASE WHEN status = 'failed' AND json_valid(result)
+                       AND json_extract(result, '$.unverifiable') = 1 THEN 'set_aside'
+                     ELSE status END AS s, COUNT(*)
+         FROM replays WHERE NOT (status = 'set_aside' AND file_deleted_at IS NOT NULL)
+         GROUP BY s",
+    )
+    .fetch_all(db)
+    .await
     {
         Ok(rows) => {
             for st in REPLAY_STATUSES {

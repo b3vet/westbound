@@ -124,8 +124,10 @@ async fn nightly_run_writes_dated_file_and_prunes() {
     let dir = tempfile::tempdir().unwrap();
     let pool = db::connect(&db_config(&dir, "live.db")).await.unwrap();
     db::migrate(&pool).await.unwrap();
+    // N10.3: a count of daily backups (the new one and one more).
     let cfg = BackupConfig {
         dir: dir.path().join("backups"),
+        retention_days: 2,
         ..BackupConfig::default()
     };
     std::fs::create_dir_all(&cfg.dir).unwrap();

@@ -606,9 +606,16 @@ impl Server {
             state.db.clone(),
             replays.clone(),
             state.clock.clone(),
+            state.metrics.clone(),
             cancel.clone(),
         ));
         let probe_task = tokio::spawn(crate::ops::db_probe(state.clone()));
+        // N10.3: the disk check and the daily pass on the data volume.
+        let housekeeping_task = state
+            .config
+            .housekeeping
+            .enabled
+            .then(|| tokio::spawn(crate::housekeeping::periodic(state.clone())));
         let admin_task = admin_listener.map(|l| {
             let app = crate::admin_api::router(state.clone());
             let cancel = cancel.clone();
@@ -676,6 +683,9 @@ impl Server {
             t.abort();
         }
         probe_task.abort();
+        if let Some(t) = housekeeping_task {
+            t.abort();
+        }
         maintenance_task.abort();
         ban_sweep_task.abort();
         retention_task.abort();

@@ -7,6 +7,9 @@
 //! per hour, speeds, disagreement distribution go into the admin stats"), live since the
 //! start and from `shadow_contacts` over the last day and week.
 //!
+//! N10.3: a `disk` section: the volume's free space, what the database, WAL, replays,
+//! backups and the rest of the data directory take, and the newest backup's age.
+//!
 //! `curl -s 127.0.0.1:9090/admin/stats | jq` (docs/SERVER.md → "Admin stats").
 
 use std::sync::atomic::AtomicU64;
@@ -53,6 +56,37 @@ pub struct AdminStats {
     pub rooms: RoomsView,
     pub netcode: NetcodeView,
     pub shadow: ShadowView,
+    /// N10.3: the data volume (`null` when it could not be read).
+    pub disk: Option<DiskView>,
+}
+
+/// N10.3: the data volume and the backups' freshness.
+#[derive(Debug, Serialize)]
+pub struct DiskView {
+    #[serde(flatten)]
+    pub usage: crate::housekeeping::DiskUsage,
+    /// Dated daily backups, and at most how many are kept (`backup.retention_days`).
+    pub backup_files: usize,
+    pub backups_kept_max: u32,
+    pub backup_newest: Option<String>,
+    pub backup_newest_age_s: Option<i64>,
+    /// Older than `backup.max_age_hours` (or none).
+    pub backup_stale: bool,
+}
+
+/// The disk view now (blocking: a walk of the data directory).
+pub fn disk_view(cfg: &crate::config::Config, now: i64) -> DiskView {
+    let usage = crate::housekeeping::disk_usage(cfg);
+    let b =
+        crate::backup::status(&cfg.backup.dir, now, cfg.backup.max_age_hours).unwrap_or_default();
+    DiskView {
+        usage,
+        backup_files: b.files.len(),
+        backups_kept_max: cfg.backup.retention_days,
+        backup_newest: b.newest().map(|f| f.name.clone()),
+        backup_newest_age_s: b.newest_age_secs,
+        backup_stale: b.stale,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -239,6 +273,7 @@ pub fn collect(m: &Metrics, r: &RoomMetrics, tick_rate_hz: f64) -> AdminStats {
             last_day: None,
             last_week: None,
         },
+        disk: None,
     }
 }
 
@@ -249,6 +284,10 @@ pub async fn handler(State(state): State<AppState>) -> Response {
     let now = crate::rooms::unix_now_ms() / 1_000;
     stats.shadow.last_day = shadow_log::summary(&state.db, now - DAY_S).await.ok();
     stats.shadow.last_week = shadow_log::summary(&state.db, now - WEEK_S).await.ok();
+    let cfg = state.config.clone();
+    stats.disk = tokio::task::spawn_blocking(move || disk_view(&cfg, now))
+        .await
+        .ok();
     ([(header::CACHE_CONTROL, "no-store")], Json(stats)).into_response()
 }
 

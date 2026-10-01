@@ -46,7 +46,13 @@ fn defaults_are_valid_and_match_the_spec() {
     assert_eq!(c.limits.dead_after_ms, 8_000);
     assert_eq!(c.limits.max_rooms, 40);
     assert_eq!(c.limits.max_connections, 400);
-    assert_eq!(c.backup.retention_days, 7);
+    // N10.3 (owner: the disk is small): at most 3 daily backups, stale after 26 h.
+    assert_eq!(c.backup.retention_days, 3);
+    assert_eq!(c.backup.max_age_hours, 26);
+    assert!(c.housekeeping.enabled);
+    assert_eq!(c.housekeeping.min_free_mb, 500);
+    assert_eq!(c.housekeeping.shadow_contacts_days, 30);
+    assert_eq!(c.replays.set_aside_retention_days, 30);
     assert_eq!(c.backup.dir.to_str(), Some("/data/backups"));
     assert!(c.metrics_addr().unwrap().ip().is_loopback());
     assert_eq!(
@@ -159,6 +165,60 @@ fn validation_collects_every_error() {
     // + auth.device_secret_pepper missing
     let errs = c.validate().unwrap_err().0;
     assert_eq!(errs.len(), 20, "{errs:#?}");
+}
+
+/// N10.3: the backup count is bounded (the volume is small), the housekeeping keeps what
+/// the server still needs, and every key is settable from the environment.
+#[test]
+fn housekeeping_and_backup_retention_are_validated() {
+    let mut c = Config::default();
+    with_secrets(&mut c);
+    c.backup.retention_days = 32;
+    c.backup.max_age_hours = 0;
+    c.housekeeping.time_utc = "4pm".into();
+    c.housekeeping.check_interval_secs = 0;
+    c.housekeeping.batch_rows = 0;
+    c.housekeeping.vacuum_min_free_pct = 101;
+    c.housekeeping.runs_days = 7;
+    c.housekeeping.admin_log_days = 1;
+    c.housekeeping.board_periods_days = 3;
+    let errs = c.validate().unwrap_err().0;
+    assert_eq!(errs.len(), 9, "{errs:#?}");
+    assert!(
+        errs.iter().any(|e| e.contains("backup.retention_days")),
+        "{errs:#?}"
+    );
+    assert!(
+        errs.iter().any(|e| e.contains("housekeeping.runs_days")),
+        "{errs:#?}"
+    );
+    // 0 keeps the rows; the edges are fine.
+    let mut c = Config::default();
+    with_secrets(&mut c);
+    c.backup.retention_days = 31;
+    c.housekeeping.runs_days = 0;
+    c.housekeeping.admin_log_days = 0;
+    c.housekeeping.board_periods_days = 8;
+    c.housekeeping.shadow_contacts_days = 0;
+    c.housekeeping.vacuum_min_free_pct = 0;
+    c.validate().unwrap();
+    let c = Config::from_toml_and_env(
+        "",
+        env(&[
+            ("WB_BACKUP__RETENTION_DAYS", "2"),
+            ("WB_HOUSEKEEPING__MIN_FREE_MB", "1000"),
+            ("WB_HOUSEKEEPING__SHADOW_CONTACTS_DAYS", "14"),
+            ("WB_REPLAYS__SET_ASIDE_RETENTION_DAYS", "7"),
+            ("WB_AUTH__JWT_SECRET", JWT),
+            ("WB_AUTH__DEVICE_SECRET_PEPPER", PEPPER),
+        ]),
+    )
+    .unwrap();
+    c.validate().unwrap();
+    assert_eq!(c.backup.retention_days, 2);
+    assert_eq!(c.housekeeping.min_free_bytes(), 1000 * 1_048_576);
+    assert_eq!(c.housekeeping.shadow_contacts_days, 14);
+    assert_eq!(c.replays.set_aside_retention_days, 7);
 }
 
 #[test]

@@ -781,3 +781,156 @@ async fn serve_sigterm_sends_the_restart_notice_then_closes_1012() {
     assert!(log.contains("database closed"), "{log}");
     assert!(dir.path().join("room-handover.json").exists());
 }
+
+// ---------------------------------------------------------------------------- N10.3
+
+/// N10.3: `admin replays` lists set-aside jobs apart from failed ones;
+/// `admin replay-purge-set-aside` deletes their files; `admin backups` shows the count and
+/// the newest backup's age; `admin stats` has the disk numbers; `admin housekeeping` runs
+/// the daily pass.
+#[tokio::test]
+async fn admin_set_aside_purge_backups_disk_and_housekeeping() {
+    use westbound_server::{accounts, db};
+    let dir = tempfile::tempdir().unwrap();
+    assert!(run(dir.path(), &["migrate"]).0);
+    let cfg = westbound_server::config::DbConfig {
+        path: dir.path().join("wb.db"),
+        ..Default::default()
+    };
+    let pool = db::connect(&cfg).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let (id, _) = accounts::insert_device_account(&mut conn, "LoneWolf", &[0u8; 32], 1_000)
+        .await
+        .unwrap();
+    drop(conn);
+    let replays = dir.path().join("replays");
+    std::fs::create_dir_all(&replays).unwrap();
+    let now = westbound_server::clock::unix_now_secs();
+    for (run_id, status, result, age_days) in [
+        (
+            1,
+            "set_aside",
+            r#"{"error":"no verifier for build 7 here","unverifiable":true,"build":7}"#,
+            40,
+        ),
+        (
+            2,
+            "set_aside",
+            r#"{"error":"no verifier for build 8 here","unverifiable":true,"build":8}"#,
+            2,
+        ),
+        (3, "failed", r#"{"error":"timeout"}"#, 40),
+    ] {
+        sqlx::query(
+            "INSERT INTO runs (id, account_id, mode, map_or_seed, date, score, distance_m,
+                               duration_s, verification, created_at)
+             VALUES (?, ?, 'journey', '7', '2026-09-29', 100, 1000, 60, 'pending', ?)",
+        )
+        .bind(run_id)
+        .bind(id)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let file = replays.join(format!("{run_id}.wbr"));
+        std::fs::write(&file, b"replay").unwrap();
+        sqlx::query(
+            "INSERT INTO replays (run_id, file_path, status, created_at, attempts, result)
+             VALUES (?, ?, ?, ?, 1, ?)",
+        )
+        .bind(run_id)
+        .bind(file.to_string_lossy().into_owned())
+        .bind(status)
+        .bind(now - age_days * 86_400)
+        .bind(result)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let (ok, out, err) = run(dir.path(), &["admin", "replays"]);
+    assert!(ok, "{err}");
+    assert!(
+        out.contains("set_aside 2") && out.contains("failed 1"),
+        "{out}"
+    );
+    assert!(out.contains("set aside run 1 (build 7"), "{out}");
+    assert!(out.contains("failed run 3 after 1 attempts"), "{out}");
+    let (ok, out, err) = run(dir.path(), &["admin", "replay-purge-set-aside"]);
+    assert!(ok, "{err}");
+    assert!(out.starts_with("1 set-aside replay job(s) purged"), "{out}");
+    assert!(!replays.join("1.wbr").exists(), "older than 30 days: gone");
+    assert!(replays.join("2.wbr").exists() && replays.join("3.wbr").exists());
+    let (ok, _, err) = run(
+        dir.path(),
+        &["admin", "replay-purge-set-aside", "--older-than", "perm"],
+    );
+    assert!(!ok && err.contains("--older-than"), "{err}");
+    let (ok, out, _) = run(
+        dir.path(),
+        &["admin", "replay-purge-set-aside", "--older-than", "1d"],
+    );
+    assert!(ok && out.starts_with("1 set-aside"), "{out}");
+    let (ok, out, _) = run(dir.path(), &["admin", "replays"]);
+    assert!(ok && out.contains("set_aside_purged 2"), "{out}");
+
+    // Backups: five dated files, the newest 30 h old: STALE; the count is shown.
+    let backups = dir.path().join("backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    let days = [
+        "2026-09-25",
+        "2026-09-26",
+        "2026-09-27",
+        "2026-09-28",
+        "2026-09-29",
+    ];
+    for (i, day) in days.iter().enumerate() {
+        let p = backups.join(format!("westbound-{day}.db"));
+        std::fs::write(&p, b"db").unwrap();
+        let age = Duration::from_secs(30 * 3_600 + (4 - i as u64) * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+    let (ok, out, err) = run(dir.path(), &["admin", "backups"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("dated backups: 5 (at most 3 kept)"), "{out}");
+    assert!(
+        out.contains("newest: westbound-2026-09-29.db 30 h old: STALE"),
+        "{out}"
+    );
+    let (ok, out, err) = run(dir.path(), &["admin", "stats"]);
+    assert!(ok, "{err}");
+    for key in [
+        "disk_free_bytes ",
+        "disk_db_bytes ",
+        "disk_backups_bytes ",
+        "backup_files 5",
+        "backup_stale true",
+    ] {
+        assert!(out.contains(key), "{key}: {out}");
+    }
+
+    // The daily pass by hand: the dated backups down to 3, an old shadow contact gone.
+    sqlx::query(
+        "INSERT INTO shadow_contacts (room_id, tick, player_a, player_b, speed, disagreement_m,
+                                      closing_mps, depth_m, ticks, created_at)
+         VALUES (1, 1, 1, 2, 30, 0.1, 1, 0.2, 3, ?)",
+    )
+    .bind(now - 60 * 86_400)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (ok, out, err) = run(dir.path(), &["admin", "housekeeping"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("shadow_contacts=1"), "{out}");
+    assert!(out.contains("backups_removed=2"), "{out}");
+    assert!(out.contains("replays: files_deleted=0"), "{out}");
+    assert_eq!(std::fs::read_dir(&backups).unwrap().count(), 3);
+    assert!(backups.join("westbound-2026-09-29.db").exists());
+    let (ok, out, _) = run(dir.path(), &["admin", "log", "--limit", "1"]);
+    assert!(ok && out.contains("cli housekeeping"), "{out}");
+    db::close(&pool).await;
+}

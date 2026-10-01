@@ -63,7 +63,15 @@ enabled = true
 dir = "/data/backups"
 # UTC, HH:MM.
 time_utc = "03:17"
-retention_days = 7
+# N10.3: how many dated daily backups stay on the volume (1..=31; the disk is small, keep
+# history off-site). After each good backup the older ones beyond this go; the newest is
+# never deleted, and a failed or skipped backup deletes nothing.
+retention_days = 3
+# N10.3: the newest backup older than this is stale (wb_backup_stale, a warning).
+max_age_hours = 26
+# N10.3: manual / pre-deploy .db files in dir and the <db>.before-restore-* copies go this
+# many days after they were written (0 keeps them); stray .tmp files after a day.
+other_retention_days = 7
 # N10.2: open each backup read-only and run PRAGMA integrity_check.
 verify = true
 # N10.2: optional off-site hook after each good backup: argv, "{file}" = the backup path,
@@ -311,6 +319,9 @@ poll_interval_secs = 30
 keep_top_n = 100
 # The retention sweep (and orphan files) runs this often.
 cleanup_interval_secs = 3600
+# N10.3: set-aside replays (no verifier has their build) lose their file this many days
+# after the upload; their runs stay "verifying". 0 keeps them (admin replay-purge-set-aside).
+set_aside_retention_days = 30
 
 [rooms]
 # Rooms and players (docs/SERVER.md → "Rooms"). The room cap is limits.max_rooms.
@@ -436,3 +447,33 @@ bind = "127.0.0.1:9091"
 token = ""
 # How long an `admin` command waits for the running server.
 request_timeout_ms = 10000
+
+[housekeeping]
+# N10.3: the data volume is small; everything the server writes there is capped
+# (docs/OPERATIONS.md → Disk space). Retentions are in days; 0 keeps the rows.
+enabled = true
+# The daily pass (row pruning, old backups and copies, a VACUUM when worth it), UTC HH:MM,
+# after the nightly backup.
+time_utc = "03:47"
+# The disk check: sizes and free space (wb_disk_*), the newest backup's age, a WAL
+# checkpoint.
+check_interval_secs = 300
+# Below this much free space: a warning, wb_disk_low = 1, the nightly backup skips and
+# replay uploads answer 503 (the game retries them later).
+min_free_mb = 500
+shadow_contacts_days = 30
+admin_log_days = 365
+# Handled reports only.
+reports_days = 365
+# Daily Drive days and Journey weeks that ended longer ago lose their board entries
+# (seasons and all-time stay).
+board_periods_days = 90
+# Runs holding no board entry (not legacy uploads, not runs waiting for their replay).
+runs_days = 90
+# Rows per delete, and the pause between full batches.
+batch_rows = 500
+batch_pause_ms = 50
+# VACUUM when this share of the file is free pages (0 = never), the file is at most
+# vacuum_max_mb and there is room for two copies plus min_free_mb.
+vacuum_min_free_pct = 25
+vacuum_max_mb = 1024
