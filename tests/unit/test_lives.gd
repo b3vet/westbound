@@ -5,7 +5,8 @@ extends WBTest
 ## speed within 1 s; a second contact during the ghost does not count; a clean-leg
 ## restore never exceeds 2 lives).
 
-const CAR_IDS: Array[StringName] = [&"falcon_gt", &"night_viper", &"brute_v8"]
+const CAR_IDS: Array[StringName] = [&"falcon_gt", &"night_viper", &"brute_v8", &"kestrel_rs", &"coastliner",
+	&"afterglow", &"daybreak", &"needle"]
 const HIT_SPEEDS_KMH: Array[float] = [150.0, 200.0, 250.0]
 ## "Drivable": heading back within this of the lane direction by the 1 s mark...
 const DRIVABLE_YAW_DEG := 1.0

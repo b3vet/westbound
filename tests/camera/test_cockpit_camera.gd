@@ -8,7 +8,9 @@ extends WBTest
 
 const RIG_SCENE := "res://src/camera/camera_rig.tscn"
 const CAR_SCENE := "res://src/vehicle/player_car.tscn"
-const CAR_PATH := "res://data/cars/falcon_gt.tres"
+## A car on the old placeholder bake: these cases test the procedural cockpit and the stub eye
+## (tests/art/test_art_cameras.gd covers model interiors).
+const CAR_PATH := "res://tests/fixtures/placeholder_car/placeholder_car.tres"
 const TOP_KMH := 280.0
 const DT := 1.0 / 120.0
 

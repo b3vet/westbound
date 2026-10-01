@@ -28,36 +28,41 @@ unlock_level = 1
 
 [sub_resource type="Resource" id="slot_3"]
 script = ExtResource("2_slot")
-id = &"slot_4"
-car_path = ""
+id = &"kestrel_rs"
+car_path = "res://data/cars/kestrel_rs.tres"
+former_ids = PackedStringArray("slot_4")
 unlock = &"level"
 unlock_level = 8
 
 [sub_resource type="Resource" id="slot_4"]
 script = ExtResource("2_slot")
-id = &"slot_5"
-car_path = ""
+id = &"coastliner"
+car_path = "res://data/cars/coastliner.tres"
+former_ids = PackedStringArray("slot_5")
 unlock = &"coast"
 unlock_level = 1
 
 [sub_resource type="Resource" id="slot_5"]
 script = ExtResource("2_slot")
-id = &"slot_6"
-car_path = ""
+id = &"afterglow"
+car_path = "res://data/cars/afterglow.tres"
+former_ids = PackedStringArray("slot_6")
 unlock = &"level"
 unlock_level = 12
 
 [sub_resource type="Resource" id="slot_6"]
 script = ExtResource("2_slot")
-id = &"slot_7"
-car_path = ""
+id = &"daybreak"
+car_path = "res://data/cars/daybreak.tres"
+former_ids = PackedStringArray("slot_7")
 unlock = &"daily_streak"
 unlock_level = 1
 
 [sub_resource type="Resource" id="slot_7"]
 script = ExtResource("2_slot")
-id = &"slot_8"
-car_path = ""
+id = &"needle"
+car_path = "res://data/cars/needle.tres"
+former_ids = PackedStringArray("slot_8")
 unlock = &"threads"
 unlock_level = 1
 

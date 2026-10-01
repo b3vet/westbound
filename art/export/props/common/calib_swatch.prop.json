@@ -1,0 +1,6 @@
+{
+	"mesh": "calib_swatch",
+	"material": "world",
+	"meta": {},
+	"tris_budget": 400
+}

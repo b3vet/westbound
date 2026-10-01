@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="CarDef" format=3]
+
+[ext_resource type="Script" uid="uid://cabuje4bcoqqj" path="res://src/vehicle/car_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"afterglow"
+model_scene_path = "res://assets/cars/afterglow/afterglow.glb"
+display_name = "Afterglow"
+top_speed_kmh = 292.0
+zero_to_200_s = 8.9
+braking_mps2 = 9.0
+handling_scale = 0.98
+boost_capacity_scale = 1.0
+length_m = 4.8
+width_m = 1.98
+height_m = 1.12
+mass_kg = 1250.0
+wheelbase_m = 2.75
+gear_count = 7
+default_paint = Color(0.961, 0.459, 0.129, 1)

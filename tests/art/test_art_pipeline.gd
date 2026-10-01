@@ -299,9 +299,9 @@ func test_delivered_modular_cars_import_cleanly() -> void:
 
 
 func test_placeholders_keep_their_import_path() -> void:
+	# The roster cars are modular now; their old placeholder files keep the old path.
 	for id: String in ["falcon_gt", "night_viper", "brute_v8"]:
-		var def := load("res://data/cars/%s.tres" % id) as CarDef
-		var scene := load(def.model_scene_path) as PackedScene
+		var scene := load("res://assets/cars/placeholder/%s.glb" % id) as PackedScene
 		var root := _keep(scene.instantiate())
 		check(not root.has_meta(&"car_import_modular"), "%s: placeholder bake, not the modular path" % id)
 		check(root.get_node_or_null(^"Interior") == null, "%s: no interior" % id)

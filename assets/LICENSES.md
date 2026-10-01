@@ -1,6 +1,6 @@
 # Asset licenses
 
-Every third-party file in the repo is listed here with its source URL and license. Only **CC0** is accepted (OFL for fonts); see CLAUDE.md and the plan's decision D2 (CC0 packs are interim placeholders).
+Every third-party file in the repo is listed here with its source URL and license. Only **CC0** is accepted (OFL for fonts) for third-party files; see CLAUDE.md and the plan's decision D2 (CC0 packs are interim placeholders).
 
 ## Third-party assets
 
@@ -22,10 +22,12 @@ Every third-party file in the repo is listed here with its source URL and licens
 | Farmland props: crop tiles, fence, trees, farmstead, grain bins, windpump, water tower, wind turbine | `assets/props/farmland/*.res` | `tools/props/build_props.gd` (WP1.4) |
 | Style-guide palette sheet | `assets/palette/palette.png` | `tools/props/build_props.gd` from `assets/palette/palette.tres` (WP1.4) |
 | Traffic vehicles (17 models: 3 sedans, 2 hatchbacks, 2 SUVs, pickup, delivery van, semi with box and tank trailers, coach, 2 motorbikes with riders, 2 sports cars, coupe; the coach livery and motorcycle brands are invented or absent) | `assets/traffic/*.res`, `assets/traffic/*.tscn` | `tools/traffic_models/build_traffic_models.gd` (WP3.1) |
+| Player cars (ART P1–P3), each with its interior (Cabin, SteeringWheel, Gauges) and LOD1: Falcon GT, Night Viper, Brute V8 (remodels), Kestrel RS, Coastliner, Afterglow, Daybreak, Needle (invented designs and names) | `assets/cars/<id>/<id>.glb`, `<id>_lod1.glb`, `<id>.car.json`; sources `art/blender/cars/<id>.blend`; renders `art/renders/<id>/` | In-house, Blender 5.2 from scripts: `tools/blender/cars/<id>.py` on `tools/blender/wb_carkit.py`, exported by `tools/blender/wb_export.py` (Claude Code art agent). No AI 3D generator, no third-party meshes |
+| Art pipeline calibration: a box car with every convention node and one face per palette colour, its LOD1, and a palette swatch prop (tests only) | `assets/cars/calib_box/*`, `art/export/props/common/calib_swatch.*`, source `art/blender/calib/calib.blend` | `tools/blender/wb_calib.py` (ART P0) |
 | Audio (synthesized placeholders): engine loops at 6 rpm steps on and off throttle, wind, tire hum, intake roar, pass whoosh, close-pass zip, thread thump, horn, air-brake hiss, boost whoosh, scoring stingers, banking tick and chime, HESITATED and hit stings | Loops as OGG: `assets/audio/engine_on_*.ogg`, `assets/audio/engine_off_*.ogg`, `wind_loop.ogg`, `tire_hum_loop.ogg`, `intake_loop.ogg`. One-shots as WAV (QOA on import): `whoosh`, `zip`, `thump`, `horn`, `air_brake`, `boost_whoosh`, `sting_*`, `chime_*` (`.wav`, under `assets/audio/`) | `tools/audio/gen_audio.py synth` (WP7A; numpy, deterministic) |
 
 ## Owner-supplied placeholders
 
 | Asset | Files | Source | Rights | Notes |
 | --- | --- | --- | --- | --- |
-| Placeholder player cars: Falcon GT, Night Viper, Brute V8 | `assets/cars/placeholder/*.glb` (+ `*.car.json` import hints) | The owner's own project [cool_drive](https://github.com/b3vet/cool_drive) `models/`, generated with Tripo AI | Owner's own assets | Placeholders only (spec: replaced by in-house modular models) |
+| Placeholder player cars: Falcon GT, Night Viper, Brute V8 | `assets/cars/placeholder/*.glb` (+ `*.car.json` import hints) | The owner's own project [cool_drive](https://github.com/b3vet/cool_drive) `models/`, generated with Tripo AI | Owner's own assets | Placeholders only, replaced in the roster by the in-house models above (ART P1–P3); the files stay as the placeholder-path test fixture (`tests/fixtures/placeholder_car/`) |

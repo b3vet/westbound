@@ -7,7 +7,8 @@ extends WBTest
 const RIG_SCENE := "res://src/camera/camera_rig.tscn"
 const CAR_SCENE := "res://src/vehicle/player_car.tscn"
 const CALIB_DEF := "res://tests/art/fixtures/calib_car/calib_car.tres"
-const PLACEHOLDER_DEF := "res://data/cars/falcon_gt.tres"
+## A car on the old placeholder bake (no interior, stubbed markers): the roster is modular now.
+const PLACEHOLDER_DEF := "res://tests/fixtures/placeholder_car/placeholder_car.tres"
 const DT := 1.0 / 120.0
 
 var _tuning: Tuning

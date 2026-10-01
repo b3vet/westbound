@@ -14,6 +14,9 @@ var cat: GarageCatalog
 var _nodes: Array[Node] = []
 var _saved: Dictionary
 var _closed: int = 0
+## A slot emptied for a test (restored in after_each): every roster slot holds a car now.
+var _emptied: GarageSlot
+var _emptied_path: String = ""
 
 
 func before_all() -> void:
@@ -31,6 +34,9 @@ func before_each() -> void:
 
 
 func after_each() -> void:
+	if _emptied != null:
+		_emptied.car_path = _emptied_path
+		_emptied = null
 	for n in _nodes:
 		if is_instance_valid(n):
 			n.free()
@@ -134,6 +140,10 @@ func test_tabs_show_their_items() -> void:
 
 
 func test_placeholders_are_clearly_marked() -> void:
+	# A COMING SOON slot: the coast slot with its car taken out for this test.
+	_emptied = _slot_of(GarageSlot.UNLOCK_COAST)
+	_emptied_path = _emptied.car_path
+	_emptied.car_path = ""
 	var g := _garage(_title())
 	for i in cat.slots.size():
 		var s := cat.slots[i]

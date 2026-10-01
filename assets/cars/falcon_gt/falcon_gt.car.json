@@ -1,0 +1,6 @@
+{
+	"root_name": "Car_FalconGT",
+	"modular": true,
+	"forward_axis": "-Z",
+	"source": "in-house, Blender: art/blender/cars/falcon_gt.blend (tools/blender/cars/falcon_gt.py)"
+}

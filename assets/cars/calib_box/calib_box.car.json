@@ -1,0 +1,6 @@
+{
+	"root_name": "Car_CalibBox",
+	"modular": true,
+	"forward_axis": "-Z",
+	"source": "in-house, Blender: tools/blender/wb_calib.py (P0 calibration)"
+}

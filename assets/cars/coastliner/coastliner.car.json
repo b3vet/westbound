@@ -1,0 +1,6 @@
+{
+	"root_name": "Car_Coastliner",
+	"modular": true,
+	"forward_axis": "-Z",
+	"source": "in-house, Blender: art/blender/cars/coastliner.blend (tools/blender/cars/coastliner.py)"
+}
