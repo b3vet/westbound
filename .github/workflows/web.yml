@@ -45,6 +45,11 @@ jobs:
           key: web-template-${{ steps.hash.outputs.hash }}
           lookup-only: true
 
+      - uses: actions/setup-python@v5
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          python-version: '3.12'
+
       - name: Build the slim web template (cold cache only)
         id: build
         if: steps.cache.outputs.cache-hit != 'true'
