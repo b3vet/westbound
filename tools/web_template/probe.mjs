@@ -49,6 +49,13 @@ const script = { load: 'web_probe.gd', names: 'web_names.gd', net: 'web_net.gd' 
 const doneRe = { load: /^PROBE done files/, names: /^PROBE done text/, net: /^PROBE done net/ }[mode];
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head>
 <body style="margin:0;background:#000"><canvas id="canvas" width="1280" height="720"></canvas>
+<script>
+// The wasm memory, for the heap size at the end (PROBE heap).
+const wbInst = WebAssembly.instantiate;
+WebAssembly.instantiate = async (...a) => { const r = await wbInst(...a); window.wbMem = (r.instance || r).exports; return r; };
+const wbStream = WebAssembly.instantiateStreaming;
+WebAssembly.instantiateStreaming = async (...a) => { const r = await wbStream(...a); window.wbMem = r.instance.exports; return r; };
+</script>
 <script src="godot.js"></script>
 <script>
 const engine = new Engine({ executable: 'godot', mainPack: 'index.pck', canvasResizePolicy: 0,
@@ -105,6 +112,14 @@ page.on('pageerror', (e) => lines.push(`pageerror: ${e.message}`));
 const t0 = Date.now();
 await page.goto(url);
 await Promise.race([finished, new Promise((r) => setTimeout(r, opts.timeout))]);
+if (done) {
+  const heap = await page.evaluate(() => {
+    const ex = window.wbMem || {};
+    const mem = Object.values(ex).find((v) => v instanceof WebAssembly.Memory);
+    return mem ? mem.buffer.byteLength : 0;
+  });
+  lines.push(`PROBE heap ${heap}`);
+}
 if (done && opts.screenshot) {
   await page.waitForTimeout(3000);   // a few frames after the labels went up
   fs.mkdirSync(path.dirname(opts.screenshot), { recursive: true });
@@ -115,5 +130,6 @@ server.close();
 fs.mkdirSync(path.dirname(opts.out), { recursive: true });
 fs.writeFileSync(opts.out, lines.join('\n') + '\n');
 const summary = lines.find((l) => doneRe.test(l)) || 'no PROBE done line';
-console.log(`probe: ${path.basename(opts.dir)}: ${summary} (${((Date.now() - t0) / 1000).toFixed(1)} s) -> ${opts.out}`);
+const heapLine = lines.find((l) => l.startsWith('PROBE heap ')) || 'PROBE heap 0';
+console.log(`probe: ${path.basename(opts.dir)}: ${summary}, wasm heap ${(Number(heapLine.split(' ')[2]) / 1048576).toFixed(2)} MiB (${((Date.now() - t0) / 1000).toFixed(1)} s) -> ${opts.out}`);
 process.exit(done ? 0 : 1);
