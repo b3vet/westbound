@@ -55,7 +55,8 @@ done
 [[ $status -eq 0 ]] || { echo "verify.sh: a probe did not finish (logs in $work)" >&2; exit 2; }
 
 # Failures and engine errors, normalized (no timings or addresses), official vs slim.
-issues() { grep -E '^PROBE fail |ERROR|console.error|pageerror' "$1" | sed -E 's/0x[0-9a-f]+/0x?/g' | sort -u; }
+# (The slim build prints engine sources as ./modules/..., the official one as modules/....)
+issues() { grep -E '^PROBE fail |ERROR|console.error|pageerror' "$1" | sed -E -e 's/0x[0-9a-f]+/0x?/g' -e 's/\(\.\//(/g' | sort -u; }
 issues "$work/official.log" >"$work/official.issues"
 issues "$work/custom.log" >"$work/custom.issues"
 classes() { grep -m1 '^PROBE classes ' "$1" | cut -d' ' -f4 | tr ',' '\n' | sort; }

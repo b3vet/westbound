@@ -19,7 +19,8 @@ extends SceneTree
 ##   tools/godot.sh --headless --path . --script res://tools/web_template/detect_classes.gd -- --write
 ##   ... -- --check   exit 1 if the game uses a class the template lacks: one the profile
 ##                    disables, or one tools/web_template/removed_classes.txt lists (the
-##                    classes of the disabled modules, written by tools/web_template/verify.sh)
+##                    classes of the disabled modules, written by tools/web_template/verify.sh).
+##                    Whole-line comments do not count as a use here.
 
 const PROFILE_PATH := "res://tools/web_template/westbound.gdbuild"
 const REMOVED_PATH := "res://tools/web_template/removed_classes.txt"
@@ -54,6 +55,7 @@ const DEPENDENCIES := {
 
 var _words := RegEx.create_from_string("[A-Za-z_][A-Za-z0-9_]*")
 var _used := {}
+var _skip_comments := false
 var _seen := {}
 var _files := 0
 var _loaded := 0
@@ -63,6 +65,9 @@ func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
 	var write := args.has("--write")
 	var check := args.has("--check")
+	# --write keeps a class even when only a comment names it (errs toward keeping);
+	# --check ignores whole-line comments (no false alarm from a doc comment's "Noise").
+	_skip_comments = check and not write
 	if not write and not check:
 		printerr("detect_classes: pass --write or --check")
 		quit(2)
@@ -105,7 +110,15 @@ func _scan_dir(dir_path: String) -> void:
 
 
 func _scan_text(path: String) -> void:
-	for m in _words.search_all(FileAccess.get_file_as_string(path)):
+	var text := FileAccess.get_file_as_string(path)
+	if _skip_comments:
+		var kept := PackedStringArray()
+		for line in text.split("\n"):
+			var t := line.strip_edges()
+			if not (t.begins_with("#") or t.begins_with("//")):
+				kept.append(line)
+		text = "\n".join(kept)
+	for m in _words.search_all(text):
 		var word := m.get_string()
 		if not _used.has(word) and ClassDB.class_exists(word):
 			_used[word] = true
