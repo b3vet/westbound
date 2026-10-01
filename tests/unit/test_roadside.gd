@@ -512,8 +512,20 @@ func test_frame_cost() -> void:
 
 
 ## The worst single frame (a window step, or re-anchoring the biggest layer after
-## an origin shift) must stay a small slice of a 16.7 ms frame.
+## an origin shift) must stay a small slice of a 16.7 ms frame. The 99.5th percentile,
+## not the single worst sample: the window steps and re-anchors are the spikes we
+## budget. Load-robust (WBFrameBench, WP9.10): three drives on fresh roadsides, each
+## frame's cost the minimum over them, re-measured once if over budget; one OS
+## preemption made the max flaky on a loaded CI box, and a single drive's p99.5 still
+## moves under heavy load. A frame that really costs too much does so in every drive.
 func test_worst_frame_spike() -> void:
+	var usec := WBFrameBench.tail_within("roadside p99.5 frame (step or re-anchor)", _drive_with_origin_shifts,
+			WBFrameBench.P995, 3000.0)
+	le(usec, WBBench.budget(3000.0), "p99.5 roadside frame usec")
+
+
+## One timed drive (a fresh roadside, the origin following): each frame's update_view usec.
+func _drive_with_origin_shifts() -> PackedInt64Array:
 	var road := StraightRoadPath.new(3, _t.road)
 	var origin := _origin()
 	var rs := _roadside(road, origin)
@@ -528,10 +540,4 @@ func test_worst_frame_spike() -> void:
 		var t0 := Time.get_ticks_usec()
 		rs.update_view(s)
 		samples.append(Time.get_ticks_usec() - t0)
-	# 99.5th percentile, not the single worst sample: the window steps and
-	# re-anchors are the spikes we budget; one OS preemption among ~3,300
-	# samples made the max flaky on a loaded CI box.
-	samples.sort()
-	var p995 := samples[int(float(samples.size() - 1) * 0.995)]
-	WBBench.report("roadside p99.5 frame (step or re-anchor)", float(p995), 3000.0)
-	le(float(p995), WBBench.budget(3000.0), "p99.5 roadside frame usec")
+	return samples

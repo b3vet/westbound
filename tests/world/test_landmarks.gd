@@ -523,27 +523,42 @@ func test_draw_calls_with_a_landmark_and_two_signs() -> void:
 # ---------------------------------------------------------------- Cost
 
 ## Per frame nothing happens until the focus crosses a step; a placement (stations,
-## text, atlas upload) is director-rate work and stays small.
+## text, atlas upload) is director-rate work and stays small. Load-robust
+## (WBFrameBench, WP9.10): three drives on fresh landmarks, each frame's cost the
+## minimum over them, re-measured once if over budget. A placement that really costs
+## too much does so in every drive and still fails.
 func test_update_view_cost() -> void:
-	var road := StraightRoadPath.new(_t.road.lanes_default, _t.road)
-	var kinds := LandmarkBuilds.kinds()
-	for i in 8:
-		_add_checkpoint(road, LEG_M * float(i + 1), i + 1, kinds[i % kinds.size()])
-	var origin := _origin()
-	var lm := _landmarks(road, origin)
-	var s := 0.0
-	var worst := 0
-	while s < LEG_M * 8.0:
-		var t0 := Time.get_ticks_usec()
-		lm.update_view(s)
-		if s >= LEG_M * 4.0:   # second lap: glyph caches warm, as in a run
-			worst = maxi(worst, Time.get_ticks_usec() - t0)
-		s += _lt.update_step_m * 0.2
-	WBBench.report("landmarks update_view, worst frame (placements)", float(worst), 4000.0)
-	le(float(worst), WBBench.budget(4000.0), "worst update_view usec")
+	var last := {}
+	var worst := WBFrameBench.tail_within("landmarks update_view, worst frame (placements)",
+			_drive_eight_legs.bind(last), WBFrameBench.WORST, 4000.0)
+	le(worst, WBBench.budget(4000.0), "worst update_view usec")
 	# Within a step, update_view does not even query the road.
+	var lm: Landmarks = last["lm"]
+	var s: float = last["s"]
 	var q := floorf(s / _lt.update_step_m) * _lt.update_step_m + _lt.update_step_m
 	lm.update_view(q + 1.0)
 	var lo := lm.window_s_lo
 	lm.update_view(q + _lt.update_step_m * 0.5)
 	eq(lm.window_s_lo, lo, "no work inside a step")
+
+
+## One timed drive over eight legs with a landmark each (fresh landmarks): the second
+## lap's update_view usec per frame (the first lap warms the glyph caches, as in a run).
+## `last` gets the landmarks and the final s.
+func _drive_eight_legs(last: Dictionary) -> PackedInt64Array:
+	var road := StraightRoadPath.new(_t.road.lanes_default, _t.road)
+	var kinds := LandmarkBuilds.kinds()
+	for i in 8:
+		_add_checkpoint(road, LEG_M * float(i + 1), i + 1, kinds[i % kinds.size()])
+	var lm := _landmarks(road, _origin())
+	var samples := PackedInt64Array()
+	var s := 0.0
+	while s < LEG_M * 8.0:
+		var t0 := Time.get_ticks_usec()
+		lm.update_view(s)
+		if s >= LEG_M * 4.0:   # second lap: glyph caches warm, as in a run
+			samples.append(Time.get_ticks_usec() - t0)
+		s += _lt.update_step_m * 0.2
+	last["lm"] = lm
+	last["s"] = s
+	return samples

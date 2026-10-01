@@ -1043,17 +1043,10 @@ func _toggle_throttle() -> void:
 	_refresh_buttons()
 
 
-## The display safe area in canvas pixels (notch, rounded corners), as DriveControls
-## computes it.
+## The display safe area in canvas pixels (notch, camera cutout, rounded corners), as
+## DriveControls and the HUD compute it: ScreenInsets.canvas_safe_rect (WP9.7, WP9.10).
 func safe_rect() -> Rect2:
-	var vp := get_viewport().get_visible_rect().size
-	var safe := Rect2(Vector2.ZERO, vp)
-	var screen_safe := DisplayServer.get_display_safe_area()
-	var win := DisplayServer.window_get_size()
-	if screen_safe.size.x > 0 and win.x > 0 and DisplayServer.get_name() != "headless":
-		var k := vp / Vector2(win)
-		safe = Rect2(Vector2(screen_safe.position) * k, Vector2(screen_safe.size) * k).intersection(safe)
-	return safe
+	return ScreenInsets.canvas_safe_rect(get_viewport().get_visible_rect())
 
 
 ## The sky_t slider moves to the bottom left (the tab buttons use the bottom right);
@@ -1066,6 +1059,9 @@ func _place_slider() -> void:
 		return
 	panel.anchor_left = 0.0
 	panel.anchor_right = 0.0
+	# Wider content grows it rightward only (the scene's centred panel grows both ways,
+	# which pushed its left edge past the safe area, under the camera cutout).
+	panel.grow_horizontal = Control.GROW_DIRECTION_END
 	panel.offset_left = safe.position.x + EDGE_PX
 	panel.offset_right = safe.position.x + EDGE_PX + SLIDER_WIDTH_PX
 
