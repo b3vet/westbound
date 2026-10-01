@@ -9,7 +9,7 @@ For the owner running `westbound-server` on Coolify. The technical reference is 
 | Image | `ghcr.io/b3vet/westbound-server:edge` (CI pushes it from the `claude/game-implementation-phases-asl5jz` branch); rollback tags `claude-game-implementation-phases-asl5jz-<sha7>` |
 | Replay verifier (N8.3) | `ghcr.io/b3vet/westbound-verifier:edge`, a second resource on the same volume: see "Replay verification" |
 | Public | `https://westbound.sipsakrandevu.com` → container port 8080 (`/api/*`, `/ws`, `/r/*`, `/.well-known/*`) |
-| Volume | `/data`: `westbound.db` (+ `-wal`, `-shm`), `backups/`, `well-known/`, `replays/`, `room-handover.json` |
+| Volume | `/data`: `westbound.db` (+ `-wal`, `-shm`), `backups/`, `well-known/`, `replays/`, `room-handover.json`. Small disk: everything the server writes there is capped (see "Disk space") |
 | Inside the container only | `/metrics` on `127.0.0.1:9090`; the admin API on `127.0.0.1:9091` (needs `WB_ADMIN__TOKEN`) |
 | Logs | stdout/stderr, JSON lines: Coolify → the resource → **Logs**, or `docker logs <container>` |
 | Admin | On the VPS host: `docker exec <container> westbound-server admin ...` (`docker ps` shows the container name). The image has no shell, so Coolify's **Terminal** may not open; when it does, run `westbound-server admin ...` there. The examples below leave out the `docker exec <container>` prefix |
@@ -99,6 +99,9 @@ westbound-server admin crew-disband 5
 westbound-server admin stats                                # database + live numbers
 westbound-server admin log --limit 20                       # who did what
 westbound-server admin replays                              # the replay verification queue
+westbound-server admin replay-purge-set-aside --older-than 7d   # drop parked replays' files
+westbound-server admin backups                              # the backups, the newest one's age, free space
+westbound-server admin housekeeping                         # run the daily cleanup now
 ```
 
 - A ban ends the player's session at once with the admin token set, else within 30 s; the reason stays in the admin log and shows in `admin player`.
@@ -114,7 +117,7 @@ WP N8.3. A single-player run that makes a top 100 or a personal best uploads its
 | Image | `ghcr.io/b3vet/westbound-verifier:edge`; rollback tags `claude-game-implementation-phases-asl5jz-<sha7>`. The **Verifier** workflow builds it on every push to the branch that changes the game or the server, tests it end to end (an honest replay verified, tampered ones rejected) and pushes it |
 | What is in it | `westbound-server verify-worker` + one headless game build per recent client build (the current one and up to two older; `/verifier/BUILDS.txt` lists them with their commit) + `verify-backlog` (a dry run) |
 | How it runs | Next to the server on the **same `/data` volume** (same host): one replay at a time, each under `nice 10`, the container capped at 1 CPU and 1 GB. It picks up new uploads within 10 s |
-| A build it does not have | The replay is set aside: its run stays "verifying", `admin replays` shows `failed run N ...: {"error":"no verifier for build 7 here ...","unverifiable":true}`. Every verifier start retries those, so a newer image that has the build picks them up. The same for replays it cannot verify (recorded before N8.2, no input stream; another simulation under the same build number) |
+| A build it does not have | The replay is set aside: its run stays "verifying", `admin replays` shows `set_aside N` and `set aside run N (build 7, uploaded ...): no verifier for build 7 here ...` (N10.3; before, these showed as `failed`). Every verifier start retries those, so a newer image that has the build picks them up. The same for replays it cannot verify (recorded before N8.2, no input stream; another simulation under the same build number). After 30 days their files are deleted (the runs stay "verifying"); `admin replay-purge-set-aside --older-than 7d` does it sooner |
 
 ### Before you switch it on (once)
 
@@ -146,7 +149,7 @@ The server keeps its current resource and volume; the verifier is a second resou
 ### Check it works
 
 - **Verifier logs** (Coolify → westbound-verifier → Logs): `replay verification worker started` with the command, then one `replay verified` line per replay with `verdict`, `reason`, the recomputed and claimed score and the seconds it took (5–60 s each). `replay cannot be verified by this verifier; set aside` names a build the image lacks.
-- **Queue:** `westbound-server admin replays` (on the server container): `pending` goes down, `done` up; set-aside replays are listed with their reason.
+- **Queue:** `westbound-server admin replays` (on the server container): `pending` goes down, `done` up; set-aside replays are counted as `set_aside` and listed with their build and reason.
 - **Metrics** (the server's `/metrics`, it counts the shared database): `wb_replay_jobs{status="pending"}` drains to 0 and stays low; the `WestboundReplayBacklog` alert covers a stuck verifier.
 - **A test run:** play a Journey run on the web build with a new account (a first run is always a personal best, so it uploads a replay). Its board entry shows "verifying", and within about a minute it is verified: the verifier's log shows `replay verified run_id=<id> verdict="accepted"`.
 - **Which builds it verifies:** `docker exec <verifier container> cat /verifier/BUILDS.txt` (build, commit, export date); the Verifier workflow's run summary shows the same. The build players run is the web build's `client_build` (`data/tuning/net.tres`).
@@ -174,9 +177,9 @@ The same container (the verifier inside the server image) is not offered: the se
 
 ## Backups
 
-- **Nightly** at 03:17 UTC: `/data/backups/westbound-YYYY-MM-DD.db`, integrity-checked, 7 kept.
-- **List:** `westbound-server admin backups`. **Check one:** `westbound-server verify-backup /data/backups/westbound-2026-09-28.db`. **Manual:** `westbound-server backup /data/backups/manual-2026-10-01.db`.
-- **Watch:** the logs say `nightly backup written` every night; `admin stats` shows `last_backup`; the metric `wb_backups_failed_total` stays at 0.
+- **Nightly** at 03:17 UTC: `/data/backups/westbound-YYYY-MM-DD.db`, integrity-checked before it replaces anything. **At most 3 are kept** (N10.3, `backup.retention_days`, a count): after each good backup the oldest beyond 3 is deleted; the newest is never deleted, and a failed or skipped backup deletes nothing. Keep longer history off the machine (below).
+- **List:** `westbound-server admin backups`: the files with sizes and ages, `newest: westbound-2026-09-30.db 5 h old: ok` (or `STALE` past 26 h), the volume's free space. **Check one:** `westbound-server verify-backup /data/backups/westbound-2026-09-28.db`. **Manual:** `westbound-server backup /data/backups/manual-2026-10-01.db`. Manual and pre-deploy copies are deleted after 7 days (`backup.other_retention_days`), as is the `westbound.db.before-restore-<time>` a restore leaves.
+- **Watch:** the logs say `nightly backup written` every night; `wb_backups_failed_total` stays at 0 and `wb_backup_stale` at 0. A missed night shows within a few hours: `the newest backup is stale` (WARN, every 6 h while it lasts). With too little disk the backup is skipped instead of filling it: `nightly backup skipped: not enough disk space` (ERROR, `wb_backups_skipped_total`); see "Disk space".
 - **Keep the secrets with the backups:** a restored database needs the same `WB_AUTH__DEVICE_SECRET_PEPPER` (and the same JWT secret, or players simply refresh their tokens).
 
 ### Off-site copies
@@ -208,6 +211,41 @@ Pick one:
 
 A restore loses everything written after the backup (accounts created since, runs, friends). Players whose accounts were created after it get "please sign in again" and a new account.
 
+## Disk space
+
+The server's disk is small, so everything the server writes on the volume is capped (N10.3; technical detail: SERVER.md → "Housekeeping (N10.3)"). Nothing needs setting: these are the defaults.
+
+**What is kept:**
+
+| On the volume | Kept |
+| --- | --- |
+| Daily backups (`backups/westbound-YYYY-MM-DD.db`) | **3** (the newest three; each about the size of the database) |
+| Manual / pre-deploy backups in `backups/`, `westbound.db.before-restore-*` | 7 days |
+| Replays (`replays/`) | Verified: only while in a current top 100 (today, this week, this season, all-time). Set aside (no verifier for their build): 30 days. Waiting (`pending`): until the verifier verifies them, so keep the verifier running |
+| Database rows | Shadow contacts 30 days; runs that hold no leaderboard entry 90 days; past Daily Drive days and Journey weeks 90 days; handled reports and the admin log 365 days; seasons, all-time boards, accounts, friends and crews are kept |
+| The write-ahead log (`westbound.db-wal`) | Emptied every 5 minutes |
+| `room-handover.json` | A few KB; deleted once expired |
+
+**Expected steady state** (rough, for about 100 players a day; it scales with play):
+
+| Item | Size |
+| --- | --- |
+| Database (`westbound.db`) | 50–150 MB: runs about 1 KB each for 90 days, shadow contacts about 20 KB per player-hour in rooms for 30 days, plus accounts and boards |
+| Write-ahead log | under 10 MB |
+| Backups | 3 × the database: 150–450 MB (a copy is compacted) |
+| Replays | 10–50 MB (a 10-minute run is about 50 KB; a 6-hour one up to 2 MB) |
+| Everything else on `/data` | under 1 MB (plus your `bin/rclone` if you use the off-site hook) |
+| **Total** | **about 0.25–0.7 GB**, plus room for one more database copy while the nightly backup runs |
+
+Once the retentions are reached the database file stops growing (deleted rows' space is reused); the daily pass runs a `VACUUM` to give space back when a quarter of the file is free.
+
+**What to watch:**
+
+- `westbound-server admin stats`: the `disk_*` lines (`disk_free_bytes`, `disk_low`, `disk_db_bytes`, `disk_backups_bytes`, `disk_replays_bytes`, `disk_other_bytes`) and `backup_newest` / `backup_stale`. `admin backups` shows the same for the backups.
+- **The floor: 500 MB free** (`WB_HOUSEKEEPING__MIN_FREE_MB`). Below it the log says `disk space low on the data volume` (WARN, every 6 h), `wb_disk_low` is 1, the nightly backup is **skipped** (ERROR; older backups stay), and replay uploads wait (players' games retry later). The game itself keeps working. To make room: delete old manual files in `/data/backups`, run `westbound-server admin housekeeping`, purge parked replays (`admin replay-purge-set-aside --older-than 7d`), check `admin replays` for a large `pending` (is the verifier running?), or grow the disk.
+- **The host, not just the volume:** container logs (stdout) are kept by Docker on the host and grow unless rotated. Check the VPS's `/etc/docker/daemon.json` has `"log-driver": "json-file", "log-opts": {"max-size": "10m", "max-file": "3"}` (Coolify usually sets this on install; after changing it, `systemctl restart docker`, and it applies to newly created containers). Old images pile up too: Coolify → Settings → "Docker cleanup", or `docker image prune -a` on the host.
+- **Alerts** (if you scrape metrics): `wb_disk_low == 1`, `wb_backup_stale == 1`, `increase(wb_backups_failed_total[1d]) > 0`.
+
 ## Logs
 
 - One JSON object per line: `timestamp`, `level`, `target`, `message` and the event's fields; HTTP lines carry `span.req_id`, `span.method`, `span.path`; WebSocket lines `client` (a hashed IP), `account`, `session`. Tokens, secrets and IPs never appear.
@@ -230,7 +268,8 @@ What to watch (SERVER.md → "Operations (N10.2) → Metrics added" has the full
 | Errors | `wb_log_events_total{level="error"}`, `wb_http_requests_total{class="5xx"}` |
 | Database | `wb_db_probe_seconds`, `wb_db_file_bytes`, `wb_db_wal_bytes` |
 | Queues | `wb_replay_jobs{status="pending"}`, `wb_reports_unhandled` |
-| Backups | `wb_backups_failed_total`, `wb_backup_last_success_timestamp_seconds` |
+| Backups | `wb_backups_failed_total`, `wb_backup_stale`, `wb_backup_newest_age_seconds`, `wb_backup_files` |
+| Disk (small volume) | `wb_disk_low`, `wb_disk_free_bytes`, `wb_disk_backups_bytes`, `wb_disk_replays_bytes`, `wb_db_file_bytes` |
 | Cheating signals | `wb_room_offences_total{kind}`, `wb_room_claims_total{verdict="rejected"}` |
 | Memory (spec: under 300 MB) | `process_resident_memory_bytes` |
 
@@ -266,8 +305,10 @@ Everything is per client IP or per account and configurable (SERVER.md → "Rate
 | "admin API is off" | `WB_ADMIN__TOKEN` not set (32+ characters) on the resource; redeploy after setting it |
 | Health shows `draining` | A restart is in progress; it ends with the container exiting |
 | `nightly backup failed` | The log line's error; disk space on the volume; `verify-backup` the last good file |
+| `nightly backup skipped: not enough disk space` / `disk space low on the data volume` | "Disk space": make room, then the next night's backup runs (or take one by hand: `westbound-server backup ...`) |
+| `the newest backup is stale` | No good backup for 26 h: look for `nightly backup failed` / `skipped` lines; `admin backups` |
 | Everyone gets `map_mismatch` | A client build with another map; see SERVER.md → "Map hashes" |
 | A player can't sign in after a restore | Their account was created after the backup: they get a new one |
-| Runs stay "verifying" | Is the verifier resource running (its logs: `replay verified` lines)? `admin replays`: a growing `pending` = no verifier or a stuck one; `failed ... "unverifiable":true` = a build the image lacks (a newer image, redeployed, takes them) |
+| Runs stay "verifying" | Is the verifier resource running (its logs: `replay verified` lines)? `admin replays`: a growing `pending` = no verifier or a stuck one; `set_aside` = a build the image lacks (a newer image, redeployed, takes them; after 30 days their files are deleted and the runs stay "verifying") |
 | The verifier logs `no such table: replays` | It does not see the server's database: "Replay verification → If the volume cannot be shared" |
 | `Verifier build parity` warning in the Verifier workflow | The simulation changed without a `client_build` bump: replays from players still on the previous web build fail verification. Bump `client_build` (`data/tuning/net.tres`) |

@@ -600,7 +600,10 @@ async fn a_build_without_a_verifier_is_set_aside_until_a_worker_has_it() {
     );
     assert!(!script.file("ran").exists(), "nothing was run");
     let (status, _, verdict, deleted) = app.job(run_id).await.unwrap();
-    assert_eq!((status.as_str(), verdict, deleted), ("failed", None, None));
+    assert_eq!(
+        (status.as_str(), verdict, deleted),
+        ("set_aside", None, None)
+    );
     let result: Value = serde_json::from_str(&app.job_result(run_id).await).unwrap();
     assert_eq!(result["unverifiable"], true, "{result}");
     assert_eq!(result["build"], 1, "{result}");
@@ -656,7 +659,7 @@ async fn a_replay_this_verifier_cannot_verify_is_set_aside_at_once() {
         panic!("{outcome:?}")
     };
     assert!(error.contains("tuning_mismatch"), "{error}");
-    assert_eq!(app.job(run_id).await.unwrap().0, "failed");
+    assert_eq!(app.job(run_id).await.unwrap().0, "set_aside");
     let result: Value = serde_json::from_str(&app.job_result(run_id).await).unwrap();
     assert_eq!(result["unverifiable"], true, "{result}");
     assert!(
@@ -808,6 +811,198 @@ async fn retention_keeps_top_n_replays_and_removes_orphans() {
         .await
         .unwrap();
     assert_eq!((again.deleted, again.orphans), (0, 0));
+}
+
+/// N10.3: only a **current** top N keeps a verified replay (the day, week or season
+/// containing now, or all-time): a Daily Drive winner's file goes once its day is over.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_past_period_no_longer_keeps_its_replay() {
+    let script = Script::new(ACCEPT);
+    let app = app_with_verifier(&script, |c| c.replays.keep_top_n = 1).await;
+    let worker = app.state.replay_worker();
+    // The Distance (all-time) top 1 is someone else's longer run.
+    let (_, tok_b) = app.account().await;
+    let rb = app
+        .submit_ok(&tok_b, journey_run("cur-00001", 50_000, 25_000.0))
+        .await;
+    let b: i64 = rb["run_id"].as_str().unwrap().parse().unwrap();
+    let mut hb = header(b);
+    hb.score = 50_000;
+    hb.distance_mm = 25_000_000;
+    app.upload(Some(&tok_b), &b.to_string(), replay(&hb, 10))
+        .await;
+    worker.run_next().await.unwrap().unwrap();
+    // Today's Daily Drive winner (and second on Distance).
+    let (_, tok_a) = app.account().await;
+    let ra = app
+        .submit_ok(&tok_a, daily_run("cur-00002", T0_DATE, 30_000))
+        .await;
+    assert_eq!(ra["replay_required"], true, "{ra}");
+    let a: i64 = ra["run_id"].as_str().unwrap().parse().unwrap();
+    let mut ha = header(a);
+    ha.mode = "daily";
+    ha.seed = westbound_server::runs::daily_seed::daily_seed_for_date(T0_DATE).unwrap();
+    ha.score = 30_000;
+    app.upload(Some(&tok_a), &a.to_string(), replay(&ha, 10))
+        .await;
+    worker.run_next().await.unwrap().unwrap();
+    assert_eq!(app.verification(a).await, "verified");
+    let cfg = &app.state.config.replays;
+    let now = app.clock.now();
+    let r = retention::sweep(app.db(), cfg, now + 10).await.unwrap();
+    assert_eq!((r.deleted, r.kept), (0, 2), "{r:?}");
+    assert!(replay_file(&app, a).exists(), "today's Daily top 1: kept");
+    // The next day: the Daily period is over, so its entry no longer keeps the file.
+    let r = retention::sweep(app.db(), cfg, now + 86_400).await.unwrap();
+    assert_eq!((r.deleted, r.kept), (1, 1), "{r:?}");
+    assert!(
+        !replay_file(&app, a).exists(),
+        "a past day's top 1: deleted"
+    );
+    assert!(replay_file(&app, b).exists(), "the all-time top 1 stays");
+}
+
+/// N10.3: set-aside replays have their own status; after `set_aside_retention_days` the
+/// sweep deletes their files (the run stays verifying, no worker start requeues them),
+/// and `admin replay-purge-set-aside` does the same by hand. The queue gauge counts only
+/// the parked ones.
+#[cfg(unix)]
+#[tokio::test]
+async fn set_aside_replays_are_purged_after_their_retention() {
+    let script = Script::new(ACCEPT);
+    let builds = script.file("builds");
+    let per_build = format!("{}/{{build}}/westbound", builds.display());
+    let app = app_with_verifier(&script, |c| {
+        c.replays.verifier_command.push(per_build);
+        c.replays.set_aside_retention_days = 30;
+    })
+    .await;
+    let worker = app.state.replay_worker();
+    let mut runs = Vec::new();
+    for key in ["sa-000001", "sa-000002"] {
+        let (run_id, tok, _) = app.pending_run(key, 42_000).await;
+        app.upload(Some(&tok), &run_id.to_string(), replay(&header(run_id), 10))
+            .await;
+        let (_, outcome) = worker.run_next().await.unwrap().unwrap();
+        assert!(
+            matches!(outcome, JobOutcome::Unverifiable { .. }),
+            "{outcome:?}"
+        );
+        runs.push(run_id);
+    }
+    let (old, young) = (runs[0], runs[1]);
+    // The first was uploaded 20 days earlier.
+    sqlx::query("UPDATE replays SET created_at = created_at - 20 * 86400 WHERE run_id = ?")
+        .bind(old)
+        .execute(app.db())
+        .await
+        .unwrap();
+    westbound_server::ops::probe_once(app.db(), &app.state.config.db.path, &app.state.metrics)
+        .await;
+    assert_eq!(app.state.metrics.replay_jobs("set_aside"), 2);
+    assert_eq!(app.state.metrics.replay_jobs("failed"), 0);
+    let cfg = &app.state.config.replays;
+    // 31 days after the first upload (and 11 after the second): only the first goes.
+    let now = app.clock.now() + 11 * 86_400;
+    let r = retention::sweep(app.db(), cfg, now).await.unwrap();
+    assert_eq!(r.set_aside_purged, 1, "{r:?}");
+    assert!(!replay_file(&app, old).exists());
+    assert!(replay_file(&app, young).exists());
+    let (status, _, _, deleted) = app.job(old).await.unwrap();
+    assert_eq!((status.as_str(), deleted), ("set_aside", Some(now)));
+    let result: Value = serde_json::from_str(&app.job_result(old).await).unwrap();
+    assert_eq!(result["purged_at"], now, "{result}");
+    assert_eq!(result["unverifiable"], true, "the reason stays: {result}");
+    assert_eq!(app.verification(old).await, "pending", "still verifying");
+    // A worker start takes only the one that still has its file.
+    assert_eq!(worker.requeue_unverifiable().await.unwrap(), 1);
+    worker.run_next().await.unwrap().unwrap();
+    westbound_server::ops::probe_once(app.db(), &app.state.config.db.path, &app.state.metrics)
+        .await;
+    assert_eq!(
+        app.state.metrics.replay_jobs("set_aside"),
+        1,
+        "the purged one is not parked"
+    );
+    // By hand: everything set aside, whatever its age.
+    let out = westbound_server::admin::replay_purge_set_aside(app.db(), 0, now + 1)
+        .await
+        .unwrap();
+    assert!(out.starts_with("1 set-aside replay job(s) purged"), "{out}");
+    assert!(!replay_file(&app, young).exists());
+    let listing = westbound_server::admin::replays(app.db()).await.unwrap();
+    assert!(listing.contains("set_aside_purged 2"), "{listing}");
+    assert!(!listing.contains("set aside run"), "{listing}");
+    // 0 keeps them.
+    let keep = westbound_server::config::ReplaysConfig {
+        set_aside_retention_days: 0,
+        ..cfg.clone()
+    };
+    assert_eq!(
+        retention::sweep(app.db(), &keep, now + 400 * 86_400)
+            .await
+            .unwrap()
+            .set_aside_purged,
+        0
+    );
+}
+
+/// N10.3: a set-aside job written the pre-N10.3 way (`failed` with `"unverifiable": true`,
+/// by a worker from an older image) is still requeued, counted and listed as set aside,
+/// and migration 0007 moves the old rows.
+#[tokio::test]
+async fn pre_n10_3_set_aside_rows_count_as_set_aside() {
+    let app = runs_app().await;
+    let (run_id, tok, _) = app.pending_run("old-00001", 42_000).await;
+    app.upload(Some(&tok), &run_id.to_string(), replay(&header(run_id), 10))
+        .await;
+    sqlx::query(
+        "UPDATE replays SET status = 'failed',
+           result = '{\"error\":\"no verifier for build 1\",\"unverifiable\":true,\"build\":1}'
+         WHERE run_id = ?",
+    )
+    .bind(run_id)
+    .execute(app.db())
+    .await
+    .unwrap();
+    westbound_server::ops::probe_once(app.db(), &app.state.config.db.path, &app.state.metrics)
+        .await;
+    assert_eq!(app.state.metrics.replay_jobs("set_aside"), 1);
+    assert_eq!(app.state.metrics.replay_jobs("failed"), 0);
+    let listing = westbound_server::admin::replays(app.db()).await.unwrap();
+    assert!(listing.contains("set_aside 1"), "{listing}");
+    assert!(
+        listing.contains(&format!("set aside run {run_id} (build 1")),
+        "{listing}"
+    );
+    assert!(!listing.contains("failed"), "{listing}");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0007_replay_set_aside.sql"
+    ))
+    .execute(app.db())
+    .await
+    .unwrap();
+    assert_eq!(app.job(run_id).await.unwrap().0, "set_aside");
+}
+
+/// N10.3: with the data volume below its floor (the disk check), replay uploads answer 503
+/// `storage_low` (the game keeps the replay and retries), and nothing is stored.
+#[tokio::test]
+async fn uploads_wait_while_the_disk_is_low() {
+    let app = runs_app().await;
+    let (run_id, tok, _) = app.pending_run("low-00001", 42_000).await;
+    westbound_server::metrics::Metrics::set(&app.state.metrics.disk_low, 1);
+    let r = app
+        .upload(Some(&tok), &run_id.to_string(), replay(&header(run_id), 10))
+        .await;
+    assert_error(&r, 503, "storage_low");
+    assert!(app.job(run_id).await.is_none());
+    westbound_server::metrics::Metrics::set(&app.state.metrics.disk_low, 0);
+    let r = app
+        .upload(Some(&tok), &run_id.to_string(), replay(&header(run_id), 10))
+        .await;
+    assert_eq!(r.status, 201, "{:?}", r.json);
 }
 
 #[tokio::test]

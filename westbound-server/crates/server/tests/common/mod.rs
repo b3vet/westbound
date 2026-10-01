@@ -53,6 +53,9 @@ pub fn test_config(dir: &TempDir) -> Config {
     c.metrics.bind = "127.0.0.1:0".into();
     c.db.path = dir.path().join("test.db");
     c.backup.enabled = false;
+    // N10.3: no disk checks or WAL checkpoints under the tests (tests/housekeeping.rs turns
+    // them on).
+    c.housekeeping.enabled = false;
     // The test client never closes on a fatal error; don't wait the production second.
     c.gateway.fatal_close_delay_ms = 20;
     c.backup.dir = dir.path().join("backups");

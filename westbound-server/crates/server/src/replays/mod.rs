@@ -34,6 +34,12 @@ pub mod status {
     pub const RUNNING: &str = "running";
     pub const DONE: &str = "done";
     pub const FAILED: &str = "failed";
+    /// N10.3: a job no verifier here can verify (its build has no verifier, or the
+    /// verifier answered "cannot verify"); the run stays "verifying". Every worker start
+    /// requeues these; before N10.3 they were `failed` with `"unverifiable": true` in
+    /// their result (migration 0007 moved them; a worker from an older image may still
+    /// write that, and the queries accept both).
+    pub const SET_ASIDE: &str = "set_aside";
 }
 
 /// The file name of a run's replay.
@@ -56,7 +62,7 @@ pub fn work_dir(cfg: &ReplaysConfig) -> PathBuf {
 pub struct UploadReceipt {
     /// Decimal string.
     pub run_id: String,
-    /// The job's status (`pending`, `running`, `done`, `failed`).
+    /// The job's status (`pending`, `running`, `done`, `failed`, `set_aside`).
     pub status: String,
     /// This run already had a replay: this is it (nothing was stored).
     pub duplicate: bool,

@@ -68,6 +68,8 @@ pub struct Config {
     pub scoring: ScoringConfig,
     /// N10.2: the admin API (live rooms, notices, stats) the `admin` CLI talks to.
     pub admin: AdminConfig,
+    /// N10.3: disk hygiene on the data volume (pruning, free space, WAL, backup age).
+    pub housekeeping: HousekeepingConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -169,8 +171,18 @@ pub struct BackupConfig {
     pub dir: PathBuf,
     /// UTC wall-clock time of the nightly run, `HH:MM`.
     pub time_utc: String,
-    /// Dated files older than this many days are deleted after each run.
+    /// N10.3: how many dated daily backups (`westbound-YYYY-MM-DD.db`) the directory keeps:
+    /// after each good backup the older ones beyond this count go (newest first; the one
+    /// just written is never deleted, and a failed run deletes nothing). The key keeps its
+    /// N0 name: with one backup a day it is the days kept.
     pub retention_days: u32,
+    /// N10.3: the newest dated backup older than this is stale (`wb_backup_stale`, a
+    /// warning, `admin backups`). A day plus slack for the run itself.
+    pub max_age_hours: u64,
+    /// N10.3: other `.db` files in `dir` (manual and pre-deploy backups) and the
+    /// `<db>.before-restore-*` copies a restore leaves are deleted this many days after
+    /// they were written; leftover `.tmp` files after a day. 0 keeps them.
+    pub other_retention_days: u32,
     /// N10.2: after each backup, open it read-only and run `PRAGMA integrity_check`.
     pub verify: bool,
     /// N10.2: optional off-site hook, run after each good backup: argv, `{file}` is the
@@ -438,6 +450,50 @@ pub struct ReplaysConfig {
     pub keep_top_n: u32,
     /// How often the retention sweep runs (and finds orphan files).
     pub cleanup_interval_secs: u64,
+    /// N10.3: set-aside (unverifiable) jobs uploaded longer ago than this lose their file
+    /// in the retention sweep (their runs stay "verifying"; the row stays, `set_aside` with
+    /// `file_deleted_at`). 0 keeps them until `admin replay-purge-set-aside`.
+    pub set_aside_retention_days: u32,
+}
+
+/// `[housekeeping]` (N10.3): the data volume is small, so everything the server writes
+/// there is capped. docs/SERVER.md → "Housekeeping (N10.3)", docs/OPERATIONS.md → Disk
+/// space. Row retentions are in days; 0 keeps the rows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HousekeepingConfig {
+    /// Run the checks and the daily pass inside `serve`.
+    pub enabled: bool,
+    /// UTC `HH:MM` of the daily pass (row pruning, the file prunes, a VACUUM when worth
+    /// it). After the nightly backup, so the backup still holds what the pass deletes.
+    pub time_utc: String,
+    /// The disk check: sizes and free space (`wb_disk_*`), the newest backup's age, a WAL
+    /// checkpoint.
+    pub check_interval_secs: u64,
+    /// Below this much free space on the data volume: a warning and `wb_disk_low`, the
+    /// nightly backup is skipped (with an error) and replay uploads answer 503.
+    pub min_free_mb: u64,
+    /// `shadow_contacts` rows older than this are deleted.
+    pub shadow_contacts_days: u32,
+    /// `admin_log` rows older than this are deleted.
+    pub admin_log_days: u32,
+    /// Handled `reports` older than this are deleted (unhandled ones stay).
+    pub reports_days: u32,
+    /// Past Daily Drive days and Journey weeks that ended longer ago than this lose their
+    /// leaderboard entries (seasons and all-time boards stay).
+    pub board_periods_days: u32,
+    /// Runs older than this that hold no leaderboard entry are deleted (legacy uploads and
+    /// runs still waiting for their replay stay).
+    pub runs_days: u32,
+    /// Rows deleted per statement, and the pause between two batches that deleted
+    /// something (other writers get the database in between).
+    pub batch_rows: u32,
+    pub batch_pause_ms: u64,
+    /// The daily pass runs `VACUUM` when at least this share of the database file is free
+    /// pages (0 = never), the file is at most `vacuum_max_mb` and the volume has room for
+    /// two copies plus `min_free_mb`.
+    pub vacuum_min_free_pct: u32,
+    pub vacuum_max_mb: u64,
 }
 
 /// Plausibility checks on single-player submissions (`POST /api/v1/runs`). Spec:
@@ -718,6 +774,14 @@ const LOG_FORMATS: &[&str] = &["text", "json"];
 /// `replays.max_bytes` bounds: a header's worth, and 64 MiB.
 const MIN_REPLAY_BYTES: u64 = 1_024;
 const MAX_REPLAY_BYTES: u64 = 64 * 1024 * 1024;
+/// N10.3: `backup.retention_days` upper bound (the volume is small; off-site copies keep
+/// history).
+pub const MAX_BACKUPS_KEPT: u32 = 31;
+pub const BYTES_PER_MB: u64 = 1_048_576;
+const MAX_HOUSEKEEPING_BATCH: u32 = 10_000;
+const MIN_RUNS_DAYS: u32 = 30;
+const MIN_ADMIN_LOG_DAYS: u32 = 30;
+const MIN_BOARD_PERIOD_DAYS: u32 = 8;
 const MIN_INVITE_CODE_LEN: u32 = 6;
 const MAX_INVITE_CODE_LEN: u32 = 16;
 /// A report's `context` must fit in a request body.
@@ -799,7 +863,9 @@ impl Default for BackupConfig {
             enabled: true,
             dir: "/data/backups".into(),
             time_utc: "03:17".into(),
-            retention_days: 7,
+            retention_days: 3,
+            max_age_hours: 26,
+            other_retention_days: 7,
             verify: true,
             upload_command: Vec::new(),
             upload_timeout_secs: 600,
@@ -937,7 +1003,35 @@ impl Default for ReplaysConfig {
             poll_interval_secs: 30,
             keep_top_n: 100,
             cleanup_interval_secs: 3_600,
+            set_aside_retention_days: 30,
         }
+    }
+}
+
+impl Default for HousekeepingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            time_utc: "03:47".into(),
+            check_interval_secs: 300,
+            min_free_mb: 500,
+            shadow_contacts_days: 30,
+            admin_log_days: 365,
+            reports_days: 365,
+            board_periods_days: 90,
+            runs_days: 90,
+            batch_rows: 500,
+            batch_pause_ms: 50,
+            vacuum_min_free_pct: 25,
+            vacuum_max_mb: 1_024,
+        }
+    }
+}
+
+impl HousekeepingConfig {
+    /// `min_free_mb` in bytes.
+    pub fn min_free_bytes(&self) -> u64 {
+        self.min_free_mb.saturating_mul(BYTES_PER_MB)
     }
 }
 
@@ -1365,8 +1459,13 @@ impl Config {
                     self.backup.time_utc
                 ));
             }
-            if self.backup.retention_days == 0 {
-                errs.push("backup.retention_days must be at least 1".into());
+            if self.backup.retention_days == 0 || self.backup.retention_days > MAX_BACKUPS_KEPT {
+                errs.push(format!(
+                    "backup.retention_days (daily backups kept) must be 1..={MAX_BACKUPS_KEPT}"
+                ));
+            }
+            if self.backup.max_age_hours == 0 {
+                errs.push("backup.max_age_hours must be at least 1".into());
             }
         }
         let a = &self.auth;
@@ -1437,6 +1536,7 @@ impl Config {
         self.validate_social(errs);
         self.validate_deeplinks(errs);
         self.validate_replays(errs);
+        self.validate_housekeeping(errs);
         self.validate_rooms(errs);
         self.validate_scoring(errs);
     }
@@ -1510,6 +1610,45 @@ impl Config {
         ] {
             if v == 0 {
                 errs.push(format!("replays.{name} must be at least 1"));
+            }
+        }
+    }
+
+    /// N10.3: `[housekeeping]`.
+    fn validate_housekeeping(&self, errs: &mut Vec<String>) {
+        let h = &self.housekeeping;
+        if h.enabled && parse_hh_mm(&h.time_utc).is_none() {
+            errs.push(format!(
+                "housekeeping.time_utc `{}` must be HH:MM (UTC)",
+                h.time_utc
+            ));
+        }
+        if h.check_interval_secs == 0 {
+            errs.push("housekeeping.check_interval_secs must be at least 1".into());
+        }
+        if h.batch_rows == 0 || h.batch_rows > MAX_HOUSEKEEPING_BATCH {
+            errs.push(format!(
+                "housekeeping.batch_rows must be 1..={MAX_HOUSEKEEPING_BATCH}"
+            ));
+        }
+        if h.vacuum_min_free_pct > 100 {
+            errs.push("housekeeping.vacuum_min_free_pct must be 0..=100".into());
+        }
+        // Rows the server still needs: a run's idempotent answer and the recent history,
+        // the admin log of recent moderation, the current Journey week.
+        for (key, days, min) in [
+            ("runs_days", h.runs_days, MIN_RUNS_DAYS),
+            ("admin_log_days", h.admin_log_days, MIN_ADMIN_LOG_DAYS),
+            (
+                "board_periods_days",
+                h.board_periods_days,
+                MIN_BOARD_PERIOD_DAYS,
+            ),
+        ] {
+            if days != 0 && days < min {
+                errs.push(format!(
+                    "housekeeping.{key} must be 0 (keep) or at least {min}"
+                ));
             }
         }
     }

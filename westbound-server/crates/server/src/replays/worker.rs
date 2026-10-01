@@ -16,8 +16,9 @@
 //! left `running` by a stopped worker go back to `pending`.
 //!
 //! N8.3, build parity: a job this worker cannot verify is **set aside** at once instead of
-//! being retried against the same verifier: `failed` with `{"error": ..., "unverifiable":
-//! true, "build": N}` as its result, the run still "verifying". That is a command naming a
+//! being retried against the same verifier: status `set_aside` (N10.3; `failed` before)
+//! with `{"error": ..., "unverifiable": true, "build": N}` as its result, the run still
+//! "verifying". That is a command naming a
 //! per-build file (an absolute argv entry built from `{build}`, like
 //! `/verifier/{build}/westbound`) that does not exist here (nothing is run), or the
 //! verifier's "cannot verify" (exit 3 with a result `error`: another tuning under the same
@@ -69,7 +70,7 @@ pub enum JobOutcome {
     /// The attempt failed; the job is pending again (retry) or `failed` (`final_`).
     Failed { error: String, final_: bool },
     /// This worker cannot verify the job (its build has no verifier here, or the verifier
-    /// answered "cannot verify"): set aside as `failed` until a worker starts (N8.3).
+    /// answered "cannot verify"): `set_aside` until a worker starts (N8.3, N10.3).
     Unverifiable { error: String },
 }
 
@@ -160,14 +161,18 @@ impl Worker {
 
     /// Jobs set aside as unverifiable by a worker (N8.3) go back to `pending`, their
     /// attempts reset: called when a worker starts, whose verifier may know their build.
+    /// Purged ones (their file let go, N10.3) stay. The pre-N10.3 form (`failed` with
+    /// `"unverifiable": true`) counts too.
     pub async fn requeue_unverifiable(&self) -> sqlx::Result<u64> {
         let now = self.clock.now();
         let done = sqlx::query(
             "UPDATE replays SET status = ?, attempts = 0, not_before = ?
-             WHERE status = ? AND json_valid(result) AND json_extract(result, '$.unverifiable') = 1",
+             WHERE file_deleted_at IS NULL AND (status = ? OR (status = ?
+               AND json_valid(result) AND json_extract(result, '$.unverifiable') = 1))",
         )
         .bind(status::PENDING)
         .bind(now)
+        .bind(status::SET_ASIDE)
         .bind(status::FAILED)
         .execute(&self.db)
         .await?;
@@ -331,8 +336,9 @@ impl Worker {
         Ok(JobOutcome::Failed { error, final_ })
     }
 
-    /// Sets a job aside as unverifiable here (N8.3): `failed` with the reason, until a
-    /// worker starts. The run stays pending ("verifying") and the file is kept.
+    /// Sets a job aside as unverifiable here (N8.3): `set_aside` (N10.3) with the reason,
+    /// until a worker starts. The run stays pending ("verifying") and the file is kept
+    /// (up to `replays.set_aside_retention_days`).
     async fn set_aside(&self, job: &Job, error: String) -> anyhow::Result<JobOutcome> {
         let now = self.clock.now();
         let result = serde_json::json!({
@@ -342,7 +348,7 @@ impl Worker {
         })
         .to_string();
         sqlx::query("UPDATE replays SET status = ?, result = ?, finished_at = ? WHERE run_id = ?")
-            .bind(status::FAILED)
+            .bind(status::SET_ASIDE)
             .bind(result)
             .bind(now)
             .bind(job.run_id)

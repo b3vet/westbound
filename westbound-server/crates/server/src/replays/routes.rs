@@ -37,6 +37,18 @@ pub async fn upload(
         }
     })?;
     let run_id = parse_run_id(&run_id).ok_or_else(unknown_run)?;
+    // N10.3: the data volume is below its floor (the disk check): the client keeps the
+    // replay and retries later (5xx), instead of the upload filling the disk.
+    if crate::metrics::Metrics::get(&state.metrics.disk_low) == 1 {
+        let mut e = ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "storage_low",
+            "the server is short of disk space; try again later",
+        )
+        .with("retry_after_secs", STORAGE_LOW_RETRY_SECS);
+        e.retry_after = Some(STORAGE_LOW_RETRY_SECS);
+        return Err(e);
+    }
     let outcome = super::upload(
         &state.db,
         &state.config.replays,
@@ -73,6 +85,9 @@ pub async fn upload(
         Err(UploadError::Mismatch(why)) => Err(ApiError::bad_request("replay_mismatch", why)),
     }
 }
+
+/// What a 503 `storage_low` suggests to the client (its own retry schedule decides).
+const STORAGE_LOW_RETRY_SECS: u64 = 3_600;
 
 fn parse_run_id(s: &str) -> Option<i64> {
     if s.is_empty() || s.len() > 19 || !s.bytes().all(|b| b.is_ascii_digit()) {
