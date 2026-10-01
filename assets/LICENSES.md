@@ -1,6 +1,6 @@
 # Asset licenses
 
-Every third-party file in the repo is listed here with its source URL and license. Only **CC0** is accepted (OFL for fonts) for third-party files; see CLAUDE.md and the plan's decision D2 (CC0 packs are interim placeholders).
+Every third-party file in the repo is listed here with its source URL and license. Only **CC0** is accepted (OFL for fonts) for third-party files; see CLAUDE.md and the plan's decision D2 (CC0 packs are interim placeholders). The owner's own work (music, placeholders) is logged in its own sections below.
 
 ## Third-party assets
 
@@ -25,6 +25,21 @@ Every third-party file in the repo is listed here with its source URL and licens
 | Player cars (ART P1–P3), each with its interior (Cabin, SteeringWheel, Gauges) and LOD1: Falcon GT, Night Viper, Brute V8 (remodels), Kestrel RS, Coastliner, Afterglow, Daybreak, Needle (invented designs and names) | `assets/cars/<id>/<id>.glb`, `<id>_lod1.glb`, `<id>.car.json`; sources `art/blender/cars/<id>.blend`; renders `art/renders/<id>/` | In-house, Blender 5.2 from scripts: `tools/blender/cars/<id>.py` on `tools/blender/wb_carkit.py`, exported by `tools/blender/wb_export.py` (Claude Code art agent). No AI 3D generator, no third-party meshes |
 | Art pipeline calibration: a box car with every convention node and one face per palette colour, its LOD1, and a palette swatch prop (tests only) | `assets/cars/calib_box/*`, `art/export/props/common/calib_swatch.*`, source `art/blender/calib/calib.blend` | `tools/blender/wb_calib.py` (ART P0) |
 | Audio (synthesized placeholders): engine loops at 6 rpm steps on and off throttle, wind, tire hum, intake roar, pass whoosh, close-pass zip, thread thump, horn, air-brake hiss, boost whoosh, scoring stingers, banking tick and chime, HESITATED and hit stings | Loops as OGG: `assets/audio/engine_on_*.ogg`, `assets/audio/engine_off_*.ogg`, `wind_loop.ogg`, `tire_hum_loop.ogg`, `intake_loop.ogg`. One-shots as WAV (QOA on import): `whoosh`, `zip`, `thump`, `horn`, `air_brake`, `boost_whoosh`, `sting_*`, `chime_*` (`.wav`, under `assets/audio/`) | `tools/audio/gen_audio.py synth` (WP7A; numpy, deterministic) |
+
+## Owner-supplied music
+
+| Track | Files | Source | Rights | Notes |
+| --- | --- | --- | --- | --- |
+| Music: "Day Cruise 1" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_day_cruise_1.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Day Cruise 2" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_day_cruise_2.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Golden Hour 1" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_golden_hour_1.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Golden Hour 2" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_golden_hour_2.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Rush Hour 1" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_rush_hour_1.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Rush Hour 2" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_rush_hour_2.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Night Drive 1" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_night_drive_1.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Night Drive 2" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_night_drive_2.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Menu 1" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_menu_1.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
+| Music: "Menu 2" (re-encoded from the MP3 master to 32 kHz stereo OGG Vorbis, `ffmpeg -c:a libvorbis -q:a 3 -ar 32000`; the master is kept out of the repo in the git-ignored `art/music_src/`) | `assets/audio/music_menu_2.ogg` | Berke Ucvet | Owner's own work: Berke Ucvet holds the copyright | Owner-supplied original music |
 
 ## Owner-supplied placeholders
 

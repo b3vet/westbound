@@ -15,3 +15,6 @@ tests/out/
 
 # Agent worktrees (orchestration scratch, never committed)
 .claude/worktrees/
+
+# Music masters (MP3 from the owner); the game ships the OGG conversions in assets/audio/
+art/music_src/
