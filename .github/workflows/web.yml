@@ -17,9 +17,57 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  # WP9.9 (docs/WEB.md → Slim engine): Westbound's slim Godot web template, built with a
+  # pinned emsdk and cached by its config hash (tools/web_template/build.sh --hash: the
+  # script's pins and SCons flags plus the class profile). A cold build (~30-60 min) runs
+  # only when that config changes; every other push finds the cache in seconds. Caches
+  # saved on the default branch are visible to every branch. Never blocks a deploy: the
+  # build step may fail or time out (continue-on-error keeps this job, and so the deploy's
+  # implicit success() over its ancestors, green) and the build job then exports with the
+  # official template.
+  template:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
+    outputs:
+      hash: ${{ steps.hash.outputs.hash }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Template config hash
+        id: hash
+        run: echo "hash=$(tools/web_template/build.sh --hash)" >> "$GITHUB_OUTPUT"
+
+      - name: Look up the cached template
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/web_template
+          key: web-template-${{ steps.hash.outputs.hash }}
+          lookup-only: true
+
+      - name: Build the slim web template (cold cache only)
+        id: build
+        if: steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 100
+        run: tools/web_template/build.sh --release
+
+      - name: Report a failed template build
+        if: steps.build.outcome == 'failure'
+        run: echo "::warning title=Slim web template::the build failed; this run deploys the official engine"
+
+      - name: Save the template
+        if: steps.build.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: build/web_template
+          key: web-template-${{ steps.hash.outputs.hash }}
+
+  build:
+    needs: template
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -34,16 +82,16 @@ jobs:
             godot-4.7-stable-web-linux-
             godot-4.7-stable-linux
 
+      # The slim template when the template job built or found it; a missing or stale
+      # one leaves tools/export_web.sh on the official template (it says which).
+      - name: Restore the slim web template
+        uses: actions/cache/restore@v4
+        with:
+          path: build/web_template
+          key: web-template-${{ needs.template.outputs.hash || 'none' }}
+
       - name: Export Web build
         run: tools/export_web.sh
-
-      - name: Upload web build
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-build
-          path: build/web
-          if-no-files-found: error
-          retention-days: 14
 
       - uses: actions/setup-node@v4
         with:
@@ -56,6 +104,20 @@ jobs:
         run: |
           npm ci
           npx playwright install --with-deps --only-shell chromium
+
+      # Slim engine checks (probe, smoke, 60 s determinism); on any failure it re-exports
+      # with the official template, so the steps below always test what gets deployed.
+      - name: Slim engine gate
+        id: engine
+        run: tools/web_template/ci_gate.sh
+
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Smoke test (headless Chromium)
         run: node tools/web_smoke/smoke.mjs --timeout 90000 --settle 6000 --gzip --json build/web_metrics.json
