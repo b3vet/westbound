@@ -7,7 +7,8 @@ extends WBTest
 ## VehicleTestDriver (tests/fixtures/vehicle), independently of VehicleParams'
 ## own procedure, on a straight road fixture starting in the middle lane.
 
-const CAR_IDS: Array[StringName] = [&"falcon_gt", &"night_viper", &"brute_v8"]
+const CAR_IDS: Array[StringName] = [&"falcon_gt", &"night_viper", &"brute_v8", &"kestrel_rs", &"coastliner",
+	&"afterglow", &"daybreak", &"needle"]
 ## Tick budget for one VehiclePhysics.step (usec): ~3x the local median (see TOOLS.md).
 const STEP_BUDGET_USEC := 40.0
 const FUZZ_FAST_S := 60.0

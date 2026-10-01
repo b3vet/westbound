@@ -21,6 +21,11 @@ const CAR_PATHS: Array[String] = [
 	"res://data/cars/falcon_gt.tres",
 	"res://data/cars/night_viper.tres",
 	"res://data/cars/brute_v8.tres",
+	"res://data/cars/kestrel_rs.tres",
+	"res://data/cars/coastliner.tres",
+	"res://data/cars/afterglow.tres",
+	"res://data/cars/daybreak.tres",
+	"res://data/cars/needle.tres",
 ]
 const START_LANE := 1
 const START_SPEED_KMH := 120.0

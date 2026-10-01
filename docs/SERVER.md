@@ -1511,7 +1511,7 @@ Logs at INFO: `room created` (id, code, settings), `room seat taken` / `taken ba
 | `traffic_aoi_*`, `traffic_near_*`, `traffic_far_hz`, `traffic_car_id_hold_ms` | see "Traffic streaming → Configuration" | The area of interest, correction rates and car-id hold (N4.2) |
 | `cycle_len_ms` / `day_len_ms` / `clock_epoch_unix_ms` | `1920000` / `1320000` / `0` | The room clock (loop.tres; spec 32 / 22 min) |
 | `command_queue` / `join_timeout_ms` | `256` / `2000` | Each room's queue; how long a join waits for the room (not in spec) |
-| `max_speed_kmh` / `speed_tolerance_pct` | `307.8` / `10.0` | The fastest car with boost; spec × 1.1 |
+| `max_speed_kmh` / `speed_tolerance_pct` | `315.36` / `10.0` | The fastest car with boost; spec × 1.1 |
 | `max_accel_mps2` / `max_lateral_speed_mps` / `capability_tolerance_pct` | `12.0` / `12.0` / `20.0` | The car's capability; spec × 1.2 |
 | `lateral_margin_m` / `position_slack_m` | `1.0` / `2.0` | Allowed overshoot of the barriers; slack on the distance checks (not in spec) |
 | `future_tolerance_ms` / `stale_state_ms` | `500` / `2000` | States stamped this far ahead are refused; this far behind, dropped (not in spec) |
@@ -2207,9 +2207,9 @@ The workflow runs only when `westbound-server/**` or the workflow file changes, 
 2. **`image`** (after `test`):
    - Builds the image with buildx and the GitHub Actions layer cache.
    - Smoke-tests it: runs it, curls the health route, runs `healthcheck` inside the container, then checks that `docker stop` exits 0.
-   - On pushes to `claude/game-implementation-phases-asl5jz` only, logs in to GHCR with `GITHUB_TOKEN` (`packages: write`) and pushes these tags:
+   - On pushes to `main` only (merged pull requests), logs in to GHCR with `GITHUB_TOKEN` (`packages: write`) and pushes these tags:
      - `ghcr.io/<owner, lowercased>/westbound-server:edge`
-     - `:claude-game-implementation-phases-asl5jz-<sha7>`
+     - `:main-<sha7>`
 
 ## Coolify setup
 

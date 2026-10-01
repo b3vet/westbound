@@ -298,7 +298,7 @@ func _f_level() -> void:
 
 
 func _s_new_wheels() -> void:
-	Save.section(Garage.SECTION_UNLOCKS)["car/slot_5"] = 1   # a placeholder slot: not a car yet
+	Save.section(Garage.SECTION_UNLOCKS)["car/slot_9"] = 1   # not a roster car
 	_start()
 	_over()
 

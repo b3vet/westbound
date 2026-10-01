@@ -1,13 +1,14 @@
 extends WBTest
 ## Model interiors in the cockpit view (G4) and the hood camera on the model's
 ## Markers/cam_hood (G6): WP-ART-G, docs/ART_PRODUCTION.md §3.6.5, §3.6.6, §3.11. Uses the
-## calibration car (tests/art/fixtures/calib_car, tests only). The cockpit is hidden from
-## players (WP9.8), so these drive the mode directly (set_mode), as the dev tools do.
+## calibration car (tests/art/fixtures/calib_car, tests only). These drive the mode
+## directly (set_mode), as the dev tools do.
 
 const RIG_SCENE := "res://src/camera/camera_rig.tscn"
 const CAR_SCENE := "res://src/vehicle/player_car.tscn"
 const CALIB_DEF := "res://tests/art/fixtures/calib_car/calib_car.tres"
-const PLACEHOLDER_DEF := "res://data/cars/falcon_gt.tres"
+## A car on the old placeholder bake (no interior, stubbed markers): the roster is modular now.
+const PLACEHOLDER_DEF := "res://tests/fixtures/placeholder_car/placeholder_car.tres"
 const DT := 1.0 / 120.0
 
 var _tuning: Tuning

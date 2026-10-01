@@ -56,6 +56,11 @@ const CAR_PATHS: Array[String] = [
 	"res://data/cars/falcon_gt.tres",
 	"res://data/cars/night_viper.tres",
 	"res://data/cars/brute_v8.tres",
+	"res://data/cars/kestrel_rs.tres",
+	"res://data/cars/coastliner.tres",
+	"res://data/cars/afterglow.tres",
+	"res://data/cars/daybreak.tres",
+	"res://data/cars/needle.tres",
 ]
 ## WP4.3's HUD: installed only if the scene exists (built in parallel).
 const HUD_SCENE_PATH := "res://src/ui/hud/hud.tscn"

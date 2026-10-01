@@ -13,8 +13,9 @@ extends Resource
 ## hidden, and the look-ahead, head sway, shake and punch applied to the head (the
 ## Camera3D) so the dash moves in the view. Its numbers are the `cockpit_*` fields.
 ##
-## Player modes (owner, 2026-10-01; plan D11): the cockpit is hidden from players until
-## further notice. `cockpit_player_enabled` (false) is the one switch: while it is off,
+## Player modes (owner, 2026-10-01; plan D11): the cockpit was hidden from players and
+## came back the same day with the modelled car interiors (data: true). `cockpit_player_enabled`
+## is the one switch: while it is off,
 ## the cockpit is left out of player_modes() (the C key and HUD CAM cycle, the settings
 ## CAMERA row) and a saved `cockpit` loads as `cockpit_fallback_mode` (player_mode(),
 ## Settings). The mode itself, its code, assets and tests stay; CameraRig.set_mode and
@@ -78,8 +79,8 @@ extends Resource
 @export var mode_heading_damping_ratio: PackedFloat64Array = [1.0, 1.0, 1.0, 1.0, 1.0]   # not in spec
 
 @export_group("Cockpit (plan D11)")
-## Offered to players (camera cycle, settings row, loading a saved choice). Off until
-## further notice (owner, 2026-10-01); true brings the cockpit back everywhere.
+## Offered to players (camera cycle, settings row, loading a saved choice). On in
+## data/tuning/camera.tres since the modelled interiors (owner, 2026-10-01).
 @export var cockpit_player_enabled: bool = false
 ## Where a saved cockpit choice goes while the cockpit is hidden (the nearest view: the
 ## other mounted camera). Must be one of `modes` and not the cockpit.

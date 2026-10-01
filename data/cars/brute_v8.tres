@@ -5,7 +5,7 @@
 [resource]
 script = ExtResource("1_script")
 id = &"brute_v8"
-model_scene_path = "res://assets/cars/placeholder/brute_v8.glb"
+model_scene_path = "res://assets/cars/brute_v8/brute_v8.glb"
 display_name = "Brute V8"
 top_speed_kmh = 260.0
 zero_to_200_s = 8.2

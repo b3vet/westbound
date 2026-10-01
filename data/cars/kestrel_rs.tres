@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="CarDef" format=3]
+
+[ext_resource type="Script" uid="uid://cabuje4bcoqqj" path="res://src/vehicle/car_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"kestrel_rs"
+model_scene_path = "res://assets/cars/kestrel_rs/kestrel_rs.glb"
+display_name = "Kestrel RS"
+top_speed_kmh = 255.0
+zero_to_200_s = 8.3
+braking_mps2 = 9.0
+handling_scale = 0.93
+boost_capacity_scale = 0.98
+length_m = 4.3
+width_m = 1.9
+height_m = 1.38
+mass_kg = 1180.0
+wheelbase_m = 2.5
+gear_count = 6
+default_paint = Color(0.102, 0.58, 0.6, 1)

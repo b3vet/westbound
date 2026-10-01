@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="CarDef" format=3]
+
+[ext_resource type="Script" uid="uid://cabuje4bcoqqj" path="res://src/vehicle/car_def.gd" id="1_script"]
+
+[resource]
+script = ExtResource("1_script")
+id = &"daybreak"
+model_scene_path = "res://assets/cars/daybreak/daybreak.glb"
+display_name = "Daybreak"
+top_speed_kmh = 262.0
+zero_to_200_s = 8.1
+braking_mps2 = 9.0
+handling_scale = 1.06
+boost_capacity_scale = 1.02
+length_m = 4.9
+width_m = 1.95
+height_m = 1.4
+mass_kg = 1600.0
+wheelbase_m = 2.95
+gear_count = 6
+default_paint = Color(0.98, 0.78, 0.161, 1)

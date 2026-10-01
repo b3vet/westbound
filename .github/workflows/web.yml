@@ -7,7 +7,8 @@ name: Web
 # Deploy is gated on repository variables (Settings > Secrets and variables >
 # Actions > Variables), so this workflow stays green before Pages is set up:
 #   PAGES_ENABLED = true        turn the deploy job on
-#   PAGES_BRANCH  = <branch>    optional: only deploy pushes to this branch
+#   PAGES_BRANCH  = <branch>    optional: deploy pushes to this branch instead of the
+#                               default branch (main); other branches build and test only
 
 on:
   push:
@@ -159,7 +160,7 @@ jobs:
     if: >-
       vars.PAGES_ENABLED == 'true' &&
       github.event_name != 'pull_request' &&
-      (vars.PAGES_BRANCH || github.ref_name) == github.ref_name
+      (vars.PAGES_BRANCH || github.event.repository.default_branch) == github.ref_name
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
