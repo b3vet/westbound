@@ -81,7 +81,7 @@ WP8.1 (docs/SAVE.md → Settings has every setting, its key and what applies it)
 
 | Page | Row | Key | Choices |
 | --- | --- | --- | --- |
-| GAME | CAMERA (full width) | `camera_mode` | `camera.player_modes()`: CHASE / FAR CHASE / HOOD / OVERHEAD (the cockpit is hidden from players, plan D11 / docs/COCKPIT.md; `camera.cockpit_player_enabled` brings it back) |
+| GAME | CAMERA (full width) | `camera_mode` | `camera.player_modes()`: CHASE / FAR CHASE / HOOD / OVERHEAD / COCKPIT (`camera.cockpit_player_enabled`, on since the modelled interiors; off hides COCKPIT, docs/COCKPIT.md) |
 | GAME | GRAPHICS | `quality_tier` | every `quality.tier_names`: LOW / MEDIUM / HIGH |
 | GAME | BATTERY SAVER | `battery_saver` | OFF / ON |
 | GAME | TEXT SIZE | `text_scale` | `text_scales` (100 / 125%) |

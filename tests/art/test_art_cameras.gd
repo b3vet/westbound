@@ -1,8 +1,8 @@
 extends WBTest
 ## Model interiors in the cockpit view (G4) and the hood camera on the model's
 ## Markers/cam_hood (G6): WP-ART-G, docs/ART_PRODUCTION.md §3.6.5, §3.6.6, §3.11. Uses the
-## calibration car (tests/art/fixtures/calib_car, tests only). The cockpit is hidden from
-## players (WP9.8), so these drive the mode directly (set_mode), as the dev tools do.
+## calibration car (tests/art/fixtures/calib_car, tests only). These drive the mode
+## directly (set_mode), as the dev tools do.
 
 const RIG_SCENE := "res://src/camera/camera_rig.tscn"
 const CAR_SCENE := "res://src/vehicle/player_car.tscn"

@@ -5,7 +5,7 @@ extends WBTest
 ## selected; a change made elsewhere shows at once; the chooser revisited from CONTROLS
 ## (CHOOSE LAYOUT / BACK, reset when the panel closes); DEFAULTS puts the CONTROLS rows
 ## back (drag + manual, wheel look: plan D22 / D10, owner 2026-10-01); the camera row
-## offers only the modes players can pick (the cockpit is hidden, plan D11); TILT is N/A
+## offers only the modes players can pick (the cockpit while cockpit_player_enabled, plan D11); TILT is N/A
 ## without tilt; text fit
 ## on every page and the chooser (both text sizes, 1280x720 and a notched 1560x720, in
 ## the pause menu and on the title). Spec: UI → Screens → Settings; Controls → Settings
@@ -120,7 +120,8 @@ func test_every_spec_setting_has_a_row_on_its_page() -> void:
 	for r in sp.rows:
 		check(SPEC_ROWS.has(r.key), "%s is a setting the spec or the plan names" % r.key)
 	eq(sp.row(&"camera_mode").buttons.size(), t.camera.player_modes().size(), "every camera mode players can pick")
-	check(not sp.row(&"camera_mode").values.has(&"cockpit"), "the cockpit is hidden (owner, 2026-10-01)")
+	eq(sp.row(&"camera_mode").values.has(&"cockpit"), t.camera.cockpit_player_enabled,
+		"the cockpit row choice follows cockpit_player_enabled (on: owner, 2026-10-01)")
 	check(sp.row(&"camera_mode").wide, "the camera row spans the page")
 	eq(sp.row(&"quality_tier").buttons.size(), t.quality.tier_names.size(), "every quality tier")
 	eq(sp.row(&"steer_dead_zone").values.size(), t.meta.settings_dead_zones.size())

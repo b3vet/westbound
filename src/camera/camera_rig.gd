@@ -1,8 +1,8 @@
 class_name CameraRig
 extends Node3D
 ## Gameplay camera rig. Spec: Cameras (chase, far chase, hood, overhead, cockpit (plan
-## D11, WP4.7: before the cars have interiors, see docs/COCKPIT.md; hidden from players
-## since 2026-10-01, CameraTuning.cockpit_player_enabled); spring follow,
+## D11, WP4.7: the procedural cockpit, or the model's Interior (G4), docs/COCKPIT.md; a
+## player mode while CameraTuning.cockpit_player_enabled is on); spring follow,
 ## speed response, look-ahead, roll and shake, reduced motion, cycling, glare rule);
 ## Audio, haptics and game feel (shake on hits, FOV punch on boost); Accessibility ->
 ## Reduced motion; Performance budget (far plane just past the fog end).

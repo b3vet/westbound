@@ -3,8 +3,9 @@ extends WBTest
 ## choice, speed response, look-ahead, roll, shake, FOV punch, reduced motion); Cars →
 ## Modular car convention (Markers/cam_cockpit, SteeringWheel rotating with steer);
 ## Performance budget (draw calls, no StandardMaterial3D, no shadows). Hidden from
-## players since 2026-10-01 (owner; CameraTuning.cockpit_player_enabled): these tests
-## drive the mode directly (set_mode, cycle_mode(true)).
+## players on 2026-10-01 and back for players the same day with the modelled
+## interiors (owner; CameraTuning.cockpit_player_enabled = true). The switch-off
+## behaviour is still tested (test_cockpit_hidden_from_players turns it off).
 
 const RIG_SCENE := "res://src/camera/camera_rig.tscn"
 const CAR_SCENE := "res://src/vehicle/player_car.tscn"
@@ -15,6 +16,8 @@ const TOP_KMH := 280.0
 const DT := 1.0 / 120.0
 
 var ct: CameraTuning
+## The shipped switch, restored after each test (one test turns it off).
+var _saved_cockpit_enabled: bool = true
 var vt: VehicleTuning
 var _tuning: Tuning
 var _params: VehicleParams
@@ -26,6 +29,7 @@ var _saved_reduced: Variant
 func before_all() -> void:
 	_tuning = Tuning.load_default()
 	ct = _tuning.camera
+	_saved_cockpit_enabled = ct.cockpit_player_enabled
 	vt = _tuning.vehicle
 
 
@@ -41,6 +45,7 @@ func after_each() -> void:
 		if is_instance_valid(n):
 			n.queue_free()
 	_nodes.clear()
+	ct.cockpit_player_enabled = _saved_cockpit_enabled
 	Settings.set_value(&"camera_mode", _saved_mode)
 	Settings.set_value(&"reduced_motion", _saved_reduced)
 	await tree.process_frame
@@ -123,8 +128,15 @@ func test_dev_cycle_includes_cockpit_and_wraps() -> void:
 	eq(seen, [&"far", &"hood", &"overhead", &"cockpit", &"chase"] as Array[StringName], "wraps")
 
 
+func test_cockpit_is_a_player_mode() -> void:
+	check(ct.cockpit_player_enabled, "players can pick the cockpit (owner, 2026-10-01: back with the modelled interiors)")
+	eq(ct.player_modes(), ct.modes, "every mode")
+	eq(ct.player_mode(&"cockpit"), &"cockpit", "a saved cockpit loads as cockpit")
+
+
+## The switch still hides it (CameraTuning.cockpit_player_enabled = false).
 func test_cockpit_hidden_from_players() -> void:
-	check(not ct.cockpit_player_enabled, "hidden until further notice (owner, 2026-10-01)")
+	ct.cockpit_player_enabled = false
 	eq(ct.player_modes(), PackedStringArray(["chase", "far", "hood", "overhead"]))
 	check(not ct.is_player_mode(&"cockpit"))
 	eq(ct.player_mode(&"cockpit"), &"hood", "a saved cockpit falls back to the other mounted view")

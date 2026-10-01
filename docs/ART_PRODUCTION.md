@@ -329,7 +329,7 @@ The four wheels are drawn as **one MultiMesh** (one draw call) only if they shar
 
 #### 3.6.5 Interior and the cockpit camera
 
-The cockpit camera exists but is **hidden from players** until better car and interior models exist (owner, 2026-10-01, plan D11 and O6; `CameraTuning.cockpit_player_enabled = false`). Your interiors are what brings it back.
+The cockpit camera was **hidden from players** until better car and interior models existed (owner, 2026-10-01, plan D11 and O6). The modelled interiors (P1–P3) brought it back the same day: `CameraTuning.cockpit_player_enabled = true`.
 
 What the game does today (docs/COCKPIT.md, `src/camera/camera_rig.gd`, `src/camera/cockpit/cockpit.gd`):
 

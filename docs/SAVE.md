@@ -108,7 +108,7 @@ Every setting the spec names, where it lives, its default (`Settings.DEFAULTS`),
 | response curve | `steer_curve` | CONTROLS · CURVE | `meta.settings_curves` GENTLE / NORMAL / SHARP (exponent 1.0 / 1.6 / 2.2) | `1.0` | `PlayerInput` |
 | (D10) drag visual | `drag_visual` | CONTROLS · DRAG LOOK | RING / WHEEL | `wheel` (D10, owner 2026-10-01; was `ring`) | `ControlsOverlay` |
 | (D9) controls size | `controls_scale` | CONTROLS · CONTROLS SIZE | `hud.settings_controls_scales` 80 / 100 / 120 % | `1.0` | `PlayerInput` |
-| camera | `camera_mode` | GAME · CAMERA (full width) | `camera.player_modes()`: CHASE / FAR CHASE / HOOD / OVERHEAD (COCKPIT hidden, D11: `camera.cockpit_player_enabled`) | `chase` | `CameraRig` (also the C key and the HUD button) |
+| camera | `camera_mode` | GAME · CAMERA (full width) | `camera.player_modes()`: CHASE / FAR CHASE / HOOD / OVERHEAD / COCKPIT (COCKPIT only while `camera.cockpit_player_enabled`, on; D11) | `chase` | `CameraRig` (also the C key and the HUD button) |
 | graphics tier | `quality_tier` | GAME · GRAPHICS | every `quality.tier_names`: LOW / MEDIUM / HIGH | `medium` | `Quality` |
 | battery saver | `battery_saver` | GAME · BATTERY SAVER | OFF / ON (30 fps) | `false` | `Quality` |
 | text size | `text_scale` | GAME · TEXT SIZE | `hud.text_scales` 100 / 125 % | `1.0` | HUD, screens |
@@ -120,7 +120,7 @@ Every setting the spec names, where it lives, its default (`Settings.DEFAULTS`),
 | the chooser, revisited | — | CONTROLS · CHOOSE LAYOUT | the first-run chooser in place of the rows | — | — |
 | back to the defaults | — | CONTROLS · DEFAULTS | every CONTROLS row back to its default | — | — |
 
-**Loading is defensive** (`Settings.sanitize`): a value of the wrong type, an unknown choice (`CHOICES`) or a non-finite number loads as the default. A camera mode players cannot pick loads through `CameraTuning.player_mode`: the hidden `cockpit` as `cockpit_fallback_mode` (`hood`), an unknown one as `default_mode`. This is a load-time rule, not a migration, so the saved choice comes back as `cockpit` once `cockpit_player_enabled` is on again (a save written in between holds `hood`). Ranges are clamped by the systems that read them, from their own tuning. Loading announces every key whose value changed, so a system already running applies it.
+**Loading is defensive** (`Settings.sanitize`): a value of the wrong type, an unknown choice (`CHOICES`) or a non-finite number loads as the default. A camera mode players cannot pick loads through `CameraTuning.player_mode`: `cockpit`, when `cockpit_player_enabled` is off, as `cockpit_fallback_mode` (`hood`), an unknown one as `default_mode`. This is a load-time rule, not a migration, so the saved choice comes back as `cockpit` once `cockpit_player_enabled` is on again (a save written in between holds `hood`). Ranges are clamped by the systems that read them, from their own tuning. Loading announces every key whose value changed, so a system already running applies it.
 
 **Changing a default** (D22 / D10, owner 2026-10-01: `throttle_mode` `auto` → `manual`, `drag_visual` `ring` → `wheel`) reaches fresh saves, SKIP in the chooser, `Settings.restore_defaults()` and CONTROLS · DEFAULTS. An existing save keeps its values: settings are stored whole, so a value that is the old default cannot be told from a choice, and nothing is migrated. Such a player gets the new layout from CONTROLS · DEFAULTS (or CHOOSE LAYOUT), or with a fresh save.
 

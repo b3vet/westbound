@@ -154,9 +154,16 @@ func test_settings_are_sanitized_on_load() -> void:
 	eq((disk["settings"] as Dictionary).get("future_key"), [1.0, 2.0], "a newer build's key is kept")
 
 
+## With the cockpit hidden (CameraTuning.cockpit_player_enabled off) a saved cockpit
+## loads as hood; with it on (as shipped) it loads as saved.
 func test_a_saved_cockpit_loads_as_hood() -> void:
 	var ct := Tuning.load_default().camera
-	check(not ct.cockpit_player_enabled, "the cockpit is hidden (owner, 2026-10-01)")
+	var shipped := ct.cockpit_player_enabled
+	check(shipped, "players can pick the cockpit (owner, 2026-10-01)")
+	_write_raw(JSON.stringify({"version": 2, "settings": {"camera_mode": "cockpit"}}))
+	_save().load_from_disk()
+	eq(Settings.get_value(&"camera_mode"), &"cockpit", "loads as saved while the cockpit is a player mode")
+	ct.cockpit_player_enabled = false
 	_write_raw(JSON.stringify({"version": 2, "settings": {"camera_mode": "cockpit"}}))
 	var s := _save()
 	s.load_from_disk()
@@ -165,6 +172,7 @@ func test_a_saved_cockpit_loads_as_hood() -> void:
 	_write_raw(JSON.stringify({"version": 2, "settings": {"camera_mode": "far"}}))
 	_save().load_from_disk()
 	eq(Settings.get_value(&"camera_mode"), &"far", "the other modes load as saved")
+	ct.cockpit_player_enabled = shipped
 
 
 func test_an_existing_save_keeps_its_controls() -> void:

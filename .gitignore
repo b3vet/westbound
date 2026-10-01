@@ -18,3 +18,6 @@ tests/out/
 
 # Music masters (MP3 from the owner); the game ships the OGG conversions in assets/audio/
 art/music_src/
+
+# Python bytecode (tools/blender, tools/audio)
+__pycache__/
