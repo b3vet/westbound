@@ -11,7 +11,7 @@ API, like a client: four device accounts each submit a run and upload its replay
   inflated    the sample, a claimed score above the recomputed -> rejected (score)
   no-verifier the sample under a client build the image lacks  -> set aside: the run stays
                                                                  "verifying", the job
-                                                                 `failed` with the reason
+                                                                 `set_aside` with the reason
 
 and the verifier binary once directly (`docker run` its entrypoint) on the honest and the
 teleported replay. Exit 0 when every case answers as expected.
@@ -212,7 +212,7 @@ def main():
         while time.time() < deadline:
             out = replays()
             settled = sum(int(l.split()[1]) for l in out.splitlines()
-                          if l.split()[:1] in (["done"], ["failed"]) and len(l.split()) == 2)
+                          if l.split()[:1] in (["done"], ["failed"], ["set_aside"]) and len(l.split()) == 2)
             if settled >= len(runs):
                 break
             time.sleep(2)
@@ -222,7 +222,10 @@ def main():
             me = api.me(tok)
             got = "rejected" if me is None else me.get("verification")
             if want == "set_aside":
-                good = got == "pending" and f"failed run {run_id} " in out \
+                # N10.3 lists parked jobs as `set_aside` ("set aside run N"); older
+                # servers listed them as `failed` with the reason.
+                parked = f"set aside run {run_id} " in out or f"failed run {run_id} " in out
+                good = got == "pending" and parked \
                     and f"no verifier for build {MISSING_BUILD}" in out
                 got = f"{got} (verifying), job set aside" if good else got
             else:
