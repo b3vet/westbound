@@ -2,6 +2,7 @@
 # WP9.9: does the slim web template run everything in the game's pack like the official one?
 #
 #   tools/web_template/verify.sh [--pck-dir build/web] [--template build/web_template/web_nothreads_release.zip]
+#                                [--net http://127.0.0.1:8080]
 #
 # Runs tools/web_template/web_probe.gd (compile every script, load every scene, resource
 # and imported file of index.pck and music.pck) in headless Chromium twice: on the
@@ -9,7 +10,9 @@
 # engine fails anything the official one does not (a disabled class a script or a
 # resource needs). Then the names check (web_names.gd: player names with diacritics,
 # Turkish casing, Thai, fallback glyphs in the game's theme): the shaped widths and the
-# screenshot pixels must match. Also writes tools/web_template/removed_classes.txt: the classes the
+# screenshot pixels must match. --net also checks HTTP (fetch) and a WebSocket echo
+# against a local westbound-server (web_net.gd; `cargo run -p server -- --config
+# config/dev.toml` in westbound-server/). Also writes tools/web_template/removed_classes.txt: the classes the
 # official engine has and the slim one lacks, which `detect_classes.gd --check`
 # (tools/export_web.sh, CI) compares with what the game uses from then on.
 # Needs a Web export in --pck-dir (tools/export_web.sh; either template) and `npm ci`
@@ -19,8 +22,10 @@ cd "$(dirname "$0")/../.."
 
 pck_dir="build/web"
 custom="build/web_template/web_nothreads_release.zip"
+net=""
 for a in "$@"; do
   case "$a" in
+    --net=*) net="${a#--net=}" ;;
     --pck-dir=*) pck_dir="${a#--pck-dir=}" ;;
     --template=*) custom="${a#--template=}" ;;
     -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -51,8 +56,13 @@ for side in official custom; do
   nice node tools/web_template/probe.mjs --dir "$work/$side" --out "$work/$side.log" || status=2
   nice node tools/web_template/probe.mjs --dir "$work/$side" --out "$work/${side}_names.log" --names \
     --screenshot "$work/${side}_names.png" || status=2
+  if [[ -n "$net" ]]; then
+    nice node tools/web_template/probe.mjs --dir "$work/$side" --out "$work/${side}_net.log" --net "$net" --timeout 60000 \
+      && echo "verify.sh: $side engine: HTTP and WebSocket echo ok against $net" \
+      || { echo "verify.sh: $side engine: HTTP/WebSocket check failed (see $work/${side}_net.log)"; status=1; }
+  fi
 done
-[[ $status -eq 0 ]] || { echo "verify.sh: a probe did not finish (logs in $work)" >&2; exit 2; }
+[[ $status -ne 2 ]] || { echo "verify.sh: a probe did not finish (logs in $work)" >&2; exit 2; }
 
 # Failures and engine errors, normalized (no timings or addresses), official vs slim.
 # (The slim build prints engine sources as ./modules/..., the official one as modules/....)

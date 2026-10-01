@@ -2,10 +2,11 @@
 // engine in headless Chromium and save its console.
 //
 //   node tools/web_template/probe.mjs --dir DIR --out LOG [--timeout 180000]
-//        [--names --screenshot PNG]
+//        [--names --screenshot PNG] [--net http://127.0.0.1:8080]
 //
 // --names runs tools/web_template/web_names.gd instead (player names in the game's theme)
-// and saves a screenshot of it.
+// and saves a screenshot of it; --net runs web_net.gd (HTTP + WebSocket echo against a
+// local westbound-server).
 //
 // DIR holds an unzipped web template (godot.js, godot.wasm, the audio worklets) and the
 // game's index.pck (and music.pck, if the export made one). Export templates ignore
@@ -23,7 +24,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(path.join(here, '../web_smoke/package.json'));
 const { chromium } = require('playwright');
 
-const opts = { dir: '', out: '', timeout: 180000, names: false, screenshot: '' };
+const opts = { dir: '', out: '', timeout: 180000, names: false, screenshot: '', net: '' };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   const v = () => argv[++i];
@@ -32,6 +33,7 @@ for (let i = 0; i < argv.length; i++) {
     case '--out': opts.out = path.resolve(v()); break;
     case '--timeout': opts.timeout = Number(v()); break;
     case '--names': opts.names = true; break;
+    case '--net': opts.net = v(); break;
     case '--screenshot': opts.screenshot = path.resolve(v()); break;
     default: console.error(`probe: unknown argument ${argv[i]}`); process.exit(2);
   }
@@ -41,9 +43,10 @@ if (!opts.dir || !opts.out) {
   process.exit(2);
 }
 
-const hasMusic = !opts.names && fs.existsSync(path.join(opts.dir, 'music.pck'));
-const script = opts.names ? 'web_names.gd' : 'web_probe.gd';
-const doneRe = opts.names ? /^PROBE done text/ : /^PROBE done /;
+const mode = opts.names ? 'names' : opts.net ? 'net' : 'load';
+const hasMusic = mode === 'load' && fs.existsSync(path.join(opts.dir, 'music.pck'));
+const script = { load: 'web_probe.gd', names: 'web_names.gd', net: 'web_net.gd' }[mode];
+const doneRe = { load: /^PROBE done files/, names: /^PROBE done text/, net: /^PROBE done net/ }[mode];
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head>
 <body style="margin:0;background:#000"><canvas id="canvas" width="1280" height="720"></canvas>
 <script src="godot.js"></script>
@@ -81,7 +84,7 @@ const server = http.createServer((req, res) => {
   fs.createReadStream(file).pipe(res);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const url = `http://127.0.0.1:${server.address().port}/probe.html?server=off`;
+const url = `http://127.0.0.1:${server.address().port}/probe.html?server=off${opts.net ? '&probe_server=' + encodeURIComponent(opts.net) : ''}`;
 
 const browser = await chromium.launch({
   headless: true,
