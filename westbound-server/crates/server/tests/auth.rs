@@ -316,18 +316,36 @@ async fn bearer_errors() {
 
 #[tokio::test]
 async fn provider_routes_are_not_enabled() {
+    // N11: still the MP-D2 shape while `[identity]` has no client ids (tests/identity.rs
+    // covers them configured). Link needs a bearer token first.
     let app = common::app().await;
-    for path in [
-        "/api/v1/auth/link/apple",
-        "/api/v1/auth/link/google",
-        "/api/v1/auth/signin/apple",
-        "/api/v1/auth/signin/google",
+    let d = app.create_device().await;
+    for (path, token) in [
+        (
+            "/api/v1/auth/link/apple",
+            Some(d.session.access_token.as_str()),
+        ),
+        (
+            "/api/v1/auth/link/google",
+            Some(d.session.access_token.as_str()),
+        ),
+        ("/api/v1/auth/signin/apple", None),
+        ("/api/v1/auth/signin/google", None),
     ] {
         let r = app
-            .call("POST", path, None, Some(json!({ "id_token": "x" })))
+            .call("POST", path, token, Some(json!({ "id_token": "x" })))
             .await;
         assert_error(&r, 501, "provider_not_enabled");
     }
+    let r = app
+        .call(
+            "POST",
+            "/api/v1/auth/link/google",
+            None,
+            Some(json!({ "id_token": "x" })),
+        )
+        .await;
+    assert_error(&r, 401, "unauthorized");
 }
 
 #[tokio::test]

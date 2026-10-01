@@ -322,7 +322,7 @@ Pause → SETTINGS → **ACCOUNT** (the button sits left of DONE, and only shows
 - **Player card:** `name` + `#tag`, the status (ONLINE in the accent; SUSPENDED and ACCOUNT ERROR hot; CONNECTING, OFFLINE, SIGNED OUT muted) and one line saying what it means.
 - **Rename:** a text field (max `display_name_max_chars`), SAVE (Enter works too), and the server's answer inline in hot text; the hint line shows the rules or the cooldown. While the field has focus the run's `PlayerInput` stops reading keys (typing "P" must not unpause).
 - When not signed in: TRY AGAIN (SIGN IN after logout or deletion), plus NEW ACCOUNT when the stored account was refused.
-- **Link account:** SIGN IN WITH APPLE / GOOGLE, disabled, COMING SOON (MP-D2).
+- **Sign in:** SIGN IN WITH APPLE / GOOGLE and the cloud save line (N11: see "Sign in with Apple / Google → Account screen").
 - **Delete account:** DELETE ACCOUNT → the warning, DELETE FOREVER and CANCEL.
 - Every button and the field are at least `touch_target_px` (88) tall; buttons are `ScreenButton`s, so raw touch ids never index anything.
 
@@ -392,6 +392,76 @@ The server logged `refresh token reuse detected; session family revoked` for the
 - The orchestrator adds the autoload `NetSession` (`res://src/net/session.gd`). Until then the pause menu hides ACCOUNT, and nothing touches the network.
 - Once it is an autoload, the game signs in silently at launch. The web smoke test serves no API, so run it with `?server=off` or accept the failed request, or point it at a local server.
 - `NetClient.start(session.ws_url(), build, map_hash, await session.fresh_access_token())`; `test_session.gd::test_access_token_plugs_into_net_client` checks that the Hello carries the session's token, and that a fatal `not_allowed` (a newer login elsewhere) shows "This account signed in on another device."
+
+## Sign in with Apple / Google (N11)
+
+Spec: multiplayer handoff → Accounts and authentication (Sign in with Apple / Google; "Native side: a small native plugin per platform"; App Store rules: Google on iOS requires Apple too, which we offer). The server side: SERVER.md → "Sign in with Apple / Google"; the owner's setup: OPERATIONS.md → "Sign in with Apple / Google"; the save: SAVE.md → "Cloud sync".
+
+| File | Class | Role |
+| --- | --- | --- |
+| `src/net/session.gd` | `NetSession` | `load_providers()`, `sign_in_with(provider)`, `resolve_conflict(keep_device)` / `cancel_conflict()`, `unlink(provider)`, `account_switched`; owns `cloud` |
+| `src/net/identity_provider.gd` | `NetIdentityProvider` | One provider's sheet: `available()`, `configure(config)`, `sign_in(nonce)` → `NetIdentityResult`; polls the begin / poll / cancel contract |
+| `src/net/web_identity.gd` | `NetWebIdentity` | The web build: the shell's `window.wbIdentity` (WEB.md → Sign-in) |
+| `src/net/native_identity.gd` | `NetNativeIdentity` | iOS / Android: a native plugin singleton (none yet: unavailable) |
+| `src/net/fake_identity.gd` | `NetFakeIdentity` | Tests and previews: tokens the fake server accepts (`fake.<provider>.<sub>.<nonce>`) |
+| `src/net/identity_result.gd` | `NetIdentityResult` | Token, Apple's code, or cancelled / error |
+| `src/net/cloud_save.gd`, `cloud_save_target.gd` | `NetCloudSave`, `NetCloudSaveTarget` | The cloud save sync over `Save` (SAVE.md → Cloud sync) |
+| `src/net/api.gd` | `NetApi` | `get_providers`, `get_nonce`, `provider_sign_in`, `link_provider`, `unlink_provider`, `get_save`, `put_save` (If-Match) |
+| `src/net/fake_accounts.gd` | `NetFakeAccounts` | The same routes in memory, with the conflict and the 409 |
+
+### Flow (`sign_in_with`)
+
+1. `GET /auth/providers` (cached `identity_config_cache_s`) hands each provider its public config; the web shell loads a provider's script only now, and only when it is enabled.
+2. `POST /auth/nonce`, then the provider's sheet with that nonce (the web popup, a native sheet). Cancelled: nothing else happens.
+3. **Signed in on this device** (ONLINE with an account): `POST /auth/link/{provider}`. The account and its progress stay; the profile now lists the identity; the cloud save turns on and syncs.
+4. **`identity_in_use`** (the identity already has its own account): `pending_conflict` holds the server's `{provider, current, other}` summaries and the chooser shows. `resolve_conflict(keep_device)` signs in with the **same** token (`POST /auth/signin/{provider}`), adopts that account (its `device_secret` is stored like a device account's), logs the old device session out (best effort) and emits `account_switched(previous)`; `cloud.next_mode` becomes `KEEP_LOCAL` or `USE_CLOUD` for the first sync. Accounts are never merged; the save is (SAVE.md). `cancel_conflict()` keeps everything as it was. An ID token expires (Google 1 h, Apple 10 min): a late answer gets `id_token_expired` and the player taps the provider again.
+5. **No usable account here** (SIGNED_OUT, FAILED: the stored account was refused): straight to sign-in; a new identity gets a new account (`created`).
+6. Renewals afterwards are the device account's: refresh rotation, then `/auth/device/login` with the stored secret (now the per-device one from the sign-in).
+
+Errors are states with player texts (`NetSession.error_text`): `provider_not_enabled` (NOT SET UP), `provider_unavailable_here` (NOT IN THIS BUILD), `sign_in_timeout` (`identity_sign_in_timeout_s`), `invalid_id_token`, `id_token_expired`, `invalid_nonce`, `provider_unavailable`, `provider_already_linked`, `last_sign_in_method`, `not_linked`. One sign-in at a time (`busy`).
+
+### Native plugins (not written yet)
+
+iOS (Sign in with Apple through `ASAuthorizationController`; Google through Google Sign-In for iOS) and Android (Credential Manager with "Sign in with Google"; Apple through the web flow in a Custom Tab or a library) each need a small plugin that registers an engine singleton, `WestboundSignInWithApple` / `WestboundGoogleSignIn`, with this contract (the web shell's, so `NetIdentityProvider` drives all three the same way):
+
+| Method | Does |
+| --- | --- |
+| `configure(config: Dictionary)` | The server's `{enabled, client_id, redirect_uri}` |
+| `begin(nonce: String) -> bool` | Opens the system sheet with that nonce (raw, or its SHA-256 hex: the server accepts both) |
+| `poll() -> String` | `""` while open, then once `{"state":"done","id_token":"…","code":"…"}` / `{"state":"cancelled"}` / `{"state":"error","error":"…"}` |
+| `cancel()` | Closes it |
+
+The tokens' audiences must be in the server's lists: the iOS app's bundle id for Apple (`identity.apple_client_ids`), the iOS OAuth client for Google (`identity.google_client_ids`; Android's Credential Manager uses the web client id). Until a plugin exists, `NetNativeIdentity.available()` is false and the buttons say NOT IN THIS BUILD. Same as the Keychain plugin (MP-D2): it comes with the iOS export.
+
+### Account screen
+
+Pause → SETTINGS → ACCOUNT (`ProfilePanel`), right column:
+
+- **SIGN IN WITH APPLE / SIGN IN WITH GOOGLE**: a tap signs in (above). Notes under the label: CHECKING (the config is loading), NOT SET UP (the server has no client ids), NOT IN THIS BUILD (no plugin), nothing when ready.
+- **Signed in:** SIGNED IN WITH GOOGLE (selected) with the masked address (or PRIVATE EMAIL for Apple's relay); the player card's note says "Signed in with Google. Plays on any device." A tap opens the unlink confirm: "Unlink Google? You stay signed in here." (and, for the last provider, "Then only this device can open the account."), UNLINK / CANCEL.
+- **Cloud save line:** CLOUD SAVE · OFF UNTIL YOU SIGN IN / ON / SYNCING / SYNCED (n MIN AGO) / UPDATES AFTER THIS RUN / OFFLINE, WILL RETRY / PAUSED.
+- **The chooser** (identity_in_use): the right column shows THAT GOOGLE ACCOUNT HAS ITS OWN PROGRESS, this device's level and runs with its `name#tag`, the cloud's (from the server's summary: `stats.xp` → level, `stats.runs`), then KEEP THIS DEVICE'S PROGRESS and USE THE CLOUD PROGRESS; CANCEL and "Either way, you switch to that account." take the left column's rename row.
+- One line under the buttons answers the last action ("Signed in. Your progress is saved to the cloud.", "Sign-in cancelled.", "Switched to name#tag.", the error texts).
+- The widest names step the name line's size down to fit (`_fit_name`). Text fit: `tests/ui/test_account_identity.gd` (100 / 125 %, both hands, 1280×720, a notched 1560×720 and the phone's minimum left inset).
+
+```
+tools/snap.sh src/ui/screens/dev/profile_preview.tscn --renderer=both --sweep=net:signin,linked,unlink,chooser,switched,notsetup,native
+```
+
+### Tuning (`data/tuning/net.tres`, N11 fields)
+
+| Field | Default | |
+| --- | --- | --- |
+| `identity_config_cache_s` | 600 | `GET /auth/providers` cache |
+| `identity_sign_in_timeout_s` | 180 | A sheet nobody answers |
+| `cloud_after_run_delay_s` | 20 | Sync after a run's results (debounced) |
+| `cloud_resume_min_s` | 300 | Sync on coming back when older than this |
+| `cloud_retry_s`, `cloud_retry_max_s` | 30, 900 | Failed sync backoff |
+| `cloud_conflict_rounds` | 3 | Merge-and-write rounds after a 409 |
+
+### Tests
+
+`tests/net/test_identity.gd` (config, link, cancel / unavailable / not set up, a refused token, the conflict and both choices with the switch and the per-device secret, sign-in without an account, unlink, one at a time, the web bridge with a scripted page, the native stub), `tests/net/test_cloud_save.gd` (SAVE.md → Cloud sync), `tests/ui/test_account_identity.gd` (taps with iOS-style ids, the chooser, text fit), `tests/net/test_session_profile_panel.gd` (provider states).
 
 ## Runs and leaderboards client (N7.2)
 

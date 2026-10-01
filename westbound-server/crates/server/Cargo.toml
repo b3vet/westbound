@@ -44,6 +44,9 @@ sha2 = "0.10.9"
 subtle = "2.6.1"
 tower_governor = { version = "0.8.0", default-features = false, features = ["axum"] }
 governor = { version = "0.10.4", default-features = false, features = ["std", "dashmap", "quanta", "jitter"] }
+# N11 identity providers: JWKS fetches, Apple's token and revoke endpoints. rustls with
+# the bundled webpki roots (no system CA bundle needed; the musl image stays static).
+reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls-webpki-roots"] }
 
 # N10.3: free space on the data volume (statvfs; the linux_raw backend needs no libc, so
 # the static musl image is fine).

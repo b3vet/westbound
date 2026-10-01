@@ -43,9 +43,12 @@ async fn migrations_apply_in_wal_mode_and_are_idempotent() {
             "accounts",
             "admin_log",
             "blocks",
+            "cloud_saves",
             "crew_members",
             "crews",
+            "device_secrets",
             "friends",
+            "identity_links",
             "leaderboard_entries",
             "refresh_tokens",
             "replays",
@@ -114,7 +117,7 @@ async fn online_backup_is_a_consistent_copy() {
     assert_eq!(details, vec!["before backup"]);
     // The copy is a working database with the migration history.
     db::migrate(&copy).await.unwrap();
-    assert_eq!(tables(&copy).await.len(), 12);
+    assert_eq!(tables(&copy).await.len(), 15);
     db::close(&copy).await;
     db::close(&pool).await;
 }

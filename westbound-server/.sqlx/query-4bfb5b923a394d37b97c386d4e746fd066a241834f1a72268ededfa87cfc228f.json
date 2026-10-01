@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT banned_until FROM accounts WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "banned_until",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "accounts",
+            "name": "banned_until"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "4bfb5b923a394d37b97c386d4e746fd066a241834f1a72268ededfa87cfc228f"
+}

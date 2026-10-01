@@ -477,3 +477,56 @@ batch_pause_ms = 50
 # vacuum_max_mb and there is room for two copies plus min_free_mb.
 vacuum_min_free_pct = 25
 vacuum_max_mb = 1024
+
+[identity]
+# N11: Sign in with Apple / Google (docs/OPERATIONS.md → Sign in with Apple / Google has the
+# owner's steps). A provider is on when its client ids are set; otherwise its routes answer
+# 501 provider_not_enabled. Lists from the environment are comma-separated:
+#   WB_IDENTITY__GOOGLE_CLIENT_IDS=1234-abc.apps.googleusercontent.com
+# Google OAuth client ids accepted as the ID token's audience (Web; later iOS, Android).
+google_client_ids = []
+# The one the web build uses ("" = the first above).
+google_web_client_id = ""
+google_issuers = ["https://accounts.google.com", "accounts.google.com"]
+google_jwks_url = "https://www.googleapis.com/oauth2/v3/certs"
+# Apple: the Services ID (web) and the app's bundle id (iOS).
+apple_client_ids = []
+# The Services ID the web build uses ("" = the first above), and its registered return URL.
+apple_web_client_id = ""
+apple_web_redirect_uri = ""
+apple_issuer = "https://appleid.apple.com"
+apple_jwks_url = "https://appleid.apple.com/auth/keys"
+apple_token_url = "https://appleid.apple.com/auth/token"
+apple_revoke_url = "https://appleid.apple.com/auth/revoke"
+# For revoking Apple grants on account deletion (Apple requires it): the team id, the
+# Sign in with Apple key's id, and the key (.p8 PEM) from the environment
+# (WB_IDENTITY__APPLE_PRIVATE_KEY, "\n" escapes allowed) or a mounted file. Without them,
+# sign-in works and revocation is skipped.
+apple_team_id = ""
+apple_key_id = ""
+apple_private_key = ""
+apple_private_key_file = ""
+# The ID token must carry a nonce from POST /api/v1/auth/nonce, valid this long.
+require_nonce = true
+nonce_ttl_secs = 600
+# Leeway for exp / iat.
+clock_skew_secs = 60
+# Signing keys are cached for the provider's max-age within these bounds; an unknown key
+# id refetches at most this often.
+jwks_cache_min_secs = 300
+jwks_cache_max_secs = 86400
+jwks_refetch_min_secs = 60
+# Outbound calls (JWKS, Apple token / revoke).
+http_timeout_ms = 5000
+# Device credentials kept per account (one per signed-in device).
+max_device_secrets = 10
+max_id_token_bytes = 4096
+
+[cloud_save]
+# N11: GET/PUT /api/v1/save, one JSON document per account (no old revisions kept).
+enabled = true
+# The largest document; also the per-account disk cap.
+max_bytes = 65536
+# Writes per account, on top of the account limit.
+writes_per_hour = 120
+writes_burst = 30

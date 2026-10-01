@@ -41,6 +41,10 @@ pub struct Profile {
     /// When the next rename is allowed; `null` = now.
     pub next_rename_at: Option<i64>,
     pub linked: Linked,
+    /// N11: the linked Apple / Google identities (masked email hints), filled by
+    /// `profile_with_identities`.
+    #[serde(default)]
+    pub identities: Vec<crate::identity::store::IdentityInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +74,22 @@ impl Account {
                 apple: self.apple_linked,
                 google: self.google_linked,
             },
+            identities: Vec::new(),
         }
+    }
+
+    /// The profile with its linked identities (one more indexed read).
+    pub async fn profile_with_identities(
+        &self,
+        db: impl sqlx::SqliteExecutor<'_>,
+        now: i64,
+        cooldown: i64,
+    ) -> sqlx::Result<Profile> {
+        let mut p = self.profile(now, cooldown);
+        if self.apple_linked || self.google_linked {
+            p.identities = crate::identity::store::identities(db, self.id).await?;
+        }
+        Ok(p)
     }
 }
 
@@ -270,6 +289,18 @@ pub struct DeleteReport {
     /// N9.1: friendships, blocks, the crew membership (and what happened to the crew),
     /// reports kept with the account's side nulled.
     pub social: crate::social::SocialDeleteReport,
+    /// N11: the cloud save, the linked identities and the extra device credentials.
+    pub cloud_saves: u64,
+    pub identity_links: u64,
+    pub device_secrets: u64,
+}
+
+/// What an account deletion returns: the counts, and the Apple grant to revoke after it
+/// (N11; the caller holds the HTTP client).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Deleted {
+    pub report: DeleteReport,
+    pub apple_grant: Option<crate::identity::store::AppleGrant>,
 }
 
 /// Deletes an account and everything that belongs to it, in one transaction, and
@@ -286,8 +317,10 @@ pub struct DeleteReport {
 ///   account's side (reporter or target) set to NULL;
 /// - the `accounts` row.
 ///
-/// Still to come: Apple token revocation (MP-D2): call Apple's revoke endpoint before
-/// deleting when `apple_sub` is set.
+/// N11: the cloud save, `identity_links` and `device_secrets` go too. Apple revocation:
+/// `delete_with_grant` returns the stored Apple grant (read in the same transaction) so the
+/// caller can revoke it after the commit (`Identity::revoke_apple`); `DELETE /account`
+/// does.
 pub async fn delete(
     db: &SqlitePool,
     boards: &crate::config::LeaderboardsConfig,
@@ -295,7 +328,31 @@ pub async fn delete(
     actor: &str,
     now: i64,
 ) -> anyhow::Result<DeleteReport> {
+    Ok(delete_with_grant(db, boards, id, actor, now).await?.report)
+}
+
+/// `delete`, also returning the Apple grant to revoke.
+pub async fn delete_with_grant(
+    db: &SqlitePool,
+    boards: &crate::config::LeaderboardsConfig,
+    id: i64,
+    actor: &str,
+    now: i64,
+) -> anyhow::Result<Deleted> {
     let mut tx = db.begin_with("BEGIN IMMEDIATE").await?;
+    let apple_grant = crate::identity::store::apple_grant(&mut *tx, id).await?;
+    let cloud_saves = sqlx::query!("DELETE FROM cloud_saves WHERE account_id = ?", id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let identity_links = sqlx::query!("DELETE FROM identity_links WHERE account_id = ?", id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    let device_secrets = sqlx::query!("DELETE FROM device_secrets WHERE account_id = ?", id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     let refresh_tokens = sqlx::query!("DELETE FROM refresh_tokens WHERE account_id = ?", id)
         .execute(&mut *tx)
         .await?
@@ -334,6 +391,9 @@ pub async fn delete(
         leaderboard_entries,
         replays,
         social,
+        cloud_saves,
+        identity_links,
+        device_secrets,
     };
     if accounts == 1 {
         crate::db::admin_log(
@@ -345,7 +405,8 @@ pub async fn delete(
                 "refresh_tokens={refresh_tokens} runs={runs} \
                  leaderboard_entries={leaderboard_entries} replays={replays} \
                  friends={} blocks={} crew_memberships={} crew_transferred={} \
-                 crew_disbanded={} reports_kept={}",
+                 crew_disbanded={} reports_kept={} cloud_saves={cloud_saves} \
+                 identity_links={identity_links} device_secrets={device_secrets}",
                 social.friends,
                 social.blocks,
                 social.crew_memberships,
@@ -360,7 +421,10 @@ pub async fn delete(
     for path in &replay_files {
         crate::leaderboards::remove_replay_file(path).await;
     }
-    Ok(report)
+    Ok(Deleted {
+        report,
+        apple_grant: apple_grant.filter(|_| accounts == 1),
+    })
 }
 
 /// `last_seen = now` (sign-in and refresh).

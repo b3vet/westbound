@@ -25,6 +25,7 @@ For the owner running `westbound-server` on Coolify. The technical reference is 
 | `WB_LOG__FORMAT` | `json` (the image's default) | Structured logs |
 | `WB_BACKUP__UPLOAD_COMMAND` | optional | Off-site copy after each nightly backup (below) |
 | `WB_REPLAYS__WORKER_ENABLED` | `false` | N8.3: the verifier resource runs the replay queue, never the server (see "Replay verification") |
+| `WB_IDENTITY__GOOGLE_CLIENT_IDS`, `WB_IDENTITY__APPLE_*` | see "Sign in with Apple / Google" | N11: turn the providers on (off until set; cloud save needs one of them) |
 
 ## Deploy, update, roll back
 
@@ -292,6 +293,68 @@ What to watch (SERVER.md → "Operations (N10.2) → Metrics added" has the full
    }
    ```
 3. **Alerts:** `westbound-server/deploy/alerts.example.yml` has Prometheus rules for the table above (server down, errors, 5xx, room tick p99, database latency, failed backups, memory, near the connection cap, replay backlog). Grafana Cloud imports them.
+
+## Sign in with Apple / Google
+
+N11. Players can sign in with Apple or Google on the account screen (pause → SETTINGS → ACCOUNT, or the title's profile chip); that is what lets their progress move between devices (cloud save). Everything is built and tested; **adding the credentials below is the only step left**. Until a provider's client ids are set, its button says NOT SET UP and the server answers `501 provider_not_enabled`, exactly as before. Reference: SERVER.md → "Sign in with Apple / Google", "Cloud save"; the client: NET_CLIENT.md → "Sign in with Apple / Google"; the merge rules: SAVE.md → "Cloud sync".
+
+**What it costs.** Google sign-in is free (no Google Play developer account needed for the web). Apple needs the paid Apple Developer Program membership (99 USD a year; you will have it for TestFlight anyway). Cloud save storage on the VPS: one JSON document per player, a few KB (capped at 64 KB, old versions not kept), in the same database, so it is in the nightly backups automatically.
+
+**Which builds get what.** The web build (`https://b3vet.github.io/westbound/`) gets both providers as soon as they are configured: the page loads Google's or Apple's script only then. iOS and Android need small native plugins that are not written yet (NET_CLIENT.md → "Native plugins"); until then those builds show NOT IN THIS BUILD.
+
+### Google (web, free)
+
+1. Open <https://console.cloud.google.com/>, sign in, and create a project (top bar → project picker → **New project**, e.g. `Westbound`).
+2. **APIs & Services → OAuth consent screen** (newer consoles call it **Google Auth Platform → Branding / Audience**):
+    - User type **External**; app name `Westbound`; your support email; developer contact email.
+    - **Authorized domains:** `b3vet.github.io` (the web build) and `sipsakrandevu.com` (the server).
+    - **Scopes:** none to add (Sign in with Google only uses `openid` and `email`, which need no review). Leave the logo empty: a logo triggers Google's brand verification.
+    - **Audience / Publishing status:** press **Publish app** (In production). In "Testing" only listed test users can sign in.
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID:**
+    - Application type **Web application**, name `Westbound web`.
+    - **Authorized JavaScript origins:** `https://b3vet.github.io`. For local testing also `http://localhost` and `http://localhost:8000` (Google allows plain http only for localhost).
+    - **Authorized redirect URIs:** none (the button uses a popup).
+    - Create, then copy the **Client ID** (`1234567890-abc….apps.googleusercontent.com`; the client *secret* is not used).
+4. In Coolify → the server resource → **Environment Variables**: `WB_IDENTITY__GOOGLE_CLIENT_IDS` = that client id. Redeploy.
+5. Check: `curl https://westbound.sipsakrandevu.com/api/v1/auth/providers` shows `"google":{"enabled":true,"client_id":"…"}`; on the web build, ACCOUNT → SIGN IN WITH GOOGLE opens a sheet with Google's button.
+6. **Later (native):** an **iOS** OAuth client (bundle id `com.sipsakrandevu.westbound`) and an **Android** one (package + the signing certificate's SHA-1). Add the iOS client id to the list, comma-separated: `WB_IDENTITY__GOOGLE_CLIENT_IDS=<web id>,<ios id>`. Android's Credential Manager asks for tokens issued to the *web* client id, so the web id covers it.
+
+### Apple (paid membership)
+
+All in <https://developer.apple.com/account> → **Certificates, Identifiers & Profiles**:
+
+1. **Identifiers → App IDs → +** (if the app's App ID does not exist yet): type App, bundle id `com.sipsakrandevu.westbound` (the iOS app's; must match `deeplinks.apple_app_ids`). Under **Capabilities** tick **Sign in with Apple** (Enable as a primary App ID). Save.
+2. **Identifiers → Services IDs → +**: description `Westbound web`, identifier `com.sipsakrandevu.westbound.web`. Save, open it, tick **Sign in with Apple → Configure**:
+    - **Primary App ID:** the App ID above.
+    - **Domains and Subdomains:** `b3vet.github.io`.
+    - **Return URLs:** `https://b3vet.github.io/westbound/` (exactly the web build's URL, https). The web uses a popup, but Apple requires one.
+    - If the portal asks to **verify the domain** (older accounts): it wants `https://b3vet.github.io/.well-known/apple-developer-domain-association.txt`, which a GitHub Pages *project* site cannot serve (that path belongs to a `b3vet.github.io` user-site repo). Either create that repo with the file, or move the web build to a domain you control. Current Apple accounts no longer ask for this for Sign in with Apple.
+3. **Keys → +**: name `Westbound Sign in with Apple`, tick **Sign in with Apple → Configure** → primary App ID = the one above. Register, then **Download** the `.p8` file (only possible once; keep it with your other secrets). Note the **Key ID** (10 characters) shown with it.
+4. Your **Team ID**: **Membership details** (10 characters, also in the top-right corner of the portal).
+5. Coolify → Environment Variables (mark the key **secret**):
+
+| Variable | Value |
+| --- | --- |
+| `WB_IDENTITY__APPLE_CLIENT_IDS` | `com.sipsakrandevu.westbound.web,com.sipsakrandevu.westbound` (the Services ID for the web, the bundle id for iOS) |
+| `WB_IDENTITY__APPLE_WEB_REDIRECT_URI` | `https://b3vet.github.io/westbound/` |
+| `WB_IDENTITY__APPLE_TEAM_ID` | the Team ID |
+| `WB_IDENTITY__APPLE_KEY_ID` | the Key ID |
+| `WB_IDENTITY__APPLE_PRIVATE_KEY` | the whole `.p8` file (`-----BEGIN PRIVATE KEY-----` … `-----END PRIVATE KEY-----`); if Coolify keeps only one line, write the line breaks as `\n`. Or put the file on the volume (e.g. `/data/secrets/AuthKey_<KEYID>.p8`, readable by uid 65532) and set `WB_IDENTITY__APPLE_PRIVATE_KEY_FILE` to its path instead |
+
+6. Redeploy. The server refuses to start with a bad key or ids (the log names the setting), so a typo cannot go live silently.
+7. Check: `/api/v1/auth/providers` shows `"apple":{"enabled":true,…}`; on the web build SIGN IN WITH APPLE opens Apple's popup.
+
+**Why the key.** Apple requires apps that offer account deletion to **revoke** the user's Sign in with Apple grant when the account is deleted. With the key, the server exchanges each Apple sign-in's authorization code for a refresh token (stored sealed, never in the clear) and revokes it on DELETE ACCOUNT and on unlink. Without the key, Apple sign-in still works but nothing can be revoked (logged as `Apple grant not revoked: no Apple key configured`); set the key before the App Store review.
+
+### How to test it
+
+- **Before going live:** the server's tests sign tokens with test keys against a fake provider on loopback (`cargo test -p server --test identity`); the client's run against a fake server (`tools/test.sh --filter=identity`, `--filter=cloud_save`).
+- **Live, web:** open the web build in a private window → ACCOUNT → SIGN IN WITH GOOGLE: the account stays the same, the button turns into SIGNED IN WITH GOOGLE with your masked address, and the cloud line says SYNCED. In another browser (or after clearing site data), SIGN IN WITH GOOGLE again: the chooser shows both accounts; pick one and the progress follows.
+- `admin player <id>` shows the account; the database has `identity_links` (masked email hints only) and `cloud_saves` rows.
+
+### Turning a provider off
+
+Remove its `WB_IDENTITY__…_CLIENT_IDS` and redeploy: its button says NOT SET UP, signed-in players keep their sessions (device credentials), and nobody can sign in with it until it is back.
 
 ## Rate limits (what players can hit)
 
