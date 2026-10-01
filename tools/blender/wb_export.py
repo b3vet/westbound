@@ -139,6 +139,8 @@ def export_car(car_id, out_dir=None, force=False, lod1=None, source=None, cardef
     write_godot_import(glb)
     write_json(os.path.join(out_dir, car_id + ".car.json"), {
         "root_name": scaffold.root_name(car_id), "modular": True, "forward_axis": "-Z",
+        # Smooth bodies: keep the file's split normals (CarModularImport reads this).
+        "flat_shading": not any(p.use_smooth for o in col.all_objects if o.type == "MESH" for p in o.data.polygons),
         "source": source or "in-house, Blender: art/blender/cars/%s.blend (tools/blender/cars/%s.py)" % (car_id, car_id),
     })
     if lod1:

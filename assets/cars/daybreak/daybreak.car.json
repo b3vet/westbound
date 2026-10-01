@@ -2,5 +2,6 @@
 	"root_name": "Car_Daybreak",
 	"modular": true,
 	"forward_axis": "-Z",
+	"flat_shading": false,
 	"source": "in-house, Blender: art/blender/cars/daybreak.blend (tools/blender/cars/daybreak.py)"
 }

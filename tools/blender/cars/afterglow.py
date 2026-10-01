@@ -26,30 +26,32 @@ from wb_mesh import v_scale, v_sub  # noqa: E402
 S_FLOOR, S_TUCK, S_SILL, S_SIDE, S_UPPER, S_WINDOW, S_PILLAR, S_TOP_OUT, S_TOP_MID, S_TOP_IN = range(10)
 
 
-class ProfileLoft(kit.Loft):
-    """kit.Loft with each strip's outward taken from the section's own edge normal (the
-    half-section runs counter-clockwise in x-z, so outward = (dz, -dx)). The kit's
-    heuristic (x, 0, z - 0.6) flips top faces below 0.6 m (this nose deck) and valley
-    walls that face the centre (the pods' inner sides). No end caps: this car's sections
-    are concave, see Afterglow.fan_caps()."""
+class FanCapLoft(kit.Loft):
+    """The kit's smooth loft, with its end caps as fans from an inner point: this car's
+    sections (pods, valley, canopy) are concave, so a single n-gon cap triangulates
+    across the valley. Caps follow the smooth section curve exactly."""
+
+    CAP_CENTERS = ((0.50, 0.52), (0.48, 0.30))   # (x, z) inside the tail / nose section
 
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
+        self.fan_caps = self.caps
         self.caps = (None, None)
 
     def build(self, b, extra=None):
-        st = self.stations(extra)
-        n = len(st[0][1])
-        for (ya, a, arch0), (yb, c, arch1) in zip(st, st[1:]):
-            arch = arch0 and arch1
-            for j in range(n - 1):
-                m = self.mat_fn(ya, yb, j, arch)
-                if m is None:
-                    continue
-                dx = a[j + 1][0] - a[j][0] + c[j + 1][0] - c[j][0]
-                dz = a[j + 1][2] - a[j][2] + c[j + 1][2] - c[j][2]
-                out = (dz, 0.0, -dx) if abs(dx) + abs(dz) > 1e-9 else None
-                b.face([a[j], c[j], c[j + 1], a[j + 1]], m, out)
+        st = super().build(b, extra)
+        if not any(self.fan_caps):
+            return st
+        subs = self._subs(st)
+        for (y, pts, _), facing, (cx, cz), mat in ((st[0], -1, self.CAP_CENTERS[0], self.fan_caps[0]),
+                                                   (st[-1], 1, self.CAP_CENTERS[1], self.fan_caps[1])):
+            if not mat:
+                continue
+            curve = self._curve(pts, subs) if self.smooth else pts
+            ring = list(curve) + [(0.0, curve[-1][1], curve[-1][2])]
+            c = (cx, curve[0][1], cz)
+            for p, q in zip(ring, ring[1:] + ring[:1]):
+                b.face([c, p, q], mat, (0, facing, 0))
         return st
 
 
@@ -69,13 +71,16 @@ class Afterglow(kit.LoftCar):
     FLOOR_Z = 0.12
     NOSE_Y = 2.225
     TAIL_Y = -2.575
+    # Creases along the car: floor edge, rocker, door bottom and the valley at the canopy
+    # base; the pod tops (belt, roofSide) stay round.
+    SHARP_RAILS = (1, 2, 3, 7)
     # Rails: floorC floorE rocker lowSide shoulder belt roofSide pillarIn roofMid crown roofC.
     # belt/roofSide = the fender pod tops, pillarIn = the valley at the canopy base,
     # roofMid..roofC = canopy (cabin) or the nose / engine deck.
     KEYS = [
-        (-2.575, [(0, .34, .04), (.55, .34, .04), (.82, .35, .02), (.90, .40), (.94, .62), (.89, .85), (.76, .87),
-                  (.62, .72), (.40, .715), (.20, .715), (0, .715)]),
-        (-2.40, [(0, .28), (.55, .28), (.86, .29), (.95, .36), (.975, .64), (.92, .86), (.77, .88), (.62, .74),
+        (-2.575, [(0, .34, .04), (.52, .34, .04), (.76, .35, .02), (.82, .41), (.86, .62), (.83, .80), (.73, .84),
+                  (.60, .72), (.40, .715), (.20, .715), (0, .715)]),
+        (-2.40, [(0, .28), (.55, .28), (.84, .29), (.92, .36), (.95, .64), (.905, .855), (.765, .88), (.62, .74),
                  (.40, .73), (.20, .735), (0, .74)]),
         (-1.95, [(0, .16), (.55, .16), (.87, .15), (.96, .24), (.99, .72), (.93, .84), (.77, .85), (.62, .76),
                  (.40, .765), (.20, .77), (0, .775)]),
@@ -99,12 +104,12 @@ class Afterglow(kit.LoftCar):
     REGIONS = {"windscreen": (0.35, 1.20), "canopy_side": (-0.40, 1.20), "roof": (-0.45, 0.35),
                "side_glass": (0.0, 0.0), "rear_glass": (0.0, 0.0)}
     MIRROR = (0.78, 0.98, 0.78)
-    EYE = (-0.33, 0.05, 0.90)
+    EYE = (-0.33, 0.05, 0.81)
     CABIN = (-0.55, 1.20)
-    DASH = {"y_front": 1.15, "y_rear": 0.72, "top": 0.74, "bottom": 0.50}
+    DASH = {"y_front": 1.15, "y_rear": 0.72, "top": 0.665, "bottom": 0.44}
     STEER = {"r": 0.17, "thick": 0.024, "spokes": 2, "tilt": -0.30, "sides": 20, "flat": 0.66,
-             "pos": (-0.33, 0.64, 0.56)}
-    SEAT = {"y": -0.15, "cushion_z": 0.24, "back_top": 0.80, "w": 0.46}
+             "pos": (-0.33, 0.64, 0.50)}
+    SEAT = {"y": -0.15, "cushion_z": 0.18, "back_top": 0.74, "w": 0.46}
     INTERIOR = dict(kit.LoftCar.INTERIOR, liner="ink", door="ink", floor="ink", dash_top="ink", dash_face="asphalt",
                     seat="asphalt", seat_accent="brand_orange", wheel="ink", spoke="steel_dark", hub="ink",
                     accent="brand_orange", console="ink", strip="screen")
@@ -116,7 +121,7 @@ class Afterglow(kit.LoftCar):
     BAR_H = 0.04
     BAR_GAP = 0.02
     HEAD_Z = 0.43
-    C_X = (0.50, 0.84)
+    C_X = (0.44, 0.76)
     C_Z = (0.50, 0.70)
     C_T = 0.032
 
@@ -124,7 +129,7 @@ class Afterglow(kit.LoftCar):
 
     def build(self):
         orig = kit.Loft
-        kit.Loft = ProfileLoft      # body, inner cabin shell and LOD1 all loft through it
+        kit.Loft = FanCapLoft       # body and LOD1 get fan caps (the cabin shell has none)
         try:
             return super().build()
         finally:
@@ -144,13 +149,60 @@ class Afterglow(kit.LoftCar):
             return "glass"
         return "paint"
 
-    def fan_caps(self, b):
-        st = self.main_loft().stations(self.arch_ys())
-        for (y, pts, _), facing, (cx, cz) in ((st[0], -1, (0.50, 0.52)), (st[-1], 1, (0.50, 0.30))):
-            ring = list(pts) + [(0.0, pts[-1][1], pts[-1][2])]
-            c = (cx, y, cz)
-            for a, b_ in zip(ring, ring[1:] + ring[:1]):
-                b.face([c, a, b_], "paint_shade", (0, facing, 0))
+    # ---------------------------------------------------------------- the smooth surface
+    # Details sit on the body's actual (smooth) section curve, not on straight lines
+    # between rails (the kit's side_x), or they sink into the bulges.
+
+    def _section(self, y):
+        """The smooth section at y: (curve points, index of each rail in it)."""
+        if not hasattr(self, "_lo_subs"):
+            lo = self.main_loft()
+            self._lo = lo
+            self._lo_subs = lo._subs(lo.stations())
+        lo, subs = self._lo, self._lo_subs
+        rails, _ = self.arch_rails(y, lo.station(y))
+        pts = [(x, y + dy, z) for (x, z, dy) in rails]
+        curve = lo._curve(pts, subs)
+        idx = [sum(subs[:j]) for j in range(len(pts))]
+        return curve, idx
+
+    def side_x(self, y, z):
+        """Body side x at height z (on the curve from the door bottom to the belt)."""
+        c, idx = self._section(y)
+        seg = c[idx[3]:idx[5] + 1]
+        for p, q in zip(seg, seg[1:]):
+            lo_, hi_ = sorted((p[2], q[2]))
+            if lo_ - 1e-9 <= z <= hi_ + 1e-9 and hi_ > lo_:
+                t = (z - p[2]) / (q[2] - p[2])
+                return p[0] + (q[0] - p[0]) * t
+        return max(seg, key=lambda p: -abs(p[2] - z))[0]
+
+    def pod_top_z(self, y, x):
+        """Pod top height at x (on the curve from the belt to the canopy-base valley)."""
+        c, idx = self._section(y)
+        seg = c[idx[4]:idx[7] + 1]
+        best = None
+        for p, q in zip(seg, seg[1:]):
+            lo_, hi_ = sorted((p[0], q[0]))
+            if lo_ - 1e-9 <= x <= hi_ + 1e-9 and hi_ > lo_:
+                t = (x - p[0]) / (q[0] - p[0])
+                z = p[2] + (q[2] - p[2]) * t
+                best = z if best is None else max(best, z)
+        return best if best is not None else max(p[2] for p in seg)
+
+    def surface_patch(self, b, ys, zs, mat, off=0.005, group="patch"):
+        """A dark panel on the body side over the grid ys x zs(y) (zs: [(z0, z1)] per y)."""
+        n = 4
+        grid = []
+        for y, (z0, z1) in zip(ys, zs):
+            col = []
+            for k in range(n + 1):
+                z = z0 + (z1 - z0) * k / n
+                col.append((self.side_x(y, z) + off, y, z))
+            grid.append(col)
+        for ca, cb in zip(grid, grid[1:]):
+            for k in range(n):
+                b.face([ca[k], ca[k + 1], cb[k + 1], cb[k]], mat, (1, 0, 0), smooth=True, group=group)
 
     def door_mirror(self, b):
         """Camera-pod mirrors on stalks from the front fender pods (inside the body width)."""
@@ -166,7 +218,6 @@ class Afterglow(kit.LoftCar):
 
     def details(self, b):
         ny, ty = self.NOSE_Y, self.TAIL_Y
-        self.fan_caps(b)
         # Split splitter: a dark plate ahead of the nose, the halves apart at the centre.
         b.box((0.49, ny - 0.10, 0.115), (0.78, 0.30, 0.03), "trim_ink")
         # Dark intake mouth between the pods, under the nose.
@@ -182,14 +233,14 @@ class Afterglow(kit.LoftCar):
         for i in range(5):
             y = self.axles[0] + 0.20 - i * 0.09
             x0, x1 = 0.79, 0.90
-            z0, z1 = self.pod_top_z(y, x0) + 0.004, self.pod_top_z(y, x1) + 0.004
-            b.face([(x0, y, z0), (x1, y, z1), (x1, y - 0.045, z1), (x0, y - 0.045, z0)], "trim_ink", (0, 0, 1))
+            y1 = y - 0.045
+            b.face([(x0, y, self.pod_top_z(y, x0) + 0.004), (x1, y, self.pod_top_z(y, x1) + 0.004),
+                    (x1, y1, self.pod_top_z(y1, x1) + 0.004), (x0, y1, self.pod_top_z(y1, x0) + 0.004)], "trim_ink",
+                   (0, 0, 1))
         # Side intake behind the door (mid-engine air), a dark scoop face.
-        for (ya, yb_) in ((-0.50, -1.02),):
-            za, zb = 0.36, 0.58
-            xa, xb = self.side_x(ya, za) + 0.004, self.side_x(yb_, zb) + 0.004
-            b.face([(xa, ya, za), (self.side_x(ya, zb) + 0.004, ya, zb), (xb, yb_ + 0.12, zb),
-                    (self.side_x(yb_, za) + 0.004, yb_, za)], "trim_ink", (1, 0, 0))
+        ys = [-0.50 - 0.52 * i / 6 for i in range(7)]
+        zs = [(0.36, 0.40 + 0.18 * min(1.0, (-0.50 - y) / 0.36)) for y in ys]
+        self.surface_patch(b, ys, zs, "trim_ink", group="intake")
         self.rear_skirt(b)
         self.fin_and_wing(b)
         # Diffuser: dark lower tail panel and fins under the ramp.
@@ -210,30 +261,33 @@ class Afterglow(kit.LoftCar):
         b.extend(pipe.transformed(lambda p: (p[1], p[0], p[2])), (0.16, ty - 0.02, 0.40))
 
     def rear_skirt(self, b):
-        """A paint panel over the rear wheel opening down to SKIRT_Z, standing just outside the body side."""
+        """A paint panel over the rear wheel opening down to SKIRT_Z, a hair outside the
+        body side: smooth strips that follow the side's curve, a dark inner face."""
         ay = self.axles[1]
         n = 12
-        top = []
+        cols = []
         for i in range(n + 1):
             y = ay - self.ARCH_R + 2 * self.ARCH_R * i / n
             z, _ = self.arch_open(y)
             z = min(z if z is not None else self.SKIRT_Z, self.station(y)[4][1] - 0.05) + 0.02
-            top.append((y, max(z, self.SKIRT_Z + 0.02)))
-        # the outer skin follows the body side, a hair proud
-        xo = [self.station(y)[3][0] + 0.022 for y, _ in top]
-        outer = [(xo[i], y, z) for i, (y, z) in enumerate(top)]
-        y0, y1 = top[0][0], top[-1][0]
-        outer_poly = [(xo[0], y0, self.SKIRT_Z)] + outer + [(xo[-1], y1, self.SKIRT_Z)]
-        b.face(outer_poly, "paint", (1, 0, 0))
-        inner_poly = [(p[0] - 0.025, p[1], p[2]) for p in reversed(outer_poly)]
-        b.face(inner_poly, "trim_ink", (-1, 0, 0))
-        b.face([(xo[0] - 0.025, y0, self.SKIRT_Z), (xo[-1] - 0.025, y1, self.SKIRT_Z), (xo[-1], y1, self.SKIRT_Z),
-                (xo[0], y0, self.SKIRT_Z)], "paint_dark", (0, 0, -1))
-        for (x, y, z), s in ((outer_poly[0], -1), (outer_poly[-1], 1)):
-            b.face([(x - 0.025, y, self.SKIRT_Z), (x, y, self.SKIRT_Z), (x, y, z + 0.08), (x - 0.025, y, z + 0.08)],
-                   "paint_dark", (0, s, 0))
+            z = max(z, self.SKIRT_Z + 0.02)
+            cols.append((y, z))
+        th = 0.025
+        for (ya, za), (yb, zb) in zip(cols, cols[1:]):
+            xa = [self.side_x(ya, zz) + 0.012 for zz in (self.SKIRT_Z, za)]
+            xb = [self.side_x(yb, zz) + 0.012 for zz in (self.SKIRT_Z, zb)]
+            b.face([(xa[0], ya, self.SKIRT_Z), (xb[0], yb, self.SKIRT_Z), (xb[1], yb, zb), (xa[1], ya, za)], "paint",
+                   (1, 0, 0), smooth=True, group="skirt")
+            b.face([(xa[1] - th, ya, za), (xb[1] - th, yb, zb), (xb[0] - th, yb, self.SKIRT_Z),
+                    (xa[0] - th, ya, self.SKIRT_Z)], "trim_ink", (-1, 0, 0))
+            b.face([(xa[0] - th, ya, self.SKIRT_Z), (xb[0] - th, yb, self.SKIRT_Z), (xb[0], yb, self.SKIRT_Z),
+                    (xa[0], ya, self.SKIRT_Z)], "paint_dark", (0, 0, -1))
+        for (y, z), sgn in ((cols[0], -1), (cols[-1], 1)):
+            x0, x1 = self.side_x(y, self.SKIRT_Z) + 0.012, self.side_x(y, z) + 0.012
+            b.face([(x0 - th, y, self.SKIRT_Z), (x0, y, self.SKIRT_Z), (x1, y, z), (x1 - th, y, z)], "paint_dark",
+                   (0, sgn, 0))
 
-    FIN_T = 0.013   # half thickness of the shark fin
+    FIN_T = 0.018   # half thickness of the shark fin
 
     def fin_and_wing(self, b):
         """Right half of the shark fin (its +X face and half its top) and of the wing."""
@@ -266,7 +320,6 @@ class Afterglow(kit.LoftCar):
 
     def lod1_extras(self, b):
         self.fin_and_wing(b)
-        self.fan_caps(b)
         ny = self.NOSE_Y
         b.box((0.49, ny - 0.10, 0.115), (0.78, 0.30, 0.03), "trim_ink")
 

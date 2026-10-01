@@ -22,18 +22,48 @@ import wb_mesh  # noqa: E402
 from wb_carkit import MeshBuilder, disc_y  # noqa: E402
 
 
-def tube(b, p0, p1, hw, mat):
-    """A square tube (half-width hw) from p0 to p1."""
+def tube(b, p0, p1, hw, mat, sides=6):
+    """A round (smooth-shaded, `sides`-sided) tube of radius hw from p0 to p1."""
     d = wb_mesh.v_norm(wb_mesh.v_sub(p1, p0))
     ref = (0.0, 0.0, 1.0) if abs(d[2]) < 0.9 else (1.0, 0.0, 0.0)
     u = wb_mesh.v_norm(wb_mesh.v_cross(d, ref))
     v = wb_mesh.v_cross(d, u)
-    offs = [wb_mesh.v_add(wb_mesh.v_scale(u, hw * su), wb_mesh.v_scale(v, hw * sv))
-            for su, sv in ((1, 1), (-1, 1), (-1, -1), (1, -1))]
-    for i in range(4):
-        a, c = offs[i], offs[(i + 1) % 4]
+    offs = [wb_mesh.v_add(wb_mesh.v_scale(u, hw * math.cos(2 * math.pi * i / sides)),
+                          wb_mesh.v_scale(v, hw * math.sin(2 * math.pi * i / sides))) for i in range(sides)]
+    for i in range(sides):
+        a, c = offs[i], offs[(i + 1) % sides]
         out = wb_mesh.v_add(a, c)
-        b.face([wb_mesh.v_add(p0, a), wb_mesh.v_add(p0, c), wb_mesh.v_add(p1, c), wb_mesh.v_add(p1, a)], mat, out)
+        b.face([wb_mesh.v_add(p0, a), wb_mesh.v_add(p0, c), wb_mesh.v_add(p1, c), wb_mesh.v_add(p1, a)], mat, out,
+               smooth=True, group="cage")
+
+
+def wrap_bar(b, path, z0, z1, depth, mat):
+    """A bumper bar following a plan-view `path` [(x, y)] on the right half (from the
+    centre line outward): a smooth outer face, flat top and bottom, `depth` thick
+    toward the car, an end cap at the outer end."""
+    n = len(path)
+    norms = []
+    for i in range(n):
+        a = path[max(0, i - 1)]
+        c = path[min(n - 1, i + 1)]
+        tx, ty = c[0] - a[0], c[1] - a[1]
+        ln = math.hypot(tx, ty)
+        nx, ny = ty / ln, -tx / ln
+        if nx * path[i][0] + ny * path[i][1] < 0:
+            nx, ny = -nx, -ny
+        norms.append((nx, ny))
+    outer = path
+    inner = [(p[0] - nm[0] * depth, p[1] - nm[1] * depth) for p, nm in zip(path, norms)]
+    for i in range(n - 1):
+        (ax, ay), (cx, cy) = outer[i], outer[i + 1]
+        (ix, iy), (jx, jy) = inner[i], inner[i + 1]
+        out = (norms[i][0] + norms[i + 1][0], norms[i][1] + norms[i + 1][1], 0.0)
+        b.face([(ax, ay, z0), (cx, cy, z0), (cx, cy, z1), (ax, ay, z1)], mat, out, smooth=True, group="bar")
+        b.face([(ax, ay, z1), (cx, cy, z1), (jx, jy, z1), (ix, iy, z1)], mat, (0, 0, 1))
+        b.face([(ax, ay, z0), (ix, iy, z0), (jx, jy, z0), (cx, cy, z0)], mat, (0, 0, -1))
+    (ex, ey), (fx, fy) = outer[-1], inner[-1]
+    tdir = (outer[-1][0] - outer[-2][0], outer[-1][1] - outer[-2][1], 0.0)
+    b.face([(ex, ey, z0), (fx, fy, z0), (fx, fy, z1), (ex, ey, z1)], mat, tdir)
 
 
 class KestrelRS(kit.LoftCar):
@@ -49,31 +79,40 @@ class KestrelRS(kit.LoftCar):
     ARCH_R = 0.38
     WELL_X = 0.62
     FLOOR_Z = 0.16
-    FLARE = 0.07
-    FLARE_REACH = 0.12
+    FLARE = 0.08
+    FLARE_REACH = 0.22
     NOSE_Y = 2.16
     TAIL_Y = -2.04
+    # Rails: floorC floorE rocker lowSide shoulder belt roofSide pillarIn roofMid crown roofC.
+    # Curved door sides (widest at the shoulder, tumblehome to the window line), a
+    # crowned roof with rounded edges, a crowned hood, and the nose and tail pulled in
+    # so the corners round off in plan view.
     KEYS = [
-        (-2.04, [(0, .30, .04), (.55, .30, .04), (.80, .32, .02), (.85, .40), (.86, .80), (.84, .92), (.77, .96),
-                 (.70, .965), (.35, .97), (.18, .97), (0, .97)]),
-        (-1.96, [(0, .24), (.57, .24), (.83, .26), (.87, .38), (.88, .80), (.855, .93), (.77, .975), (.70, .98),
-                 (.35, .985), (.18, .985), (0, .985)]),
-        (-1.50, [(0, .16), (.58, .16), (.83, .19), (.87, .34), (.88, .79), (.86, .915), (.73, 1.30), (.67, 1.32),
-                 (.35, 1.335), (.18, 1.34), (0, 1.34)]),
-        (0.15, [(0, .16), (.58, .16), (.83, .19), (.87, .34), (.88, .785), (.86, .905), (.72, 1.29), (.66, 1.31),
-                (.35, 1.325), (.18, 1.33), (0, 1.33)]),
-        (0.80, [(0, .16), (.58, .16), (.83, .19), (.87, .34), (.88, .78), (.86, .90), (.83, .91), (.76, .915),
-                (.35, .925), (.18, .93), (0, .93)]),
-        (0.88, [(0, .16), (.58, .16), (.83, .19), (.87, .34), (.88, .78), (.865, .895), (.80, .90), (.68, .902),
-                (.35, .905), (.18, .908), (0, .91)]),
-        (1.86, [(0, .18), (.58, .18), (.83, .20), (.87, .36), (.875, .765), (.86, .86), (.80, .865), (.68, .866),
-                (.35, .868), (.18, .87), (0, .87)]),
-        (2.08, [(0, .27), (.57, .27), (.81, .29), (.85, .40), (.86, .75), (.84, .85), (.78, .855), (.68, .856),
-                (.35, .858), (.18, .86), (0, .86)]),
-        (2.16, [(0, .33, -.04), (.55, .33, -.04), (.78, .34, -.02), (.82, .40), (.83, .74), (.81, .84), (.75, .845),
-                (.66, .848), (.35, .85), (.18, .85), (0, .85)]),
+        (-2.04, [(0, .30, .04), (.55, .30, .04), (.74, .32, .02), (.78, .40), (.80, .72), (.78, .88, .012),
+                 (.70, .925, .02), (.62, .935, .02), (.35, .943, .02), (.18, .946, .02), (0, .947, .02)]),
+        (-1.97, [(0, .24), (.57, .24), (.80, .26), (.835, .38), (.855, .72), (.835, .92), (.74, .975), (.66, .982),
+                 (.35, .988), (.18, .99), (0, .99)]),
+        (-1.55, [(0, .16), (.58, .16), (.83, .19), (.855, .34), (.88, .70), (.855, .91), (.725, 1.22), (.665, 1.26),
+                 (.38, 1.29), (.19, 1.30), (0, 1.302)]),
+        (-1.40, [(0, .16), (.58, .16), (.83, .19), (.855, .34), (.885, .70), (.855, .91), (.72, 1.255), (.66, 1.29),
+                 (.38, 1.325), (.19, 1.335), (0, 1.338)]),
+        (0.15, [(0, .16), (.58, .16), (.83, .19), (.855, .34), (.885, .70), (.855, .905), (.72, 1.25), (.66, 1.285),
+                (.38, 1.32), (.19, 1.33), (0, 1.333)]),
+        (0.80, [(0, .16), (.58, .16), (.83, .19), (.855, .34), (.885, .70), (.855, .90), (.82, .905), (.75, .91),
+                (.38, .925), (.19, .93), (0, .932)]),
+        (0.88, [(0, .16), (.58, .16), (.83, .19), (.855, .34), (.885, .70), (.858, .895), (.80, .90), (.68, .905),
+                (.38, .92), (.19, .927), (0, .929)]),
+        (1.86, [(0, .18), (.58, .18), (.83, .20), (.855, .36), (.88, .69), (.855, .86), (.79, .866), (.67, .872),
+                (.38, .887), (.19, .893), (0, .895)]),
+        (2.06, [(0, .25), (.57, .25), (.81, .27), (.84, .38), (.86, .69), (.84, .85), (.77, .856), (.66, .861),
+                (.37, .872), (.19, .876), (0, .877)]),
+        (2.12, [(0, .29), (.56, .29), (.78, .31), (.815, .39), (.835, .69), (.815, .842), (.75, .848), (.645, .852),
+                (.36, .862), (.185, .866), (0, .867)]),
+        (2.16, [(0, .33, -.04), (.55, .33, -.04), (.74, .34, -.02), (.78, .40), (.80, .69), (.78, .80, -.015),
+                (.72, .81, -.02), (.62, .815, -.02), (.35, .823, -.02), (.18, .826, -.02), (0, .827, -.02)]),
     ]
-    REGIONS = {"windscreen": (0.15, 0.80), "rear_glass": (-1.96, -1.50), "side_glass": (-1.30, 0.80),
+    CREASE_Y = (0.80,)
+    REGIONS = {"windscreen": (0.15, 0.80), "rear_glass": (-1.97, -1.55), "side_glass": (-1.30, 0.80),
                "b_pillar": (-0.42, -0.32)}
     MIRROR = (0.865, 0.66, 0.97)
     EYE = (-0.36, -0.30, 1.05)
@@ -86,16 +125,18 @@ class KestrelRS(kit.LoftCar):
 
     # Front and rear layout (right half; m).
     GRILLE_Z = (0.58, 0.76)
-    HEAD = (0.64, 0.67, 0.28, 0.12)          # x, z, w, h
+    GRILLE_X = 0.76
+    HEAD = (0.62, 0.67, 0.25, 0.12)          # x, z, w, h
     POD_Z = (0.45, 0.57)
     POD_X = 0.56
     POD_LAMPS = (0.15, 0.41)
     POD_Y = 0.09                             # pod depth ahead of the nose face
-    BLINK_F = (0.72, 0.50, 0.15, 0.08)
+    BLINK_F = (0.66, 0.50, 0.15, 0.08)
     TAIL_BAND_Z = (0.69, 0.87)
-    TAIL_LAMPS = (0.52, 0.72)
-    TAIL_R = 0.075
-    BLINK_R = (0.70, 0.52, 0.18, 0.08)
+    TAIL_X = 0.76
+    TAIL_LAMPS = (0.49, 0.67)
+    TAIL_R = 0.072
+    BLINK_R = (0.64, 0.52, 0.16, 0.08)
 
     def rim(self):
         return kit.star_rim(self.TIRE_W / 2 + 0.008, self.RIM_IN, spokes=8, spoke_w=(0.016, 0.012), face="trim_white",
@@ -105,8 +146,6 @@ class KestrelRS(kit.LoftCar):
         ym = (y0 + y1) / 2
         if j == kit.S_WINDOW and self.region("b_pillar", ym):
             return "paint"
-        if j == kit.S_SIDE and arch:
-            return "trim_asphalt"   # the bolted-on flare band over each opening
         return super().body_material(y0, y1, j, arch)
 
     # ---------------------------------------------------------------- details
@@ -115,7 +154,7 @@ class KestrelRS(kit.LoftCar):
         ny = self.NOSE_Y + 0.004
         gz0, gz1 = self.GRILLE_Z
         # Black grille band across the nose (grille + headlamp housings).
-        b.face([(0, ny, gz0), (0.80, ny, gz0), (0.80, ny, gz1), (0, ny, gz1)], "trim_ink", (0, 1, 0))
+        b.face([(0, ny, gz0), (self.GRILLE_X, ny, gz0), (self.GRILLE_X, ny, gz1), (0, ny, gz1)], "trim_ink", (0, 1, 0))
         # Light-pod bar: a black housing standing proud, four round trim lamps.
         pz0, pz1 = self.POD_Z
         py = self.NOSE_Y + self.POD_Y
@@ -129,35 +168,70 @@ class KestrelRS(kit.LoftCar):
                 for i in range(10):
                     k = (i + 1) % 10
                     b.face([ring[i], ring[k], inner[k], inner[i]], "trim_steel", (0, 1, 0))
-        # Chunky black bumper.
-        b.box((0.43, self.NOSE_Y + 0.02, 0.35), (0.86, 0.10, 0.14), "trim_asphalt", skip=("-x", "-y"))
+        # Chunky black bumper wrapping round the corners.
+        ny = self.NOSE_Y
+        wrap_bar(b, [(0.0, ny + 0.07), (0.50, ny + 0.07), (0.66, ny + 0.055), (0.77, ny + 0.01), (0.84, ny - 0.07),
+                     (0.875, ny - 0.18)], 0.28, 0.42, 0.10, "trim_asphalt")
 
     def _rear(self, b, lod=False):
         ty = self.TAIL_Y - 0.004
         tz0, tz1 = self.TAIL_BAND_Z
-        b.face([(0.84, ty, tz0), (0, ty, tz0), (0, ty, tz1), (0.84, ty, tz1)], "trim_ink", (0, -1, 0))
-        b.box((0.43, self.TAIL_Y - 0.03, 0.36), (0.86, 0.10, 0.16), "trim_asphalt", skip=("-x", "+y"))
+        b.face([(self.TAIL_X, ty, tz0), (0, ty, tz0), (0, ty, tz1), (self.TAIL_X, ty, tz1)], "trim_ink", (0, -1, 0))
+        t = self.TAIL_Y
+        wrap_bar(b, [(0.0, t - 0.07), (0.50, t - 0.07), (0.66, t - 0.055), (0.76, t - 0.01), (0.82, t + 0.07),
+                     (0.85, t + 0.17)], 0.28, 0.44, 0.10, "trim_asphalt")
         # Tall rear wing on the hatch: main plane, endplates, two struts.
         wy, wz = self.TAIL_Y + 0.13, 1.30
-        b.box((0.39, wy, wz), (0.78, 0.24, 0.045), "paint_shade", {"+z": "paint", "-z": "paint_dark"}, skip=("-x",))
-        b.box((0.786, wy - 0.01, wz), (0.012, 0.30, 0.15), "trim_ink")
+        b.box((0.38, wy, wz), (0.76, 0.24, 0.045), "paint_shade", {"+z": "paint", "-z": "paint_dark"}, skip=("-x",))
+        b.box((0.766, wy - 0.01, wz), (0.012, 0.30, 0.15), "trim_ink")
         if not lod:
             zb = 1.02
             b.box((0.45, wy + 0.02, (zb + wz) / 2), (0.04, 0.06, wz - zb), "trim_ink", skip=("-z", "+z"))
 
+    def arch_lips(self, b):
+        """A dark lip round each opening: the edge of the bolted-on flare, standing on
+        the swollen (smooth) fender."""
+        n = 16
+        for ay in self.axles:
+            inner, outer = [], []
+            for i in range(n + 1):
+                a = math.pi * i / n
+                ca, sa = math.cos(a), math.sin(a)
+                for rad, lst in ((self.ARCH_R + 0.004, inner), (self.ARCH_R + 0.06, outer)):
+                    y, z = ay + rad * ca, self.WHEEL_R + rad * sa
+                    lst.append((self.side_x(y, z) + 0.014, y, z))
+            for i in range(n):
+                b.face([inner[i], inner[i + 1], outer[i + 1], outer[i]], "trim_asphalt", (1, 0, 0), smooth=True,
+                       group="arch_lip")
+            # The lip's edge facing the opening (its thickness).
+            for i in range(n):
+                p0, p1 = inner[i], inner[i + 1]
+                q0, q1 = (p0[0] - 0.05, p0[1], p0[2]), (p1[0] - 0.05, p1[1], p1[2])
+                mid = ((p0[1] + p1[1]) / 2 - ay, (p0[2] + p1[2]) / 2 - self.WHEEL_R)
+                b.face([p0, q0, q1, p1], "trim_asphalt", (0, -mid[0], -mid[1]))
+
+    def surface_z(self, y, x):
+        """Top surface height at (x, y): along the top rails (hood and roof)."""
+        r = self.station(y)
+        pts = sorted((r[i][0], r[i][1]) for i in range(kit.R_ROOFSIDE, 11))
+        for (x0, z0), (x1, z1) in zip(pts, pts[1:]):
+            if x0 <= x <= x1:
+                return z0 + (z1 - z0) * ((x - x0) / (x1 - x0) if x1 > x0 else 0.0)
+        return pts[-1][1]
+
     def details(self, b):
         self._front(b)
         self._rear(b)
+        self.arch_lips(b)
         # Mud flaps behind every wheel.
         for ay in self.axles:
             y = ay - self.ARCH_R - 0.03
-            b.box((0.81, y, 0.21), (0.22, 0.012, 0.30), "trim_ink")
-        # Hood vents.
-        for x0, x1 in ((0.20, 0.40),):
-            y0, y1 = 1.40, 1.66
-            z0 = self.top_z(y0, 9) + 0.004
-            z1 = self.top_z(y1, 9) + 0.004
-            b.face([(x0, y0, z0), (x1, y0, z0), (x1, y1, z1), (x0, y1, z1)], "trim_ink", (0, 0, 1))
+            b.box((0.80, y, 0.21), (0.20, 0.012, 0.30), "trim_ink")
+        # Two hood vents following the crowned hood.
+        y0, y1 = 1.38, 1.62
+        for x0, x1 in ((0.12, 0.30), (0.42, 0.58)):
+            pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+            b.face([(x, y, self.surface_z(y, x) + 0.006) for x, y in pts], "trim_ink", (0, 0, 1))
 
     def lod1_extras(self, b):
         self._front(b, lod=True)

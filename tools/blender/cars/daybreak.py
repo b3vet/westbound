@@ -31,40 +31,87 @@ CAB_BACK = -0.80        # top of the cab back wall
 WALL_BASE = -0.835      # the tonneau meets the cab back wall here
 WIN_BASE = -0.825       # rear window sill (the wall below it is paint)
 
-# Bed rails (right half): floorC floorE rocker lowSide shoulder belt roofSide pillarIn roofMid crown roofC
-BED = [(0, .22), (.60, .22), (.88, .24), (.93, .42), (.955, .80), (.935, RAIL_Z), (.845, RAIL_Z + .005),
-       (.825, TONNEAU_Z), (.40, TONNEAU_Z), (.20, TONNEAU_Z), (0, TONNEAU_Z)]
+T = TONNEAU_Z
+R = RAIL_Z
+
+# Right-half rails: floorC floorE rocker lowSide shoulder belt roofSide pillarIn roofMid crown roofC.
+LOW = [(0, .22), (.60, .22), (.862, .25), (.902, .40), (.952, .69)]      # floor .. shoulder (cab, bed)
+BED = LOW + [(.918, R), (.848, R + .008), (.828, T), (.40, T), (.20, T + .004), (0, T + .005)]
 
 
-def _cab(roof, roof_side_x=.76, belt=(.93, .965)):
-    """Cab section: lower body rails and a roof at `roof` (centre height)."""
-    return [(0, .22), (.60, .22), (.88, .24), (.93, .42), (.945, .80), belt, (roof_side_x, roof - .045),
-            (roof_side_x - .06, roof - .025), (.40, roof - .01), (.20, roof - .003), (0, roof)]
+def _cab(roof, belt_z=.955):
+    """Cab section: a tumblehome side window and a crowned roof with rounded edges."""
+    return LOW + [(.905, belt_z), (.748, roof - .052), (.69, roof - .024), (.42, roof - .008), (.22, roof - .002),
+                  (0, roof)]
 
 
-def _hood(y_z, fender_x=.93):
-    """Hood section at a given hood centre height."""
-    z = y_z
-    return [(0, .22), (.60, .22), (.88, .24), (.93, .42), (.945, .80), (fender_x, z - .025), (.85, z - .02),
-            (.72, z - .018), (.35, z - .015), (.25, z - .005), (0, z)]
+def _hood(z):
+    """Hood section: a crisp fender line (belt) rolling over into a crowned hood."""
+    return LOW + [(.912, z - .045), (.862, z - .032), (.74, z - .026), (.42, z - .018), (.22, z - .004), (0, z)]
 
 
-def beam(b, p0, p1, w, mat, caps=True):
-    """A square tube of width `w` from p0 to p1."""
-    d = v_norm(v_sub(p1, p0))
-    up = (0.0, 0.0, 1.0) if abs(d[2]) < 0.9 else (1.0, 0.0, 0.0)
-    u = v_norm(v_cross(d, up))
-    v = v_norm(v_cross(u, d))
-    h = w / 2
+def tube(b, pts, r, mat, sides=10, group="tube", caps=(True, True)):
+    """A smooth round tube swept along `pts` (parallel-transport frames)."""
+    n = len(pts)
+    tan = []
+    for i in range(n):
+        a, c = pts[max(i - 1, 0)], pts[min(i + 1, n - 1)]
+        tan.append(v_norm(v_sub(c, a)))
+    ref = (0.0, 0.0, 1.0) if abs(tan[0][2]) < 0.9 else (0.0, 1.0, 0.0)
+    u = v_norm(v_cross(v_cross(tan[0], ref), tan[0]))
+    rings = []
+    for i in range(n):
+        t = tan[i]
+        dot = u[0] * t[0] + u[1] * t[1] + u[2] * t[2]
+        u = v_norm(v_sub(u, v_scale(t, dot)))
+        w = v_cross(t, u)
+        rings.append([v_add(pts[i], v_add(v_scale(u, r * math.cos(2 * math.pi * k / sides)),
+                                          v_scale(w, r * math.sin(2 * math.pi * k / sides)))) for k in range(sides)])
+    for i in range(n - 1):
+        for k in range(sides):
+            k1 = (k + 1) % sides
+            quad = [rings[i][k], rings[i][k1], rings[i + 1][k1], rings[i + 1][k]]
+            mid = v_scale(v_add(v_add(quad[0], quad[1]), v_add(quad[2], quad[3])), 0.25)
+            ctr = v_scale(v_add(pts[i], pts[i + 1]), 0.5)
+            b.face(quad, mat, v_sub(mid, ctr), smooth=True, group=group)
+    if caps[0]:
+        b.face(rings[0], mat, v_scale(tan[0], -1))
+    if caps[1]:
+        b.face(rings[-1], mat, tan[-1])
 
-    def corner(p, su, sv):
-        return v_add(p, v_add(v_scale(u, su * h), v_scale(v, sv * h)))
-    for (su0, sv0), (su1, sv1), out in (((1, -1), (1, 1), u), ((1, 1), (-1, 1), v), ((-1, 1), (-1, -1), v_scale(u, -1)),
-                                        ((-1, -1), (1, -1), v_scale(v, -1))):
-        b.face([corner(p0, su0, sv0), corner(p0, su1, sv1), corner(p1, su1, sv1), corner(p1, su0, sv0)], mat, out)
-    if caps:
-        b.face([corner(p1, 1, 1), corner(p1, -1, 1), corner(p1, -1, -1), corner(p1, 1, -1)], mat, d)
-        b.face([corner(p0, 1, 1), corner(p0, -1, 1), corner(p0, -1, -1), corner(p0, 1, -1)], mat, v_scale(d, -1))
+
+def arc(p0, p1, n, axis="xy"):
+    """A quarter ellipse from p0 to p1 in plan (x, y): leaves p0 along x, arrives at p1 along y."""
+    out = []
+    for i in range(n + 1):
+        th = (math.pi / 2) * i / n
+        out.append((p0[0] + (p1[0] - p0[0]) * math.sin(th), p1[1] + (p0[1] - p1[1]) * math.cos(th)))
+    return out
+
+
+def sweep_bumper(b, plan, z0, z1, depth, mat, top_mat, sign, group):
+    """A bumper blade following a plan polyline [(x, y)] from the centre line out and round
+    the corner; `sign` +1 = the front (outward is +y first), -1 = the rear."""
+    n = len(plan)
+    nrm = []
+    for i in range(n):
+        a, c = plan[max(i - 1, 0)], plan[min(i + 1, n - 1)]
+        tx, ty = c[0] - a[0], c[1] - a[1]
+        ln = math.hypot(tx, ty)
+        tx, ty = tx / ln, ty / ln
+        nrm.append((-ty * sign, tx * sign) if sign > 0 else (ty, -tx))
+    outer = plan
+    inner = [(p[0] - m[0] * depth, p[1] - m[1] * depth) for p, m in zip(plan, nrm)]
+    for i in range(n - 1):
+        a, c, ai, ci = outer[i], outer[i + 1], inner[i], inner[i + 1]
+        mo = ((nrm[i][0] + nrm[i + 1][0]) / 2, (nrm[i][1] + nrm[i + 1][1]) / 2, 0.0)
+        b.face([(a[0], a[1], z0), (c[0], c[1], z0), (c[0], c[1], z1), (a[0], a[1], z1)], mat, mo,
+               smooth=True, group=group)
+        b.face([(a[0], a[1], z1), (c[0], c[1], z1), (ci[0], ci[1], z1), (ai[0], ai[1], z1)], top_mat, (0, 0, 1))
+        b.face([(a[0], a[1], z0), (ai[0], ai[1], z0), (ci[0], ci[1], z0), (c[0], c[1], z0)], "trim_ink", (0, 0, -1))
+    e, ei = outer[-1], inner[-1]
+    tx, ty = e[0] - outer[-2][0], e[1] - outer[-2][1]
+    b.face([(e[0], e[1], z0), (ei[0], ei[1], z0), (ei[0], ei[1], z1), (e[0], e[1], z1)], mat, (tx, ty, 0))
 
 
 class Daybreak(kit.LoftCar):
@@ -82,26 +129,39 @@ class Daybreak(kit.LoftCar):
     FLOOR_Z = 0.22
     NOSE_Y = NOSE
     TAIL_Y = TAIL
+    # Creases across the car: the cab back wall (bed, sill, window top), the windscreen
+    # header and the cowl. The panels between them are smooth.
+    CREASE_Y = (WALL_BASE, WIN_BASE, CAB_BACK, -0.05, 0.62)
+    SHARP_RAILS = (1, 2, 3, kit.R_BELT)
+    LOFT_STEP = 0.15
     KEYS = [
-        (TAIL, [(0, .44, .05), (.58, .44, .05), (.84, .45, .03), (.90, .52), (.925, .80), (.915, RAIL_Z),
-                (.84, RAIL_Z + .005), (.82, TONNEAU_Z), (.40, TONNEAU_Z), (.20, TONNEAU_Z), (0, TONNEAU_Z)]),
-        (-2.40, [(0, .32), (.58, .32), (.86, .32), (.925, .44), (.95, .80), (.93, RAIL_Z), (.845, RAIL_Z + .005),
-                 (.825, TONNEAU_Z), (.40, TONNEAU_Z), (.20, TONNEAU_Z), (0, TONNEAU_Z)]),
+        # Tail: the tailgate, with rounded plan corners.
+        (TAIL, [(0, .44, .05), (.58, .44, .05), (.80, .45, .03), (.838, .52), (.866, .72), (.846, R),
+                (.792, R + .005), (.772, T), (.40, T), (.20, T + .004), (0, T + .005)]),
+        (-2.42, [(0, .37), (.58, .37), (.835, .38), (.878, .46), (.915, .71), (.885, R), (.82, R + .007),
+                 (.80, T), (.40, T), (.20, T + .004), (0, T + .005)]),
+        (-2.30, [(0, .29), (.59, .29), (.855, .30), (.896, .42), (.942, .70), (.91, R), (.84, R + .008),
+                 (.82, T), (.40, T), (.20, T + .004), (0, T + .005)]),
         (-2.10, BED),
         (WALL_BASE, BED),
-        (WIN_BASE, [(0, .22), (.60, .22), (.88, .24), (.93, .42), (.945, .80), (.93, .965), (.80, 1.10), (.70, 1.11),
-                    (.40, 1.12), (.20, 1.12), (0, 1.12)]),
+        # Cab back wall: the rear window sill, then the window top (= the roof's rear edge).
+        (WIN_BASE, LOW + [(.905, .955), (.79, 1.095), (.70, 1.10), (.42, 1.105), (.22, 1.108), (0, 1.11)]),
         (CAB_BACK, _cab(1.385)),
-        (-0.76, _cab(1.40)),
-        (-0.05, _cab(1.39, .755, (.93, .96))),
-        (0.62, [(0, .22), (.60, .22), (.88, .24), (.93, .42), (.945, .80), (.93, .95), (.87, .958), (.79, .963),
-                (.40, .968), (.20, .97), (0, .97)]),
-        (0.70, _hood(.97)),
-        (1.60, _hood(.945)),
-        (2.24, [(0, .30), (.58, .30), (.85, .32), (.915, .44), (.935, .80), (.90, .88), (.83, .885), (.70, .887),
-                (.35, .89), (.25, .895), (0, .90)]),
-        (NOSE, [(0, .34, -.04), (.55, .34, -.04), (.80, .35, -.03), (.86, .42), (.88, .78), (.86, .85), (.79, .855),
-                (.68, .858), (.35, .86), (.25, .862), (0, .865)]),
+        (-0.70, _cab(1.40)),
+        (-0.30, _cab(1.40)),
+        (-0.05, _cab(1.384)),
+        # Cowl: the windscreen base.
+        (0.62, LOW + [(.908, .948), (.862, .956), (.80, .96), (.42, .966), (.22, .97), (0, .972)]),
+        (0.72, _hood(.976)),
+        (1.20, _hood(.968)),
+        (1.75, _hood(.950)),
+        (2.10, [(0, .27), (.58, .27), (.85, .29), (.89, .41), (.935, .69), (.895, .89), (.848, .898), (.73, .903),
+                (.42, .91), (.22, .922), (0, .926)]),
+        (2.28, [(0, .32), (.56, .32), (.82, .33), (.862, .42), (.902, .69), (.866, .868), (.81, .877), (.71, .881),
+                (.40, .887), (.22, .897), (0, .90)]),
+        # The nose: a small flat fascia inside rounded corners.
+        (NOSE, [(0, .34, -.04), (.55, .34, -.04), (.79, .35, -.03), (.83, .42), (.852, .69), (.822, .842, -.02),
+                (.765, .850, -.03), (.675, .853, -.03), (.40, .857, -.03), (.22, .86, -.03), (0, .862, -.03)]),
     ]
     REGIONS = {"windscreen": (-0.05, 0.62), "rear_glass": (WIN_BASE, CAB_BACK), "side_glass": (-0.66, 0.62),
                "bed": (TAIL, WALL_BASE), "wall": (WALL_BASE, WIN_BASE)}
@@ -122,7 +182,7 @@ class Daybreak(kit.LoftCar):
     HEAD_X = ((0.50, 0.625), (0.645, 0.77))
     BUMPER_F_Z = (0.36, 0.50)
     BUMPER_R_Z = (0.30, 0.46)
-    TAIL_LAMP_X = (0.72, 0.88)
+    TAIL_LAMP_X = (0.675, 0.828)
     TAIL_LAMP_Z = (0.60, 0.92)
     TAIL_BLINK_Z = (0.50, 0.57)
     ROLL_Y = -1.00
@@ -132,7 +192,8 @@ class Daybreak(kit.LoftCar):
     def main_loft(self):
         edges = [r[k] for r in self.REGIONS.values() for k in (0, 1)]
         return kit.Loft(self.KEYS, self.body_material, self.arch_rails, extra_ys=self.arch_ys() + edges,
-                        caps=("paint", "paint_shade"))
+                        caps=("paint", "paint_shade"), creases_y=self.CREASE_Y, sharp_rails=self.SHARP_RAILS,
+                        step=self.LOFT_STEP, seg=self.LOFT_SEG, max_sub=self.LOFT_MAX_SUB)
 
     def body_material(self, y0, y1, j, arch):
         ym = (y0 + y1) / 2
@@ -176,14 +237,11 @@ class Daybreak(kit.LoftCar):
                   "trim_steel", skip=("-y",))
         for xs in (x0 - 0.0, x1):
             b.box((xs, fy + 0.008, (hz0 + hz1) / 2), (0.02, 0.016, hz1 - hz0), "trim_steel", skip=("-y",))
-        # Front bumper: a big chrome blade wrapping the corner.
+        # Front bumper: a chrome blade following the rounded nose round the corner.
         z0, z1 = self.BUMPER_F_Z
         ny = self.NOSE_Y
-        b.box((0.45, ny + 0.035, (z0 + z1) / 2), (0.90, 0.07, z1 - z0), "trim_steel", skip=("-x", "-y"))
-        b.face([(0.90, ny + 0.07, z0), (0.90, ny - 0.12, z0), (0.90, ny - 0.12, z1), (0.90, ny + 0.07, z1)],
-               "trim_steel", (1, 0, 0))
-        b.face([(0.90, ny - 0.12, z0), (0.90, ny + 0.07, z0), (0, ny + 0.07, z0), (0, ny, z0)], "trim_ink",
-               (0, 0, -1))
+        plan = [(0.0, ny + 0.07), (0.40, ny + 0.07)] + arc((0.74, ny + 0.07), (0.905, ny - 0.13), 6)
+        sweep_bumper(b, plan, z0, z1, 0.08, "trim_steel", "trim_steel", 1, "bumper_f")
         # Step-side hint: a dark notch between the cab and the rear wheel, and a step plate.
         ya, yb = -0.87, -1.05
         xs = self.side_x((ya + yb) / 2, 0.55) + 0.004
@@ -192,24 +250,27 @@ class Daybreak(kit.LoftCar):
         # Body-side rub strip (80s): a dark band along the doors and the bed side.
         zr0, zr1 = 0.60, 0.645
         for y0, y1 in ((self.axles[0] - self.ARCH_R - 0.06, -0.79), (-0.83, self.axles[1] + self.ARCH_R + 0.06),
-                       (self.axles[1] - self.ARCH_R - 0.06, self.TAIL_Y + 0.08)):
+                       (self.axles[1] - self.ARCH_R - 0.06, self.TAIL_Y + 0.20)):
             ys = [y0 + (y1 - y0) * i / 6 for i in range(7)]
             for ya_, yb_ in zip(ys, ys[1:]):
                 xa_, xb_ = self.side_x(ya_, 0.62) + 0.005, self.side_x(yb_, 0.62) + 0.005
                 b.face([(xa_, ya_, zr0), (xb_, yb_, zr0), (xb_, yb_, zr1), (xa_, ya_, zr1)], "trim_ink", (1, 0, 0))
-        # Rear step bumper with a dark tread on top.
+        # Rear step bumper (dark tread on top), wrapped round the rounded tail corners.
         z0, z1 = self.BUMPER_R_Z
         ty = self.TAIL_Y
-        b.box((0.465, ty - 0.045, (z0 + z1) / 2), (0.93, 0.09, z1 - z0), "trim_steel", {"+z": "trim_ink"},
-              skip=("-x", "+y"))
-        b.face([(0.93, ty, z0), (0.93, ty, z1), (0, ty, z1), (0, ty, z0)], "trim_ink", (0, 0, -1))
-        # Roll bar: upright on the bed rail, the crossbar half, a back stay down to the rail.
+        plan = [(0.0, ty - 0.09), (0.40, ty - 0.09)] + arc((0.76, ty - 0.09), (0.915, ty + 0.10), 6)
+        sweep_bumper(b, plan, z0, z1, 0.10, "trim_steel", "trim_ink", -1, "bumper_r")
+        # Roll bar: one bent round hoop (centre line -> corner -> down to the bed rail) and a
+        # back stay to the rail; smooth tubes.
         rx, ry, top = self.ROLL_X, self.ROLL_Y, self.ROLL_TOP
-        beam(b, (rx, ry, RAIL_Z), (rx, ry, top + 0.03), 0.06, "trim_steel")
-        beam(b, (0.0, ry, top), (rx + 0.03, ry, top), 0.06, "trim_steel", caps=False)
-        b.face([(rx + 0.03, ry - 0.03, top - 0.03), (rx + 0.03, ry + 0.03, top - 0.03),
-                (rx + 0.03, ry + 0.03, top + 0.03), (rx + 0.03, ry - 0.03, top + 0.03)], "trim_steel", (1, 0, 0))
-        beam(b, (rx, ry - 0.02, top - 0.02), (rx, -1.55, RAIL_Z + 0.02), 0.05, "trim_steel")
+        rb = 0.10
+        hoop = [(0.0, ry, top), (rx - rb, ry, top)]
+        for i in range(1, 6):
+            th = (math.pi / 2) * i / 6
+            hoop.append((rx - rb + rb * math.sin(th), ry, top - rb + rb * math.cos(th)))
+        hoop += [(rx, ry, top - rb), (rx, ry, RAIL_Z - 0.01)]
+        tube(b, hoop, 0.032, "trim_steel", group="roll_hoop", caps=(False, True))
+        tube(b, [(rx, ry - 0.03, top - 0.06), (rx, -1.55, RAIL_Z - 0.01)], 0.026, "trim_steel", group="roll_stay")
         # Light bar: two lamps per side on the crossbar (dark housings, cream lenses forward).
         for lx in (0.17, 0.47):
             b.box((lx, ry, top + 0.075), (0.17, 0.10, 0.09), "trim_ink", {"+y": "trim_ink"})
@@ -332,10 +393,10 @@ class Daybreak(kit.LoftCar):
 
         def along(d):
             return v_add((hx, hy, hz), v_scale(axis, d))
-        beam(b, along(0.04), along(0.30), 0.06, self.imat("hub"))
+        tube(b, [along(0.04), along(0.30)], 0.03, self.imat("hub"), sides=8, group="column")
         root = along(0.07)
         tip = v_add(root, (0.20, -0.06, 0.03))
-        beam(b, v_add(root, (0.02, 0.0, 0.0)), tip, 0.014, "interior_steel")
+        tube(b, [v_add(root, (0.02, 0.0, 0.0)), tip], 0.007, "interior_steel", sides=6, group="shifter")
         b.box(tip, (0.035, 0.035, 0.035), self.imat("wheel"))
 
 

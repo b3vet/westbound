@@ -34,31 +34,39 @@ class BruteV8(kit.LoftCar):
     WELL_X = 0.62
     NOSE_Y = 2.35
     TAIL_Y = -2.45
-    # Boxy: near-vertical sides, a sharp shoulder, flat roof and hood.
+    # Sculpted, not boxy: barrel sides that tuck under (lowSide well inside the
+    # shoulder), coke-bottle haunches swelling over the rear wheels, a crowned hood and
+    # roof with rounded edges, rounded plan-view corners at both ends, a smooth
+    # semi-fastback. Crisp lines only at the window line / fender tops (belt) and the
+    # windscreen base.
     KEYS = [
-        (TAIL_Y, [(0, .40, .04), (.56, .40, .04), (.86, .40, .03), (.92, .46), (.94, .86), (.925, 1.0), (.80, 1.02),
-                  (.70, 1.02), (.35, 1.02), (.18, 1.02), (0, 1.02)]),
-        (-2.38, [(0, .34), (.58, .34), (.90, .33), (.955, .44), (.965, .86), (.94, .995), (.82, 1.0), (.70, 1.0),
-                 (.35, 1.0), (.18, 1.0), (0, 1.0)]),
-        (-1.90, [(0, .20), (.60, .19), (.91, .21), (.965, .40), (.975, .86), (.945, .99), (.83, .995), (.72, .997),
-                 (.35, 1.0), (.18, 1.0), (0, 1.0)]),
-        (-1.55, [(0, .18), (.60, .18), (.91, .20), (.965, .38), (.975, .855), (.94, .985), (.80, .995), (.71, 1.0),
-                 (.35, 1.005), (.18, 1.005), (0, 1.005)]),
-        (-0.95, [(0, .18), (.60, .18), (.90, .20), (.95, .37), (.96, .85), (.925, .965), (.74, 1.31), (.68, 1.33),
-                 (.35, 1.345), (.18, 1.35), (0, 1.35)]),
-        (-0.20, [(0, .18), (.60, .18), (.89, .20), (.935, .37), (.945, .84), (.915, .955), (.73, 1.31), (.67, 1.33),
-                 (.35, 1.345), (.18, 1.35), (0, 1.35)]),
-        (0.45, [(0, .18), (.60, .18), (.89, .20), (.935, .37), (.948, .835), (.915, .95), (.86, .955), (.78, .96),
-                (.35, .963), (.18, .965), (0, .965)]),
-        (0.55, [(0, .18), (.60, .18), (.895, .20), (.94, .37), (.952, .835), (.92, .945), (.84, .95), (.74, .952),
-                (.35, .955), (.18, .955), (0, .955)]),
-        (1.40, [(0, .18), (.60, .18), (.90, .21), (.945, .39), (.955, .83), (.92, .94), (.84, .945), (.74, .947),
-                (.35, .95), (.18, .95), (0, .95)]),
-        (2.15, [(0, .24), (.60, .24), (.88, .28), (.93, .42), (.945, .825), (.915, .93), (.84, .935), (.74, .937),
-                (.35, .94), (.18, .94), (0, .94)]),
-        (NOSE_Y, [(0, .32, -.04), (.56, .32, -.04), (.84, .33, -.02), (.90, .40), (.915, .82), (.895, .91),
-                  (.83, .915), (.73, .917), (.35, .92), (.18, .92), (0, .92)]),
+        (TAIL_Y, [(0, .40, .05), (.55, .40, .05), (.80, .40, .03), (.85, .46, .01), (.885, .82), (.865, .985),
+                  (.76, 1.005), (.66, 1.012), (.38, 1.018), (.19, 1.02), (0, 1.02)]),
+        (-2.38, [(0, .34), (.58, .34), (.86, .33), (.905, .44), (.94, .83), (.91, .99), (.79, 1.0), (.68, 1.004),
+                 (.37, 1.008), (.19, 1.01), (0, 1.01)]),
+        (-1.90, [(0, .20), (.60, .19), (.88, .21), (.925, .40), (.972, .85), (.925, 1.0), (.81, 1.01), (.71, 1.014),
+                 (.37, 1.018), (.19, 1.02), (0, 1.02)]),
+        (-1.55, [(0, .18), (.60, .18), (.88, .20), (.925, .38), (.975, .84), (.92, .99), (.78, 1.01),
+                 (.70, 1.018), (.37, 1.025), (.19, 1.027), (0, 1.027)]),
+        (-0.95, [(0, .18), (.60, .18), (.87, .20), (.91, .37), (.958, .81), (.905, .955), (.735, 1.30),
+                 (.67, 1.325), (.37, 1.345), (.19, 1.35), (0, 1.35)]),
+        (-0.20, [(0, .18), (.60, .18), (.855, .20), (.885, .37), (.945, .80), (.90, .95), (.725, 1.30),
+                 (.665, 1.325), (.37, 1.345), (.19, 1.35), (0, 1.35)]),
+        (0.45, [(0, .18), (.60, .18), (.855, .20), (.885, .37), (.948, .80), (.905, .945), (.85, .952), (.76, .958),
+                (.37, .965), (.19, .968), (0, .968)]),
+        (0.55, [(0, .18), (.60, .18), (.87, .20), (.905, .37), (.952, .80), (.91, .94), (.83, .948), (.73, .953),
+                (.37, .96), (.19, .963), (0, .963)]),
+        (1.40, [(0, .18), (.60, .18), (.875, .21), (.91, .39), (.955, .80), (.91, .935), (.83, .942), (.73, .946),
+                (.37, .954), (.19, .957), (0, .957)]),
+        (2.15, [(0, .24), (.60, .24), (.86, .28), (.895, .42), (.94, .78), (.90, .905), (.82, .91), (.72, .913),
+                (.37, .922), (.19, .925), (0, .926)]),
+        (2.28, [(0, .29), (.58, .29), (.83, .31), (.87, .41), (.91, .775), (.875, .89), (.80, .895), (.71, .898),
+                (.37, .906), (.19, .909), (0, .91)]),
+        (NOSE_Y, [(0, .32, -.04), (.55, .32, -.04), (.79, .33, -.02), (.83, .40), (.865, .77), (.835, .878),
+                  (.77, .884), (.69, .887), (.36, .894), (.19, .897), (0, .898)]),
     ]
+    CREASE_Y = (0.45,)                 # the windscreen base
+    SHARP_RAILS = (1, 2, kit.R_BELT)   # floor edge, rocker, the window line / fender tops
     REGIONS = {"windscreen": (-0.20, 0.45), "rear_glass": (-1.55, -0.95), "side_glass": (-0.90, 0.45)}
     MIRROR = (0.925, 0.25, 1.0)
     EYE = (-0.37, -0.48, 1.12)
@@ -71,16 +79,24 @@ class BruteV8(kit.LoftCar):
                     door="asphalt", liner="asphalt")
 
     GRILLE_Z = (0.52, 0.80)
-    GRILLE_X = 0.86
+    GRILLE_X = 0.82
     HEAD_Z = 0.66
     HEAD_R = 0.078
     HEAD_X = (0.50, 0.70)
     BUMPER_F_Z = (0.38, 0.50)
     BUMPER_R_Z = (0.44, 0.56)
     TAIL_Z = (0.68, 0.88)
-    TAIL_X = ((0.28, 0.50), (0.54, 0.76))
-    TAIL_BLINK_X = (0.80, 0.90)
-    SCOOP = {"y": (1.12, 1.52), "w": 0.27, "top": 1.075}
+    TAIL_X = ((0.26, 0.47), (0.51, 0.72))
+    TAIL_BLINK_X = (0.76, 0.84)
+    TAIL_PANEL_X = 0.86
+    # Shaker scoop: a closed, low solid (height above the hood at its rear end). Its top
+    # stays HOOD_CAM_CLEAR below the hood camera even with the body pitched nose-up
+    # (body_pitch_max_deg) and rolled (body_roll_max_deg): see markers().
+    SCOOP = {"y": (1.18, 1.52), "w": 0.25, "height": 0.05}
+    HOOD_CAM_CLEAR = 0.08
+    BODY_PITCH_DEG = 2.0       # data/tuning/vehicle.tres body_pitch_max_deg
+    BODY_ROLL_DEG = 4.0        # body_roll_max_deg
+    BODY_PIVOT_Z = 0.5
     PIPE = {"x": 0.935, "z": 0.19, "r": 0.042, "y": (-0.93, 0.93)}
 
     # ---------------------------------------------------------------- body details
@@ -121,10 +137,11 @@ class BruteV8(kit.LoftCar):
         # Rear bumper and tail panel.
         z0, z1 = self.BUMPER_R_Z
         ty = self.TAIL_Y
-        b.box((0.45, ty - 0.03, (z0 + z1) / 2), (0.90, 0.07, z1 - z0), "trim_steel", skip=("-x",))
+        b.box((0.44, ty - 0.03, (z0 + z1) / 2), (0.88, 0.07, z1 - z0), "trim_steel", skip=("-x",))
         tz0, tz1 = self.TAIL_Z
-        b.face([(0.92, ty - 0.004, tz0 - 0.04), (0, ty - 0.004, tz0 - 0.04), (0, ty - 0.004, tz1 + 0.04),
-                (0.92, ty - 0.004, tz1 + 0.04)], "trim_ink", (0, -1, 0))
+        px = self.TAIL_PANEL_X
+        b.face([(px, ty - 0.004, tz0 - 0.04), (0, ty - 0.004, tz0 - 0.04), (0, ty - 0.004, tz1 + 0.04),
+                (px, ty - 0.004, tz1 + 0.04)], "trim_ink", (0, -1, 0))
         # Chrome frames around the square tail lamps.
         for x0, x1 in self.TAIL_X:
             e = 0.018
@@ -138,9 +155,9 @@ class BruteV8(kit.LoftCar):
         cy, cz = sum(p[0] for p in prof) / 3, sum(p[1] for p in prof) / 3
         for i in range(3):
             (ya, za), (yb, zb) = prof[i], prof[(i + 1) % 3]
-            lip.face([(0, ya, za), (0.86, ya, za), (0.86, yb, zb), (0, yb, zb)], "trim_ink",
+            lip.face([(0, ya, za), (0.82, ya, za), (0.82, yb, zb), (0, yb, zb)], "trim_ink",
                      (0, (ya + yb) / 2 - cy, (za + zb) / 2 - cz))
-        lip.face([(0.86, 0, 0), (0.86, 0, 0.075), (0.86, 0.17, 0)], "trim_ink", (1, 0, 0))
+        lip.face([(0.82, 0, 0), (0.82, 0, 0.075), (0.82, 0.17, 0)], "trim_ink", (1, 0, 0))
         b.extend(lip, (0, ty + 0.005, 1.018))
         # Side exhaust pipes along the rockers, with chrome tips.
         p = self.PIPE
@@ -156,36 +173,58 @@ class BruteV8(kit.LoftCar):
                   skip=("-z",))
 
     def center_details(self, b):
-        # Shaker scoop: a dark box standing through the hood, intake open to the front.
-        s = self.SCOOP
-        y0, y1 = s["y"]
-        w, top = s["w"], s["top"]
-        base = self.top_z(y1) - 0.01
-        sc = MeshBuilder()
-        # Body: slanted front, flat top, vertical sides and back.
-        pts_side = [(y0, base), (y1, base), (y1, top), (y0 + 0.06, top)]
-        for sx in (-1, 1):
-            sc.face([(sx * w, y, z) for y, z in pts_side], "trim_ink", (sx, 0, 0))
-        sc.face([(-w, y0 + 0.06, top), (w, y0 + 0.06, top), (w, y1, top), (-w, y1, top)], "trim_asphalt", (0, 0, 1))
-        sc.face([(-w, y0, base), (w, y0, base), (w, y0 + 0.06, top), (-w, y0 + 0.06, top)], "trim_ink", (0, 1, 0.3))
-        sc.face([(-w, y1, base), (w, y1, base), (w, y1, top), (-w, y1, top)], "trim_ink", (0, -1, 0))
-        # Intake mouth: a chrome lip framing a black opening on the front face.
-        m = 0.03
-        yf = y0 + 0.025
-        zm0, zm1 = base + 0.035, top - 0.02
-        for (a0, a1, c0, c1) in ((-w, w, zm1, top - 0.002), (-w, w, base + 0.01, zm0), (-w, -w + m, zm0, zm1),
-                                 (w - m, w, zm0, zm1)):
-            sc.face([(a0, yf + 0.012, c0), (a1, yf + 0.012, c0), (a1, yf + 0.012, c1), (a0, yf + 0.012, c1)],
-                    "trim_steel", (0, 1, 0))
-        # Chrome base plate around the scoop on the hood.
-        sc.box((0, (y0 + y1) / 2, base + 0.008), (2 * w + 0.06, y1 - y0 + 0.06, 0.016), "trim_steel", skip=("-z",))
-        b.extend(sc)
+        b.extend(self.scoop())
         # Rear licence plate in the middle of the tail panel.
         tz0, tz1 = self.TAIL_Z
         ry = self.TAIL_Y - 0.012
         zc = (tz0 + tz1) / 2
         b.face([(0.24, ry, zc - 0.075), (-0.24, ry, zc - 0.075), (-0.24, ry, zc + 0.075), (0.24, ry, zc + 0.075)],
                "trim_cream", (0, -1, 0))
+
+    def scoop_top(self):
+        s = self.SCOOP
+        return self.top_z(s["y"][1]) + s["height"]
+
+    def scoop(self, detail=True):
+        """The shaker scoop as a CLOSED solid: a chamfered prism along Y (both end caps
+        and the base present, outward normals) whose base sinks 2 cm into the hood, so
+        no camera angle can look inside it. The intake is a dark recessed panel framed
+        in chrome on the front cap, not an opening."""
+        s = self.SCOOP
+        y0, y1 = s["y"]
+        w = s["w"]
+        top = self.scoop_top()
+        base = min(self.top_z(y0), self.top_z(y1)) - 0.02
+        ch = 0.02
+        prof = [(-w, base), (w, base), (w, top - ch), (w - ch, top), (-w + ch, top), (-w, top - ch)]
+        sc = MeshBuilder()
+        n = len(prof)
+        cx, cz = 0.0, (base + top) / 2
+        for i in range(n):
+            (xa, za), (xb, zb) = prof[i], prof[(i + 1) % n]
+            m = "trim_asphalt" if za >= top - 1e-6 and zb >= top - 1e-6 else "trim_ink"
+            sc.face([(xa, y0, za), (xb, y0, zb), (xb, y1, zb), (xa, y1, za)], m,
+                    ((xa + xb) / 2 - cx, 0, (za + zb) / 2 - cz))
+        sc.face([(x, y1, z) for x, z in prof], "trim_ink", (0, 1, 0))
+        sc.face([(x, y0, z) for x, z in prof], "trim_ink", (0, -1, 0))
+        if detail:
+            # Intake: a black panel 3 mm proud of the front cap, framed in chrome.
+            yf = y1 + 0.003
+            zm0, zm1 = base + 0.03, top - 0.012
+            xm = w - 0.03
+            sc.face([(-xm, yf, zm0), (xm, yf, zm0), (xm, yf, zm1), (-xm, yf, zm1)], "trim_ink", (0, 1, 0))
+            e = 0.012
+            for (a0, a1, c0, c1) in ((-xm - e, xm + e, zm1, zm1 + e), (-xm - e, xm + e, zm0 - e, zm0),
+                                     (-xm - e, -xm, zm0, zm1), (xm, xm + e, zm0, zm1)):
+                sc.face([(a0, yf + 0.002, c0), (a1, yf + 0.002, c0), (a1, yf + 0.002, c1), (a0, yf + 0.002, c1)],
+                        "trim_steel", (0, 1, 0))
+            # Chrome base plate on the hood around the scoop.
+            plate = MeshBuilder()
+            hz = self.top_z((y0 + y1) / 2)
+            plate.box((0, (y0 + y1) / 2, hz + 0.004), (2 * w + 0.06, y1 - y0 + 0.06, 0.012), "trim_steel",
+                      skip=("-z",))
+            sc.extend(plate)
+        return sc
 
     def lod1_extras(self, b):
         fy = self.NOSE_Y + 0.004
@@ -197,12 +236,14 @@ class BruteV8(kit.LoftCar):
         b.box((0.45, self.TAIL_Y - 0.03, (z0 + z1) / 2), (0.90, 0.07, z1 - z0), "trim_steel", skip=("-x", "+y"))
         tz0, tz1 = self.TAIL_Z
         ty = self.TAIL_Y - 0.004
-        b.face([(0.92, ty, tz0 - 0.04), (0, ty, tz0 - 0.04), (0, ty, tz1 + 0.04), (0.92, ty, tz1 + 0.04)], "trim_ink",
+        px = self.TAIL_PANEL_X
+        b.face([(px, ty, tz0 - 0.04), (0, ty, tz0 - 0.04), (0, ty, tz1 + 0.04), (px, ty, tz1 + 0.04)], "trim_ink",
                (0, -1, 0))
         s = self.SCOOP
-        base = self.top_z(s["y"][1]) - 0.01
-        b.box((s["w"] / 2, sum(s["y"]) / 2, (base + s["top"]) / 2), (s["w"], s["y"][1] - s["y"][0], s["top"] - base),
-              "trim_ink", skip=("-x", "-z"))
+        base = self.top_z(s["y"][1]) - 0.02
+        top = self.scoop_top()
+        b.box((s["w"] / 2, sum(s["y"]) / 2, (base + top) / 2), (s["w"], s["y"][1] - s["y"][0], top - base),
+              "trim_ink", skip=("-x",))
         p = self.PIPE
         pipe = MeshBuilder()
         pipe.cylinder_x((0, 0, 0), p["r"], p["y"][0], p["y"][1], 6, "trim_steel")
@@ -286,10 +327,17 @@ class BruteV8(kit.LoftCar):
 
     def markers(self):
         m = super().markers()
-        # Hood camera behind and above the shaker scoop so it sees the road over it.
-        hood_y = self.SCOOP["y"][0] - 0.12
+        # Hood camera just behind the shaker scoop. The camera is rigid on the car root
+        # while the body pitches nose-up and rolls, so the scoop's highest corner rises
+        # toward the view; keep it HOOD_CAM_CLEAR below the camera at full pitch + roll.
+        s = self.SCOOP
+        hood_y = s["y"][0] - 0.38
         hz = self.top_z(hood_y)
-        m["cam_hood"] = (0.0, hood_y, self.SCOOP["top"] + 0.06)
+        top = self.scoop_top()
+        pitch, roll = math.radians(self.BODY_PITCH_DEG), math.radians(self.BODY_ROLL_DEG)
+        rise = max(y * math.sin(pitch) + (top - self.BODY_PIVOT_Z) * (math.cos(pitch) - 1.0) for y in s["y"])
+        rise += s["w"] * math.sin(roll)
+        m["cam_hood"] = (0.0, hood_y, round(top + rise + self.HOOD_CAM_CLEAR, 3))
         m["smoke_hood"] = (0.0, hood_y, hz)
         p = self.PIPE
         m["exhaust_L"] = (-p["x"], p["y"][0], p["z"])

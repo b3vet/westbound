@@ -2,5 +2,6 @@
 	"root_name": "Car_NightViper",
 	"modular": true,
 	"forward_axis": "-Z",
+	"flat_shading": false,
 	"source": "in-house, Blender: art/blender/cars/night_viper.blend (tools/blender/cars/night_viper.py)"
 }

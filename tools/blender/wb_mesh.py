@@ -62,15 +62,21 @@ def mirror_x(p):
 
 
 class MeshBuilder:
+    """Faces with a material name each. A face can be `smooth` (shares vertex normals
+    with its smooth neighbours of the same `group` and material, across edges flatter
+    than to_mesh's angle) or flat (its own normal: details, caps, lamps)."""
+
     def __init__(self):
         self.verts = []
         self.faces = []
         self.mats = []
         self.uvs = []  # per face: list of (u, v) or None
+        self.smooth = []  # per face: bool
+        self.groups = []  # per face: hashable smoothing group
 
     # ---------------------------------------------------------------- primitives
 
-    def face(self, pts, mat, outward=None, uv=None):
+    def face(self, pts, mat, outward=None, uv=None, smooth=False, group=0):
         """Add polygon `pts` (points, CCW from outside). With `outward`, flip if needed."""
         pts = [tuple(float(c) for c in p) for p in pts]
         # Drop consecutive duplicates (collapsed loft points).
@@ -91,6 +97,11 @@ class MeshBuilder:
         self.faces.append(list(range(base, base + len(clean))))
         self.mats.append(mat)
         self.uvs.append(uv if uv and len(uv) == len(clean) else None)
+        self.smooth.append(bool(smooth))
+        self.groups.append(group)
+
+    def _faces(self):
+        return zip(self.faces, self.mats, self.uvs, self.smooth, self.groups)
 
     def quad(self, a, b, c, d, mat, outward=None):
         self.face([a, b, c, d], mat, outward)
@@ -177,20 +188,28 @@ class MeshBuilder:
                 self.face([a[j], b[j], b[j1], a[j1]], mat, out)
 
     def extend(self, other, offset=(0.0, 0.0, 0.0)):
-        for f, m, uv in zip(other.faces, other.mats, other.uvs):
-            self.face([v_add(other.verts[i], offset) for i in f], m, uv=uv)
+        for f, m, uv, sm, g in other._faces():
+            self.face([v_add(other.verts[i], offset) for i in f], m, uv=uv, smooth=sm, group=g)
 
     def mirrored(self):
         """A copy mirrored across X = 0 (winding reversed so normals stay outward)."""
         out = MeshBuilder()
-        for f, m, uv in zip(self.faces, self.mats, self.uvs):
-            out.face([mirror_x(self.verts[i]) for i in reversed(f)], m, uv=list(reversed(uv)) if uv else None)
+        for f, m, uv, sm, g in self._faces():
+            out.face([mirror_x(self.verts[i]) for i in reversed(f)], m, uv=list(reversed(uv)) if uv else None,
+                     smooth=sm, group=g)
         return out
 
     def transformed(self, fn):
         out = MeshBuilder()
-        for f, m, uv in zip(self.faces, self.mats, self.uvs):
-            out.face([fn(self.verts[i]) for i in f], m, uv=uv)
+        for f, m, uv, sm, g in self._faces():
+            out.face([fn(self.verts[i]) for i in f], m, uv=uv, smooth=sm, group=g)
+        return out
+
+    def smoothed(self, group="part", on=True):
+        """A copy with every face smooth (or flat) in one group: e.g. a tire or a fin."""
+        out = MeshBuilder()
+        for f, m, uv, _sm, _g in self._faces():
+            out.face([self.verts[i] for i in f], m, uv=uv, smooth=on, group=group)
         return out
 
     def triangles(self):
@@ -198,8 +217,12 @@ class MeshBuilder:
 
     # ---------------------------------------------------------------- output
 
-    def to_mesh(self, name, kind="car", paint=None):
-        """A new bpy mesh datablock (flat, merged, one slot per material name)."""
+    def to_mesh(self, name, kind="car", paint=None, smooth_angle_deg=38.0):
+        """A new bpy mesh datablock: merged by distance, one slot per material name.
+        Flat faces keep their own normal. Smooth faces share vertex normals with their
+        neighbours; an edge stays sharp where the material or the smoothing group
+        changes, where either face is flat, or where the faces meet at more than
+        `smooth_angle_deg` (the exporter writes the split normals)."""
         import bpy
         import bmesh
         import wb_palette
@@ -219,13 +242,33 @@ class MeshBuilder:
                 if uv:
                     for li, (u, v) in zip(poly.loop_indices, uv):
                         layer.data[li].uv = (u, v)
+        gid = {}
+        group_ids = [gid.setdefault(g, len(gid)) for g in self.groups]
         bm = bmesh.new()
         bm.from_mesh(me)
+        glayer = bm.faces.layers.int.new("wb_group")
+        bm.faces.ensure_lookup_table()
+        for f, sm, g in zip(bm.faces, self.smooth, group_ids):
+            f.smooth = sm
+            f[glayer] = g
         bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=MERGE_DIST)
         bmesh.ops.dissolve_degenerate(bm, edges=bm.edges, dist=MERGE_DIST)
+        limit = math.radians(smooth_angle_deg)
+        any_smooth = False
+        for e in bm.edges:
+            lf = e.link_faces
+            sharp = True
+            if len(lf) == 2:
+                a, b = lf
+                sharp = (not a.smooth or not b.smooth or a.material_index != b.material_index
+                         or a[glayer] != b[glayer] or a.normal.angle(b.normal, 0.0) > limit)
+            e.smooth = not sharp
+            any_smooth = any_smooth or not sharp
+        bm.faces.layers.int.remove(glayer)
         bm.to_mesh(me)
         bm.free()
-        for p in me.polygons:
-            p.use_smooth = False
+        if not any_smooth:
+            for p in me.polygons:
+                p.use_smooth = False
         me.update()
         return me

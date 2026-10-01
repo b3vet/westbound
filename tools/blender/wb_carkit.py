@@ -23,7 +23,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 import wb_mesh  # noqa: E402
 import wb_palette  # noqa: E402
-from wb_mesh import MeshBuilder, v_add, v_scale, v_sub  # noqa: E402
+from wb_mesh import MeshBuilder, v_add, v_len, v_scale, v_sub  # noqa: E402
 
 REPO = wb_palette.REPO
 RAILS = ["floorC", "floorE", "rocker", "lowSide", "shoulder", "belt", "roofSide", "pillarIn", "roofMid",
@@ -85,11 +85,50 @@ def uv_box(b):
         b.uvs[fi] = [((slot + (p[u_ax] - lo[u_ax]) / ext[u_ax]) / 6.0, (p[v_ax] - lo[v_ax]) / ext[v_ax]) for p in pts]
 
 
+def pchip_slopes(xs, ys):
+    """Fritsch-Carlson slopes: a C1 cubic through every point with no overshoot."""
+    n = len(xs)
+    if n < 2:
+        return [0.0] * n
+    h = [xs[i + 1] - xs[i] for i in range(n - 1)]
+    d = [(ys[i + 1] - ys[i]) / h[i] if h[i] else 0.0 for i in range(n - 1)]
+    m = [0.0] * n
+    m[0], m[-1] = d[0], d[-1]
+    for i in range(1, n - 1):
+        if d[i - 1] * d[i] <= 0:
+            m[i] = 0.0
+        else:
+            w1, w2 = 2 * h[i] + h[i - 1], h[i] + 2 * h[i - 1]
+            m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i])
+    # One-sided ends: keep them inside the monotone range.
+    for e, k in ((0, 0), (n - 1, n - 2)):
+        if d[k] == 0 or m[e] * d[k] < 0:
+            m[e] = 0.0
+    return m
+
+
+def hermite(p0, p1, m0, m1, h, t):
+    t2, t3 = t * t, t * t * t
+    return ((2 * t3 - 3 * t2 + 1) * p0 + (t3 - 2 * t2 + t) * h * m0 + (-2 * t3 + 3 * t2) * p1
+            + (t3 - t2) * h * m1)
+
+
 class Loft:
-    """Stations through shared rails; material per strip from `mat_fn(y0, y1, j, arch)`."""
+    """A smooth loft: stations through shared rails, material per strip from
+    `mat_fn(y0, y1, j, arch)`.
+
+    Along Y every rail coordinate (x, z, dy) follows a shape-preserving cubic through
+    the key stations (no overshoot: the body never grows past its keys), split at
+    `creases_y` (a crease across the car, e.g. the windscreen base). Stations are
+    sampled at most `step` apart. Across, each section runs on a Hermite curve
+    through the rails; `sharp_rails` are corners (a crease along the car), and each
+    strip j is cut into a fixed number of segments (from its longest chord / `seg`).
+    Faces are smooth; groups change at sharp rails and Y creases, so to_mesh keeps
+    those edges hard. `smooth=False` gives the old faceted loft."""
 
     def __init__(self, keys, mat_fn, arch_fn=None, extra_ys=(), closed=False, caps=("paint_shade", "paint_shade"),
-                 center=None):
+                 center=None, creases_y=(), sharp_rails=(), step=0.10, seg=0.075, max_sub=5, smooth=True,
+                 sub=None, group="body"):
         self.keys = keys
         self.mat_fn = mat_fn
         self.arch_fn = arch_fn
@@ -97,25 +136,79 @@ class Loft:
         self.closed = closed          # a full ring profile (pods), not a half section
         self.caps = caps
         self.center = center          # (x, z) the outward direction points away from (pods)
+        self.creases_y = sorted(creases_y)
+        self.sharp_rails = set(sharp_rails)
+        self.step = step
+        self.seg = seg
+        self.max_sub = max_sub
+        self.smooth = smooth
+        self.sub = sub                # fixed segments per strip (list) instead of from `seg`
+        self.group = group
+        self._runs = self._make_runs()
+
+    # ---------------------------------------------------------------- along Y
+
+    def _make_runs(self):
+        """Key stations split at the creases; per run, per rail, per coordinate slopes."""
+        keys = [(y, [_key3(p) for p in r]) for y, r in self.keys]
+        cuts = [c for c in self.creases_y if keys[0][0] < c < keys[-1][0]]
+        runs, cur = [], [keys[0]]
+        for k in keys[1:]:
+            cur.append(k)
+            if any(abs(k[0] - c) < 1e-6 for c in cuts):
+                runs.append(cur)
+                cur = [k]
+        if len(cur) > 1:
+            runs.append(cur)
+        out = []
+        for run in runs:
+            ys = [k[0] for k in run]
+            nr = len(run[0][1])
+            slopes = [[pchip_slopes(ys, [k[1][i][c] for k in run]) for c in range(3)] for i in range(nr)]
+            out.append((ys, run, slopes))
+        return out
 
     def station(self, y):
+        """Rails at `y`: [(x, z, dy)]."""
         k = self.keys
         if y <= k[0][0]:
             return [_key3(p) for p in k[0][1]]
-        for (y0, r0), (y1, r1) in zip(k, k[1:]):
-            if y0 - 1e-9 <= y <= y1 + 1e-9:
-                t = (y - y0) / (y1 - y0) if y1 != y0 else 0.0
-                return [_interp(_key3(a), _key3(b), t) for a, b in zip(r0, r1)]
+        if y >= k[-1][0]:
+            return [_key3(p) for p in k[-1][1]]
+        for ys, run, slopes in self._runs:
+            if ys[0] - 1e-9 <= y <= ys[-1] + 1e-9:
+                for s in range(len(ys) - 1):
+                    if ys[s] - 1e-9 <= y <= ys[s + 1] + 1e-9:
+                        h = ys[s + 1] - ys[s]
+                        t = (y - ys[s]) / h if h else 0.0
+                        out = []
+                        for i in range(len(run[0][1])):
+                            out.append(tuple(hermite(run[s][1][i][c], run[s + 1][1][i][c], slopes[i][c][s],
+                                                     slopes[i][c][s + 1], h, t) for c in range(3)))
+                        return out
         return [_key3(p) for p in k[-1][1]]
 
+    def _run_index(self, y):
+        for i, c in enumerate(self.creases_y):
+            if y < c - 1e-6:
+                return i
+        return len(self.creases_y)
+
     def stations(self, extra=None):
-        ys = {round(k[0], 5) for k in self.keys}
         y0, y1 = self.keys[0][0], self.keys[-1][0]
+        ys = {round(k[0], 5) for k in self.keys}
         for y in list(self.extra_ys) + list(extra or ()):
             if y0 < y < y1:
                 ys.add(round(y, 5))
+        ys = sorted(ys)
+        if self.step:
+            fill = []
+            for a, b in zip(ys, ys[1:]):
+                n = int(math.ceil((b - a) / self.step - 1e-9))
+                fill += [a + (b - a) * i / n for i in range(1, n)]
+            ys = sorted(set(ys) | {round(y, 5) for y in fill})
         out = []
-        for y in sorted(ys):
+        for y in ys:
             rails = self.station(y)
             arch = False
             if self.arch_fn is not None:
@@ -123,27 +216,96 @@ class Loft:
             out.append((y, [(x, y + dy, z) for (x, z, dy) in rails], arch))
         return out
 
+    # ---------------------------------------------------------------- across
+
+    def _tangents(self, P):
+        """Per rail: (tangent into the strip before it, tangent into the strip after it)."""
+        n = len(P)
+        out = []
+        for i in range(n):
+            if self.closed:
+                prev, nxt = P[(i - 1) % n], P[(i + 1) % n]
+            else:
+                prev = P[i - 1] if i > 0 else None
+                nxt = P[i + 1] if i < n - 1 else None
+                if nxt is None and abs(P[i][0]) < 1e-6 and prev is not None:
+                    nxt = (-prev[0], prev[1], prev[2])     # the centre line: mirror symmetry
+            sharp = (not self.closed and (i == 0 or i == n - 1 and nxt is None)) or i in self.sharp_rails
+            if prev is None or nxt is None or sharp:
+                tin = v_sub(P[i], prev) if prev is not None else None
+                tout = v_sub(nxt, P[i]) if nxt is not None else None
+                out.append((tin, tout))
+            else:
+                d = v_sub(nxt, prev)
+                out.append((d, d))
+        return out
+
+    def _curve(self, P, subs):
+        """The section as a point list: strip j sampled into subs[j] segments."""
+        n = len(P)
+        T = self._tangents(P)
+        pts = [P[0]]
+        for j in range(n - (0 if self.closed else 1)):
+            j1 = (j + 1) % n
+            a, b = P[j], P[j1]
+            chord = v_len(v_sub(b, a))
+            ta, tb = T[j][1], T[j1][0]
+            ma = v_scale(wb_mesh.v_norm(ta), chord) if ta is not None and v_len(ta) > 1e-9 else v_sub(b, a)
+            mb = v_scale(wb_mesh.v_norm(tb), chord) if tb is not None and v_len(tb) > 1e-9 else v_sub(b, a)
+            k = subs[j]
+            for s in range(1, k + 1):
+                t = s / k
+                pts.append(tuple(hermite(a[c], b[c], ma[c], mb[c], 1.0, t) for c in range(3)))
+        if self.closed:
+            pts.pop()
+        return pts
+
+    def _subs(self, st):
+        n = len(st[0][1])
+        strips = n if self.closed else n - 1
+        if self.sub is not None:
+            return list(self.sub)
+        out = []
+        for j in range(strips):
+            j1 = (j + 1) % n
+            longest = max(v_len(v_sub(s[1][j1], s[1][j])) for s in st)
+            out.append(max(1, min(self.max_sub, int(math.ceil(longest / self.seg - 1e-9)))) if self.smooth else 1)
+        return out
+
     def build(self, b, extra=None):
         st = self.stations(extra)
         n = len(st[0][1])
-        for (ya, a, arch0), (yb, c, arch1) in zip(st, st[1:]):
+        strips = n if self.closed else n - 1
+        subs = self._subs(st)
+        curves = [self._curve(s[1], subs) if self.smooth else s[1] for s in st]
+        # Strip j covers curve points [start[j], start[j] + subs[j]].
+        start = [sum(subs[:j]) for j in range(strips)]
+        across = 0
+        sgroup = []
+        for j in range(strips):
+            if j in self.sharp_rails and j > 0:
+                across += 1
+            sgroup.append(across)
+        m_total = len(curves[0])
+        for (ya, _a, arch0), (yb, _c, arch1), ca, cb in zip(st, st[1:], curves, curves[1:]):
             arch = arch0 and arch1
-            for j in range(n - (0 if self.closed else 1)):
-                j1 = (j + 1) % n
+            run = self._run_index((ya + yb) / 2)
+            for j in range(strips):
                 m = self.mat_fn(ya, yb, j, arch)
                 if m is None:
                     continue
-                p = [a[j], c[j], c[j1], a[j1]]
-                out = None
-                if self.center is not None:
-                    # A closed ring (pod): away from its axis.
-                    mid = v_scale(v_add(v_add(p[0], p[1]), v_add(p[2], p[3])), 0.25)
-                    out = (mid[0] - self.center[0], 0.0, mid[2] - self.center[1])
-                # Half sections need no hint: stations run toward +Y and rails run
-                # floor -> side -> roof, so the winding already faces out everywhere
-                # (a hint would flip valleys and low noses).
-                b.face(p, m, out)
-        tail, nose = st[0][1], st[-1][1]
+                for s in range(subs[j]):
+                    i0 = start[j] + s
+                    i1 = (i0 + 1) % m_total if self.closed else i0 + 1
+                    p = [ca[i0], cb[i0], cb[i1], ca[i1]]
+                    out = None
+                    if self.center is not None:
+                        mid = v_scale(v_add(v_add(p[0], p[1]), v_add(p[2], p[3])), 0.25)
+                        out = (mid[0] - self.center[0], 0.0, mid[2] - self.center[1])
+                    # Half sections need no hint: stations run toward +Y and rails run
+                    # floor -> side -> roof, so the winding already faces out everywhere.
+                    b.face(p, m, out, smooth=self.smooth, group=(self.group, run, sgroup[j]))
+        tail, nose = curves[0], curves[-1]
         if self.caps[0]:
             pts = list(tail) if self.closed else list(tail) + [(0.0, tail[-1][1], tail[-1][2])]
             b.face(pts, self.caps[0], (0, -1, 0))
@@ -173,6 +335,15 @@ class LoftCar:
     NOSE_Y = 2.2
     TAIL_Y = -2.3
     KEYS = []
+    # Smooth body (docs: the owner asked for smooth surfaces over flat facets).
+    # CREASE_Y: key stations where the surface creases across the car (e.g. the
+    # windscreen base); SHARP_RAILS: rails that stay a crease along the car (floor
+    # edge, rocker, door bottom, the window line). Everything else is a smooth curve.
+    CREASE_Y = ()
+    SHARP_RAILS = (1, 2, 3, R_BELT)
+    LOFT_STEP = 0.13          # station spacing along Y (m)
+    LOFT_SEG = 0.09           # target segment length across a section (m)
+    LOFT_MAX_SUB = 5
     REGIONS = {"windscreen": (0, 0), "rear_glass": (0, 0), "side_glass": (0, 0)}
     MIRROR = (0.905, 0.30, 0.94)     # door mirror (x of the door skin, y, z); None = none
     # Interior
@@ -259,7 +430,9 @@ class LoftCar:
 
     def main_loft(self):
         edges = [r[k] for r in self.REGIONS.values() for k in (0, 1)]
-        return Loft(self.KEYS, self.body_material, self.arch_rails, extra_ys=self.arch_ys() + edges)
+        return Loft(self.KEYS, self.body_material, self.arch_rails, extra_ys=self.arch_ys() + edges,
+                    creases_y=self.CREASE_Y, sharp_rails=self.SHARP_RAILS, step=self.LOFT_STEP, seg=self.LOFT_SEG,
+                    max_sub=self.LOFT_MAX_SUB)
 
     def station(self, y):
         return self.main_loft().station(y)
@@ -328,7 +501,7 @@ class LoftCar:
                 (w, ri + 0.03), (w - 0.01, ri)]
         mats = ["trim_asphalt", "trim_asphalt", "trim_ink", "trim_ink", "trim_ink", "trim_asphalt", "trim_asphalt"]
         t.lathe_x(prof, sides or self.TIRE_SIDES, mats)
-        return t
+        return t.smoothed("tire")
 
     def rim(self):
         """Default: a five-spoke star with a polished lip, face toward +X."""
@@ -386,7 +559,8 @@ class LoftCar:
         return keys
 
     def cabin_shell(self, b):
-        lo = Loft(self.inner_keys(), self.interior_material, caps=(None, None))
+        lo = Loft(self.inner_keys(), self.interior_material, caps=(None, None), creases_y=self.CREASE_Y,
+                  sharp_rails=self.SHARP_RAILS, step=0.2, seg=0.15, max_sub=2, group="cabin")
         st = lo.stations()
         inward = MeshBuilder()
         lo.build(inward)
@@ -467,7 +641,7 @@ class LoftCar:
                 mid = ((r0 + r1) / 2 * math.cos((a0 + a1) / 2), (y0 + y1) / 2, (r0 + r1) / 2 * math.sin((a0 + a1) / 2))
                 rad = (math.cos((a0 + a1) / 2), 0.0, math.sin((a0 + a1) / 2))
                 out = v_sub(mid, v_scale(rad, r))
-                b.face(pts, m, out)
+                b.face(pts, m, out, smooth=True, group="steer_rim")
         # Hub.
         hr = s.get("hub") or r * 0.28
         hub = MeshBuilder()
@@ -567,7 +741,8 @@ class LoftCar:
         car = self
         lo = Loft(self.KEYS, self.body_material, self.arch_rails,
                   extra_ys=[ay + s * self.ARCH_R for ay in self.axles for s in (-1.0, -0.7, 0.0, 0.7, 1.0)] +
-                  [r[k] for r in self.REGIONS.values() for k in (0, 1)])
+                  [r[k] for r in self.REGIONS.values() for k in (0, 1)],
+                  creases_y=self.CREASE_Y, sharp_rails=self.SHARP_RAILS, step=0.3, seg=0.2, max_sub=2)
         half = MeshBuilder()
         lo.build(half)
         car.lod1_extras(half)

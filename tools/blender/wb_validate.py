@@ -150,8 +150,6 @@ def _check_transforms(rep, obs, allowed_rot):
                     rep.warn("%s: modifier %s will be applied on export" % (ob.name, md.name))
             if ob.data.shape_keys:
                 rep.err("%s: shape keys not allowed" % ob.name)
-            if any(p.use_smooth for p in ob.data.polygons):
-                rep.err("%s: smooth-shaded faces (Shade Flat)" % ob.name)
 
 
 def _degenerate(ob):

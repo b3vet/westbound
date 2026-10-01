@@ -2,5 +2,6 @@
 	"root_name": "Car_KestrelRs",
 	"modular": true,
 	"forward_axis": "-Z",
+	"flat_shading": false,
 	"source": "in-house, Blender: art/blender/cars/kestrel_rs.blend (tools/blender/cars/kestrel_rs.py)"
 }
