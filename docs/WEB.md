@@ -35,6 +35,7 @@ node tools/web_smoke/smoke.mjs --gzip --network 4g --json build/web_metrics.json
 node tools/web_smoke/smoke.mjs --settle 8000 --audio-unlock tap   # also: click, key
 node tools/web_smoke/smoke.mjs --stale                        # custom shell: a stale page reloads once
 node tools/web_smoke/smoke.mjs --portrait --dpr 1             # iPhone 14 portrait: rotated, a tap on PLAY starts a run
+node tools/web_smoke/smoke.mjs --landscape --dpr 1 --audio-loops 60   # drive 60 s: engine/wind loops never pause, stall or restart past their end (docs/AUDIO.md → Loops on the web)
 node tools/web_smoke/smoke.mjs --landscape --dpr 1            # iPhone 14 landscape: not rotated, the same tap
 ```
 

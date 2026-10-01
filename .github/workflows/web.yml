@@ -135,6 +135,9 @@ jobs:
       - name: Audio unlock (default autoplay policy, first tap)
         run: node tools/web_smoke/smoke.mjs --timeout 90000 --settle 8000 --audio-unlock tap --screenshot build/web_smoke_unlock.png
 
+      - name: Engine and wind loops keep playing (60 s drive)
+        run: node tools/web_smoke/smoke.mjs --timeout 180000 --landscape --dpr 1 --audio-loops 60 --screenshot build/web_smoke_loops.png
+
       - name: Stale page reloads once
         run: node tools/web_smoke/smoke.mjs --timeout 90000 --stale --settle 6000 --screenshot build/web_smoke_stale.png
 

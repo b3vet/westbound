@@ -39,7 +39,7 @@ services:
       WB_AUTH__JWT_SECRET: ${WB_AUTH__JWT_SECRET:-}
       WB_AUTH__DEVICE_SECRET_PEPPER: ${WB_AUTH__DEVICE_SECRET_PEPPER:-}
       WB_SERVER__ENV: ${WB_SERVER__ENV:-production}
-      WB_BACKUP__RETENTION_DAYS: ${WB_BACKUP__RETENTION_DAYS:-7}
+      WB_BACKUP__RETENTION_DAYS: ${WB_BACKUP__RETENTION_DAYS:-3}
       WB_BACKUP__TIME_UTC: ${WB_BACKUP__TIME_UTC:-03:17}
       # N10.2: optional off-site hook (argv, comma-separated, {file} = the backup).
       WB_BACKUP__UPLOAD_COMMAND: ${WB_BACKUP__UPLOAD_COMMAND:-}
