@@ -18,7 +18,8 @@ WP9.2 (plan Phase 9: "web build polish (gyro decision, load time)"). Spec: *Plat
 | `src/platform/web_layout.gd` (`WebLayout`) | WP9.7: reads the shell's `window.wbLayout` (rotated, phone, the landscape box, the page's safe-area insets). |
 | `src/input/screen_insets.gd` (`ScreenInsets`) | WP9.7: the safe area in canvas px for the HUD, menus and touch controls (web insets rotated and scaled, the engine's safe area natively, the phone's minimum left inset). |
 | `src/platform/web_ui_probe.gd` (`WebUiProbe`) | WP9.7: with `?probe=ui`, prints the visible menu buttons (canvas px) for the smoke test's tap on PLAY. |
-| `tools/export_web.sh` | Exports, then writes `music.pck` (when needed), `version.json` and the shell's build id and font; prints sizes and the transfer to the title. |
+| `tools/export_web.sh` | Exports, then writes `music.pck` (when needed), `version.json` and the shell's build id and font; prints the engine template used, sizes and the transfer to the title. `--template=auto\|slim\|official` (WP9.9, [Slim engine](#slim-engine)). |
+| `tools/web_template/` | WP9.9: the slim engine template: `build.sh` (pinned build), `westbound.gdbuild` + `detect_classes.gd` (class profile and the check), `verify.sh` + `probe.mjs` + `web_probe.gd`, `web_names.gd`, `web_net.gd` (official vs slim in Chromium), `removed_classes.txt`, `ci_gate.sh` ([Slim engine](#slim-engine)). |
 | `tools/web_smoke/smoke.mjs` | The headless-Chromium smoke test, plus timings, transfer, memory, the audio-unlock test, the caching checks and (WP9.7) phone emulation: `--portrait` / `--landscape` / `--device`, `--tap-play`. |
 | `tools/web_smoke/layout_test.mjs` | WP9.7: the shell's rotation math in node (the smoke runs it first; `tests/platform/test_web_layout.gd` runs it when node is installed). |
 | `tools/web_smoke/pck_list.py` | Lists a `.pck` by group and file, raw and gzip. |
@@ -34,6 +35,7 @@ node tools/web_smoke/smoke.mjs --gzip --network 4g --json build/web_metrics.json
 node tools/web_smoke/smoke.mjs --settle 8000 --audio-unlock tap   # also: click, key
 node tools/web_smoke/smoke.mjs --stale                        # custom shell: a stale page reloads once
 node tools/web_smoke/smoke.mjs --portrait --dpr 1             # iPhone 14 portrait: rotated, a tap on PLAY starts a run
+node tools/web_smoke/smoke.mjs --landscape --dpr 1 --audio-loops 60   # drive 60 s: engine/wind loops never pause, stall or restart past their end (docs/AUDIO.md → Loops on the web)
 node tools/web_smoke/smoke.mjs --landscape --dpr 1            # iPhone 14 landscape: not rotated, the same tap
 ```
 
@@ -55,7 +57,7 @@ Memory: the wasm heap (`WebAssembly.Memory`) and Chrome's JS heap after the sett
 
 ## Budgets and measurements
 
-The spec gives no number for load time or pack size ("web build polish ... load time"), so these are proposed budgets for the everyday playtest on a phone: **first paint under 0.5 s**, **under 12 MiB (gzip) before the title**, **title within 10 s on 4G** (9 Mbps). The download alone of the current engine is 9.7 MiB, so the transfer budget is only reachable with a smaller engine template ([next steps](#next-steps-not-done-here)).
+The spec gives no number for load time or pack size ("web build polish ... load time"), so these are proposed budgets for the everyday playtest on a phone: **first paint under 0.5 s**, **under 12 MiB (gzip) before the title**, **title within 10 s on 4G** (9 Mbps). The official engine alone is 9.7 MiB on the wire; the slim engine (WP9.9, [Slim engine](#slim-engine)) is 6.1 MiB and brings the transfer to the title to 9.4 MiB, inside the budget.
 
 Measured on this branch (release export, gzip like Pages). "Before" is the committed preset (Godot's shell, music inside `index.pck`); "after" adds the two requested preset lines (custom shell, music as `music.pck`):
 
@@ -209,9 +211,123 @@ GitHub Pages sends `cache-control: max-age=600` and a weak ETag made of the file
 
 The two audio worklet files are loaded by `audioWorklet.addModule()`, not `fetch`, so they stay unversioned; they come from the engine template and only change with the Godot version.
 
+## Slim engine
+
+WP9.9. `index.wasm` was Godot's full web template (37.7 MiB, 9.7 MiB on the wire, 59 % of the transfer to the title). Westbound now ships its own build of the same engine: Godot 4.7-stable from the release tarball, the official compiler (Emscripten 4.0.20, the version `godotengine/build-containers` pins for 4.7), the official template's settings (`production=yes`, `optimize=size`, wasm SIMD, single-threaded), with what the game never uses compiled out. Nothing in the game changed.
+
+### Before and after
+
+Release export, gzip like Pages; timings from `smoke.mjs --gzip --network 4g --settle 8000`, three alternating runs each on the same machine (SwiftShader, see the caveat in [Measuring](#measuring)):
+
+| | Official template | Slim template | Change |
+| --- | --- | --- | --- |
+| `index.wasm` raw / gzip | 37.7 / 9.6 MiB (9.71 MiB on the wire) | **23.0 / 6.0 MiB** (6.07 on the wire) | −39 % / −37 % |
+| of which: modules and features off (no class profile) | | 28.4 / 7.3 MiB | −9.3 / −2.4 MiB |
+| of which: the class profile on top | | 23.0 / 6.0 MiB | −5.4 / −1.2 MiB |
+| `index.js` raw / gzip | 273 / 67 KiB | 249 / 62 KiB | |
+| `index.pck`, `music.pck` | 5.1 / 3.3 MiB, 3.7 / 3.5 MiB | unchanged | |
+| Transfer to the title (`export_web.sh`) | 13.1 MiB | **9.4 MiB** | −28 % (inside the 12 MiB budget) |
+| Boot downloads done, 4G | 13.35–13.47 s | **9.57–9.62 s** | −3.8 s |
+| `WebAssembly.instantiate` (after the download) | 0.07 s | 0.04–0.05 s | streaming compile, already small |
+| First frame, 4G | 20.0–21.0 s | 15.8–16.3 s | −4.6 s |
+| Title shown, 4G | 21.96–23.04 s | **17.82–18.10 s** | −4.6 s |
+| Engine classes (`ClassDB`) | 913 | 327 | −586 (`tools/web_template/removed_classes.txt`) |
+| Wasm memory after loading every game resource (probe) | 155.2 MiB | 136.8 MiB | −18 MiB |
+| Wasm memory, one text scene (probe) | 74.8 MiB | 65.9 MiB | −9 MiB |
+| Wasm memory 8 s after the title (smoke) | 186.3 MiB | 197.1 MiB | see below |
+| JS heap after the title (Chrome) | 215–257 MiB | 228–242 MiB | noise |
+
+The wasm memory is a high-water mark that only grows, each time to at least 1.2× its size (Emscripten's geometric growth), so one reading can land a step apart; with the same work (the probes) the slim engine holds 9–18 MiB less. The CPU-bound stretch after `engine main()` (setup, world build, shaders) is the same within noise; the gain is the download. On a phone over 4G the 3.7 MiB less is about 3–4 s.
+
+### What is compiled out
+
+All of it was audited against `src/`, `data/`, `assets/`, `platform/` and `project.godot` (grep, then the [class profile](#class-profile)), and the [checks](#checks) prove it on the real pack.
+
+| Off | Why it is safe |
+| --- | --- |
+| `disable_physics_2d` | No 2D bodies, areas or shapes anywhere (UI is Control-only). |
+| `disable_navigation_2d`, `disable_navigation_3d` | Traffic is IDM/MOBIL in road space; no navigation nodes or servers. |
+| `disable_xr` (also drops `webxr`, `mobile_vr`) | No XR. |
+| `brotli=no` | Brotli only decodes WOFF2 fonts; the fonts are TTF. Replays use gzip (core). |
+| `graphite=no` | SIL Graphite smart-font shaping; Chakra Petch has no Graphite tables (HarfBuzz/OpenType shaping stays). |
+| `godot_physics_3d`, `vhacd` | The project uses **Jolt** (`physics/3d/physics_engine`); the crash cinematic's RigidBody3Ds and box shapes run on Jolt, which stays. VHACD is import-time convex decomposition. |
+| `csg`, `gridmap`, `gltf`, `fbx`, `meshoptimizer` | No CSG or GridMap; `.glb` cars are imported at edit time (the pack holds `.scn`), no runtime GLTFDocument; LODs are made at import. |
+| `multiplayer`, `enet`, `webrtc`, `upnp`, `jsonrpc` | The net layer is the game's own protocol over `WebSocketPeer` and `HTTPRequest` (both stay); no `@rpc`/SceneMultiplayer; ENet and UPnP cannot run in a browser; JSON-RPC serves the GDScript language server only. |
+| `theora`, `mp3`, `interactive_music` | No video; audio is OGG Vorbis (music, loops) and WAV/QOA (one-shots), both stay; no AudioStreamInteractive/Playlist/Synchronized. |
+| `noise`, `visual_shader` | No FastNoiseLite/NoiseTexture; every shader is a `.gdshader`. |
+| `zip` | No ZIPReader/ZIPPacker (core `.zip` pack support, `minizip`, stays). |
+| `astcenc`, `bcdec`, `etcpak`, `basis_universal`, `ktx`, `dds` | Runtime texture (de)compression and loaders: the pack has no VRAM-compressed textures (the art is vertex-colored). If textured art arrives, keep `bcdec`/`astcenc` in mind for a device that lacks both exported formats. |
+| `bmp`, `tga`, `hdr`, `jpg`, `tinyexr` | Runtime `Image.load` of those formats: textures are imported `.ctex` (WebP lossless, which stays, like PNG in core). |
+
+Kept on purpose: `text_server_adv` (HarfBuzz kerning and shaping, BiDi, ICU line breaking: player names may be any script; the fallback server would change text layout), `freetype`, `msdfgen` (the fonts are MSDF), `svg` (the default theme's icons are SVG at run time), `webp`, `ogg`/`vorbis`, `jolt_physics`, `mbedtls` (`Crypto.generate_random_bytes`, `TLSOptions`), `regex` (`fake_boards.gd`), `websocket`, `gdscript`, `javascript_eval` (`JavaScriptBridge.eval`: the audio bridge, `js_bridge.gd`, the URL parameters). Not changed from official: `deprecated`, `disable_advanced_gui` (the loop editor uses OptionButton/SpinBox), `threads=no`, the JS glue (no closure compiler: the audio bridge reads `GodotAudio` by name).
+
+### Class profile
+
+On top of the modules, `tools/web_template/westbound.gdbuild` (Godot's build profile format, passed as `build_profile=`) unregisters 243 class trees the game never uses (each disables its descendants at compile time, and full LTO drops their code): 2D nodes (`Node2D` and below), animation (`AnimationMixer`, `AnimationNode`), most 3D nodes outside what the game uses (lights other than `DirectionalLight3D`, particles, GI, decals, fog, occluders, joints, soft and vehicle bodies, skeletons and IK, sprites and `Label3D`, paths), `Environment`/`WorldEnvironment`/sky materials (the sky and the grade are custom shaders), unused containers and controls (`RichTextLabel`, `TabContainer`, `ItemList`, `Tree`, color picker, graph and code editors…), unused shapes, meshes, textures, audio effects and streams, `Translation`, `GDExtension`.
+
+Godot 4.7 detects a profile only from the editor GUI (Project → Tools → Engine Compilation Configuration Editor → Detect from Project), so `tools/web_template/detect_classes.gd` does the same headless, more conservatively:
+
+```
+tools/godot.sh --headless --path . --script res://tools/web_template/detect_classes.gd -- --write   # regenerate the profile
+tools/godot.sh --headless --path . --script res://tools/web_template/detect_classes.gd -- --check   # does the template have every class the game uses?
+```
+
+*Used* = every word in the game's text files (scripts, scenes, resources, shaders, `.import` files, `project.godot`, comments included) that names a class, the class of every object reached by loading every game resource (scene node types, sub-resources, imported files), the editor's always-kept classes (`Font`, `InputEvent`, `ShaderInclude`, `StyleBox`, `Window` and their inheriters), the dependencies the engine declares (`ADD_CLASS_DEPENDENCY`), a few objects the engine hands the game (`World3D`, `ImageTexture`, `ViewportTexture`, `Theme`, `Image`, `X509Certificate`, `CryptoKey`), and all their ancestors. Like the editor it disables only core Node and Resource classes. `--check` fails when the game uses a class that the profile disables or that `removed_classes.txt` lists (whole-line comments do not count there); `tools/export_web.sh` runs it before using the slim template and falls back to the official one when it fails, so a new feature using, say, `GPUParticles3D` or `FastNoiseLite` can never ship a broken web build: it ships the official engine until the profile is regenerated (`--write`) or the module re-enabled in `build.sh`, and the template rebuilt.
+
+### Build
+
+```
+tools/web_template/build.sh            # release template -> build/web_template/web_nothreads_release.zip
+tools/web_template/build.sh --debug    # debug template (tools/export_web.sh --debug)
+tools/web_template/build.sh --hash     # the config hash (CI cache key)
+```
+
+Pinned: the Godot 4.7-stable source tarball (SHA-512 from the release's `SHA512-SUMS.txt`), emsdk tag 4.0.20 at its commit, SCons 4.10.1 in a venv; everything downloaded or built lives in `~/.cache/westbound/web_template` (emsdk ~1.6 GB; the source tree and objects ~3 GB while building, deleted afterwards unless `--keep`). The SCons flags, each with its reason, are in `build.sh`; the config hash covers `build.sh` and the profile, and `build/web_template/template.json` records it with the sizes. Two choices beyond the official build: **full LTO** (official uses thin; full drops more dead code) and **SCU** (`scu_build=yes`, about twice as fast cold). Neither changes float results: wasm arithmetic is strict IEEE-754 (no fast-math, no FMA contraction in the MVP/SIMD128 instruction set), the libm is the same musl, and the determinism compare is bit-identical (below). A cold release build took **15 min** here (4 cores; plus ~3 min for emsdk the first time). No Docker: a pinned emsdk checkout is just as reproducible and runs the same in CI.
+
+### How the export picks the engine
+
+The Web preset's `custom_template/release` and `/debug` point at `build/web_template/selected/` (gitignored). `tools/export_web.sh` fills it before each export:
+
+- `--template=auto` (default; also `WB_WEB_TEMPLATE`): the slim template when `build/web_template/` holds one built for the current config hash and `detect_classes.gd --check` passes; else the official one, saying why on the `engine:` line.
+- `--template=slim`: fail instead of falling back. `--template=official`: Godot's own. `--template=path.zip`: that template as is (experiments).
+
+An editor-GUI export needs `selected/` to exist: run `tools/export_web.sh` once.
+
+### Checks
+
+`tools/web_template/verify.sh [--net=http://127.0.0.1:8080]` runs the official and the slim engine in headless Chromium with the same `index.pck`/`music.pck`, through a page that mounts the pack and replaces the main scene with a probe (export templates ignore `--script`, so the page drops the probe, a scene holding it and an `override.cfg` into the engine's file system):
+
+- **Everything loads**: `web_probe.gd` compiles every script and loads every scene, resource and imported file of both packs. Same result on both engines: 675 loaded, the same 4 failures (below), no other error.
+- **Names render identically**: `web_names.gd` draws player names in the game's theme (`Şahin#1234`, Turkish dotted/dotless i and Turkish upper-casing, `Zoë Ñandú Łukasz Øyvind Ærø`, a combining accent, Greek and Cyrillic, Thai, an emoji): the same shaped widths, and byte-identical screenshots.
+- **Networking** (`--net`, with a local `westbound-server`): `web_net.gd` does an `HTTPRequest` to `/api/v1/health` and a `WebSocketPeer` echo (binary and text) on `/ws/echo`: ok on both. The game's own online boot (device account via `POST /api/v1/auth/device`) also ran against the local server with the slim engine.
+- It rewrites `removed_classes.txt` (what the official engine has and the slim one lacks).
+
+Also passed with the slim engine (this WP): every web smoke (default `--gzip`, `--portrait --dpr 1`, `--landscape --dpr 1` with the tap on PLAY, `--audio-unlock tap` with the music playing after the tap, `--stale`), and `tools/determinism/compare.sh --seconds=180`: **IDENTICAL** (180/180 s bit for bit vs native, 34 hits; the libm probe differs exactly as with the official engine).
+
+### CI
+
+`.github/workflows/web.yml` has a `template` job before `build`: it computes the config hash, looks it up in the Actions cache (`web-template-<hash>`, lookup only), and only on a miss builds the template (`continue-on-error`, step timeout 100 min) and saves it. The `build` job (`needs: template`, runs even when it failed) restores that cache, exports (`auto`), and runs `tools/web_template/ci_gate.sh` before the usual smokes: when the export used the slim engine it runs `verify.sh`, a default smoke and a 60 s determinism compare, and on any failure re-exports with the official engine (warning annotation); the step summary says which engine shipped. The existing smoke, determinism and deploy steps then test and deploy whatever was exported. So a slim-engine problem costs a warning, never a deploy. A config change costs one cold build (~15–30 min on a 4-core runner) on the first push; caches saved on the default branch are visible to every branch, other branches' caches only to themselves; GitHub evicts caches unused for 7 days (one push a week keeps it).
+
+### Found on the way (not changed: outside this WP)
+
+- The web pack contains four scripts that cannot compile there, on either engine: `assets/cars/car_import.gd` (an `EditorScenePostImport`) and the dev previews `src/road/dev/road_preview.gd`, `roadside_preview.gd`, `lane_change_road_path.gd` (they use `StraightRoadPath`/`ArcRoadPath`, which live outside the export). Those preview scenes are broken in the web build.
+- A debug web export (`tools/export_web.sh --debug`) fails the default smoke on both engines: `Run._ready → enter_menu → CrashSequence.reset()` runs before `CrashSequence.setup()` built the body pool, so `_park` assigns to null bodies (three `SCRIPT ERROR`s at boot, `src/run/crash_sequence.gd:457` and `:260`). Release builds skip the error silently. The slim debug template itself (21.9 MiB, 6.0 MiB gzip) behaves exactly like the official one there.
+- Greek and Cyrillic names render as missing-glyph boxes on the web on both engines: Chakra Petch has no such glyphs and a browser build has no system fallback fonts. Latin with diacritics (Turkish included) and Thai render.
+
+## Sign-in (N11)
+
+Sign in with Apple and Google on the web go through the custom shell (`platform/web/shell.html`), `window.wbIdentity`, driven by `NetWebIdentity` (`src/net/web_identity.gd`; docs/NET_CLIENT.md → Sign in with Apple / Google).
+
+- **Loaded only when configured.** The client ids come from the server (`GET /api/v1/auth/providers`), not the build: `configure(provider, config)` is called after that answer, and only an enabled provider's script is added (`https://accounts.google.com/gsi/client`, Apple's `appleid.auth.js`). A server without providers never loads either, and the boot is unchanged.
+- **Why a sheet over the canvas.** Both providers open a popup, and browsers allow popups only inside a real click. A tap on the game's canvas is not one: the engine handles input on its next frame, outside the DOM event. So `begin(provider, nonce)` shows a small sheet (`#wb-signin`, inside `#wb-rotor`, so it rotates with the game in portrait) with the provider's own button: Google's rendered button (`google.accounts.id.renderButton`, with the nonce passed to `initialize`), or a Sign in with Apple button that calls `AppleID.auth.signIn()` (`usePopup: true`, the nonce, scope `email`). The player's click there opens the popup; CANCEL closes the sheet. Closing Apple's popup keeps the sheet open to try again.
+- **Result.** `poll()` returns `''` while open, then once `{"state":"done","id_token":…,"code":…}` (Apple's authorization code goes to the server for the revocation grant), `{"state":"cancelled"}` or `{"state":"error","error":…}` (`sdk_load_failed`, `popup_blocked`, …). Nothing in the page stores or logs a token.
+- **Rotation and input.** The sheet's own buttons get the browser's native hit testing (the shell's coordinate rewrite only changes what the engine reads); Google's button is an iframe.
+- **Without the custom shell** (Godot's default page) `wbIdentity` is missing: the providers show NOT IN THIS BUILD.
+- **Origins.** Google needs `https://b3vet.github.io` as an authorized JavaScript origin; Apple needs the Services ID's domain `b3vet.github.io` and return URL `https://b3vet.github.io/westbound/` (OPERATIONS.md → Sign in with Apple / Google).
+
 ## Next steps (not done here)
 
-1. **A smaller engine (the biggest lever).** `index.wasm` is Godot's full web template: 37.7 MiB, 9.7 MiB gzip, 59 % of the transfer before the title, and its compile time. A custom web template built with a build profile of the classes the project uses (dropping unused modules such as navigation, XR, CSG, GridMap and Theora) and `optimize=size` typically lands around 20–25 MiB (5–6.5 MiB gzip); an estimate, to be measured. Cost: an emsdk matching the template's Emscripten (4.0.20), a cached CI build (~30–60 min cold), and a re-check of every feature on the web. Needs an orchestrator decision (CI time, a new pinned artifact).
+1. ~~A smaller engine~~: done in WP9.9 ([Slim engine](#slim-engine)).
 2. **Measure on the iPhone.** The CPU-bound boot (engine setup, world build, shader compiles) can only be judged on the phone; `wbBoot` has the marks.
 
 ## Shared-file requests

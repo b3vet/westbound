@@ -1,0 +1,64 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT revision, updated_at, bytes,\n                  CAST(json_extract(data, '$.stats.xp') AS INTEGER) AS \"xp?: i64\",\n                  CAST(json_extract(data, '$.stats.runs') AS INTEGER) AS \"runs?: i64\"\n           FROM cloud_saves WHERE account_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "revision",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "cloud_saves",
+            "name": "revision"
+          }
+        }
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "cloud_saves",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "name": "bytes",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "cloud_saves",
+            "name": "bytes"
+          }
+        }
+      },
+      {
+        "name": "xp?: i64",
+        "ordinal": 3,
+        "type_info": "Null",
+        "origin": "Expression"
+      },
+      {
+        "name": "runs?: i64",
+        "ordinal": 4,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "0921dede24d04d824cd0aff929b4913223ad380582d9c6839cacfba31063c6c5"
+}

@@ -56,6 +56,8 @@ const DEV_PEPPER: &str = "westbound-dev-only-device-pepper-not-for-production";
 const DEVICE_SECRET_CONTEXT: &[u8] = b"westbound/device-secret/v1\0";
 /// Domain separation for log-safe IP tags.
 const IP_TAG_CONTEXT: &[u8] = b"westbound/ip-tag/v1\0";
+/// Domain separation for keys derived from the pepper (N11).
+const DERIVE_CONTEXT: &[u8] = b"westbound/derived-key/v1\0";
 /// Bytes of the IP tag shown in logs (hex).
 const IP_TAG_BYTES: usize = 6;
 
@@ -207,6 +209,16 @@ impl AuthKeys {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect()
+    }
+
+    /// N11: a 32-byte key for `context`, derived from the pepper (HMAC-SHA256 under the
+    /// pepper of a domain-separated label): the identity nonces and the sealed Apple
+    /// tokens. Never stored; stable as long as the pepper is (which never rotates).
+    pub fn derive_key(&self, context: &[u8]) -> [u8; 32] {
+        let mut mac = HmacSha256::new_from_slice(&self.pepper).expect("HMAC takes any key length");
+        mac.update(DERIVE_CONTEXT);
+        mac.update(context);
+        mac.finalize().into_bytes().into()
     }
 
     /// Constant-time check of a presented device secret against a stored hash.
@@ -444,7 +456,8 @@ impl FromRequestParts<AppState> for OptionalAuthed {
     }
 }
 
-/// 501 for the Apple / Google routes until MP-D2's developer setup lands.
+/// 501 for the Apple / Google routes while the provider has no client ids configured
+/// (MP-D2's shape; N11 enables them from `[identity]`).
 pub fn provider_not_enabled(provider: &str) -> ApiError {
     ApiError::new(
         StatusCode::NOT_IMPLEMENTED,

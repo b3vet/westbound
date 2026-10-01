@@ -1,5 +1,7 @@
 //! `/api/v1/auth/*`: device account creation and sign-in, refresh rotation with reuse
-//! detection, logout, and the Apple / Google shapes (501 until MP-D2).
+//! detection, logout. The Apple / Google routes are in `identity::routes` (N11).
+//! N11: device sign-in also accepts the extra per-device credentials a provider sign-in
+//! hands out (`device_secrets`).
 //! Spec: WESTBOUND_MULTIPLAYER_HANDOFF.md → "Accounts and authentication";
 //! API reference: docs/SERVER.md → "Accounts API".
 
@@ -12,7 +14,7 @@ use sqlx::SqliteConnection;
 
 use super::{
     active_ban, b64, decode_secret, hash_refresh_token, new_family_id, parse_account_id,
-    provider_not_enabled, random_bytes, AuthKeys, SECRET_BYTES,
+    random_bytes, AuthKeys, SECRET_BYTES,
 };
 use crate::accounts::{self, NameTakenError, Profile};
 use crate::app::AppState;
@@ -80,7 +82,7 @@ pub struct LogoutRequest {
 
 /// Starts a session: inserts a refresh token (a new family unless `rotate` names the
 /// family and the token it replaces) and signs an access token.
-async fn issue_session(
+pub(crate) async fn issue_session(
     conn: &mut SqliteConnection,
     keys: &AuthKeys,
     account_id: i64,
@@ -195,7 +197,13 @@ pub async fn device_login(
         .as_ref()
         .and_then(|r| r.device_secret_hash.clone())
         .unwrap_or_default();
-    let ok = keys.device_secret_matches(&presented, &stored) && secret.is_some();
+    let mut ok = keys.device_secret_matches(&presented, &stored) && secret.is_some();
+    // N11: or one of the account's extra device credentials (provider sign-ins on other
+    // devices). Looked up by its HMAC, like refresh tokens by their hash.
+    if !ok && secret.is_some() && row.is_some() {
+        let h = keys.hash_device_secret(&presented);
+        ok = crate::identity::store::use_device_secret(&state.db, id, &h, now).await?;
+    }
     let Some(row) = row.filter(|_| ok) else {
         return Err(invalid_credentials());
     };
@@ -208,13 +216,13 @@ pub async fn device_login(
     let account = accounts::get(&mut *tx, id)
         .await?
         .ok_or_else(invalid_credentials)?;
+    let profile = account
+        .profile_with_identities(&mut *tx, now, keys.rename_cooldown_secs)
+        .await?;
     tx.commit().await?;
     Metrics::inc(&state.metrics.auth_logins);
     tracing::debug!(account_id = id, "device sign-in");
-    Ok(Json(SignedIn {
-        session,
-        profile: account.profile(now, keys.rename_cooldown_secs),
-    }))
+    Ok(Json(SignedIn { session, profile }))
 }
 
 fn invalid_refresh() -> ApiError {
@@ -368,14 +376,4 @@ pub async fn logout(
     }
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// `POST /api/v1/auth/{link,signin}/apple`: 501 until MP-D2.
-pub async fn apple_not_enabled() -> ApiError {
-    provider_not_enabled("Apple")
-}
-
-/// `POST /api/v1/auth/{link,signin}/google`: 501 until MP-D2.
-pub async fn google_not_enabled() -> ApiError {
-    provider_not_enabled("Google")
 }

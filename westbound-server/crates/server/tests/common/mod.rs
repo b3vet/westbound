@@ -53,6 +53,9 @@ pub fn test_config(dir: &TempDir) -> Config {
     c.metrics.bind = "127.0.0.1:0".into();
     c.db.path = dir.path().join("test.db");
     c.backup.enabled = false;
+    // N10.3: no disk checks or WAL checkpoints under the tests (tests/housekeeping.rs turns
+    // them on).
+    c.housekeeping.enabled = false;
     // The test client never closes on a fatal error; don't wait the production second.
     c.gateway.fatal_close_delay_ms = 20;
     c.backup.dir = dir.path().join("backups");
@@ -71,6 +74,8 @@ pub fn test_config(dir: &TempDir) -> Config {
     r.runs_burst = 100_000;
     r.social_per_hour = 100_000;
     r.social_burst = 100_000;
+    c.cloud_save.writes_per_hour = 100_000;
+    c.cloud_save.writes_burst = 100_000;
     // N10.2: every test client is 127.0.0.1; the per-IP limits have their own tests.
     r.ip_per_minute = 1_000_000;
     r.ip_burst = 100_000;

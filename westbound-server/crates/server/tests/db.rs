@@ -43,9 +43,12 @@ async fn migrations_apply_in_wal_mode_and_are_idempotent() {
             "accounts",
             "admin_log",
             "blocks",
+            "cloud_saves",
             "crew_members",
             "crews",
+            "device_secrets",
             "friends",
+            "identity_links",
             "leaderboard_entries",
             "refresh_tokens",
             "replays",
@@ -114,7 +117,7 @@ async fn online_backup_is_a_consistent_copy() {
     assert_eq!(details, vec!["before backup"]);
     // The copy is a working database with the migration history.
     db::migrate(&copy).await.unwrap();
-    assert_eq!(tables(&copy).await.len(), 12);
+    assert_eq!(tables(&copy).await.len(), 15);
     db::close(&copy).await;
     db::close(&pool).await;
 }
@@ -124,8 +127,10 @@ async fn nightly_run_writes_dated_file_and_prunes() {
     let dir = tempfile::tempdir().unwrap();
     let pool = db::connect(&db_config(&dir, "live.db")).await.unwrap();
     db::migrate(&pool).await.unwrap();
+    // N10.3: a count of daily backups (the new one and one more).
     let cfg = BackupConfig {
         dir: dir.path().join("backups"),
+        retention_days: 2,
         ..BackupConfig::default()
     };
     std::fs::create_dir_all(&cfg.dir).unwrap();

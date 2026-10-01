@@ -82,3 +82,18 @@ groups:
         labels: { severity: info }
         annotations:
           summary: "Player reports waiting (westbound-server admin reports --unhandled)"
+
+      - alert: WestboundDiskLow
+        # Below housekeeping.min_free_mb: replay uploads answer 503 storage_low.
+        expr: wb_disk_low == 1
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "Data volume nearly full (westbound-server admin stats; docs/OPERATIONS.md → Disk space)"
+
+      - alert: WestboundBackupStale
+        expr: wb_backup_stale == 1
+        for: 1h
+        labels: { severity: warn }
+        annotations:
+          summary: "No backup newer than backup.max_age_hours (westbound-server admin backups)"

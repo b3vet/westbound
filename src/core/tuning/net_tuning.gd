@@ -414,6 +414,24 @@ const PATH := "res://data/tuning/net.tres"
 ## A kick in the room menu or the party panel waits for a second tap this long.
 @export var confirm_tap_s: float = 3.0   # not in spec
 
+@export_group("Sign-in and cloud save (N11)")
+## N11 (docs/NET_CLIENT.md → Sign in with Apple / Google): the provider config
+## (`GET /auth/providers`) is fetched again after this long.
+@export var identity_config_cache_s: float = 600.0   # not in spec
+## A provider sign-in (the web popup, the native sheet) that has not answered by then is
+## given up.
+@export var identity_sign_in_timeout_s: float = 180.0   # not in spec
+## Cloud save (docs/SAVE.md → Cloud sync): a finished run syncs this long after the results
+## (several quick retries make one upload).
+@export var cloud_after_run_delay_s: float = 20.0   # not in spec
+## Coming back to the app (resume, a tab shown) syncs when the last sync is older than this.
+@export var cloud_resume_min_s: float = 300.0   # not in spec
+## A failed sync (offline, 5xx) tries again after this, doubling up to the max.
+@export var cloud_retry_s: float = 30.0   # not in spec
+@export var cloud_retry_max_s: float = 900.0   # not in spec
+## Rounds of merge-and-write after a `revision_conflict` (another device wrote first).
+@export var cloud_conflict_rounds: int = 3   # not in spec
+
 func ping_interval_usec() -> int:
 	return roundi(ping_interval_s * 1.0e6)   # lint: allow-number s -> usec
 

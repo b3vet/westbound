@@ -6,6 +6,10 @@
 //! N10.1: the peak resident memory (`process_resident_memory_peak_bytes`, `VmHWM`; N10.2's
 //! `render_process` has the CPU seconds and the current RSS) and [`ProcessStats`] for the
 //! admin stats view (spec: Resource budget, "server memory under 300 MB").
+//!
+//! N10.3: the data volume (`wb_disk_*`: free space, what the database, replays and
+//! backups take), the newest backup's age and staleness, skipped backups, and the
+//! housekeeping pass (rows deleted per table, WAL checkpoints, VACUUMs).
 
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -199,12 +203,47 @@ pub struct Metrics {
     /// Replay verification jobs by `REPLAY_STATUSES`.
     replay_jobs: [AtomicU64; REPLAY_STATUSES.len()],
     pub reports_unhandled: AtomicU64,
+    /// N10.3: backups skipped for want of disk space (also counted as failed).
+    pub backups_skipped: AtomicU64,
+    /// N10.3: the dated backups on the volume and the newest one (the disk check).
+    pub backup_files: AtomicU64,
+    pub backup_newest_unix: AtomicU64,
+    pub backup_newest_age_secs: AtomicU64,
+    pub backup_stale: AtomicU64,
+    /// N10.3: the data volume (the disk check, every `housekeeping.check_interval_secs`).
+    pub disk_free_bytes: AtomicU64,
+    pub disk_total_bytes: AtomicU64,
+    pub disk_low: AtomicU64,
+    pub disk_data_bytes: AtomicU64,
+    pub disk_replays_bytes: AtomicU64,
+    pub disk_replays_files: AtomicU64,
+    pub disk_backups_bytes: AtomicU64,
+    pub disk_other_bytes: AtomicU64,
+    /// N10.3: `PRAGMA wal_checkpoint(TRUNCATE)` runs and `VACUUM`s by the housekeeping.
+    pub db_wal_checkpoints: AtomicU64,
+    pub db_vacuums: AtomicU64,
+    /// N10.3: the last daily housekeeping pass (unix seconds) and passes that failed.
+    pub housekeeping_last_unix: AtomicU64,
+    pub housekeeping_failures: AtomicU64,
+    housekeeping_deleted: [AtomicU64; HOUSEKEEPING_TABLES.len()],
     /// Unix seconds at startup.
     pub started_unix: AtomicU64,
 }
 
-/// Replay queue statuses, in `wb_replay_jobs{status}` order.
-pub const REPLAY_STATUSES: [&str; 4] = ["pending", "running", "done", "failed"];
+/// Replay queue statuses, in `wb_replay_jobs{status}` order. N10.3: `set_aside` (a job no
+/// verifier here can verify; before N10.3 counted as `failed`), with its file still there.
+pub const REPLAY_STATUSES: [&str; 5] = ["pending", "running", "done", "failed", "set_aside"];
+
+/// What the housekeeping deletes, in `wb_housekeeping_rows_deleted_total{table}` order
+/// (`replays_set_aside`: set-aside replay files let go by age).
+pub const HOUSEKEEPING_TABLES: [&str; 6] = [
+    "shadow_contacts",
+    "admin_log",
+    "reports",
+    "leaderboard_entries",
+    "runs",
+    "replays_set_aside",
+];
 
 impl Metrics {
     pub fn count_http(&self, status: StatusCode) {
@@ -292,6 +331,147 @@ impl Metrics {
             .iter()
             .position(|s| *s == status)
             .map_or(0, |i| self.replay_jobs[i].load(Ordering::Relaxed))
+    }
+
+    /// Counts rows the housekeeping deleted from `table` (a `HOUSEKEEPING_TABLES` label;
+    /// others are ignored).
+    pub fn count_deleted(&self, table: &str, n: u64) {
+        if let Some(i) = HOUSEKEEPING_TABLES.iter().position(|t| *t == table) {
+            self.housekeeping_deleted[i].fetch_add(n, Ordering::Relaxed);
+        }
+    }
+
+    pub fn deleted(&self, table: &str) -> u64 {
+        HOUSEKEEPING_TABLES
+            .iter()
+            .position(|t| *t == table)
+            .map_or(0, |i| self.housekeeping_deleted[i].load(Ordering::Relaxed))
+    }
+
+    /// N10.3: the data volume, the backups' freshness and the housekeeping.
+    fn render_housekeeping(&self, out: &mut String) {
+        let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        let rows: [(&str, &str, &str, u64); 17] = [
+            (
+                "wb_disk_free_bytes",
+                "gauge",
+                "Free space on the data volume (for the server's user).",
+                g(&self.disk_free_bytes),
+            ),
+            (
+                "wb_disk_total_bytes",
+                "gauge",
+                "Size of the data volume.",
+                g(&self.disk_total_bytes),
+            ),
+            (
+                "wb_disk_low",
+                "gauge",
+                "1 while free space is below housekeeping.min_free_mb (backups skip, replay uploads wait).",
+                g(&self.disk_low),
+            ),
+            (
+                "wb_disk_data_bytes",
+                "gauge",
+                "Everything in the data directory (the database's directory).",
+                g(&self.disk_data_bytes),
+            ),
+            (
+                "wb_disk_replays_bytes",
+                "gauge",
+                "Replay files (replays.dir, work files included).",
+                g(&self.disk_replays_bytes),
+            ),
+            (
+                "wb_disk_replays_files",
+                "gauge",
+                "Files in replays.dir.",
+                g(&self.disk_replays_files),
+            ),
+            (
+                "wb_disk_backups_bytes",
+                "gauge",
+                "Everything in backup.dir (dated, manual and temporary files).",
+                g(&self.disk_backups_bytes),
+            ),
+            (
+                "wb_disk_other_bytes",
+                "gauge",
+                "The rest of the data directory (restore leftovers, the handover file, tools).",
+                g(&self.disk_other_bytes),
+            ),
+            (
+                "wb_backup_files",
+                "gauge",
+                "Dated daily backups on the volume (at most backup.retention_days).",
+                g(&self.backup_files),
+            ),
+            (
+                "wb_backup_newest_timestamp_seconds",
+                "gauge",
+                "When the newest dated backup was written (0: none).",
+                g(&self.backup_newest_unix),
+            ),
+            (
+                "wb_backup_newest_age_seconds",
+                "gauge",
+                "Age of the newest dated backup at the last disk check.",
+                g(&self.backup_newest_age_secs),
+            ),
+            (
+                "wb_backup_stale",
+                "gauge",
+                "1 when the newest backup is older than backup.max_age_hours (or there is none after that long).",
+                g(&self.backup_stale),
+            ),
+            (
+                "wb_backups_skipped_total",
+                "counter",
+                "Nightly backups skipped for want of disk space (also in wb_backups_failed_total).",
+                g(&self.backups_skipped),
+            ),
+            (
+                "wb_db_wal_checkpoints_total",
+                "counter",
+                "WAL checkpoints (TRUNCATE) run by the disk check.",
+                g(&self.db_wal_checkpoints),
+            ),
+            (
+                "wb_db_vacuums_total",
+                "counter",
+                "VACUUMs run by the daily housekeeping pass.",
+                g(&self.db_vacuums),
+            ),
+            (
+                "wb_housekeeping_last_run_timestamp_seconds",
+                "gauge",
+                "When the last daily housekeeping pass finished (0: none since start).",
+                g(&self.housekeeping_last_unix),
+            ),
+            (
+                "wb_housekeeping_failures_total",
+                "counter",
+                "Housekeeping steps that failed (see the logs).",
+                g(&self.housekeeping_failures),
+            ),
+        ];
+        for (name, kind, help, value) in rows {
+            let _ = writeln!(out, "# HELP {name} {help}");
+            let _ = writeln!(out, "# TYPE {name} {kind}");
+            let _ = writeln!(out, "{name} {value}");
+        }
+        let _ = writeln!(
+            out,
+            "# HELP wb_housekeeping_rows_deleted_total Rows (and set-aside replay files) the housekeeping deleted, by table."
+        );
+        let _ = writeln!(out, "# TYPE wb_housekeeping_rows_deleted_total counter");
+        for (i, t) in HOUSEKEEPING_TABLES.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "wb_housekeeping_rows_deleted_total{{table=\"{t}\"}} {}",
+                g(&self.housekeeping_deleted[i])
+            );
+        }
     }
 
     /// N10.2: restart, admin, backup, database, queue, log and process metrics.
@@ -437,6 +617,7 @@ impl Metrics {
                 g(&self.replay_jobs[i])
             );
         }
+        self.render_housekeeping(out);
         let (errors, warnings) = crate::telemetry::log_event_counts();
         let _ = writeln!(
             out,

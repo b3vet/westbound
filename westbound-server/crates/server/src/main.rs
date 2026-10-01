@@ -10,7 +10,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use westbound_server::admin_client::AdminClient;
 use westbound_server::{
-    admin, admin_api, backup, clock, config, db, healthcheck, shutdown, telemetry, Config, Server,
+    admin, admin_api, backup, clock, config, db, healthcheck, housekeeping, shutdown, telemetry,
+    Config, Server,
 };
 
 /// Seconds the `healthcheck` command waits for an answer.
@@ -102,6 +103,15 @@ enum AdminCommand {
     Replays,
     /// Put failed replay jobs (or one run's job) back in the queue with fresh attempts.
     ReplayRequeue { run_id: Option<i64> },
+    /// Delete the files of set-aside replay jobs (no verifier has their build) uploaded
+    /// longer ago than OLDER_THAN (`30d`, `2w`, `12h`); their runs stay verifying.
+    ReplayPurgeSetAside {
+        #[arg(long, default_value = "30d")]
+        older_than: String,
+    },
+    /// Run the daily housekeeping pass now (row retention, old backups and copies, the
+    /// replay sweep, a VACUUM when worth it) and print what it did.
+    Housekeeping,
     /// List player reports, newest first.
     Reports {
         /// Only reports not handled yet.
@@ -146,14 +156,14 @@ enum AdminCommand {
     },
     /// End PLAYER's live session now (admin API); they can sign in again unless banned.
     Kick { player: String },
-    /// Database stats, plus the live ones when the server answers.
+    /// Database stats and the disk numbers, plus the live ones when the server answers.
     Stats,
     /// The admin log, newest first.
     Log {
         #[arg(long, default_value_t = 50)]
         limit: i64,
     },
-    /// The dated backups in `backup.dir`.
+    /// The dated backups in `backup.dir`, the newest one's age (stale?) and free space.
     Backups,
 }
 
@@ -422,6 +432,32 @@ async fn admin_db_cmd(
         }
         AdminCommand::Replays => admin::replays(pool).await,
         AdminCommand::ReplayRequeue { run_id } => admin::replay_requeue(pool, run_id).await,
+        AdminCommand::ReplayPurgeSetAside { older_than } => {
+            let secs = admin::parse_duration(&older_than)?.with_context(|| {
+                format!("--older-than {older_than}: a duration such as 30d, not perm")
+            })?;
+            admin::replay_purge_set_aside(pool, secs, now).await
+        }
+        AdminCommand::Housekeeping => {
+            let r = housekeeping::run_daily(pool, cfg, now).await;
+            let sweep = westbound_server::replays::retention::sweep(pool, &cfg.replays, now).await;
+            db::admin_log(pool, "cli", "housekeeping", "", &r.summary()).await?;
+            if r.leaderboard_entries > 0 {
+                invalidate_boards(cfg).await;
+            }
+            let mut out = r.summary();
+            match sweep {
+                Ok(s) => out.push_str(&format!(
+                    "\nreplays: files_deleted={} kept={} orphans={} set_aside_purged={}",
+                    s.deleted, s.kept, s.orphans, s.set_aside_purged
+                )),
+                Err(e) => out.push_str(&format!("\nerror: replay sweep: {e:#}")),
+            }
+            for e in &r.errors {
+                out.push_str(&format!("\nerror: {e}"));
+            }
+            Ok(out)
+        }
         AdminCommand::RemoveEntry {
             board,
             period,
@@ -450,6 +486,8 @@ async fn admin_db_cmd(
         }
         AdminCommand::Stats => {
             let mut out = admin::db_stats(pool, now).await?;
+            out.push('\n');
+            out.push_str(&admin::disk_stats(cfg, now));
             match AdminClient::from_config(cfg) {
                 Ok(api) => match api
                     .get::<admin_api::LiveStats>(&format!("{}/stats", admin_api::PREFIX))
@@ -479,7 +517,7 @@ async fn admin_db_cmd(
             Ok(out)
         }
         AdminCommand::Log { limit } => admin::log(pool, limit).await,
-        AdminCommand::Backups => admin::backups(&cfg.backup.dir),
+        AdminCommand::Backups => admin::backups(&cfg.backup, now),
         AdminCommand::Rooms | AdminCommand::RoomClose { .. } | AdminCommand::Notice { .. } => {
             unreachable!("handled by admin_cmd")
         }
@@ -557,9 +595,14 @@ async fn serve(cfg: Config) -> anyhow::Result<()> {
     let state = server.state().clone();
     let cfg = state.config.clone();
     if cfg.backup.enabled {
+        let guard = backup::DiskGuard {
+            db_path: cfg.db.path.clone(),
+            min_free_bytes: cfg.housekeeping.min_free_bytes(),
+        };
         tokio::spawn(backup::nightly(
             pool.clone(),
             cfg.backup.clone(),
+            guard,
             state.metrics.clone(),
             state.shutdown.clone(),
         ));

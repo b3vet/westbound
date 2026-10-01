@@ -13,6 +13,8 @@ ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12:nonroot
 
 FROM ${CHEF_IMAGE} AS chef
 WORKDIR /src
+# ring (rustls, N11's reqwest) compiles C: make sure the toolchain is present.
+RUN apk add --no-cache gcc musl-dev
 # Same profile for the cooked dependencies and the final build.
 ENV CARGO_PROFILE_RELEASE_STRIP=symbols \
     CARGO_TERM_COLOR=never \

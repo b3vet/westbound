@@ -212,6 +212,70 @@ body {
 	font-weight: 400;
 	line-height: 1.3;
 }
+/* N11 sign-in sheet (docs/WEB.md → Sign-in): over the canvas, inside the rotated box. */
+#wb-signin {
+	display: none;
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	background: rgba(11, 16, 32, 0.72);
+	align-items: center;
+	justify-content: center;
+	font-family: 'WB Chakra', 'Arial Narrow', Arial, sans-serif;
+	font-weight: 700;
+	color: #f4f7ff;
+}
+#wb-signin.open {
+	display: flex;
+}
+#wb-signin-card {
+	width: min(420px, 80%);
+	padding: 24px 28px;
+	background: #111a30;
+	border-left: 3px solid #31e5c0;
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 14px;
+}
+#wb-signin-title {
+	font-size: 22px;
+	letter-spacing: 0.06em;
+}
+#wb-signin-note {
+	font-family: Arial, sans-serif;
+	font-weight: 400;
+	font-size: 14px;
+	line-height: 1.35;
+	color: #8a93ad;
+	min-height: 19px;
+}
+#wb-signin-host {
+	min-height: 44px;
+	display: flex;
+	justify-content: center;
+}
+#wb-signin button {
+	min-height: 44px;
+	font: inherit;
+	font-size: 16px;
+	letter-spacing: 0.06em;
+	border: 0;
+	cursor: pointer;
+}
+#wb-signin .wb-apple {
+	width: 100%;
+	background: #000;
+	color: #fff;
+	border-radius: 6px;
+	font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+	letter-spacing: 0;
+}
+#wb-signin-cancel {
+	background: transparent;
+	color: #8a93ad;
+	border: 1px solid #2a3554 !important;
+}
 </style>
 $GODOT_HEAD_INCLUDE
 </head>
@@ -226,6 +290,14 @@ $GODOT_HEAD_INCLUDE
 		<div id="status-progress"><div id="wb-fill"></div><div id="wb-sweep"></div></div>
 	</div>
 	<div id="status-notice"></div>
+</div>
+<div id="wb-signin" role="dialog" aria-modal="true" aria-labelledby="wb-signin-title">
+	<div id="wb-signin-card">
+		<div id="wb-signin-title">SIGN IN</div>
+		<div id="wb-signin-host"></div>
+		<div id="wb-signin-note"></div>
+		<button id="wb-signin-cancel" type="button">CANCEL</button>
+	</div>
 </div>
 </div>
 <div id="wb-safe"></div>
@@ -562,6 +634,161 @@ const GODOT_THREADS_ENABLED = $GODOT_THREADS_ENABLED;
 	} else {
 		start();
 	}
+}());
+</script>
+<script>
+// N11 Sign in with Apple / Google (docs/WEB.md → Sign-in; src/net/web_identity.gd).
+// window.wbIdentity:
+//   configure(provider, {enabled, client_id, redirect_uri}) -> true when usable; loads
+//       the provider's script (Sign in with Apple JS / Google Identity Services) only
+//       now, so a build whose server has no providers never loads either;
+//   begin(provider, nonce) -> true: shows the sheet (#wb-signin) with the provider's own
+//       button. A popup must open inside a real click, and a tap on the game's canvas is
+//       not one (the engine handles input on its next frame), so the player taps here;
+//   poll() -> '' while open, then once: '{"state":"done","id_token":"…","code":"…"}',
+//       '{"state":"cancelled"}' or '{"state":"error","error":"…"}';
+//   cancel(): closes the sheet (reported as cancelled).
+// Nothing here stores or logs a token.
+(function () {
+	'use strict';
+	var SDK = {
+		google: 'https://accounts.google.com/gsi/client',
+		apple: 'https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js'
+	};
+	var TITLE = { google: 'SIGN IN WITH GOOGLE', apple: 'SIGN IN WITH APPLE' };
+	var cfg = {};
+	var loads = {};
+	var open = null;
+	var result = '';
+	var sheet = document.getElementById('wb-signin');
+	var host = document.getElementById('wb-signin-host');
+	var note = document.getElementById('wb-signin-note');
+	var title = document.getElementById('wb-signin-title');
+
+	function load(p) {
+		if (!loads[p]) {
+			loads[p] = new Promise(function (resolve, reject) {
+				var s = document.createElement('script');
+				s.src = SDK[p];
+				s.async = true;
+				s.onload = resolve;
+				s.onerror = function () { reject(new Error('sdk_load_failed')); };
+				document.head.appendChild(s);
+			});
+			loads[p].catch(function () { loads[p] = null; });
+		}
+		return loads[p];
+	}
+
+	function finish(obj) {
+		if (!open) { return; }
+		open = null;
+		result = JSON.stringify(obj);
+		sheet.classList.remove('open');
+		host.textContent = '';
+		note.textContent = '';
+	}
+
+	function fail(code) {
+		finish({ state: 'error', error: code || 'sign_in_failed' });
+	}
+
+	function google(nonce) {
+		var g = window.google && window.google.accounts && window.google.accounts.id;
+		if (!g) { fail('sdk_load_failed'); return; }
+		g.initialize({
+			client_id: cfg.google.client_id,
+			nonce: nonce,
+			auto_select: false,
+			cancel_on_tap_outside: false,
+			callback: function (resp) {
+				if (resp && resp.credential) {
+					finish({ state: 'done', id_token: resp.credential, code: '' });
+				} else {
+					fail('sign_in_failed');
+				}
+			}
+		});
+		host.textContent = '';
+		g.renderButton(host, { theme: 'filled_black', size: 'large', text: 'signin_with', shape: 'rectangular', width: 280 });
+	}
+
+	function apple(nonce) {
+		var a = window.AppleID && window.AppleID.auth;
+		if (!a) { fail('sdk_load_failed'); return; }
+		a.init({
+			clientId: cfg.apple.client_id,
+			scope: 'email',
+			redirectURI: cfg.apple.redirect_uri || window.location.origin + window.location.pathname,
+			state: nonce.slice(0, 16),
+			nonce: nonce,
+			usePopup: true
+		});
+		host.textContent = '';
+		var b = document.createElement('button');
+		b.type = 'button';
+		b.className = 'wb-apple';
+		b.textContent = 'Sign in with Apple';
+		b.addEventListener('click', function () {
+			a.signIn().then(function (res) {
+				var auth = res && res.authorization;
+				if (auth && auth.id_token) {
+					finish({ state: 'done', id_token: auth.id_token, code: auth.code || '' });
+				} else {
+					fail('sign_in_failed');
+				}
+			}, function (err) {
+				var e = err && err.error;
+				if (e === 'popup_closed_by_user' || e === 'user_cancelled_authorize') {
+					note.textContent = 'Closed. Tap the button to try again.';
+				} else {
+					fail(e ? String(e) : 'sign_in_failed');
+				}
+			});
+		});
+		host.appendChild(b);
+	}
+
+	document.getElementById('wb-signin-cancel').addEventListener('click', function () {
+		finish({ state: 'cancelled' });
+	});
+
+	window.wbIdentity = {
+		configure: function (p, c) {
+			if (!SDK[p] || !c || !c.enabled || !c.client_id) { return false; }
+			cfg[p] = c;
+			load(p);
+			return true;
+		},
+		begin: function (p, nonce) {
+			if (open || !cfg[p] || !nonce) { return false; }
+			open = p;
+			result = '';
+			title.textContent = TITLE[p];
+			host.textContent = '';
+			note.textContent = 'Loading…';
+			sheet.classList.add('open');
+			load(p).then(function () {
+				if (open !== p) { return; }
+				note.textContent = '';
+				try {
+					if (p === 'google') { google(nonce); } else { apple(nonce); }
+				} catch (e) {
+					fail('sign_in_failed');
+				}
+			}, function () { fail('sdk_load_failed'); });
+			return true;
+		},
+		poll: function () {
+			var r = result;
+			result = '';
+			return r;
+		},
+		cancel: function () {
+			finish({ state: 'cancelled' });
+			result = '';
+		}
+	};
 }());
 </script>
 </body>

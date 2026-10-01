@@ -264,8 +264,18 @@ func test_windows_swap_per_step_and_survive_origin_shifts() -> void:
 
 
 ## Prefetching and swapping per step keep every frame cheap: the p99.5 update_view
-## while driving at top speed stays well inside a frame.
+## while driving at top speed stays well inside a frame. Load-robust (WBFrameBench,
+## WP9.10): three drives on fresh ribbons, each frame's cost the minimum over them,
+## re-measured once if over budget. A frame that really costs too much does so in
+## every drive and still fails.
 func test_frame_cost_while_driving() -> void:
+	var usec := WBFrameBench.tail_within("water ribbon p99.5 frame (prefetch + swap)", _drive_at_top_speed,
+			WBFrameBench.P995, 1500.0)
+	le(usec, WBBench.budget(1500.0), "p99.5 water frame usec")
+
+
+## One timed drive (a fresh ribbon, warmed at s = 0): each frame's update_view usec.
+func _drive_at_top_speed() -> PackedInt64Array:
 	var road := StraightRoadPath.new(3, _t.road)
 	var w := _ribbon(road, _origin(), _coast)
 	var v := Units.kmh_to_mps(_t.vehicle.car_top_speed_max_kmh) * (1.0 + Units.pct_to_frac(_t.vehicle.boost_top_speed_bonus_pct))
@@ -278,10 +288,7 @@ func test_frame_cost_while_driving() -> void:
 		var t0 := Time.get_ticks_usec()
 		w.update_view(s)
 		samples.append(Time.get_ticks_usec() - t0)
-	samples.sort()
-	var p995 := samples[int(float(samples.size() - 1) * 0.995)]
-	WBBench.report("water ribbon p99.5 frame (prefetch + swap)", float(p995), 1500.0)
-	le(float(p995), WBBench.budget(1500.0), "p99.5 water frame usec")
+	return samples
 
 
 func test_same_seed_same_river() -> void:

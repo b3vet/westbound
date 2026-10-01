@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT revision, updated_at, bytes, data FROM cloud_saves WHERE account_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "revision",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "cloud_saves",
+            "name": "revision"
+          }
+        }
+      },
+      {
+        "name": "updated_at",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "cloud_saves",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "name": "bytes",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "cloud_saves",
+            "name": "bytes"
+          }
+        }
+      },
+      {
+        "name": "data",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cloud_saves",
+            "name": "data"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "328362e75d3639c058f74d20f353dc1424cbdaea70880358cd99131dd10d7472"
+}

@@ -181,6 +181,30 @@ func test_sketch_follows_the_layout() -> void:
 	eq(fr.chooser.line2.text, "BRAKE RIGHT · GAS + BOOST LEFT", "mirrored words")
 
 
+## WP9.10: drag steering is sketched in the look the player will get: the wheel by
+## default (plan D10), the ring when drag_visual says so; tilt has no drag look.
+func test_sketch_draws_the_drag_look() -> void:
+	var ts := _title()
+	var fr := _open_chooser(ts)
+	var sk := fr.chooser.sketch
+	eq(sk.drag_visual, PlayerInput.WHEEL, "the default look: the wheel")
+	check(sk.wheel_shown(), "drag steering: the wheel is drawn")
+	await tree.process_frame
+	var r0 := sk.redraws
+	Settings.set_value(&"drag_visual", PlayerInput.RING)
+	eq(sk.drag_visual, PlayerInput.RING, "follows the setting (changed in the settings)")
+	check(not sk.wheel_shown(), "the ring look")
+	await tree.process_frame
+	gt(sk.redraws, r0, "redrawn with the new look")
+	Settings.set_value(&"drag_visual", PlayerInput.WHEEL)
+	check(sk.wheel_shown())
+	_tap(fr.chooser.option(0, 1))
+	check(not sk.wheel_shown(), "tilt steering: no drag look")
+	_tap(fr.chooser.option(0, 0))
+	_tap(fr.chooser.option(1, 1))
+	check(sk.wheel_shown(), "drag + manual (the default layout): the wheel")
+
+
 # ---------------------------------------------------------------- Text fit
 
 func _configs() -> Array[Array]:

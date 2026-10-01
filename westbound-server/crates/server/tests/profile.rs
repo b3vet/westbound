@@ -186,7 +186,8 @@ async fn delete_account_removes_everything() {
     assert_eq!(
         detail,
         "refresh_tokens=3 runs=0 leaderboard_entries=0 replays=0 friends=0 blocks=0 \
-         crew_memberships=0 crew_transferred=false crew_disbanded=false reports_kept=0"
+         crew_memberships=0 crew_transferred=false crew_disbanded=false reports_kept=0 \
+         cloud_saves=0 identity_links=0 device_secrets=0"
     );
     assert!(!detail.contains(&d.profile.display_name));
 

@@ -2,6 +2,11 @@
 # Build the Web export (Compatibility renderer, single-threaded) into build/web/.
 #   tools/export_web.sh            # release build
 #   tools/export_web.sh --debug    # debug build (debug template, verbose engine errors)
+#   --template=auto|slim|official  (or WB_WEB_TEMPLATE=...) which engine template (WP9.9):
+#     auto (default): the slim one (tools/web_template/build.sh) when it is built for the
+#     current config and has every class the game uses, else the official one (with a note);
+#     slim: fail instead of falling back; official: Godot's own; a .zip path: that
+#     template as is (experiments; no checks).
 # Installs the export templates on first use (tools/export_templates.sh).
 # Writes build/web/version.json and fills the custom shell's tokens (docs/WEB.md).
 # Then smoke-test it with:  node tools/web_smoke/smoke.mjs
@@ -9,12 +14,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 mode="release"
-case "${1:-}" in
-  "") ;;
-  --release) mode="release" ;;
-  --debug) mode="debug" ;;
-  -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
-  *) echo "export_web.sh: unknown option '$1' (use --debug or --release)" >&2; exit 2 ;;
+template="${WB_WEB_TEMPLATE:-auto}"
+for a in "$@"; do
+  case "$a" in
+    --release) mode="release" ;;
+    --debug) mode="debug" ;;
+    --template=*) template="${a#--template=}" ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    *) echo "export_web.sh: unknown option '$a' (use --debug, --release, --template=auto|slim|official)" >&2; exit 2 ;;
+  esac
+done
+case "$template" in
+  auto|slim|official) ;;
+  *.zip) [[ -s "$template" ]] || { echo "export_web.sh: no template $template" >&2; exit 2; } ;;
+  *) echo "export_web.sh: --template must be auto, slim, official or a .zip" >&2; exit 2 ;;
 esac
 
 out_dir="build/web"
@@ -42,6 +55,49 @@ echo "export_web.sh: importing project..." >&2
 if ! tools/godot.sh --headless --path . --import >"$log" 2>&1; then
   cat "$log"; echo "export_web.sh: import failed" >&2; exit 1
 fi
+
+# WP9.9 engine template (docs/WEB.md → Slim engine). The Web preset's custom_template
+# fields point at build/web_template/selected/, filled here with the slim template (when
+# built for this config and the class check passes) or the official one.
+if [[ -n "${GODOT_TEMPLATES_DIR:-}" ]]; then official_dir="$GODOT_TEMPLATES_DIR"
+elif [[ "$(uname -s)" == "Darwin" ]]; then official_dir="$HOME/Library/Application Support/Godot/export_templates/4.7.stable"
+else official_dir="${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates/4.7.stable"; fi
+slim_dir="build/web_template"
+selected="$slim_dir/selected"
+use_slim=0
+why=""
+if [[ "$template" == *.zip ]]; then
+  why="replaced by $template for this export"
+elif [[ "$template" != official ]]; then
+  want_hash="$(tools/web_template/build.sh --hash)"
+  if [[ ! -s "$slim_dir/web_nothreads_$mode.zip" ]]; then
+    why="not built (tools/web_template/build.sh$([[ $mode == debug ]] && echo ' --debug' || true))"
+  elif ! grep -q "\"config_hash\": \"$want_hash\"" "$slim_dir/template.json" 2>/dev/null; then
+    why="built for another config (rebuild: tools/web_template/build.sh)"
+  elif ! tools/godot.sh --headless --path . --script res://tools/web_template/detect_classes.gd -- --check >"$log" 2>&1; then
+    why="the game uses classes it lacks: $(grep -o 'the game uses .*' "$log" | head -3 | tr '\n' ';' || true)"
+  else
+    use_slim=1
+  fi
+  if [[ $use_slim -eq 0 && "$template" == slim ]]; then
+    echo "export_web.sh: slim template $why" >&2; exit 1
+  fi
+fi
+mkdir -p "$selected"
+for m in release debug; do
+  src="$official_dir/web_nothreads_$m.zip"
+  if [[ $use_slim -eq 1 && -s "$slim_dir/web_nothreads_$m.zip" ]]; then src="$slim_dir/web_nothreads_$m.zip"; fi
+  [[ "$template" == *.zip && $m == "$mode" ]] && src="$template"
+  cp -f "$src" "$selected/web_nothreads_$m.zip"
+done
+if [[ "$template" == *.zip ]]; then
+  engine="$template (as given)"
+elif [[ $use_slim -eq 1 ]]; then
+  engine="slim (tools/web_template, config $want_hash)"
+else
+  engine="official 4.7-stable${why:+; slim template $why}"
+fi
+echo "$engine" >"$selected/ENGINE"   # for tools/web_template/ci_gate.sh
 
 echo "export_web.sh: exporting Web ($mode) -> $out" >&2
 status=0
@@ -107,6 +163,7 @@ human() { awk '{ if ($1 >= 1048576) printf "%.1f MiB", $1 / 1048576; else printf
 size() { wc -c <"$1" | human; }
 gz() { gzip -9c "$1" | wc -c | human; }
 echo "export_web.sh: built $out ($mode), build $build_id"
+echo "  engine: $engine"
 echo "  shell: $shell"
 echo "  music: $music"
 for f in index.wasm index.pck index.js music.pck; do

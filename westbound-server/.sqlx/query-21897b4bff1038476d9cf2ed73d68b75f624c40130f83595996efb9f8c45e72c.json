@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT provider, email_hint, private_email, linked_at FROM identity_links\n         WHERE account_id = ? ORDER BY provider",
+  "describe": {
+    "columns": [
+      {
+        "name": "provider",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_links",
+            "name": "provider"
+          }
+        }
+      },
+      {
+        "name": "email_hint",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "identity_links",
+            "name": "email_hint"
+          }
+        }
+      },
+      {
+        "name": "private_email",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "identity_links",
+            "name": "private_email"
+          }
+        }
+      },
+      {
+        "name": "linked_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "identity_links",
+            "name": "linked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "21897b4bff1038476d9cf2ed73d68b75f624c40130f83595996efb9f8c45e72c"
+}
