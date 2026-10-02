@@ -24,8 +24,8 @@ use westbound_server::config::{Config, Secret};
 
 const GOOGLE_WEB: &str = "web-client.apps.googleusercontent.com";
 const GOOGLE_IOS: &str = "ios-client.apps.googleusercontent.com";
-const APPLE_WEB: &str = "com.sipsakrandevu.westbound.web";
-const APPLE_IOS: &str = "com.sipsakrandevu.westbound";
+const APPLE_WEB: &str = "com.b3vet.westbound.web";
+const APPLE_IOS: &str = "com.b3vet.westbound";
 const APPLE_TEAM: &str = "TEAM123456";
 const APPLE_KEY_ID: &str = "KEY1234567";
 const GOOGLE_ISS: &str = "https://accounts.google.com";
