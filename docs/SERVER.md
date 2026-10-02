@@ -608,7 +608,7 @@ Fetched with `reqwest` (rustls, bundled roots), cached for the response's `Cache
 **`GET /api/v1/auth/providers`** (public): what the client may offer; no secrets.
 
 ```json
-{"apple": {"enabled": true, "client_id": "com.sipsakrandevu.westbound.web", "redirect_uri": "https://b3vet.github.io/westbound/"},
+{"apple": {"enabled": true, "client_id": "com.b3vet.westbound.web", "redirect_uri": "https://b3vet.github.io/westbound/"},
  "google": {"enabled": true, "client_id": "1234-abc.apps.googleusercontent.com"},
  "nonce_required": true,
  "cloud_save": {"enabled": true, "max_bytes": 65536}}

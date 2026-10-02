@@ -141,10 +141,10 @@ ws_connect_burst = 30
 dir = ""
 # The invite page's button: the web build with the code ({code}; {origin} = public_origin).
 web_join_url = "https://b3vet.github.io/westbound/?room={code}"
-# iOS Universal Links (TEAMID.bundle.id), e.g. ["ABCDE12345.com.sipsakrandevu.westbound"].
+# iOS Universal Links (TEAMID.bundle.id), e.g. ["ABCDE12345.com.b3vet.westbound"].
 apple_app_ids = []
 # Android App Links: package name and signing-certificate SHA-256 fingerprints, e.g.
-# "com.sipsakrandevu.westbound" and ["AA:BB:...:FF"] (32 pairs).
+# "com.b3vet.westbound" and ["AA:BB:...:FF"] (32 pairs).
 android_package = ""
 android_cert_sha256 = []
 # Store links on the invite page (empty: "coming soon").

@@ -317,14 +317,14 @@ N11. Players can sign in with Apple or Google on the account screen (pause → S
     - Create, then copy the **Client ID** (`1234567890-abc….apps.googleusercontent.com`; the client *secret* is not used).
 4. In Coolify → the server resource → **Environment Variables**: `WB_IDENTITY__GOOGLE_CLIENT_IDS` = that client id. Redeploy.
 5. Check: `curl https://westbound.sipsakrandevu.com/api/v1/auth/providers` shows `"google":{"enabled":true,"client_id":"…"}`; on the web build, ACCOUNT → SIGN IN WITH GOOGLE opens a sheet with Google's button.
-6. **Later (native):** an **iOS** OAuth client (bundle id `com.sipsakrandevu.westbound`) and an **Android** one (package + the signing certificate's SHA-1). Add the iOS client id to the list, comma-separated: `WB_IDENTITY__GOOGLE_CLIENT_IDS=<web id>,<ios id>`. Android's Credential Manager asks for tokens issued to the *web* client id, so the web id covers it.
+6. **Later (native):** an **iOS** OAuth client (bundle id `com.b3vet.westbound`) and an **Android** one (package + the signing certificate's SHA-1). Add the iOS client id to the list, comma-separated: `WB_IDENTITY__GOOGLE_CLIENT_IDS=<web id>,<ios id>`. Android's Credential Manager asks for tokens issued to the *web* client id, so the web id covers it.
 
 ### Apple (paid membership)
 
 All in <https://developer.apple.com/account> → **Certificates, Identifiers & Profiles**:
 
-1. **Identifiers → App IDs → +** (if the app's App ID does not exist yet): type App, bundle id `com.sipsakrandevu.westbound` (the iOS app's; must match `deeplinks.apple_app_ids`). Under **Capabilities** tick **Sign in with Apple** (Enable as a primary App ID). Save.
-2. **Identifiers → Services IDs → +**: description `Westbound web`, identifier `com.sipsakrandevu.westbound.web`. Save, open it, tick **Sign in with Apple → Configure**:
+1. **Identifiers → App IDs → +** (if the app's App ID does not exist yet): type App, bundle id `com.b3vet.westbound` (the iOS app's; must match `deeplinks.apple_app_ids`). Under **Capabilities** tick **Sign in with Apple** (Enable as a primary App ID). Save.
+2. **Identifiers → Services IDs → +**: description `Westbound web`, identifier `com.b3vet.westbound.web`. Save, open it, tick **Sign in with Apple → Configure**:
     - **Primary App ID:** the App ID above.
     - **Domains and Subdomains:** `b3vet.github.io`.
     - **Return URLs:** `https://b3vet.github.io/westbound/` (exactly the web build's URL, https). The web uses a popup, but Apple requires one.
@@ -335,7 +335,7 @@ All in <https://developer.apple.com/account> → **Certificates, Identifiers & P
 
 | Variable | Value |
 | --- | --- |
-| `WB_IDENTITY__APPLE_CLIENT_IDS` | `com.sipsakrandevu.westbound.web,com.sipsakrandevu.westbound` (the Services ID for the web, the bundle id for iOS) |
+| `WB_IDENTITY__APPLE_CLIENT_IDS` | `com.b3vet.westbound.web,com.b3vet.westbound` (the Services ID for the web, the bundle id for iOS) |
 | `WB_IDENTITY__APPLE_WEB_REDIRECT_URI` | `https://b3vet.github.io/westbound/` |
 | `WB_IDENTITY__APPLE_TEAM_ID` | the Team ID |
 | `WB_IDENTITY__APPLE_KEY_ID` | the Key ID |

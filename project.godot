@@ -10,9 +10,10 @@ config/description="Chase the sun. Cut through traffic."
 run/main_scene="res://src/run/run.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 run/max_fps=60
-config/icon="res://icon.svg"
+config/icon="res://assets/branding/icon_1024.png"
 boot_splash/bg_color=Color(0.043, 0.063, 0.125, 1)
-boot_splash/show_image=false
+boot_splash/image="res://assets/branding/splash.png"
+boot_splash/stretch_mode=4
 
 [shader_globals]
 
