@@ -9,7 +9,8 @@ WP7A (plan WP7.1 engine and wind, WP7.2 pass and traffic audio, WP7.3 music and 
 | `src/audio/game_audio.gd` (`GameAudio`) | The hub. It connects to `Events`, re-reads the run's car, traffic, road and origin every frame (a retry rebuilds them), and updates the other parts. It also sets bus volumes from Settings and handles mute (the setting and the M key). |
 | `src/audio/engine_audio.gd` (`EngineAudio`) | Engine loops (6 rpm steps × on/off throttle), crossfaded and pitched by rpm, with the gear-shift dip. Also the boost intake roar and the wind. |
 | `src/audio/traffic_audio.gd` (`TrafficAudio`) | Tire hum of the nearest cars, the truck air-brake hiss, finding the passed car for the whoosh, and doppler and placement for positional voices. |
-| `src/audio/music_player.gd` (`MusicPlayer`) | The playlist, the night filter fade, and feeding `MusicClock`. |
+| `src/audio/music_mood.gd` (`MusicMood`) | Pure: which mood the moment wants (MENU, DAY, GOLDEN, NIGHT, RUSH), with the golden latch. |
+| `src/audio/music_player.gd` (`MusicPlayer`) | The mood pools in rotation, the minimum play, crossfades (two players), waiting for tracks still being fetched (web), the night filter fade, and feeding `MusicClock`. |
 | `src/audio/voice_pool.gd` (`VoicePool`) | Fixed one-shot voices with a cap and priorities. It also keeps the test hook: a log of started sound ids with their process frames. |
 | `src/audio/audio_buses.gd` (`AudioBuses`) | Bus names, effect slots, the night and tunnel effect controls, and the volume and mute settings keys. |
 | `src/audio/audio_math.gd` (`AudioMath`) | Pure curves: engine weights and pitch, whoosh and zip versus clearance, stinger pitch versus multiplier, doppler, wind. |
@@ -73,7 +74,27 @@ Every handler starts its sound inside the signal callback, so the sound starts i
 
 ## Music
 
-`AudioTuning.music_tracks` play in order and loop around the list, with a `music_gap_s` gap and a `music_fade_in_s` fade-in. Only the playing track is loaded. The playlist starts when the audio starts and moves on at each track's end. The night filter is on the Music bus (see Buses).
+Music follows the **mood** of the moment (owner decision; not in the spec). Each frame `GameAudio` feeds `MusicMood` the game state, the room, the biome at the player and the run's `SunClock` (`sky_t`, `phase`; rooms and the loop mode set them from the room clock), and tells `MusicPlayer.want_mood()` the result.
+
+| Mood | When | Pool (`music_pool_*`) |
+| --- | --- | --- |
+| MENU | no run is being driven: title, garage, results, room lobby (Game state not COUNTDOWN, RUNNING or CRASH) | `music_menu_1`, `music_menu_2` |
+| RUSH | a room on RUSH HOUR density (`NetRoomState.density == "rush"`), or a solo run (Journey, Daily Drive; not a room, not the loop mode) in a `music_rush_biomes` biome (default `city`: legs 6 and 7) | `music_rush_hour_1`, `music_rush_hour_2`, `music_cyber_runner` |
+| NIGHT | sun phase NIGHTFALL or NIGHT | `music_night_drive_1`, `music_night_drive_2`, `music_midnight_drive` |
+| GOLDEN | sun phase DAY with `sky_t` in [`sky_t_golden_hour`, `sky_t_sunset`); **latched**: a checkpoint's sun lift back below the golden hour keeps GOLDEN until the night or a new run | `music_golden_hour_1`, `music_golden_hour_2` |
+| DAY | the rest of the day, and the dawn | `music_day_cruise_1`, `music_day_cruise_2`, `music_slampe` |
+
+Priority when several apply: MENU > RUSH > NIGHT > GOLDEN > DAY. A city leg in a room is not RUSH (only the room's density counts there).
+
+`MusicPlayer` rules:
+
+- **Rotation.** At a track's end the next track of the wanted mood's pool plays, after `music_gap_s`, with a `music_fade_in_s` fade-in. Each pool rotates (deterministically, no randomness), never plays the same track twice in a row (pools of 2+), and keeps its place across mood changes, so coming back to a mood plays its next track. A track always starts from the top. Only the playing tracks are loaded; a faded-out player drops its stream.
+- **Mood change.** A crossfade (equal power) over `music_crossfade_s` (4 s) on the second of two players (A/B), once the playing track has played `music_min_play_s` (45 s). A change asked for earlier waits, and is dropped if the mood flips back to the playing track's meanwhile. Entering or leaving MENU (run start, run end, quit to the title) switches at once, still crossfaded. The minimum counts from when a track actually started.
+- **Tracks not here yet** (the web, [docs/WEB.md → Music packs](WEB.md#music-packs)): the player asks `WebMusicPack` for the track, keeps the current music (or silence at boot) and starts or crossfades when it lands; a failed track is skipped for the next of its pool. When a track starts it prefetches the next track of its pool, then the first of the likely next mood (MENU → DAY, DAY → GOLDEN, GOLDEN → NIGHT, NIGHT → DAY, RUSH → the time-of-day mood).
+- **Night filter.** Unchanged: the Music bus low-pass and reverb fade in on `night_started` and out over the dawn (see Buses), whatever track plays.
+- `MusicClock` follows the current (incoming) track; `music_bpm` is per track (by `music_tracks` index).
+
+Tuning (`data/tuning/audio.tres`): `music_tracks`, `music_bpm`, `music_pool_menu/day/golden/night/rush`, `music_rush_biomes`, `music_crossfade_s`, `music_min_play_s`, `music_gap_s`, `music_fade_in_s`.
 
 ## Voice budget
 
@@ -85,9 +106,9 @@ Every handler starts its sound inside the signal callback, so the sound starts i
 | Engine loops | 12 players, ≤ 4 audible | Zero-gain loops are paused (web: stopped after `loop_stop_hold_s`) |
 | Intake, wind | 2 | Paused when silent (web: stopped) |
 | Tire hum (3D loops) | 3 | Paused when silent (web: stopped) |
-| Music | 1 | |
+| Music | 2 | both only during a crossfade |
 
-Worst case: 16 one-shots + 4 engine + 2 + 3 + 1 = **26 mixing voices**; typical is about 10. Every player is created once in `setup()`, and no node is created per event or per frame (a test checks the node count over 200 event bursts). Per-frame code allocates nothing: the traffic scan and nearest-car insertion use fixed arrays. Godot itself creates a short-lived stream-playback object per `play()`; it is freed when the sound ends.
+Worst case: 16 one-shots + 4 engine + 2 + 3 + 2 = **27 mixing voices**; typical is about 10. Every player is created once in `setup()`, and no node is created per event or per frame (a test checks the node count over 200 event bursts). Per-frame code allocates nothing: the traffic scan and nearest-car insertion use fixed arrays. Godot itself creates a short-lived stream-playback object per `play()`; it is freed when the sound ends.
 
 ## Loops on the web
 
@@ -129,7 +150,7 @@ Regenerate with `pip install numpy soundfile`, then `python3 tools/audio/gen_aud
 
 1. **Same name, same path.** Replace `assets/audio/<name>.ogg` (a loop) or `assets/audio/<name>.wav` (a one-shot) with the new file, keeping the name. For a loop, keep `loop=true` in its `.import` (or tick Loop in the import dock). A one-shot stays WAV with QOA compression (`compress/mode=2`); convert an OGG or MP3 source to WAV first, since an OGG one-shot costs about 0.6 ms per play and fails `test_one_shots_are_wav`. Record the source and licence in `assets/LICENSES.md`.
 2. **Engine recordings.** Record or buy loops at a few steady rpm values, on and off throttle. Name them `engine_on_<rpm>.ogg` / `engine_off_<rpm>.ogg` and set `engine_step_rpm` in `data/tuning/audio.tres` to those rpm values. Any count of steps works (at least 2 recommended).
-3. **Music.** Edit `music_tracks` (and `music_bpm` if the tempo is known, which starts the music clock) in `data/tuning/audio.tres`. Keep tracks at 128 kbps or less for the web pack; 32–44.1 kHz OGG is fine.
+3. **Music.** Add the track to `music_tracks` (and its `music_bpm` if the tempo is known, which starts the music clock) and to one mood pool (`music_pool_*`) in `data/tuning/audio.tres`. Keep tracks at 128 kbps or less (each is its own web pack); 32–44.1 kHz OGG is fine.
 4. **Levels.** Adjust the per-sound `*_db` and per-bus `*_db` values in `data/tuning/audio.tres`; no code changes are needed.
 
 ## Tests
@@ -148,11 +169,13 @@ Regenerate with `pip install numpy soundfile`, then `python3 tools/audio/gen_aud
 - the banking count-up;
 - horns (lower for trucks), the air brake (tap, hard-brake edge, cooldown) and tire hum on the nearest cars;
 - the night filter on night and dawn, and the tunnel reverb on entry and exit (a straight road with a tunnel feature);
-- the music playlist and the clock;
+- the music starting and the clock;
 - loop import flags, and every one-shot being a non-looping QOA WAV (no OGG one-shots);
 - the voice cap and priority stealing;
 - no new nodes or leftover objects per event;
 - the run attaching the audio.
+
+`tests/audio/test_music_mood.gd` covers the mood choice: menu, day, golden, night, the priority, room rush versus a solo city leg (a city leg in a room is not rush), the golden latch across a sun lift and its clearing at night, dawn to day, and that every track sits in exactly one pool. `tests/audio/test_music_player.gd` covers the player: start from the top, the minimum play (deferral and cancel), the crossfade finishing and stopping the old player, rotation without back-to-back repeats and across moods, MENU switching at once, hold and stop, and tracks fetched first (waiting, the prefetch order, a failed track skipped).
 
 `tests/audio/test_audio_loops.gd` covers the loops over long runs and on the web (see [Loops on the web](#loops-on-the-web)).
 

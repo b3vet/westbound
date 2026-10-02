@@ -5,7 +5,7 @@
 #                                [--net http://127.0.0.1:8080]
 #
 # Runs tools/web_template/web_probe.gd (compile every script, load every scene, resource
-# and imported file of index.pck and music.pck) in headless Chromium twice: on the
+# and imported file of index.pck and music/*.pck) in headless Chromium twice: on the
 # official 4.7 template and on the slim one, with the same packs. Fails when the slim
 # engine fails anything the official one does not (a disabled class a script or a
 # resource needs). Then the names check (web_names.gd: player names with diacritics,
@@ -52,7 +52,7 @@ for side in official custom; do
   mkdir -p "$work/$side"
   unzip -q -o "$zip" -d "$work/$side"
   cp "$pck_dir/index.pck" "$work/$side/"
-  [[ -f "$pck_dir/music.pck" ]] && cp "$pck_dir/music.pck" "$work/$side/"
+  [[ -d "$pck_dir/music" ]] && cp -r "$pck_dir/music" "$work/$side/"
   nice node tools/web_template/probe.mjs --dir "$work/$side" --out "$work/$side.log" || status=2
   nice node tools/web_template/probe.mjs --dir "$work/$side" --out "$work/${side}_names.log" --names \
     --screenshot "$work/${side}_names.png" || status=2

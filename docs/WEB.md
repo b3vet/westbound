@@ -8,22 +8,22 @@ WP9.2 (plan Phase 9: "web build polish (gyro decision, load time)"). Spec: *Plat
 | --- | --- |
 | `platform/web/shell.html` | The custom HTML shell: the loading screen, versioned downloads, the stale-page check, the AudioContext hook, and (WP9.7) the landscape-only layout: a portrait page rotated to landscape, input remapped, the canvas sized, the safe-area insets for the game ([Landscape only](#landscape-only)). Set as `html/custom_html_shell` in the Web preset. |
 | `platform/web/wordmark.woff`, `make_font.py` | Chakra Petch Bold cut down to A–Z, digits and a few signs (3.6 KB) for the loading screen; `make_font.py` rebuilds it (fontTools). |
-| `platform/web/pack_music.gd` | Writes `music.pck` (the music tracks as their own pack). |
+| `platform/web/pack_music.gd` | Writes `music/<track>.pck`, one pack per music track. |
 | `platform/web/.gdignore` | Keeps the directory out of Godot's import and out of `index.pck`. |
 | `src/platform/web_audio_unlock.gd` (`WebAudioUnlock`) | Pure state machine: is the page's audio still locked? |
 | `src/platform/web_audio_bridge.gd` (`WebAudioBridge`) | The page side: finds the engine's AudioContext, resumes it inside gestures, reports its state. |
-| `src/platform/web_audio.gd` (`WebAudio`) | The node: polls the bridge, holds the music until the unlock and the music pack, boot marks. `GameAudio` adds it on the web. |
-| `src/platform/web_music_pack.gd` (`WebMusicPack`) | Fetches and mounts `music.pck` when the main pack leaves the music out. |
+| `src/platform/web_audio.gd` (`WebAudio`) | The node: polls the bridge, holds the music until the unlock, hands the music its track packs, boot marks. `GameAudio` adds it on the web. |
+| `src/platform/web_music_pack.gd` (`WebMusicPack`) | Fetches and mounts one track's pack at a time, as the music asks for it, when the main pack leaves the music out. |
 | `src/platform/web_boot.gd` (`WebBoot`) | Boot milestones (`window.wbBoot`, the `wb-boot` event, a console line): `title`, `run`, and `start` (the first run after the title, WP9.7). |
 | `src/platform/web_layout.gd` (`WebLayout`) | WP9.7: reads the shell's `window.wbLayout` (rotated, phone, the landscape box, the page's safe-area insets). |
 | `src/input/screen_insets.gd` (`ScreenInsets`) | WP9.7: the safe area in canvas px for the HUD, menus and touch controls (web insets rotated and scaled, the engine's safe area natively, the phone's minimum left inset). |
 | `src/platform/web_ui_probe.gd` (`WebUiProbe`) | WP9.7: with `?probe=ui`, prints the visible menu buttons (canvas px) for the smoke test's tap on PLAY. |
-| `tools/export_web.sh` | Exports, then writes `music.pck` (when needed), `version.json` and the shell's build id and font; prints the engine template used, sizes and the transfer to the title. `--template=auto\|slim\|official` (WP9.9, [Slim engine](#slim-engine)). |
+| `tools/export_web.sh` | Exports, then writes `music/<track>.pck` (when needed), `version.json` and the shell's build id and font; prints the engine template used, sizes and the transfer to the title. `--template=auto\|slim\|official` (WP9.9, [Slim engine](#slim-engine)). |
 | `tools/web_template/` | WP9.9: the slim engine template: `build.sh` (pinned build), `westbound.gdbuild` + `detect_classes.gd` (class profile and the check), `verify.sh` + `probe.mjs` + `web_probe.gd`, `web_names.gd`, `web_net.gd` (official vs slim in Chromium), `removed_classes.txt`, `ci_gate.sh` ([Slim engine](#slim-engine)). |
 | `tools/web_smoke/smoke.mjs` | The headless-Chromium smoke test, plus timings, transfer, memory, the audio-unlock test, the caching checks and (WP9.7) phone emulation: `--portrait` / `--landscape` / `--device`, `--tap-play`. |
 | `tools/web_smoke/layout_test.mjs` | WP9.7: the shell's rotation math in node (the smoke runs it first; `tests/platform/test_web_layout.gd` runs it when node is installed). |
 | `tools/web_smoke/pck_list.py` | Lists a `.pck` by group and file, raw and gzip. |
-| `tests/platform/test_web_audio.gd` | Unit tests: the unlock state machine, the music hold, the node, the `GameAudio` hook, the music pack. |
+| `tests/platform/test_web_audio.gd` | Unit tests: the unlock state machine, the music hold, the node, the `GameAudio` hook, the music packs (queue, mount, failure). |
 
 ## Measuring
 
@@ -59,7 +59,7 @@ Memory: the wasm heap (`WebAssembly.Memory`) and Chrome's JS heap after the sett
 
 The spec gives no number for load time or pack size ("web build polish ... load time"), so these are proposed budgets for the everyday playtest on a phone: **first paint under 0.5 s**, **under 12 MiB (gzip) before the title**, **title within 10 s on 4G** (9 Mbps). The official engine alone is 9.7 MiB on the wire; the slim engine (WP9.9, [Slim engine](#slim-engine)) is 6.1 MiB and brings the transfer to the title to 9.4 MiB, inside the budget.
 
-Measured on this branch (release export, gzip like Pages). "Before" is the committed preset (Godot's shell, music inside `index.pck`); "after" adds the two requested preset lines (custom shell, music as `music.pck`):
+Measured on this branch (release export, gzip like Pages). "Before" is the committed preset (Godot's shell, music inside `index.pck`); "after" adds the two requested preset lines (custom shell, music as its own pack; since the music moods, one pack per track, see [Music packs](#music-packs)):
 
 | | Before | After | Change |
 | --- | --- | --- | --- |
@@ -100,17 +100,19 @@ Checked and left alone:
 - **Fonts.** Two full Chakra Petch weights, 79 KiB. Subsetting to Latin would save ~40 KiB but risks player names (nametags, friends) in other scripts. Not done.
 - **Compression.** Pages sends gzip only (no brotli, and no precompressed files), so nothing to gain there.
 
-## Music pack
+## Music packs
 
-The music is the biggest part of `index.pck`, and the page downloads the whole main pack before the engine starts. With the requested exclude filter (`assets/audio/music_*`), `tools/export_web.sh` finds no music in `index.pck` and runs `platform/web/pack_music.gd`, which writes `build/web/music.pck`: each track's imported stream and a remap-only `.import`, exactly as an export packs them (PCKPacker, same engine version).
+The music is the biggest part of the game (13 tracks, ~29 MB), and the page downloads the whole main pack before the engine starts. With the requested exclude filter (`assets/audio/music_*`), `tools/export_web.sh` finds no music in `index.pck` and runs `platform/web/pack_music.gd`, which writes **one pack per track**, `build/web/music/<track>.pck` (`music/music_menu_1.pck`, ...): the track's imported stream and a remap-only `.import`, exactly as an export packs them (PCKPacker, same engine version). The title never waits for any of them.
 
-At run time `WebAudio` hands the track list to `WebMusicPack.begin()` as the run boots:
+The music asks for each track just before it needs it ([docs/AUDIO.md → Music](AUDIO.md#music): moods, pools, crossfades). `WebAudio` hands `MusicPlayer` its `WebMusicPack`, and the player calls `request(track)` before it plays one:
 
-1. Every track already loadable (native, or the music still in `index.pck`): done, nothing fetched.
-2. Otherwise it fetches `music.pck?v=<build>` with an `HTTPRequest` (`accept_gzip = false`: the browser has already decoded Pages' gzip; `download_chunk_size` 1 MiB, one read per frame), writes it to `/tmp/wb_music.pck` in the page's memory file system (never `user://`, the save's IndexedDB), mounts it with `ProjectSettings.load_resource_pack` and checks the tracks.
-3. The music is held until the pack is in; if the fetch fails the game runs without music and says why in the console (no engine error). `HTTPRequest.download_file` reported success but wrote no file in the 4.7 web build, so the body is written out by hand.
+1. A track already loadable (native, the music still in `index.pck`, or a pack mounted before) is `is_loaded()` at once: nothing fetched.
+2. Otherwise the request is queued (first in, first out, once per track; one download at a time) and fetched as `music/<track>.pck?v=<build>` with an `HTTPRequest` (`accept_gzip = false`: the browser has already decoded Pages' gzip; `download_chunk_size` 1 MiB, one read per frame). The body is written by hand (`HTTPRequest.download_file` reported success but wrote no file in the 4.7 web build) to `/tmp/wb_music_<track>.pck` in the page's memory file system (never `user://`, the save's IndexedDB), mounted with `ProjectSettings.load_resource_pack` and checked with `ResourceLoader.exists`: `track_loaded(track)`.
+3. A failed fetch or mount prints why (`web music: failed <track>: <why>`, no engine error) and emits `track_failed`: the player skips that track for the next of its pool, or stays silent.
 
-Nothing loads a track before its pack: `AudioBank` would `push_error` on a missing file. The smoke checks `web music: loaded 3 tracks` whenever the game says it is downloading.
+Meanwhile the player keeps the current music (silence at boot) and starts or crossfades the track when it lands. At boot the title's first track (`music_menu_1`) is requested while the page waits for its first gesture; the menu music fades in when it lands (owner accepted the delay). When a track starts the player prefetches the next track of its pool, then the first track of the likely next mood (MENU → DAY, ...), so a run's first track is usually in before PLAY. Nothing else is fetched up front.
+
+Nothing loads a track before its pack: `AudioBank` would `push_error` on a missing file. Console lines: `web music: downloading <track>`, `web music: loaded <track>`, `web music: failed <track>: <why>`, and `web audio: music playing <track> (<mood>)` at each track start. The smoke requires every track it saw downloading to load and a track to play; `--audio-loops` also requires a drive-mood track (`day|golden|night|rush`) to start during the drive. Measured (release export, official engine): 13 packs, 0.8–2.7 MiB each (28.7 MiB raw, 27.9 MiB gzip: Vorbis barely compresses); the transfer to the title stays 15.2 MiB (`index.wasm` 9.6 + `index.pck` 5.4 MiB gzip). `smoke.mjs --audio-loops 60`: `music_menu_1` lands just after the title and plays (menu), `music_menu_2` and `music_day_cruise_1` follow as prefetches, the tap on PLAY crossfades to `music_day_cruise_1 (day)` at once, which prefetches `music_day_cruise_2` and `music_golden_hour_1`. Chromium reports each finished pack fetch as `ERR_ABORTED` (the smoke's "aborted request ignored" note) although the whole body arrived and mounted.
 
 ## Loading screen
 
@@ -128,13 +130,13 @@ Measured effect: first contentful paint 0.12–0.16 s instead of the canvas's fi
 
 **Finding (headless Chromium, the browser's default autoplay policy).** The page's AudioContext starts `suspended`. Godot 4.7's web engine calls `resume()` from its own mouse, touch and key callbacks, which run inside the browser's event dispatch in the single-threaded build, so the first click, tap (on `touchend`: `touchstart` does not count as user activation and logs a warning) or non-modifier key already resumes it. Modifier keys and Esc do not count as user activation (HTML spec), so no page can unlock on them. What was missing:
 
-1. **Music "started" silently.** `GameAudio` starts the music on the title, before any gesture. The player then "plays" into a suspended context while `MusicPlayer`'s fade-in runs on frame time, so by the unlock the fade is long over and the track comes in abruptly (and a future engine that keeps mixing while suspended would skip its start). Now `MusicPlayer.hold` defers the start: `WebAudio` holds it while the context is locked (and until the music pack is in) and releases it on the unlock, so the music starts on the first gesture from the top with its fade-in.
+1. **Music "started" silently.** `GameAudio` starts the music on the title, before any gesture. The player then "plays" into a suspended context while `MusicPlayer`'s fade-in runs on frame time, so by the unlock the fade is long over and the track comes in abruptly (and a future engine that keeps mixing while suspended would skip its start). Now `MusicPlayer.hold` defers the start: `WebAudio` holds it while the context is locked and releases it on the unlock (since the music packs, a track not fetched yet starts when it lands), so the music starts on the first gesture from the top with its fade-in.
 2. **Gestures the engine never sees.** `WebAudioBridge` adds capture-phase listeners on `window` for the activating events (`pointerup`, `touchend`, `mousedown`, `keydown`, `click`): they call `resume()` and start a one-sample silent buffer (older iOS unlocks only on a sound started in a gesture). They act only while `navigator.userActivation.isActive`, so the browser never logs "not allowed to start". They cover a tap on an HTML overlay or a key while the canvas lacks focus.
 3. **Finding the context.** The custom shell records it (`window.wbAudioCtx`) when the engine creates it; without the shell the bridge reaches the engine's own `GodotAudio.ctx` by evaluating in the engine's scope (`JavaScriptBridge.eval(code, false)`). With neither, it falls back to `navigator.userActivation.hasBeenActive`, and with no information at all it never holds the music.
 
 `WebAudioUnlock` (pure): `UNKNOWN → LOCKED` (suspended or iOS `interrupted` at boot) `→ UNLOCKED` (running, or closed: never hold forever); a context that is already running needs nothing; a later suspension (iOS interrupts a hidden tab) is `RELOCKED → RESUMED` and never holds the playing music. The node polls every 0.1 s while locked and every 1 s after.
 
-**Tests.** `tests/platform/test_web_audio.gd` (15 tests: the state machine, the hold, the node with a scripted bridge, the `GameAudio` hook, native unchanged, the music pack mounting a real `.pck`). `smoke.mjs --audio-unlock click|tap|key` launches Chromium with its default autoplay policy, checks the context is `suspended` and the game says `web audio: locked`, taps an empty part of the title, and requires the context `running`, `web audio: unlocked` and the music playing. All three gestures pass with both shells.
+**Tests.** `tests/platform/test_web_audio.gd` (15 tests: the state machine, the hold, the node with a scripted bridge, the `GameAudio` hook, native unchanged, the music packs mounting a real `.pck`). `smoke.mjs --audio-unlock click|tap|key` launches Chromium with its default autoplay policy, checks the context is `suspended` and the game says `web audio: locked`, taps an empty part of the title, and requires the context `running`, `web audio: unlocked` and the music playing. All three gestures pass with both shells.
 
 iOS note: Web Audio on iOS follows the ring/silent switch (like native Godot's default *ambient* session). Safari 17's `navigator.audioSession.type = 'playback'` would play through the silent switch; left alone to match native.
 
@@ -205,7 +207,7 @@ The plan never recorded the M2 decision (§10 item 4 still lists web gyro as ope
 
 GitHub Pages sends `cache-control: max-age=600` and a weak ETag made of the file's modification time and size, which changes on every deploy. Without help, a phone that opened the game in the last 10 minutes keeps running the old `index.html`, `index.pck` and `index.wasm` for up to 10 minutes after a deploy, and can mix a new page with an old pack.
 
-- **Versioned downloads.** `tools/export_web.sh` hashes `index.wasm`, `index.pck` and `music.pck` into a 12-hex build id and writes it into the shell: `index.js?v=<build>` in the page, and the shell wraps `fetch` so the engine's own `index.wasm` and `index.pck` requests (and `music.pck`, through `window.wbBuild`) carry `?v=<build>`. A new build has new URLs: never a cached mix. A deploy that changes nothing keeps the same URLs.
+- **Versioned downloads.** `tools/export_web.sh` hashes `index.wasm`, `index.pck` and every `music/*.pck` into a 12-hex build id and writes it into the shell: `index.js?v=<build>` in the page, and the shell wraps `fetch` so the engine's own `index.wasm` and `index.pck` requests (and each `music/<track>.pck`, through `window.wbBuild`) carry `?v=<build>`. A new build has new URLs: never a cached mix. A deploy that changes nothing keeps the same URLs.
 - **Stale page.** `version.json` (`{"build": ..., "commit": ...}`) is fetched with `cache: 'no-store'` at boot, in parallel with the engine. If it names another build, the cached `index.html` is stale and the page reloads once (a `sessionStorage` guard stops a loop if Pages' edge still serves the old page).
 - Checked by the smoke: every run with the custom shell requires the three files with `?v=<build>`; `--stale` serves a newer build id first and requires exactly one reload.
 
@@ -295,7 +297,7 @@ An editor-GUI export needs `selected/` to exist: run `tools/export_web.sh` once.
 
 ### Checks
 
-`tools/web_template/verify.sh [--net=http://127.0.0.1:8080]` runs the official and the slim engine in headless Chromium with the same `index.pck`/`music.pck`, through a page that mounts the pack and replaces the main scene with a probe (export templates ignore `--script`, so the page drops the probe, a scene holding it and an `override.cfg` into the engine's file system):
+`tools/web_template/verify.sh [--net=http://127.0.0.1:8080]` runs the official and the slim engine in headless Chromium with the same `index.pck` and `music/*.pck`, through a page that mounts the packs and replaces the main scene with a probe (export templates ignore `--script`, so the page drops the probe, a scene holding it and an `override.cfg` into the engine's file system):
 
 - **Everything loads**: `web_probe.gd` compiles every script and loads every scene, resource and imported file of both packs. Same result on both engines: 675 loaded, the same 4 failures (below), no other error.
 - **Names render identically**: `web_names.gd` draws player names in the game's theme (`Şahin#1234`, Turkish dotted/dotless i and Turkish upper-casing, `Zoë Ñandú Łukasz Øyvind Ærø`, a combining accent, Greek and Cyrillic, Thai, an emoji): the same shaped widths, and byte-identical screenshots.
@@ -346,6 +348,6 @@ Sign in with Apple and Google on the web go through the custom shell (`platform/
 +html/custom_html_shell="res://platform/web/shell.html"
 ```
 
-Both are independent: the shell alone gives the loading screen and the versioned downloads; the filter alone makes `music.pck` (the game fetches it either way). Everything works, and the smoke passes, with neither.
+Both are independent: the shell alone gives the loading screen and the versioned downloads; the filter alone makes the `music/` packs (the game fetches them either way). Everything works, and the smoke passes, with neither.
 
 `.github/workflows/web.yml` (build job): see the handoff for the exact diff (gzip metrics, the audio-unlock and stale-page smoke runs).

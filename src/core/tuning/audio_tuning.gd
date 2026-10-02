@@ -179,18 +179,65 @@ const PATH := "res://data/tuning/audio.tres"
 @export var bonus_chime_db: float = -9.0   # not in spec
 
 @export_group("Music")
-## The playlist (played in order, looping). Swap in licensed tracks here (docs/AUDIO.md).
+## Every track (each pool below names tracks from this list). Swap in licensed tracks
+## here (docs/AUDIO.md). The web export ships each one as its own pack, fetched when
+## the music needs it (docs/WEB.md → Music packs).
 @export var music_tracks: PackedStringArray = [
-	"res://assets/audio/music_midnight_drive.ogg",
-	"res://assets/audio/music_cyber_runner.ogg",
+	"res://assets/audio/music_menu_1.ogg",
+	"res://assets/audio/music_menu_2.ogg",
+	"res://assets/audio/music_day_cruise_1.ogg",
+	"res://assets/audio/music_day_cruise_2.ogg",
 	"res://assets/audio/music_slampe.ogg",
+	"res://assets/audio/music_golden_hour_1.ogg",
+	"res://assets/audio/music_golden_hour_2.ogg",
+	"res://assets/audio/music_night_drive_1.ogg",
+	"res://assets/audio/music_night_drive_2.ogg",
+	"res://assets/audio/music_midnight_drive.ogg",
+	"res://assets/audio/music_rush_hour_1.ogg",
+	"res://assets/audio/music_rush_hour_2.ogg",
+	"res://assets/audio/music_cyber_runner.ogg",
 ]   # not in spec
-## Each track's tempo for the music clock (0 = unknown: the clock stays stopped).
-@export var music_bpm: PackedFloat64Array = [0.0, 0.0, 0.0]   # not in spec
+## Each track's tempo for the music clock, by music_tracks index (0 = unknown: the
+## clock stays stopped).
+@export var music_bpm: PackedFloat64Array = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # not in spec
 @export var music_beats_per_bar: int = 4   # not in spec
 ## Silence between tracks (s) and the fade at the start of a track (s).
 @export var music_gap_s: float = 1.5   # not in spec
 @export var music_fade_in_s: float = 1.5   # not in spec
+## Moods (MusicMood, docs/AUDIO.md → Music): each mood plays its pool in rotation.
+## MENU: title, garage, results, room lobby. DAY: the run by day (and the dawn). GOLDEN:
+## from sky_t_golden_hour to sunset (latched until night). NIGHT: nightfall and night.
+## RUSH: a room on RUSH HOUR density, or a solo run in a music_rush_biomes leg.
+@export var music_pool_menu: PackedStringArray = [
+	"res://assets/audio/music_menu_1.ogg",
+	"res://assets/audio/music_menu_2.ogg",
+]   # not in spec
+@export var music_pool_day: PackedStringArray = [
+	"res://assets/audio/music_day_cruise_1.ogg",
+	"res://assets/audio/music_day_cruise_2.ogg",
+	"res://assets/audio/music_slampe.ogg",
+]   # not in spec
+@export var music_pool_golden: PackedStringArray = [
+	"res://assets/audio/music_golden_hour_1.ogg",
+	"res://assets/audio/music_golden_hour_2.ogg",
+]   # not in spec
+@export var music_pool_night: PackedStringArray = [
+	"res://assets/audio/music_night_drive_1.ogg",
+	"res://assets/audio/music_night_drive_2.ogg",
+	"res://assets/audio/music_midnight_drive.ogg",
+]   # not in spec
+@export var music_pool_rush: PackedStringArray = [
+	"res://assets/audio/music_rush_hour_1.ogg",
+	"res://assets/audio/music_rush_hour_2.ogg",
+	"res://assets/audio/music_cyber_runner.ogg",
+]   # not in spec
+## Solo runs (Journey, Daily Drive) play RUSH in these biomes (BiomeDef.id).
+@export var music_rush_biomes: Array[StringName] = [&"city"]   # not in spec
+## A mood change crossfades over this (s).
+@export var music_crossfade_s: float = 4.0   # not in spec
+## A track plays at least this long (s) before a mood change may cut it; an earlier
+## change waits. Entering or leaving MENU does not wait.
+@export var music_min_play_s: float = 45.0   # not in spec
 ## The web export mixes music in the engine (stream playback) so the night filter works
 ## and a long track isn't decoded whole into memory; effects use web samples.
 @export var music_stream_on_web: bool = true   # not in spec
@@ -230,6 +277,22 @@ func tire_hum_full_mps() -> float:
 ## True where silent loops are stopped rather than paused (the web; loop_stop_on_web).
 func stops_silent_loops() -> bool:
 	return loop_stop_on_web and OS.has_feature("web")
+
+
+## The pool of MusicMood.Mood `mood` (empty for an unknown mood).
+func music_pool(mood: int) -> PackedStringArray:
+	match mood:
+		MusicMood.Mood.MENU:
+			return music_pool_menu
+		MusicMood.Mood.DAY:
+			return music_pool_day
+		MusicMood.Mood.GOLDEN:
+			return music_pool_golden
+		MusicMood.Mood.NIGHT:
+			return music_pool_night
+		MusicMood.Mood.RUSH:
+			return music_pool_rush
+	return PackedStringArray()
 
 
 static func load_default() -> AudioTuning:

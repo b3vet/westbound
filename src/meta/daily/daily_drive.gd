@@ -32,6 +32,9 @@ var ghost_car: GhostCar
 var run: Run
 ## The Daily run's date ("YYYY-MM-DD"); "" outside Daily Drive.
 var date: String = ""
+## The UTC date the store prunes against when a ghost is offered; "" = the real date
+## (DailyGhostStore.today_utc()). Tests pin it so a fixed run date never ages out.
+var today: String = ""
 ## A Daily run is on (recording, maybe playing a ghost).
 var active: bool = false
 ## The last run's ghost was kept as the date's best (results, tests).
@@ -151,7 +154,7 @@ func on_run_over(results: Dictionary) -> void:
 	saved = false
 	if g == null or not save_enabled or not tuning.ghost_enabled or results.get(RunWarmup.RESULT_KEY, false):
 		return
-	saved = store.offer(g, DailyGhostStore.today_utc())
+	saved = store.offer(g, today if not today.is_empty() else DailyGhostStore.today_utc())
 	if saved:
 		Save.request_save()
 
