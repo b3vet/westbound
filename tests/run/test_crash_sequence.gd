@@ -378,6 +378,16 @@ func test_reset_returns_bodies_and_restores_the_car() -> void:
 	check(_crash.player_body().freeze, "still frozen after a physics frame")
 
 
+## The run's boot into the title resets the crash before setup() built the pool. Any
+## error here fails the test; on a release build the null bodies crashed the engine.
+func test_reset_before_setup_is_a_no_op() -> void:
+	var fresh := CrashSequence.new()
+	_add(fresh)
+	fresh.reset()
+	check(not fresh.is_running(), "not running")
+	check(fresh.player_body() == null, "no pool built by reset()")
+
+
 # ---------------------------------------------------------------- Traffic view
 
 func test_hit_car_is_hidden_during_the_crash_and_shown_after() -> void:

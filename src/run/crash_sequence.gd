@@ -254,7 +254,11 @@ func skip() -> void:
 ## hit car in the TrafficView again, restores the PlayerCar (physics process, blob
 ## shadow, the transform it had at start()) and the previous camera. Creates and frees
 ## nothing. Emits nothing (a reset before the end aborts the cinematic silently).
+## Before setup() there is no pool and nothing to reset (the run's boot into the title
+## calls this first; on a release build the null bodies would crash the engine).
 func reset() -> void:
+	if not _built:
+		return
 	_park(_player_body)
 	_park(_traffic_body)
 	_traffic_mmi.visible = false
