@@ -33,7 +33,9 @@
 // times from navigation start: first paint, downloads done, wasm compiled, the
 // engine's main(), first WebGL frame, title shown (the game's "web boot: title"
 // mark), loading overlay gone; plus the wasm heap and JS heap after the settle.
-// When the game fetches its music pack ("web music: downloading"), it must load.
+// Music packs (music/<track>.pck): every track the game starts fetching ("web music:
+// downloading <track>") must load ("web music: loaded <track>"), and a track must then
+// start playing ("web audio: music playing <track> (<mood>)").
 // --audio-unlock: launch with the browser's default autoplay policy (the rest of
 // the smoke allows autoplay) and check the unlock: the page's AudioContext is
 // suspended at boot and the game holds its music ("web audio: locked"); one
@@ -488,7 +490,7 @@ async function collectMetrics(page, consoleLines, sent) {
     };
   });
   const byName = (re) => perf.res.filter((r) => re.test(r.name));
-  const big = byName(/\.(wasm|pck)$/).filter((r) => r.name !== 'music.pck');   // the boot's downloads
+  const big = byName(/\.(wasm|pck)$/).filter((r) => !/^music_/.test(r.name));   // the boot's downloads
   const downloaded = big.length ? Math.max(...big.map((r) => r.end)) : null;
   const files = {};
   for (const r of perf.res) files[r.name] = { end_ms: Math.round(r.end), decoded: r.decoded, encoded: r.encoded };
@@ -663,7 +665,7 @@ async function main() {
     if (!failures.length && opts.audioUnlock) await audioUnlock(page, opts, consoleLines, failures);
     if (!failures.length && (opts.tapPlay || opts.expectRotated != null)) await checkLayout(page, opts, consoleLines, failures);
     if (!failures.length && opts.tapPlay) await tapPlay(page, opts, consoleLines, failures);
-    if (!failures.length && opts.audioLoops > 0) await auditLoops(page, opts, failures);
+    if (!failures.length && opts.audioLoops > 0) await auditLoops(page, opts, consoleLines, failures);
     if (!failures.length) checkCaching(opts, urls, consoleLines, shellBuild, failures);
 
     if (!failures.length && opts.waitFor) {
@@ -693,14 +695,9 @@ async function main() {
       const renderer = consoleLines.find((l) => /OpenGL API|WebGL/.test(l) && !l.startsWith('wbsmoke:'));
       if (renderer) console.log(`smoke: Godot renderer: ${renderer}`);
 
-      // The music pack (music.pck, when the main pack leaves the music out) must load.
-      if (consoleLines.some((l) => l.startsWith('web music: downloading'))) {
-        const deadline = Date.now() + opts.timeout;
-        while (!consoleLines.some((l) => /^web music: (loaded|no music)/.test(l)) && Date.now() < deadline) await page.waitForTimeout(250);
-        const line = consoleLines.find((l) => /^web music: (loaded|no music)/.test(l));
-        if (!line || !line.startsWith('web music: loaded')) failures.push(`music pack: ${line || 'never loaded'}`);
-        else console.log(`smoke: music pack: ${line.slice('web music: '.length)}`);
-      }
+      // The music packs (music/<track>.pck, when the main pack leaves the music out):
+      // every track fetched must load, and the music must start.
+      if (consoleLines.some((l) => l.startsWith('web music: downloading '))) await checkMusic(page, opts, consoleLines, failures);
 
       metrics = await collectMetrics(page, consoleLines, sent);
       printMetrics(metrics, opts);
@@ -777,8 +774,9 @@ function checkCaching(opts, urls, consoleLines, build, failures) {
     if (!got.length) failures.push(`caching: ${f} was never requested`);
     else if (!got.every((u) => u.endsWith(`?v=${build}`))) failures.push(`caching: ${f} requested as ${got.join(', ')}, not ?v=${build}`);
   }
-  const music = urls.filter((u) => u.split('?')[0].endsWith('/music.pck'));   // only when the game fetched it
-  if (!music.every((u) => u.endsWith(`?v=${build}`))) failures.push(`caching: music.pck requested as ${music.join(', ')}, not ?v=${build}`);
+  const music = urls.filter((u) => /\/music\/[^/?]+\.pck$/.test(u.split('?')[0]));   // only the tracks the game fetched
+  const unversioned = music.filter((u) => !u.endsWith(`?v=${build}`));
+  if (unversioned.length) failures.push(`caching: music packs requested as ${unversioned.join(', ')}, not ?v=${build}`);
   const pages = urls.filter((u) => u.split('?')[0].endsWith('/index.html')).length;
   const reloads = consoleLines.filter((l) => /^Westbound: build \w+ is out/.test(l)).length;
   if (opts.stale) {
@@ -841,7 +839,7 @@ async function audioUnlock(page, opts, consoleLines, failures) {
   const unlocked = await waitFor(/^web audio: unlocked /, unlockWait, from);
   const gesture = consoleMs(consoleLines, /^wbsmoke: gesture \w+ (\d+)/);
   const resumed = consoleMs(consoleLines, /^wbsmoke: audio-ctx running (\d+)/);
-  // The music starts on the unlock, or when its pack (music.pck) arrives after it.
+  // The music starts on the unlock, or when its track's pack (music/<track>.pck) arrives after it.
   const playing = unlocked && await waitFor(/^web audio: .*music playing/, unlockWait, from);
   if (!running) failures.push(`audio unlock: the context did not resume after a ${opts.audioUnlock}`);
   if (!unlocked) failures.push('audio unlock: the game did not report the unlock ("web audio: unlocked ...")');
@@ -1034,7 +1032,7 @@ function audioLoopsProbe() {
 // --audio-loops: drives the run for opts.audioLoops seconds (gas on and off every
 // 3 s, a pause and resume every 20 s; the run may crash, which is fine) and checks the
 // counters of audioLoopsProbe.
-async function auditLoops(page, opts, failures) {
+async function auditLoops(page, opts, consoleLines, failures) {
   console.log(`smoke: audio loops: driving ${opts.audioLoops} s with gas on/off and pauses`);
   const end = Date.now() + opts.audioLoops * 1000;
   let sec = 0;
@@ -1061,4 +1059,27 @@ async function auditLoops(page, opts, failures) {
   if (st.loopPauses > 0) failures.push(`audio loops: ${st.loopPauses} pauses of looping samples (Godot 4.7's web resume can leave them silent for good)`);
   if (st.pastEnd > 0) failures.push(`audio loops: ${st.pastEnd} loop resumes started past the buffer's end`);
   if (st.stuckMax > 0) failures.push(`audio loops: ${st.stuckMax} looping samples stuck (unpaused, no restart within their duration)`);
+  // The drive's music: leaving the title switches the mood (MENU -> the run's), so a
+  // drive track must have started (its pack fetched on demand on the web).
+  const drive = consoleLines.filter((l) => /^web audio: music playing \S+ \((day|golden|night|rush)\)/.test(l));
+  if (!drive.length) failures.push('audio loops: no drive music started (no "web audio: music playing <track> (day|golden|night|rush)")');
+  else console.log(`smoke: audio loops: drive music: ${drive.map((l) => l.slice('web audio: music playing '.length)).join(', ')}`);
+}
+
+// The music packs: waits (up to --timeout) until every track the game started fetching
+// has loaded or failed, then requires no failure and a track playing.
+async function checkMusic(page, opts, consoleLines, failures) {
+  const fetching = () => consoleLines.filter((l) => l.startsWith('web music: downloading ')).map((l) => l.split(' ')[3]);
+  const settled = (t) => consoleLines.some((l) => l === `web music: loaded ${t}` || l.startsWith(`web music: failed ${t}:`));
+  const playing = () => consoleLines.some((l) => l.startsWith('web audio: music playing '));
+  // Locked audio (--audio-unlock before its gesture) holds the music: then only the loads count.
+  const held = () => consoleLines.some((l) => l.startsWith('web audio: locked ')) && !consoleLines.some((l) => l.startsWith('web audio: unlocked '));
+  const deadline = Date.now() + opts.timeout;
+  while ((!fetching().every(settled) || (!held() && !playing())) && Date.now() < deadline) await page.waitForTimeout(250);
+  const loaded = fetching().filter((t) => consoleLines.includes(`web music: loaded ${t}`));
+  for (const l of consoleLines.filter((x) => x.startsWith('web music: failed '))) failures.push(`music: ${l.slice('web music: '.length)}`);
+  const open = fetching().filter((t) => !settled(t));
+  if (open.length) failures.push(`music: never loaded ${open.join(', ')}`);
+  if (!held() && !playing()) failures.push('music: no track started ("web audio: music playing ...")');
+  console.log(`smoke: music: loaded ${loaded.join(', ') || '(none)'}${playing() ? `; ${consoleLines.find((l) => l.startsWith('web audio: music playing ')).slice('web audio: '.length)}` : ''}`);
 }

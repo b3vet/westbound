@@ -10,8 +10,8 @@ extends Node
 ## Every script in the pack is loaded (compiled), every scene, resource and imported file too.
 ## Run with both templates, the failures must match (tools/web_template/verify.sh).
 
-## probe.mjs preloads the export's music pack here, when there is one.
-const MUSIC_PACK := "/tmp/music.pck"
+## probe.mjs preloads the export's music packs (music/<track>.pck) here, when there are any.
+const MUSIC_DIR := "/tmp/music"
 
 var _files := 0
 var _loaded := 0
@@ -22,8 +22,11 @@ func _ready() -> void:
 	var classes := ClassDB.get_class_list()
 	classes.sort()
 	print("PROBE classes %d %s" % [classes.size(), ",".join(classes)])
-	if FileAccess.file_exists(MUSIC_PACK) and not ProjectSettings.load_resource_pack(MUSIC_PACK):
-		_fail(MUSIC_PACK, "mount")
+	var packs := DirAccess.get_files_at(MUSIC_DIR) if DirAccess.dir_exists_absolute(MUSIC_DIR) else PackedStringArray()
+	for f in packs:
+		var pck := MUSIC_DIR.path_join(f)
+		if f.ends_with(".pck") and not ProjectSettings.load_resource_pack(pck):
+			_fail(pck, "mount")
 	var paths := PackedStringArray()
 	_collect("res://", paths)
 	paths.sort()

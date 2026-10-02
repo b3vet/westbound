@@ -121,29 +121,33 @@ if grep -qE '^WARNING:' "$log"; then
   grep -E '^WARNING:' -A1 "$log" >&2 || true
 fi
 
-# WP9.2 music pack (docs/WEB.md): when the Web preset's exclude filter leaves the music
-# out of index.pck, the tracks ship as music.pck, which the game fetches after it
-# starts (src/platform/web_music_pack.gd). The pack's directory holds plain paths
-# (the tracks' .import remaps; audio.tres names the .ogg files too, so match .ogg.import).
+# WP9.2 music packs (docs/WEB.md → Music packs): when the Web preset's exclude filter
+# leaves the music out of index.pck, each track ships as music/<track>.pck, which the
+# game fetches just before it plays it (src/platform/web_music_pack.gd). The pack's
+# directory holds plain paths (the tracks' .import remaps; audio.tres names the .ogg
+# files too, so match .ogg.import).
+music_dir="$out_dir/music"
 if grep -aqE 'assets/audio/music_[a-z0-9_]+\.ogg\.import' "$out_dir/index.pck"; then
   music="in index.pck (the Web preset does not exclude assets/audio/music_*)"
 else
-  echo "export_web.sh: packing the music -> $out_dir/music.pck" >&2
-  if ! tools/godot.sh --headless --path . --script res://platform/web/pack_music.gd -- "$PWD/$out_dir/music.pck" >"$log" 2>&1 \
-      || [[ ! -s "$out_dir/music.pck" ]]; then
-    cat "$log"; echo "export_web.sh: music pack failed" >&2; exit 1
+  echo "export_web.sh: packing the music -> $music_dir/<track>.pck" >&2
+  if ! tools/godot.sh --headless --path . --script res://platform/web/pack_music.gd -- "$PWD/$music_dir" >"$log" 2>&1 \
+      || ! compgen -G "$music_dir/*.pck" >/dev/null; then
+    cat "$log"; echo "export_web.sh: music packs failed" >&2; exit 1
   fi
-  music="music.pck, loaded after the title is up"
+  music="$(ls "$music_dir"/*.pck | wc -l | tr -d ' ') packs in music/, each fetched when the music needs it"
 fi
 
 # WP9.2 (docs/WEB.md): the build id is a hash of the engine and the packs, so a deploy
 # that changes none of them keeps every cache warm. version.json (read uncached by the
 # custom shell) lets a stale cached index.html reload itself. The custom shell
 # (platform/web/shell.html, html/custom_html_shell in export_presets.cfg) carries two
-# tokens: __WB_BUILD__ (the ?v= on index.js, index.wasm, index.pck and music.pck) and
+# tokens: __WB_BUILD__ (the ?v= on index.js, index.wasm, index.pck and music/*.pck) and
 # __WB_FONT__ (the loading screen's wordmark font, inlined so it needs no request).
 hashed=("$out_dir/index.wasm" "$out_dir/index.pck")
-[[ -f "$out_dir/music.pck" ]] && hashed+=("$out_dir/music.pck")
+if [[ -d "$music_dir" ]]; then
+  while IFS= read -r f; do hashed+=("$f"); done < <(ls "$music_dir"/*.pck | LC_ALL=C sort)
+fi
 sha256() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; }   # Linux, macOS
 build_id="$(cat "${hashed[@]}" | sha256 | cut -c1-12)"
 printf '{"build":"%s","commit":"%s"}\n' "$build_id" "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
@@ -166,16 +170,24 @@ echo "export_web.sh: built $out ($mode), build $build_id"
 echo "  engine: $engine"
 echo "  shell: $shell"
 echo "  music: $music"
-for f in index.wasm index.pck index.js music.pck; do
+for f in index.wasm index.pck index.js; do
   [[ -f "$out_dir/$f" ]] || continue
   printf '  %-11s %10s   gzip %10s\n' "$f" "$(size "$out_dir/$f")" "$(gz "$out_dir/$f")"
 done
+if [[ -d "$music_dir" ]]; then
+  music_raw=0; music_gz=0
+  for f in "$music_dir"/*.pck; do
+    printf '  %-30s %10s   gzip %10s\n' "music/$(basename "$f")" "$(size "$f")" "$(gz "$f")"
+    music_raw=$((music_raw + $(wc -c <"$f"))); music_gz=$((music_gz + $(gzip -9c "$f" | wc -c)))
+  done
+  printf '  %-11s %10s   gzip %10s   (after the title, one track at a time)\n' "music/" "$(echo "$music_raw" | human)" "$(echo "$music_gz" | human)"
+fi
 printf '  %-11s %10s\n' "total" "$(du -sk "$out_dir" | awk '{ print $1 * 1024 }' | human)"
-# What a first visit downloads before the title (every file but the music pack,
+# What a first visit downloads before the title (every file but the music packs,
 # gzip-encoded as GitHub Pages serves them, ~level 6).
 wire=0
 for f in "$out_dir"/*; do
-  [[ "$(basename "$f")" == music.pck ]] && continue
+  [[ -f "$f" ]] || continue   # music/ is fetched after the title
   wire=$((wire + $(gzip -6c "$f" | wc -c)))
 done
-printf '  %-11s %10s   (to the title: every file but music.pck, gzip -6 as GitHub Pages serves them)\n' "transfer" "$(echo "$wire" | human)"
+printf '  %-11s %10s   (to the title: every file but music/, gzip -6 as GitHub Pages serves them)\n' "transfer" "$(echo "$wire" | human)"
