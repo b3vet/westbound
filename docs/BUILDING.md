@@ -144,29 +144,146 @@ redeploys. If the old build sticks, reload the page.
 
 ## iOS (owner's Mac)
 
-Needs macOS, Xcode, an Apple developer account and the Godot 4.7-stable editor.
+Needs macOS, Xcode with the iOS SDK, an Apple developer account and the official Godot
+4.7-stable macOS editor (any copy; point `GODOT` at its binary). Last verified with Xcode
+26.3 (iOS SDK 26.2), shipping 0.1.0 (2) to TestFlight. The commands below assume:
 
-1. Install the templates: `GODOT=/Applications/Godot.app/Contents/MacOS/Godot tools/export_templates.sh --all`
-   (or use the editor's Export Template Manager).
-2. Open the project in the editor. Go to **Project → Export… → iOS** and fill in
-   **App Store Team ID** (the 10-character ID from developer.apple.com → Membership).
-   The debug export method (Development) and bundle ID `com.b3vet.westbound` are already set.
-   Also set in the preset: version `0.1.0` (`application/short_version`) and build `1`
-   (`application/version`; **raise it for every TestFlight upload**), the App Store icon and
-   launch screen (`assets/branding/`), and two Info.plist keys
-   (`application/additional_plist_content`): `ITSAppUsesNonExemptEncryption = NO` (HTTPS/WSS
-   only, so no export-compliance question per build) and `UIRequiresFullScreen = YES` (the game
-   is landscape-only; without it App Store validation rejects the iPad build).
-3. Export from the editor, or from the command line:
-   ```
-   GODOT=/Applications/Godot.app/Contents/MacOS/Godot tools/godot.sh --headless --path . \
-     --export-debug iOS build/ios/Westbound.ipa
-   ```
-   This writes `build/ios/Westbound.xcodeproj` and, if signing works, the `.ipa`.
-   To sign, run on device, and profile with Instruments, open the Xcode project and run it
-   on the iPhone. You can tick **Export Project Only** to skip the `.ipa` step.
+```
+export GODOT=/Applications/Godot.app/Contents/MacOS/Godot   # or wherever your Godot.app is
+```
 
-**Keeping the team ID out of git.** Godot moves only fields marked *secret* into the
+Values in `<ANGLE_BRACKETS>` are the owner's and never go into the repo.
+
+### One-time setup
+
+1. **Templates:** `tools/export_templates.sh --all` (or the editor's Export Template Manager).
+2. **Team ID:** in **Project → Export… → iOS**, fill in **App Store Team ID** (developer.apple.com
+   → Membership), or set `application/app_store_team_id` in `export_presets.cfg`. Then keep it
+   out of git (see [Keeping the team ID out of git](#keeping-the-team-id-out-of-git)).
+   Already set in the preset: bundle ID `com.b3vet.westbound`, Development (debug) and App Store
+   (release) export methods, version `0.1.0` (`application/short_version`), the build number
+   (`application/version`), the App Store icon and launch screen (`assets/branding/`, the icon
+   is opaque), and two Info.plist keys (`application/additional_plist_content`):
+   `ITSAppUsesNonExemptEncryption = NO` (HTTPS/WSS only, so no export-compliance question per
+   build) and `UIRequiresFullScreen = YES` (the game is landscape-only; without it App Store
+   validation rejects the iPad build).
+3. **App ID and app record:** register the bundle ID `com.b3vet.westbound` (developer.apple.com
+   → Identifiers, or the App Store Connect API `POST /v1/bundleIds`) and create the app in App
+   Store Connect (My Apps → +) with that bundle ID. The API can't create app records; that step
+   is web-only.
+4. **App Store Connect API key:** a team key (App Manager role) saved as
+   `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`, plus its key ID and issuer ID. The
+   upload uses it, and it lets Xcode sign the App Store build with a cloud-managed distribution
+   certificate, so no Apple Distribution certificate has to be in the keychain.
+5. **TestFlight group:** an internal group with access to all builds, so every upload reaches
+   testers without an extra step. Beta testers are per app: add yourself to this app's group
+   by email (assigning an existing tester record from another app fails with
+   `409 STATE_ERROR "Tester(s) cannot be assigned"`).
+
+### Each TestFlight upload
+
+1. Raise the build number, `application/version`, in the iOS preset (every upload needs a new
+   one; change `application/short_version` for a new marketing version).
+2. Export. The `.ipa` step fails on signing (exit code 1, see step 3), but
+   `build/ios/Westbound.xcodeproj` is written, and that's all we need:
+   ```
+   tools/godot.sh --headless --path . --export-release iOS build/ios/Westbound.ipa
+   ```
+3. Fix the signing identity (after **every** export). Godot writes
+   `CODE_SIGN_IDENTITY = "Apple Distribution"` into the Release config together with
+   `CODE_SIGN_STYLE = Automatic`, which Xcode rejects: *"Westbound has conflicting provisioning
+   settings. Westbound is automatically signed for development, but a conflicting code signing
+   identity Apple Distribution has been manually specified."* The App Store export re-signs
+   with distribution anyway:
+   ```
+   sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Distribution";/CODE_SIGN_IDENTITY = "Apple Development";/' \
+     build/ios/Westbound.xcodeproj/project.pbxproj
+   ```
+4. Archive:
+   ```
+   xcodebuild -project build/ios/Westbound.xcodeproj -scheme Westbound -configuration Release \
+     -destination 'generic/platform=iOS' -archivePath build/ios/Westbound.xcarchive \
+     -derivedDataPath build/ios/DerivedData -allowProvisioningUpdates archive
+   ```
+5. Check the archived app on a device before uploading (iPhone unlocked and on a cable; get
+   its identifier from `xcrun devicectl list devices`). The console shows Godot's log (see
+   [Debugging on a device](#debugging-on-a-device)):
+   ```
+   xcrun devicectl device install app --device <DEVICE> \
+     build/ios/Westbound.xcarchive/Products/Applications/Westbound.app
+   xcrun devicectl device process launch --console --terminate-existing \
+     --environment-variables '{"OS_ACTIVITY_DT_MODE":"1"}' --device <DEVICE> com.b3vet.westbound
+   ```
+6. Upload. Write `build/ios/ExportOptions.plist`:
+   ```xml
+   <?xml version="1.0" encoding="UTF-8"?>
+   <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+   <plist version="1.0">
+   <dict>
+   	<key>method</key><string>app-store-connect</string>
+   	<key>destination</key><string>upload</string>
+   	<key>teamID</key><string><TEAM_ID></string>
+   	<key>signingStyle</key><string>automatic</string>
+   	<key>uploadSymbols</key><true/>
+   	<key>manageAppVersionAndBuildNumber</key><false/>
+   </dict>
+   </plist>
+   ```
+   then:
+   ```
+   xcodebuild -exportArchive -archivePath build/ios/Westbound.xcarchive \
+     -exportOptionsPlist build/ios/ExportOptions.plist -exportPath build/ios/export \
+     -allowProvisioningUpdates \
+     -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8 \
+     -authenticationKeyID <KEY_ID> -authenticationKeyIssuerID <ISSUER_ID>
+   ```
+   It ends with `Upload succeeded` / `** EXPORT SUCCEEDED **` (about 2 minutes).
+7. Apple processes the build in about 5 minutes; then it shows up in TestFlight. To script
+   the wait, poll `GET /v1/builds?filter[app]=<APP_ID>` on the App Store Connect API until
+   `processingState` is `VALID`.
+
+### Debugging on a device
+
+- **Crash reports:** crashes that testers send from TestFlight appear in App Store Connect →
+  TestFlight → Crashes (API: `betaFeedbackCrashSubmissions` and their `crashLog`).
+- **Release builds crash where debug builds only log.** The release templates compile out
+  GDScript's null checks, so a method call or property assignment on `null` that prints a
+  `SCRIPT ERROR` in the editor or a debug build segfaults on a release build (for example,
+  0.1.0 (1) crashed in `Node::reset_physics_interpolation()` because
+  `CrashSequence.reset()` ran before `setup()`). To find the script and line, run a debug
+  export on the device. The Development method signs it automatically:
+  ```
+  tools/godot.sh --headless --path . --export-debug iOS build/ios-debug/Westbound.ipa
+  xcrun devicectl device install app --device <DEVICE> build/ios-debug/Westbound.ipa
+  ```
+  then launch it with the `--console` command from step 5 above.
+- **Getting the log:** Godot logs through os_log, so `--console` alone shows nothing.
+  `OS_ACTIVITY_DT_MODE=1` (what Xcode sets) mirrors it to the console with GDScript backtraces.
+  `log collect --device-udid …` needs root.
+- **Device errors:** `kAMDMobileImageMounterDeviceLocked` means unlock the iPhone;
+  `CoreDeviceError 4000` (disconnected right after connecting) is usually Wi-Fi, so use a cable.
+
+### Known issues
+
+- **No iOS Simulator with the stock 4.7 templates.** The simulator slice of `libgodot.a` is
+  x86_64 only, so an arm64 simulator build fails to link (`_main` undefined). An x86_64 build
+  also fails against the iOS 26.2 simulator SDK: undefined Swift concurrency symbols
+  (`Swift.MainActor.shared`) from Godot's SwiftUI app shell. Use a device, or build the
+  templates from source with an arm64 simulator slice.
+- **`mouse_get_position(): Mouse is not supported by this display server`** is logged on every
+  start. It's an engine bug (the root window asks for the mouse position on entering the
+  tree), [godotengine/godot#124041](https://github.com/godotengine/godot/issues/124041), fixed
+  upstream. Harmless; it goes away with a Godot update.
+- **Minimum iOS version:** App Store Connect warns that from April 2027 apps must target
+  iOS 15.0 or later. Raise `application/min_ios_version` (now 14.0) before then.
+- `Info.plist` ships an empty `NSCameraUsageDescription` (Godot's camera module). It
+  didn't block the upload.
+- `test_sin_cos_tan_accuracy` fails on macOS: it compares against the host's libm, which
+  differs from Linux glibc. CI (Linux) is the reference.
+
+### Keeping the team ID out of git
+
+Godot moves only fields marked *secret* into the
 gitignored `.godot/export_credentials.cfg`. For iOS those are the provisioning-profile
 UUIDs, not the team ID. The team ID is saved into `export_presets.cfg` like any other
 option. Do one of these:
@@ -174,10 +291,12 @@ option. Do one of these:
 - Before committing, run `git restore -p export_presets.cfg` to drop the team-ID line
   (it's the easiest after a one-off export), or
 - run `git update-index --skip-worktree export_presets.cfg` so git ignores your local
-  edits. Undo it with `--no-skip-worktree` before pulling preset changes.
+  edits (including the build number). Undo it with `--no-skip-worktree` before pulling
+  preset changes.
 
 The team ID isn't a password (it appears in every signed app), but the plan keeps it
-local (plan §10). Certificates and profiles stay in the macOS keychain and Xcode.
+local (plan §10). Certificates, profiles and the API key stay in the macOS keychain,
+Xcode and `~/.appstoreconnect/`.
 
 ## Android (not device-tested yet, plan D5)
 
