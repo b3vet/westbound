@@ -151,6 +151,12 @@ Needs macOS, Xcode, an Apple developer account and the Godot 4.7-stable editor.
 2. Open the project in the editor. Go to **Project → Export… → iOS** and fill in
    **App Store Team ID** (the 10-character ID from developer.apple.com → Membership).
    The debug export method (Development) and bundle ID `com.b3vet.westbound` are already set.
+   Also set in the preset: version `0.1.0` (`application/short_version`) and build `1`
+   (`application/version`; **raise it for every TestFlight upload**), the App Store icon and
+   launch screen (`assets/branding/`), and two Info.plist keys
+   (`application/additional_plist_content`): `ITSAppUsesNonExemptEncryption = NO` (HTTPS/WSS
+   only, so no export-compliance question per build) and `UIRequiresFullScreen = YES` (the game
+   is landscape-only; without it App Store validation rejects the iPad build).
 3. Export from the editor, or from the command line:
    ```
    GODOT=/Applications/Godot.app/Contents/MacOS/Godot tools/godot.sh --headless --path . \
