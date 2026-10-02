@@ -9,7 +9,7 @@
 // local westbound-server).
 //
 // DIR holds an unzipped web template (godot.js, godot.wasm, the audio worklets) and the
-// game's index.pck (and music.pck, if the export made one). Export templates ignore
+// game's index.pck (and music/*.pck, if the export made them). Export templates ignore
 // `--script`, so the page preloads the probe, a scene holding it and an override.cfg
 // next to index.pck that makes that scene the main scene: the game's pack and autoloads
 // load, its own main scene never runs. Uses the Playwright install of tools/web_smoke
@@ -44,7 +44,8 @@ if (!opts.dir || !opts.out) {
 }
 
 const mode = opts.names ? 'names' : opts.net ? 'net' : 'load';
-const hasMusic = mode === 'load' && fs.existsSync(path.join(opts.dir, 'music.pck'));
+const musicDir = path.join(opts.dir, 'music');
+const musicPacks = mode === 'load' && fs.existsSync(musicDir) ? fs.readdirSync(musicDir).filter((f) => f.endsWith('.pck')).sort() : [];
 const script = { load: 'web_probe.gd', names: 'web_names.gd', net: 'web_net.gd' }[mode];
 const doneRe = { load: /^PROBE done files/, names: /^PROBE done text/, net: /^PROBE done net/ }[mode];
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head>
@@ -62,7 +63,7 @@ const engine = new Engine({ executable: 'godot', mainPack: 'index.pck', canvasRe
   canvas: document.getElementById('canvas') });
 const files = [engine.preloadFile('${script}', '/tmp/${script}'),
   engine.preloadFile('probe.tscn', '/tmp/probe.tscn'), engine.preloadFile('override.cfg', 'override.cfg')];
-${hasMusic ? "files.push(engine.preloadFile('music.pck', '/tmp/music.pck'));" : ''}
+${musicPacks.map((f) => `files.push(engine.preloadFile('music/${f}', '/tmp/music/${f}'));`).join('\n')}
 Promise.all(files).then(() => engine.startGame()).catch((e) => console.error('PROBE start failed: ' + e));
 </script></body></html>`;
 

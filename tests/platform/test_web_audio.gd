@@ -223,25 +223,26 @@ func test_off_the_web_nothing_changes() -> void:
 	check(not WebBoot.is_marked(WebBoot.TITLE))
 
 
-# ---------------------------------------------------------------- Music pack
+# ---------------------------------------------------------------- Music packs
 
-## A pack whose download is scripted (records the URL; the test calls finish()).
+## A pack whose download is scripted (records the URLs; the test calls finish()).
 class FakePack:
 	extends WebMusicPack
 	var downloads: Array[String] = []
 
-	func _download(from: String) -> void:
-		downloads.append(from)
+	func _download(_from: String) -> void:
+		downloads.append(current)
 
 
 const PROBE_DIR := "res://wb_test_web_music_pack"
 
 
-## Writes a .pck holding one resource at `res_path` (the stand-in "track").
-func _write_pack(res_path: String) -> String:
+## Writes a .pck holding one resource at `res_path` (the stand-in "track"; `res`, else
+## a plain Resource).
+func _write_pack(res_path: String, res: Resource = null) -> String:
 	var src := "user://wb_test_web_music_probe.tres"
-	var pck := "user://wb_test_web_music.pck"
-	eq(ResourceSaver.save(Resource.new(), src), OK, "probe resource saved")
+	var pck := "user://wb_test_web_music_%s.pck" % res_path.get_file().get_basename()
+	eq(ResourceSaver.save(res if res != null else Resource.new(), src), OK, "probe resource saved")
 	var packer := PCKPacker.new()
 	eq(packer.pck_start(pck), OK)
 	eq(packer.add_file(res_path, src), OK)
@@ -250,85 +251,157 @@ func _write_pack(res_path: String) -> String:
 	return pck
 
 
-func test_pack_not_needed_when_the_tracks_are_packed() -> void:
+func _pack() -> FakePack:
 	var p := FakePack.new()
 	p.verbose = false
 	tree.root.add_child(p)
 	_nodes.append(p)
-	p.begin(AudioTuning.resolve().music_tracks)
-	eq(p.status, WebMusicPack.Status.NOT_NEEDED, "native and a web build that packs the music")
-	check(p.is_ready())
+	return p
+
+
+func test_pack_present_tracks_need_no_fetch() -> void:
+	var p := _pack()
+	for path in AudioTuning.resolve().music_tracks:
+		p.request(path)
+		check(p.is_loaded(path), "native and a web build that packs the music: %s" % path.get_file())
 	eq(p.downloads.size(), 0, "nothing fetched")
+	eq(WebMusicPack.pack_file("res://assets/audio/music_menu_1.ogg"), "music/music_menu_1.pck", "one pack per track")
 
 
-func test_pack_downloads_mounts_and_signals() -> void:
+func test_pack_queues_once_per_track_in_order() -> void:
+	var p := _pack()
+	var a := PROBE_DIR + "/track_a.tres"
+	var b := PROBE_DIR + "/track_b.tres"
+	var c := PROBE_DIR + "/track_c.tres"
+	p.request(a)
+	p.request(b)
+	p.request(a)
+	p.request(c)
+	p.request(b)
+	eq(p.downloads, [a] as Array[String], "one download at a time")
+	eq(p.current, a)
+	eq(p.queue, PackedStringArray([b, c]), "first in, first out, each once")
+	check(not p.is_loaded(a), "not before it lands")
+	p.finish(false, "", "download failed (result 4, HTTP 404)")
+	eq(p.downloads, [a, b] as Array[String], "the next one starts")
+	p.finish(false, "", "download failed (result 4, HTTP 404)")
+	eq(p.current, c)
+	p.request(a)
+	eq(p.queue.size(), 0, "a failed track is not fetched again")
+	p.finish(false, "", "download failed (result 4, HTTP 404)")
+	eq(p.current, "", "idle")
+
+
+func test_pack_mounts_a_track_and_signals() -> void:
 	var track := PROBE_DIR + "/loaded_track.tres"
-	var p := FakePack.new()
-	p.verbose = false
-	tree.root.add_child(p)
-	_nodes.append(p)
-	var fired: Array[int] = [0]
-	p.loaded.connect(func() -> void: fired[0] += 1)
-	p.begin(PackedStringArray([track]))
-	eq(p.status, WebMusicPack.Status.DOWNLOADING, "a missing track: fetch the pack")
-	check(not p.is_ready())
-	eq(p.downloads.size(), 1)
+	var p := _pack()
+	var fired: Array[String] = []
+	p.track_loaded.connect(func(path: String) -> void: fired.append(path))
+	p.request(track)
+	eq(p.downloads.size(), 1, "a missing track: fetch its pack")
 	var pck := _write_pack(track)
 	p.finish(true, ProjectSettings.globalize_path(pck))
-	eq(p.status, WebMusicPack.Status.LOADED, "mounted: " + p.failure)
-	check(p.is_ready())
+	check(p.is_loaded(track), "mounted: " + str(p.failures.get(track, "")))
 	check(ResourceLoader.exists(track), "the track loads from the mounted pack")
-	eq(fired[0], 1, "loaded emitted once")
-	p.begin(PackedStringArray([track]))
-	eq(p.downloads.size(), 1, "begin() runs once")
+	eq(fired, [track] as Array[String], "track_loaded once")
+	p.request(track)
+	eq(p.downloads.size(), 1, "a loaded track is not fetched again")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(pck))
 
 
-func test_pack_failures_leave_no_music_without_errors() -> void:
-	var p := FakePack.new()
-	p.verbose = false
-	tree.root.add_child(p)
-	_nodes.append(p)
-	p.begin(PackedStringArray([PROBE_DIR + "/never.tres"]))
+func test_pack_failures_skip_the_track_without_errors() -> void:
+	var p := _pack()
+	var failed: Array[String] = []
+	p.track_failed.connect(func(path: String) -> void: failed.append(path))
+	var never := PROBE_DIR + "/never.tres"
+	p.request(never)
 	p.finish(false, "", "download failed (result 4, HTTP 404)")
-	eq(p.status, WebMusicPack.Status.FAILED)
-	check(not p.is_ready(), "no music rather than a missing-file error")
-	check(p.failure.contains("404"))
-	var q := FakePack.new()
-	q.verbose = false
-	tree.root.add_child(q)
-	_nodes.append(q)
+	check(p.has_failed(never))
+	check(not p.is_loaded(never), "no music rather than a missing-file error")
+	check(p.failures[never].contains("404"))
+	eq(failed, [never] as Array[String])
 	var other := _write_pack(PROBE_DIR + "/other.tres")
-	q.begin(PackedStringArray([PROBE_DIR + "/still_missing.tres"]))
-	q.finish(true, ProjectSettings.globalize_path(other))
-	eq(q.status, WebMusicPack.Status.FAILED, "a pack without the tracks does not count")
+	var missing := PROBE_DIR + "/still_missing.tres"
+	p.request(missing)
+	p.finish(true, ProjectSettings.globalize_path(other))
+	check(p.has_failed(missing), "a pack without its track does not count")
+	eq(failed.size(), 2)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(other))
 
 
-func test_music_waits_for_both_the_unlock_and_the_pack() -> void:
-	var m := _music()
-	var track := PROBE_DIR + "/late_track.tres"
+## Tracks stand-ins: a test tuning whose pools name probe resources.
+func _probe_tuning(menu: String, day: String) -> AudioTuning:
+	var t := AudioTuning.resolve().duplicate() as AudioTuning
+	t.music_tracks = PackedStringArray([menu, day])
+	t.music_bpm = PackedFloat64Array([0.0, 0.0])
+	t.music_pool_menu = PackedStringArray([menu])
+	t.music_pool_day = PackedStringArray([day])
+	return t
+
+
+func test_music_waits_for_the_unlock_and_its_track() -> void:
+	var menu := "res://assets/audio/music_menu_1.ogg"
+	var m := MusicPlayer.new()
+	tree.root.add_child(m)
+	_nodes.append(m)
+	m.setup(_probe_tuning(menu, "res://assets/audio/music_day_cruise_1.ogg"))
 	var w := _web("suspended")
 	var p := FakePack.new()
 	p.verbose = false
-	# A web build whose main pack leaves the music out: the pack still has to come.
-	p.begin(PackedStringArray([track]))
 	w.music_pack = p
 	tree.root.add_child(w)
 	_nodes.append(w)
 	w.bind_music(m)
 	check(p.get_parent() == w, "the node adopts its pack")
-	eq(p.downloads.size(), 1, "one download (begin() runs once)")
+	check(m.pack == p, "the music asks the pack for its tracks")
 	m.start()
-	check(not m.is_playing(), "locked and no pack")
+	check(not m.is_playing(), "locked")
+	eq(p.downloads.size(), 0, "a present track is never fetched")
 	(w.bridge as FakeBridge).ctx_state = "running"
 	w._process(WebAudio.POLL_LOCKED_S)
 	check(not w.is_locked(), "unlocked")
-	check(m.hold, "still held: the pack is not in")
+	check(not m.hold, "the title no longer waits for any download")
+	check(m.is_playing(), "a present track plays on the unlock")
+	eq(m.tracks_started, 1)
+	m.stop()
+
+
+func test_music_starts_when_its_pack_lands_after_the_unlock() -> void:
+	var menu := PROBE_DIR + "/late_menu.tres"
+	var m := MusicPlayer.new()
+	tree.root.add_child(m)
+	_nodes.append(m)
+	m.setup(_probe_tuning(menu, PROBE_DIR + "/late_day.tres"))
+	var w := _web("suspended")
+	var p := FakePack.new()
+	p.verbose = false
+	w.music_pack = p
+	tree.root.add_child(w)
+	_nodes.append(w)
+	w.bind_music(m)
+	m.start()
+	eq(p.downloads, [menu] as Array[String], "held by the lock, the title's track is already on its way")
+	(w.bridge as FakeBridge).ctx_state = "running"
+	w._process(WebAudio.POLL_LOCKED_S)
+	check(not w.is_locked(), "unlocked")
 	check(not m.is_playing(), "no track loaded before its pack")
-	var pck := _write_pack(track)
+	eq(m.pending_track(), menu, "waiting for it")
+	eq(p.downloads.size(), 1, "asked for once")
+	var pck := _write_pack(menu, _probe_stream())
 	p.finish(true, ProjectSettings.globalize_path(pck))
-	check(m.is_playing(), "the pack arrived after the unlock: the music starts then")
+	check(m.is_playing(), "its pack arrived after the unlock: the music starts then")
+	eq(m.track_path(), menu)
 	eq(m.tracks_started, 1)
 	m.stop()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(pck))
+
+
+## A tiny real AudioStream (a few silent samples) to stand in for a track.
+func _probe_stream() -> AudioStreamWAV:
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
+	wav.mix_rate = 22050
+	var data := PackedByteArray()
+	data.resize(4410)
+	wav.data = data
+	return wav

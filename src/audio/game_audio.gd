@@ -20,11 +20,16 @@ extends Node
 ## Traffic:  traffic_horn -> horn at the car (doppler; heavy vehicles lower);
 ##           traffic_brake_tap (heavy) and hard braking trucks -> air-brake hiss.
 ## Night:    night_started -> music low-pass + reverb in; dawn_started -> out.
+## Music:    each frame MusicMood picks the mood (MENU outside a run; RUSH, NIGHT,
+##           GOLDEN or DAY from the room, the biome and the run's sun) and MusicPlayer
+##           follows it (docs/AUDIO.md → Music).
 ## Settings: volume_* and audio_muted (Settings), the M key (PlayerInput.mute_toggled).
 ## Slow motion doesn't bend audio; smoothing runs on real time. Reduced motion doesn't
 ## affect audio.
 
 const AUTOLOAD_PATH := ^"/root/Audio"
+## The room density that plays RUSH (NetCodec.DENSITY's RUSH HOUR).
+const ROOM_RUSH := "rush"
 
 var tuning: AudioTuning
 var bank: AudioBank
@@ -32,6 +37,8 @@ var pool: VoicePool
 var engine: EngineAudio
 var traffic_audio: TrafficAudio
 var music: MusicPlayer
+## Picks the music's mood each frame (made in setup()).
+var music_mood: MusicMood
 
 ## Bound sources (read-only). A bound run refreshes them each frame; tests set them.
 var run: Run
@@ -115,6 +122,7 @@ func setup(t: AudioTuning = null) -> void:
 	music.name = "Music"
 	add_child(music)
 	music.setup(tuning)
+	music_mood = MusicMood.new(tuning, Tuning.load_default().sun)
 	if web_audio == null and WebAudio.wanted():
 		web_audio = WebAudio.new()
 	if web_audio != null:
@@ -126,6 +134,9 @@ func setup(t: AudioTuning = null) -> void:
 	apply_volumes(true)
 	if run != null:
 		bind_run(run)
+		if run.state != Game.PAUSED:
+			game_state = run.state
+	_update_mood()
 	if autoplay_music:
 		music.start()
 
@@ -230,6 +241,7 @@ func step(dt: float) -> void:
 		traffic_audio.update(dt, pool, game_state == Game.RUNNING or game_state == Game.CRASH)
 		_update_tunnel()
 		_update_chime(dt)
+	_update_mood()
 	music.update(dt)
 
 
@@ -249,6 +261,34 @@ func _sync_run() -> void:
 	traffic_audio.player = player
 	if run.state != game_state and run.state != Game.PAUSED:
 		game_state = run.state
+
+
+## True while a run is being driven (the music's run moods); MENU otherwise.
+func in_run() -> bool:
+	return game_state == Game.COUNTDOWN or game_state == Game.RUNNING or game_state == Game.CRASH
+
+
+## Feeds MusicMood from the run (room, biome at the player, the sun) and tells the music.
+func _update_mood() -> void:
+	var in_room := false
+	var room_rush := false
+	var biome := &""
+	var phase := SunClock.Phase.DAY
+	var sky_t := 0.0
+	if run != null and is_instance_valid(run):
+		if run.room != null:
+			in_room = true
+			var rs := run.room.session
+			room_rush = rs != null and rs.room != null and rs.room.density == ROOM_RUSH
+		elif run.loop == null and run.biome_director != null and player != null:
+			var b := run.biome_director.biome_at(player.s)
+			if b != null:
+				biome = b.id
+		if run.sun != null:
+			phase = run.sun.phase
+			sky_t = run.sun.sky_t
+	var m := music_mood.update(in_run(), in_room, room_rush, biome, phase, sky_t)
+	music.want_mood(m, music_mood.likely_next(m))
 
 
 func _update_tunnel() -> void:
@@ -459,6 +499,7 @@ func _on_run_started(_mode: StringName, _seed: int) -> void:
 	pool.stop_all()
 	chime_left = 0
 	engine.reset()
+	music_mood.reset()
 	music.set_night(false, 0.0)
 	if autoplay_music:
 		music.start()

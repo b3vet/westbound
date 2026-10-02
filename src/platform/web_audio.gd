@@ -14,9 +14,11 @@ extends Node
 ##   from the top with its fade-in.
 ## - It never touches the context when the page could already play (autoplay allowed,
 ##   or nothing to read): nothing is held.
-## - The music also waits for its pack (WebMusicPack: music.pck, fetched in the
-##   background when the main pack leaves the music out), so no track is loaded before
-##   it exists. Where the tracks are in the main pack this costs nothing.
+## - The music's tracks come from WebMusicPack (one pack per track, fetched when the
+##   music needs it, when the main pack leaves the music out): bind_music() hands it to
+##   the MusicPlayer, which asks for each track before it plays it, so no track is
+##   loaded before it exists and nothing waits for the music. Where the tracks are in
+##   the main pack this costs nothing. Each track start prints "music playing".
 ## - Boot marks (WebBoot): "title" on the first frame after the title (Game.MENU) was
 ##   drawn, "run" for a direct boot into a run (`?title=0`, `?mode=`), and "start" when
 ##   the first run starts after the title (WP9.7).
@@ -72,26 +74,27 @@ func start() -> void:
 		music_pack.name = "MusicPack"
 	if music_pack.get_parent() == null:
 		add_child(music_pack)
-	music_pack.loaded.connect(_on_pack_loaded)
 	if WebUiProbe.wanted():
 		add_child(WebUiProbe.new())
 	poll()
 
 
-## Holds `m`'s start while the audio is locked or its pack is missing; the first
-## unlock with the pack present releases it. Starts the pack's download if needed.
+## Holds `m`'s start while the audio is locked; the first unlock releases it. Its
+## tracks come from the music pack from now on.
 func bind_music(m: MusicPlayer) -> void:
 	start()
+	if music != null and music.track_started.is_connected(_on_track_started):
+		music.track_started.disconnect(_on_track_started)
 	music = m
-	if music != null and music.tuning != null:
-		music_pack.begin(music.tuning.music_tracks)
+	if music != null:
+		music.bind_pack(music_pack)
+		music.track_started.connect(_on_track_started)
 	_apply_hold()
 
 
-## True while the music must not start: the page's audio is locked, or the tracks are
-## not loaded yet.
+## True while the music must not start: the page's audio is locked.
 func holds_music() -> bool:
-	return unlock.holds_music() or (music_pack != null and not music_pack.is_ready())
+	return unlock.holds_music()
 
 
 func is_locked() -> bool:
@@ -115,7 +118,7 @@ func poll() -> void:
 			_say("resumed")
 
 
-## Holds or releases the music (bind_music, the unlock, the pack's `loaded`).
+## Holds or releases the music (bind_music, the unlock).
 func _apply_hold() -> void:
 	if music == null:
 		return
@@ -125,9 +128,8 @@ func _apply_hold() -> void:
 		music.release()
 
 
-func _on_pack_loaded() -> void:
-	_apply_hold()
-	_say("music pack in; music %s" % _music_state())
+func _on_track_started(path: String, mood: int) -> void:
+	_say("music playing %s (%s)" % [WebMusicPack.pack_name(path), MusicMood.NAMES[mood]])
 
 
 func _music_state() -> String:
@@ -137,8 +139,8 @@ func _music_state() -> String:
 		return "playing"
 	if unlock.holds_music():
 		return "waiting for the first tap, click or key"
-	if music_pack != null and not music_pack.is_ready():
-		return "waiting for %s" % WebMusicPack.FILE
+	if not music.pending_track().is_empty():
+		return "waiting for %s" % WebMusicPack.pack_file(music.pending_track())
 	return "idle"
 
 
