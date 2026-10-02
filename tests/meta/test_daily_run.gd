@@ -57,6 +57,7 @@ func _run(mode: StringName = RunContext.MODE_DAILY, tuning: DailyTuning = null) 
 	if tuning != null:
 		r.daily.tuning = tuning
 	r.daily.store = DailyGhostStore.new({}, r.daily.tuning, _dir)
+	r.daily.today = DATE
 	r.daily.save_enabled = true
 	r.retry()
 	return r
