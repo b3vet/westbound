@@ -18,8 +18,11 @@ extends Node
 ##   tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --seconds=2.5 --sweep=party:room_invites
 ##
 ## snap_setup options: --party=none|lead|member|kick|invite|link|hub|room_host|room_player|
-## card|toast|crew_line|room_invites (default lead), --text_scale=1|1.25,
-## --hand=right|left, --sky_t=<0..1>.
+## card|toast|crew_line|room_invites|code (default lead), --text_scale=1|1.25,
+## --hand=right|left, --sky_t=<0..1>, --text_entry=1 (code: the text entry overlay open on
+## the JOIN BY CODE field, as on a phone with an OS keyboard; docs/SCREENS.md → Social →
+## Text fields):
+##   tools/snap.sh src/ui/screens/dev/party_preview.tscn --size=1688x780 --party=code --text_entry=1
 
 const RUN_SCENE := preload("res://src/run/run.tscn")
 const SNAP_SEED := 20260929
@@ -97,6 +100,8 @@ func snap_setup(args: Dictionary) -> void:
 		"link":
 			hub._open_lobby()
 			hub.lobby.follow_link(CODE)
+		"code":
+			hub.open_code()
 		"card":
 			hub._process(0.0)
 		"toast":
@@ -104,6 +109,11 @@ func snap_setup(args: Dictionary) -> void:
 			run.title.invite_toast.rooms = rooms
 			run.title.invite_toast.advance(0.0)
 	run.title.finish_animations()
+	if what == "code" and args.has("text_entry"):
+		var f := hub.lobby.code_field
+		f.entry_mode = 1
+		f.text = CODE.left(4)
+		f.open_entry()
 
 
 ## A social client with online friends and crewmates, no server (previews only).

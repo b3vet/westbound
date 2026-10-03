@@ -51,6 +51,7 @@ crew_code_max_chars = 16
 crew_board_around = 1
 social_note_s = 3.0
 web_text_prompt = true
+text_entry_overlay = true
 room_interp_delay_ms = 100.0
 room_extrap_max_ms = 250.0
 room_fade_out_s = 0.5
