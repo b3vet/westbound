@@ -74,9 +74,13 @@ static func button_width(b: ScreenButton, t: HudTuning) -> float:
 
 
 ## The social screens' text fields: the ProfilePanel's look (faceted box, accent focus).
+## A SocialField keeps the style for its text entry overlay.
 static func style_edit(e: LineEdit, s: HudStyle, t: HudTuning) -> void:
 	if s == null or t == null:
 		return
+	if e is SocialField:
+		(e as SocialField).style = s
+		(e as SocialField).hud_tuning = t
 	var border := UiTheme.border_px(t)
 	var pad := t.spacing_grid_px * 2.0
 	var normal := UiTheme.box(t.control_bevel_px, border, s.panel_fill, s.edge_idle)

@@ -119,6 +119,11 @@ const PATH := "res://data/tuning/net.tres"
 ## Web on a touch screen: a tap on a text field opens the browser's text prompt (iOS
 ## Safari does not open its keyboard for Godot's field). Off: the field as on desktop.
 @export var web_text_prompt: bool = true   # not in spec
+## An OS on-screen keyboard (native iOS / Android on a touch screen) covers the lower half
+## of a landscape phone: focusing a text field opens the text entry overlay, a bar at the
+## top of the screen the keyboard types into (SocialField, TextEntryOverlay). Off: typed
+## in place.
+@export var text_entry_overlay: bool = true   # not in spec
 
 @export_group("Rooms (N5.2)")
 ## Remote players are shown this far behind the room clock, interpolated between their

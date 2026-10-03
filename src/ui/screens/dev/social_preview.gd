@@ -13,7 +13,10 @@ extends Node
 ## snap_setup options: --social=friends|sheet|confirm|error|blocked|crew|member|
 ## crew_confirm|crew_none|crew_error|report|report_confirm|report_sent|report_limited|
 ## crew_invite_friends|crew_invites|crew_pending (default friends), --text_scale=1|1.25,
-## --hand=right|left, --sky_t=<0..1>.
+## --hand=right|left, --sky_t=<0..1>, --text_entry=name|tag|code|friend (the text entry
+## overlay open on that field, as on a phone with an OS keyboard; docs/SCREENS.md →
+## Social → Text fields):
+##   tools/snap.sh src/ui/screens/dev/social_preview.tscn --size=1688x780 --social=crew_none --text_entry=name
 ##
 ## Crew invites (protocol 2): --sweep=social:crew_invite_friends,crew_invites,crew_pending
 
@@ -102,9 +105,22 @@ func snap_setup(args: Dictionary) -> void:
 			if what == "report_sent" or what == "report_limited":
 				await rd.confirm()
 	run.screens.finish_animations()
+	_open_entry(String(args.get("text_entry", "")), fp, cp)
 	await get_tree().process_frame
 	print("snap: social=%s view=%d rows=%d crew=%s" % [what, p.view, fp.rows.size(),
 			cp.client.crew.tag if cp.client != null and cp.client.crew != null else "-"])
+
+
+## The text entry overlay open on one field, with a little typed.
+func _open_entry(which: String, fp: FriendsPanel, cp: CrewPanel) -> void:
+	var fields := {"name": cp.name_field, "tag": cp.tag_field, "code": cp.code_field, "friend": fp.field}
+	var texts := {"name": "Night Riders", "tag": "NR", "code": "K7QX", "friend": "LoneWolf#0007"}
+	if not fields.has(which):
+		return
+	var f: SocialField = fields[which]
+	f.entry_mode = 1
+	f.text = String(texts[which])
+	f.open_entry()
 
 
 func _friend(fp: FriendsPanel, display: String) -> NetSocialPlayer:
