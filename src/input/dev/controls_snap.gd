@@ -8,7 +8,7 @@ extends Node
 ##
 ## Args: --steering=drag|gyro --throttle=auto|manual --left_handed=true|false, and the
 ## input preview's demo args (--drag_visual, --controls_scale, --pedal, --drag_x,
-## --tilt_deg). The drive scene's own args (--sky_t, --car, --cam, --speed_kmh, --s)
+## --tilt_deg, --look_back). The drive scene's own args (--sky_t, --car, --cam, --speed_kmh, --s)
 ## are passed on to it.
 
 const InputPreview := preload("res://src/input/dev/input_preview.gd")

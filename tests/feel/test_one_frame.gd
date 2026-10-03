@@ -89,6 +89,7 @@ const NOT_SCORING := {
 	&"set_piece_warning": "traffic", &"set_piece_started": "traffic", &"set_piece_ended": "traffic",
 	&"traffic_horn": "traffic", &"traffic_brake_tap": "traffic", &"traffic_hazards": "traffic",
 	&"gear_shifted": "car", &"hard_braking_changed": "car", &"high_beam_changed": "car",
+	&"look_back_changed": "a view request (the camera rig)",
 	&"origin_shifted": "world", &"biome_changed": "world",
 	&"slowmo_requested": "a feel request", &"camera_shake_requested": "a feel request",
 	&"settings_changed": "platform", &"camera_mode_changed": "platform",

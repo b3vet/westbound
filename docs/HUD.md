@@ -28,7 +28,7 @@ hud.high_beam_pressed.connect(...)    # the headlamp button (WP5.5): the run tog
 - **Top-right:** the lives panel, [II] and [CAM], and the high-beam button under [CAM] (WP5.5).
 - **Bottom-centre (plan D14):** the cluster, under the car: the speedometer and the boost meter beside it, with the minimum-speed strip reserved above them. See [Bottom-centre cluster and thumb zones](#bottom-centre-cluster-and-thumb-zones-wp49-d14).
 
-No readout goes into a thumb zone or onto a pedal (`pedal_clearance_px` apart), in any control layout, hand, `controls_scale` or text size. The objective chip keeps fallbacks (under the lives, then centred under the toast) for canvases so short that a zone reaches it.
+No readout goes into a thumb zone or onto a pedal (`pedal_clearance_px` apart), in any control layout, hand, `controls_scale` or text size. The LOOK BACK button above the gas column counts as a pedal (`HudLayout.pedal_rects`; docs/CONTROLS.md → Look back): it stays below the lives, the buttons and the achievement toast (`look_back_top_clear_cm`), and the readouts keep clear of it. While looking back the HUD stays as it is; only the camera turns. The objective chip keeps fallbacks (under the lives, then centred under the toast) for canvases so short that a zone reaches it.
 
 The controls' rects come from the `PlayerInput` hub's `ControlsLayout` when a hub exists. The HUD polls `layout_version` and re-places itself when it changes. Without a hub, the rects are built from Settings.
 

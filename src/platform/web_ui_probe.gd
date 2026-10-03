@@ -9,7 +9,10 @@ extends Node
 ##   wbui: button <x> <y> <w> <h> canvas <W> <H> <TEXT>
 ## (canvas px, the root viewport's visible rect). The smoke test turns a button's
 ## centre into a page tap, through the shell's rotation when the page is rotated, and
-## so checks the whole input path. Reads the tree only; never drives anything.
+## so checks the whole input path. After the list, the button the gamepad's focus shows
+## on (PadNav), if any (the --gamepad smoke):
+##   wbui: focus <TEXT>
+## Reads the tree only; never drives anything.
 
 const PARAM_JS := "/[?&]probe=ui(&|$)/.test(window.location.search)"
 ## Probe period (smoke instrumentation, not gameplay tuning).
@@ -46,6 +49,9 @@ func _process(dt: float) -> void:
 static func report(root: Node, canvas: Vector2) -> PackedStringArray:
 	var out := PackedStringArray()
 	_collect(root, canvas, out)
+	var f := root.get_viewport().gui_get_focus_owner() as ScreenButton if root.is_inside_tree() else null
+	if f != null and f.focus_shown():
+		out.append("wbui: focus %s" % f.text)
 	return out
 
 

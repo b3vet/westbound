@@ -15,12 +15,15 @@ extends Control
 ## --tilt_deg=<deg> (simulated tilt in the demo, default 12), --drag_visual=ring|wheel,
 ## --controls_scale=<x>, --pedal=gas|boost|brake|none (the manual pedal finger),
 ## --drag_x=<-1..1.2> (the steering thumb's offset in max_drag, default 0.6).
+## --look_back=true (a finger holds LOOK BACK too: the rear view).
 
 const SIM_TILT_STEP_DEG := 2.0
 const SIM_TILT_MAX_DEG := 45.0
 const READOUT_INTERVAL_MSEC := 100
 const DEMO_TILT_DEG := 12.0
 const DEMO_DRAG_X := 0.6
+## The --look_back demo finger's touch index.
+const LOOK_FINGER := 3
 const DEMO_DRAG_Y := 0.15
 const SIZE_STEPS: Array[float] = [0.8, 1.0, 1.2]
 
@@ -146,6 +149,9 @@ static func apply_look_args(args: Dictionary) -> void:
 static func demo_fingers(p_hub: PlayerInput, sim: SimulatedGravity, args: Dictionary) -> void:
 	var l := p_hub.layout
 	var now := float(Time.get_ticks_usec()) * PlayerInput.S_PER_USEC
+	if bool(args.get("look_back", false)):
+		# A finger on LOOK BACK (the rear view), held with the others.
+		_finger(p_hub, LOOK_FINGER, l.look_rect.get_center(), true, now)
 	var max_px := p_hub.drag.max_drag_px
 	if p_hub.effective_steering == PlayerInput.DRAG:
 		var zone := l.drag_zone

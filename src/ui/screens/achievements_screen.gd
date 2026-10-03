@@ -44,6 +44,7 @@ func _init() -> void:
 	super._init()
 	name = "Achievements"
 	modal = true
+	pad_focus = false   # the arrows (D-pad, stick) switch the tabs themselves
 	dim = ColorRect.new()
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(dim)
@@ -189,6 +190,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed(&"ui_left") or event.is_action_pressed(&"ui_right"):
 		get_viewport().set_input_as_handled()
 		show_tab(posmod(tab + (-1 if event.is_action_pressed(&"ui_left") else 1), maxi(catalog.groups.size(), 1)))
+	elif event.is_action_pressed(PadNav.TAB_PREV) or event.is_action_pressed(PadNav.TAB_NEXT):
+		get_viewport().set_input_as_handled()
+		show_tab(posmod(tab + (-1 if event.is_action_pressed(PadNav.TAB_PREV) else 1), maxi(catalog.groups.size(), 1)))
 
 
 # ---------------------------------------------------------------- Dev (snaps)

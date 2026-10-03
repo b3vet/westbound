@@ -12,7 +12,7 @@
 //        [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt ms>] [--json out.json]
 //        [--audio-unlock [click|tap|key]] [--stale]
 //        [--device NAME | --portrait | --landscape] [--tap-play] [--dpr N]
-//        [--audio-loops SECONDS]
+//        [--audio-loops SECONDS] [--gamepad]
 //
 // --query: the page's query string (default server=off; e.g. the loop test mode:
 // "mode=loop&server=off&at=city&bot=keep"). --expect: a console line must match
@@ -68,6 +68,16 @@
 // resume, where WebKit never plays or ends it), when a resume starts one past its end,
 // when an unpaused loop stops restarting (stuck), or when no loop ever played.
 //
+// --gamepad (owner request 2026-10-03, docs/CONTROLS.md → Menus with a gamepad): a fake
+// standard-mapping Xbox pad (navigator.getGamepads overridden in an init script, at
+// index 1: a browser does not always number the first pad 0) connects once the title
+// shows (gamepadconnected, as a browser does after the first button press). The game
+// must report it ("pad: connected 1"), show the pad's focus on PLAY after a D-pad press
+// ("wbui: focus PLAY", ?probe=ui), start a run on A (DRIVE first on a fresh save's
+// chooser, focused by default), take the triggers and the stick, pause on Start (the
+// pause menu's RESUME listed and focused), resume on B, and pause again on Start. The page
+// is 844x390 (a landscape phone's size; no touch) so the drive renders fast enough.
+//
 // Needs `npm ci` in tools/web_smoke once. Browser: Playwright's Chromium
 // (`npx playwright install chromium`), or CHROMIUM_PATH=/path/to/chrome.
 import fs from 'node:fs';
@@ -112,6 +122,7 @@ function parseArgs(argv) {
     tapPlay: false,
     dpr: null,
     audioLoops: 0,
+    gamepad: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split(/=(.*)/s, 2);
@@ -148,6 +159,7 @@ function parseArgs(argv) {
       case '--tap-play': opts.tapPlay = true; break;
       case '--dpr': opts.dpr = Number(value()); break;
       case '--audio-loops': opts.audioLoops = Number(value()); opts.tapPlay = true; break;
+      case '--gamepad': opts.gamepad = true; break;
       case '--audio-unlock': {
         // Optional value: the next argument when it names a gesture.
         let g = inline;
@@ -160,7 +172,7 @@ function parseArgs(argv) {
         break;
       }
       case '-h': case '--help':
-        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...] [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt>] [--json out.json] [--audio-unlock [click|tap|key]] [--stale] [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE] [--device NAME | --portrait | --landscape] [--tap-play] [--dpr N] [--audio-loops SECONDS]');
+        console.log('usage: node tools/web_smoke/smoke.mjs [--dir build/web] [--timeout 60000] [--settle 3000] [--screenshot build/web_smoke.png] [--headed] [--query "server=off"] [--expect REGEX]... [--reload --expect-reload REGEX...] [--gzip] [--network wifi|4g|slow4g|<Mbps>,<rtt>] [--json out.json] [--audio-unlock [click|tap|key]] [--stale] [--wait-for REGEX] [--wait-timeout MS] [--console-out FILE] [--device NAME | --portrait | --landscape] [--tap-play] [--dpr N] [--audio-loops SECONDS] [--gamepad]');
         process.exit(0);
       default:
         console.error(`smoke: unknown argument ${argv[i]}`);
@@ -181,6 +193,10 @@ function parseArgs(argv) {
   }
   if (!(opts.audioLoops >= 0)) {
     console.error('smoke: --audio-loops takes seconds');
+    process.exit(2);
+  }
+  if (opts.gamepad && (opts.tapPlay || opts.audioUnlock)) {
+    console.error('smoke: --gamepad is a run of its own (no --tap-play, --audio-unlock or --audio-loops)');
     process.exit(2);
   }
   if (opts.tapPlay && opts.audioUnlock) {
@@ -555,7 +571,7 @@ async function main() {
     process.exit(1);
   }
   console.log('smoke: layout math (tools/web_smoke/layout_test.mjs) passes');
-  if (opts.tapPlay && !/(^|&)probe=ui(&|$)/.test(opts.query)) opts.query = `${opts.query}&probe=ui`.replace(/^&/, '');
+  if ((opts.tapPlay || opts.gamepad) && !/(^|&)probe=ui(&|$)/.test(opts.query)) opts.query = `${opts.query}&probe=ui`.replace(/^&/, '');
 
   if (opts.audioLoops > 0 && !fs.readFileSync(path.join(root, 'index.js'), 'utf8').includes(GODOT_AUDIO_HOOK[0])) {
     console.error(`smoke: --audio-loops: index.js has no "${GODOT_AUDIO_HOOK[0]}" to hook (a new Godot web engine?)`);
@@ -584,13 +600,15 @@ async function main() {
         `pixel ratio ${device.deviceScaleFactor}, touch ${device.hasTouch}`);
     }
     const context = await browser.newContext(device || {
-      viewport: { width: 1280, height: 720 },
+      // --gamepad drives a run: a phone-sized landscape page keeps SwiftShader's frames up.
+      viewport: opts.gamepad ? { width: 844, height: 390 } : { width: 1280, height: 720 },
       hasTouch: opts.audioUnlock === 'tap',
       ...(opts.dpr != null ? { deviceScaleFactor: opts.dpr } : {}),
     });
     const page = await context.newPage();
     await page.addInitScript(pageProbe);
     if (opts.audioLoops > 0) await page.addInitScript(audioLoopsProbe);
+    if (opts.gamepad) await page.addInitScript(fakeGamepad);
     if (opts.network) {
       const cdp = await context.newCDPSession(page);
       await cdp.send('Network.enable');
@@ -666,6 +684,7 @@ async function main() {
     if (!failures.length && (opts.tapPlay || opts.expectRotated != null)) await checkLayout(page, opts, consoleLines, failures);
     if (!failures.length && opts.tapPlay) await tapPlay(page, opts, consoleLines, failures);
     if (!failures.length && opts.audioLoops > 0) await auditLoops(page, opts, consoleLines, failures);
+    if (!failures.length && opts.gamepad) await gamepadDrive(page, opts, consoleLines, failures);
     if (!failures.length) checkCaching(opts, urls, consoleLines, shellBuild, failures);
 
     if (!failures.length && opts.waitFor) {
@@ -977,6 +996,103 @@ async function tapPlay(page, opts, consoleLines, failures) {
     return;
   }
   console.log('smoke: the tap on PLAY started a run');
+}
+
+
+// --gamepad: runs in the page before its scripts. A standard-mapping Xbox pad at index 1
+// that navigator.getGamepads() returns once window.__wbPad.connect() ran (a browser
+// lists a pad only after its first button press), with setters for the harness.
+function fakeGamepad() {
+  const buttons = [];
+  for (let i = 0; i < 17; i++) buttons.push({ pressed: false, touched: false, value: 0 });
+  const pad = {
+    id: 'Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)',
+    index: 1,
+    connected: true,
+    mapping: 'standard',
+    timestamp: 0,
+    axes: [0, 0, 0, 0],
+    buttons,
+    vibrationActuator: null,
+  };
+  let listed = false;
+  Object.defineProperty(navigator, 'getGamepads', {
+    configurable: true,
+    value: () => (listed ? [null, pad, null, null] : [null, null, null, null]),
+  });
+  window.__wbPad = {
+    button(i, v) { pad.buttons[i] = { pressed: v > 0.5, touched: v > 0, value: v }; pad.timestamp = performance.now(); },
+    axis(i, v) { pad.axes[i] = v; pad.timestamp = performance.now(); },
+    connect() {
+      listed = true;
+      const ev = new Event('gamepadconnected');
+      ev.gamepad = pad;
+      window.dispatchEvent(ev);
+    },
+  };
+}
+
+// Standard mapping (W3C Gamepad): A 0, B 1, Start 9, RT 7, D-pad down 13; left stick x axis 0.
+const PAD = { A: 0, B: 1, RT: 7, START: 9, DOWN: 13, STICK_X: 0 };
+
+async function gamepadDrive(page, opts, consoleLines, failures) {
+  const has = (re, from = 0) => consoleLines.slice(from).some((l) => re.test(l));
+  const waitFor = async (re, ms, from = 0) => {
+    const deadline = Date.now() + ms;
+    while (!has(re, from) && Date.now() < deadline && !failures.length) await page.waitForTimeout(100);
+    return has(re, from);
+  };
+  const press = async (b, holdMs = 200) => {
+    await page.evaluate((i) => window.__wbPad.button(i, 1), b);
+    await page.waitForTimeout(holdMs);
+    await page.evaluate((i) => window.__wbPad.button(i, 0), b);
+    await page.waitForTimeout(150);
+  };
+  const step = async (what, re, from, ms = 10000) => {
+    if (await waitFor(re, ms, from)) {
+      console.log(`smoke: gamepad: ${what}`);
+      return true;
+    }
+    failures.push(`gamepad: ${what}: no console line matched ${re}`);
+    return false;
+  };
+  if (!(await waitFor(/^web boot: title /, opts.timeout))) {
+    failures.push('gamepad: the game never marked the title (web boot: title)');
+    return;
+  }
+  let from = consoleLines.length;
+  await page.evaluate(() => window.__wbPad.connect());
+  if (!(await step('the game sees the pad at index 1', /^pad: connected 1 /, from))) return;
+  from = consoleLines.length;
+  await press(PAD.DOWN);
+  if (!(await step('a D-pad press shows the focus on PLAY', /^wbui: focus PLAY$/, from))) return;
+  from = consoleLines.length;
+  await press(PAD.A);
+  const deadline = Date.now() + 30000;
+  let chooser = false;
+  while (Date.now() < deadline && !failures.length && !has(/^web boot: start /, from)) {
+    if (has(/^wbui: focus DRIVE$/, from)) { chooser = true; break; }
+    await page.waitForTimeout(100);
+  }
+  if (chooser) {
+    console.log('smoke: gamepad: the first-run chooser opened on DRIVE: A');
+    await press(PAD.A);
+  }
+  if (!(await step(`A on ${chooser ? 'DRIVE' : 'PLAY'} starts a run`, /^web boot: start /, from, 30000))) return;
+  // Gas (RT) and steering (left stick) for a moment: the run must keep going quietly.
+  await page.evaluate(() => { window.__wbPad.button(7, 1); window.__wbPad.axis(0, 0.6); });
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => { window.__wbPad.button(7, 0); window.__wbPad.axis(0, 0); });
+  from = consoleLines.length;
+  await press(PAD.START);
+  if (!(await step('Start pauses (RESUME listed and focused)', /^wbui: focus RESUME$/, from))) return;
+  from = consoleLines.length;
+  await press(PAD.B);
+  await page.waitForTimeout(500);
+  await press(PAD.START);
+  if (!(await step('B resumed: Start pauses again', /^wbui: button .* RESUME$/, from))) return;
+  await press(PAD.B);
+  console.log('smoke: gamepad: the pad drove the menus and the run');
 }
 
 

@@ -124,7 +124,7 @@ func _draw() -> void:
 	var s := style
 	var mode := get_draw_mode()
 	var down := mode == DRAW_PRESSED or mode == DRAW_HOVER_PRESSED
-	var hover := mode == DRAW_HOVER
+	var hover := mode == DRAW_HOVER or focus_shown()
 	var off := Vector2(PRESS_SHIFT, PRESS_SHIFT) if down else Vector2.ZERO
 	var r := Rect2(off, size - Vector2(PRESS_SHIFT, PRESS_SHIFT))
 	var nfs := name_px()
@@ -142,6 +142,7 @@ func _draw() -> void:
 			s.accent if down or hover else s.edge_idle, s.edge_w)
 	_cmesh.ngon(Vector2(r.position.x + pad + dot, top + ncap + gap + scap * 0.5), dot, 4, sc,
 			Color.TRANSPARENT, 0.0, -PI * 0.25)
+	focus_ring(_cmesh, r)
 	_cmesh.flush(self)
 	HudDraw.text(self, s.label, Vector2(r.position.x + pad, top + ncap), shown_name(), nfs,
 			s.accent if down else s.text)
