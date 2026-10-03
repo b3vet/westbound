@@ -153,6 +153,18 @@ func party_kick(account_id: String) -> void:
 	session.party_kick(account_id)
 
 
+## Protocol 2: invites an online friend or crewmate to the room this player is seated in
+## (false outside a room). Refusals come as `session.room_invite_failed`.
+func room_invite(account_id: String) -> bool:
+	return session.room_invite(account_id)
+
+
+## Protocol 2: accepts a room invite (the join by its code).
+func accept_room_invite(code: String) -> void:
+	await _fresh_token()
+	session.accept_room_invite(code)
+
+
 ## The lobby connection alone (presence and party events while the hub shows).
 func connect_lobby() -> void:
 	if not available():

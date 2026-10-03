@@ -27,7 +27,9 @@ extends RefCounted
 ## FrameBuilder: `push*` validate and append, writing nothing on failure; `finish()` hands
 ## out the frame) and the decode cursor. Not thread-safe.
 
-const PROTOCOL_VERSION := 1
+## 2: room and crew invites (`lobby_command.room_invite`, `lobby_event.room_invite` /
+## `crew_invite`; docs/PROTOCOL.md §6). The server still takes version 1 clients.
+const PROTOCOL_VERSION := 2
 const MAX_FRAME_LEN := 16384
 const MSG_HEADER_LEN := 3
 const MAX_MESSAGES_PER_FRAME := 64
@@ -1449,6 +1451,7 @@ static func _ensure_schema() -> void:
 		["room_leave", []],
 		["quick_join", []],
 		["room_browse", []],
+		["room_invite", [account]],
 	])])
 	_add(_c2s, _c2s_ids, MSG_PLAYER_STATE, "player_state", player_state)
 	_add(_c2s, _c2s_ids, MSG_SCORE_CLAIM, "score_claim", [
@@ -1496,6 +1499,12 @@ static func _ensure_schema() -> void:
 			_f("max_players", K.U8, 1, MAX_ROOM_PLAYERS), _f("density", K.ENUM, DENSITY),
 			_f("night", K.BOOL)]), 0, MAX_ROOM_LIST)]],
 		["room_left", [_f("reason", K.ENUM, ROOM_LEFT_REASON)]],
+		["room_invite", [_f("from", K.STRUCT, identity), _f("room_id", K.U32), code,
+			_f("visibility", K.ENUM, VISIBILITY), _f("players", K.U8, 0, MAX_ROOM_PLAYERS),
+			_f("max_players", K.U8, 1, MAX_ROOM_PLAYERS), _f("expires_in_s", K.U16)]],
+		["crew_invite", [_f("invite_id", K.ACCOUNT), _f("crew_tag", K.STR, Str.CREW_TAG),
+			_f("crew_name", K.STR, Str.TEXT), _f("from", K.STRUCT, identity),
+			_f("expires_in_s", K.U32)]],
 	])])
 	_add(_s2c, _s2c_ids, MSG_ROOM_SNAPSHOT, "room_snapshot", [
 		_f("room_id", K.U32), code, _f("settings", K.STRUCT, settings), _f("tick", K.U32),

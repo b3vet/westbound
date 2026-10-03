@@ -34,6 +34,11 @@ signal presence_changed(account_id: String)
 signal blocks_changed()
 signal crew_changed()
 signal standing_changed()
+## Crew invites (docs/NET_CLIENT.md → Crew invites): the invites waiting for this player or
+## the crew's sent invites changed.
+signal crew_invites_changed()
+## A crew invite arrived over the lobby connection (`lobby_event.crew_invite`).
+signal crew_invited(invite: NetCrew.Invite)
 signal _refreshed()
 
 const PATH_FRIENDS := "/friends"
@@ -43,6 +48,7 @@ const PATH_BLOCKS := "/blocks"
 const PATH_CREWS := "/crews"
 const PATH_CREW_MINE := "/crews/mine"
 const PATH_CREW_JOIN := "/crews/join"
+const PATH_CREW_INVITES := "/crews/invites"
 const PATH_REPORTS := "/reports"
 const PATH_CREW_BOARD := "/boards/loop_crew"
 const CREW_BOARD_QUERY := "?view=around_me&limit=%d"
@@ -58,6 +64,8 @@ const ERR_FRIEND_CODE := "invalid_full_name"
 const ERR_CREW_NAME := "invalid_crew_name"
 const ERR_CREW_TAG := "invalid_crew_tag"
 const ERR_INVITE := "invalid_invite_code"
+## A crew invite that expired, was answered or was never yours.
+const ERR_INVITE_GONE := "invite_not_found"
 const ERR_REASON := "invalid_reason"
 ## The gateway's non-fatal answer when it cannot subscribe (docs/SERVER.md → Presence).
 const WS_INTERNAL := "internal"
@@ -99,6 +107,11 @@ var standing_rank: int = 0
 var standing_score: int = 0
 var standing_period: String = ""
 var standing_loaded: bool = false
+## Crew invites waiting for this player, newest first (GET /crews/invites; live events).
+var crew_invites: Array[NetCrew.Invite] = []
+var crew_invites_loaded: bool = false
+## Account ids with an invite from this player's crew still waiting (INVITED).
+var crew_invited_ids: Dictionary = {}
 ## A screen shows the friends list (presence polling on).
 var watching: bool = false
 ## Stats (tests, dev HUD).
@@ -377,6 +390,25 @@ func _on_lobby_frame(frame: NetServerFrame) -> void:
 		if msg.get("type") == "lobby_event" and msg.get("kind") == "presence" and msg.get("friends") is Array:
 			ws_presence_events += 1
 			apply_presence(msg["friends"] as Array)
+		elif msg.get("type") == "lobby_event" and msg.get("kind") == "crew_invite":
+			_add_crew_invite(NetCrew.Invite.from_event(msg, int(Time.get_unix_time_from_system())))
+
+
+func _add_crew_invite(inv: NetCrew.Invite) -> void:
+	if inv.invite_id.is_empty():
+		return
+	_drop_crew_invite(inv.invite_id)
+	crew_invites.push_front(inv)
+	crew_invites_changed.emit()
+	crew_invited.emit(inv)
+
+
+func _drop_crew_invite(invite_id: String) -> bool:
+	for i in crew_invites.size():
+		if crew_invites[i].invite_id == invite_id:
+			crew_invites.remove_at(i)
+			return true
+	return false
 
 
 # ---------------------------------------------------------------- Crews
@@ -462,6 +494,102 @@ func disband() -> NetApiResult:
 	return r
 
 
+# ---------------------------------------------------------------- Crew invites
+
+## GET /crews/invites: the crew invites waiting for this player (newest first).
+func refresh_crew_invites() -> NetApiResult:
+	var r := await _call(HTTPClient.METHOD_GET, PATH_CREW_INVITES)
+	if r.ok:
+		crew_invites.clear()
+		var list: Variant = r.data.get("invites")
+		if list is Array:
+			for e: Variant in list as Array:
+				var inv := NetCrew.Invite.from_dict(e)
+				if inv != null:
+					crew_invites.append(inv)
+		crew_invites_loaded = true
+		crew_invites_changed.emit()
+	return r
+
+
+## POST /crews/invites/{id}/accept: joins that crew (`already_in_crew`: leave yours first;
+## `crew_full`). The invite goes from the list when answered or no longer valid.
+func accept_crew_invite(invite_id: String) -> NetApiResult:
+	var r := await _call(HTTPClient.METHOD_POST, "%s/%s/accept" % [PATH_CREW_INVITES, invite_id.uri_encode()])
+	if r.ok:
+		_set_crew(NetCrew.from_dict(r.data))
+	if r.ok or r.error == ERR_INVITE_GONE:
+		if _drop_crew_invite(invite_id):
+			crew_invites_changed.emit()
+	return r
+
+
+## POST /crews/invites/{id}/decline.
+func decline_crew_invite(invite_id: String) -> NetApiResult:
+	var r := await _call(HTTPClient.METHOD_POST, "%s/%s/decline" % [PATH_CREW_INVITES, invite_id.uri_encode()])
+	if r.ok or r.error == ERR_INVITE_GONE:
+		if _drop_crew_invite(invite_id):
+			crew_invites_changed.emit()
+	return r
+
+
+## POST /crews/{id}/invites {account_id}: invites a friend to this player's crew (any
+## member may; a second invite renews the first).
+func invite_to_crew(account_id: String) -> NetApiResult:
+	var r := await _crew_call(HTTPClient.METHOD_POST, "/invites", {"account_id": account_id})
+	if r.ok:
+		crew_invited_ids[account_id] = true
+		crew_invites_changed.emit()
+	elif r.error == ERR_NO_CREW:
+		_set_crew(null)
+	return r
+
+
+## GET /crews/{id}/invites: who has an invite from the crew waiting (INVITED).
+func refresh_crew_sent() -> NetApiResult:
+	var r := await _crew_call(HTTPClient.METHOD_GET, "/invites")
+	if r.ok:
+		crew_invited_ids.clear()
+		var list: Variant = r.data.get("invites")
+		if list is Array:
+			for e: Variant in list as Array:
+				if e is Dictionary:
+					var p := NetSocialPlayer.from_dict((e as Dictionary).get("player"))
+					if p != null:
+						crew_invited_ids[p.account_id] = true
+		crew_invites_changed.emit()
+	return r
+
+
+## Friends who are not in this player's crew (the crew's INVITE FRIENDS list), online
+## first then by name (the friends list's order).
+func crew_invitable() -> Array[NetSocialPlayer]:
+	var out: Array[NetSocialPlayer] = []
+	for f in friends:
+		if crew == null or crew.member(f.account_id) == null:
+			out.append(f)
+	return out
+
+
+## Room invites (protocol 2): the online friends and online crew members, deduplicated
+## (friends first, in the friends list's order, then crewmates by the crew's order),
+## without this player and anyone in `exclude` (account ids: the room's members).
+func room_invitees(exclude: Dictionary = {}) -> Array[NetSocialPlayer]:
+	var out: Array[NetSocialPlayer] = []
+	var seen := {my_account_id(): true}
+	seen.merge(exclude)
+	for f in friends:
+		if f.is_online() and not seen.has(f.account_id):
+			seen[f.account_id] = true
+			out.append(f)
+	if crew != null:
+		for m in crew.members:
+			if m.is_online() and not seen.has(m.account_id):
+				seen[m.account_id] = true
+				out.append(m)
+	return out
+
+
 func _member_call(action: String, account_id: String) -> NetApiResult:
 	var r := await _crew_call(HTTPClient.METHOD_POST, action, {"account_id": account_id})
 	if r.ok:
@@ -485,6 +613,7 @@ func _set_crew(c: NetCrew) -> void:
 		standing_rank = 0
 		standing_score = 0
 		standing_loaded = false
+		crew_invited_ids.clear()
 	crew_changed.emit()
 
 
@@ -574,6 +703,9 @@ func _follow_account(id: String) -> void:
 	crew = null
 	crew_loaded = false
 	standing_loaded = false
+	crew_invites.clear()
+	crew_invites_loaded = false
+	crew_invited_ids.clear()
 	friends_changed.emit()
 	blocks_changed.emit()
 	crew_changed.emit()
@@ -703,6 +835,11 @@ const TEXT := {
 	"crew_not_found": "That crew no longer exists.",
 	"invalid_invite_code": "That invite code doesn't work.",
 	"crew_full": "That crew is full.",
+	"invite_not_found": "That invite is no longer valid.",
+	"not_friends": "You can only invite friends.",
+	"already_member": "They're already in your crew.",
+	"crew_invites_limit": "Too many invites waiting. Try later.",
+	"cannot_invite_self": "You're already in your crew.",
 	"cannot_kick_self": "You can't kick yourself.",
 	"not_permitted": "Your role can't do that.",
 	"member_not_found": "They're no longer in the crew.",

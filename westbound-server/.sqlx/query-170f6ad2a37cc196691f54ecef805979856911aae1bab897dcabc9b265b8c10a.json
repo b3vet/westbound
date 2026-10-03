@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) AS \"n!: i64\" FROM crew_members m1\n           JOIN crew_members m2 ON m2.crew_id = m1.crew_id\n           WHERE m1.account_id = ? AND m2.account_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "n!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "170f6ad2a37cc196691f54ecef805979856911aae1bab897dcabc9b265b8c10a"
+}

@@ -1159,7 +1159,7 @@ async fn account_deletion_cascade() {
     assert!(
         detail.contains(
             "friends=2 blocks=2 crew_memberships=1 crew_transferred=true \
-             crew_disbanded=false reports_kept=2"
+             crew_disbanded=false crew_invites=0 reports_kept=2"
         ),
         "{detail}"
     );

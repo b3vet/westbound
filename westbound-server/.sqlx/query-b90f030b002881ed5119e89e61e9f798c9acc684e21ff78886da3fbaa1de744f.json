@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM crew_invites WHERE account_id = ?1 OR inviter_id = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "b90f030b002881ed5119e89e61e9f798c9acc684e21ff78886da3fbaa1de744f"
+}

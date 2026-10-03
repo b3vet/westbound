@@ -59,7 +59,7 @@ Together that is well under 1 % of a 16.7 ms frame. Decoding the hot messages al
 
 ## Golden vectors
 
-`tests/net/test_codec_vectors.gd` reads `westbound-server/crates/protocol/vectors/*.json` from disk. The server tree has a `.gdignore`, so the test uses `FileAccess` on `ProjectSettings.globalize_path("res://")`. It runs in the normal fast tier (`tools/test.sh`), so the existing Godot CI covers the "both sides run the vectors" rule. If the directory is missing, or any count differs from 87 / 39 / 48 / 3 / 36 / 69, every test fails.
+`tests/net/test_codec_vectors.gd` reads `westbound-server/crates/protocol/vectors/*.json` from disk. The server tree has a `.gdignore`, so the test uses `FileAccess` on `ProjectSettings.globalize_path("res://")`. It runs in the normal fast tier (`tools/test.sh`), so the existing Godot CI covers the "both sides run the vectors" rule. If the directory is missing, or any count differs from 91 / 40 / 51 / 3 / 37 / 69 (protocol 2: room and crew invites), every test fails.
 
 What it checks:
 
@@ -76,7 +76,7 @@ Extra tests cover:
 - UTF-8 edge sequences;
 - the differential fuzz of mutated frames: both decoders agree, there are no engine errors, and every frame that decodes re-encodes byte-identically.
 
-Result: **all 87 message vectors, 3 frames, 36 invalid frames and 69 quantization samples pass.** No mismatch with the Rust side was found.
+Result: **all 87 message vectors, 3 frames, 36 invalid frames and 69 quantization samples pass.** No mismatch with the Rust side was found. Protocol 2 (2026-10-03: `NetCodec.PROTOCOL_VERSION` 2; `lobby_command.room_invite`, `lobby_event.room_invite` / `crew_invite`, two schema lines in `codec.gd`): all 91 message vectors, 3 frames, 37 invalid frames and 69 samples pass.
 
 ## Transports
 
@@ -659,6 +659,26 @@ if not r.ok: note.text = NetSocialClient.error_text(r)
 - **Errors.** `error_text(r)` maps every Social API code to a short line (`player_not_found` → "No player with that code.", the same when a block stands either way; the caps; the crew name / tag filter and rule codes; `not_permitted` → "Your role can't do that."), a 429 to "Too many tries. Try again in 10 min." (`error_text(r, true)`: "Report limit reached. Try again in 24 h."), and the rest to `NetSession.error_text`. `NetApi` itself retries a 429 whose Retry-After is at most 30 s.
 - **Reports.** A 429 is remembered: `report_wait_s()` counts down to the Retry-After, and the dialog keeps SEND off until then.
 - **Join seam (N5).** `NetSocialClient.join_handler: Callable` (`func(friend: NetSocialPlayer)`). The friends list shows JOIN for a friend `in_room` and `joinable`, disabled (SOON) until it is set.
+
+### Crew invites
+
+The owner's request: "there is no way to invite my friends to my crew, there should be". Server: SERVER.md → Social API → Crew invites (any member invites a friend; persistent; 7 days; JOIN uses the join-by-code checks).
+
+| Call | Route | Notes |
+| --- | --- | --- |
+| `refresh_crew_invites()` | `GET /crews/invites` | `crew_invites` (`NetCrew.Invite`: id, crew id, name, tag, size, who sent it, expiry), newest first |
+| `accept_crew_invite(id)` | `POST /crews/invites/{id}/accept` | joins (`crew` set); `already_in_crew` (leave yours first), `crew_full`; the invite leaves the list when answered or `invite_not_found` |
+| `decline_crew_invite(id)` | `POST /crews/invites/{id}/decline` | |
+| `invite_to_crew(account_id)` | `POST /crews/{id}/invites` | `crew_invited_ids` (INVITED); `not_friends`, `already_member`, `crew_full`, `crew_invites_limit` |
+| `refresh_crew_sent()` | `GET /crews/{id}/invites` | who has the crew's invite waiting (INVITED across devices and members) |
+| `crew_invitable()` | | friends not in your crew (INVITE FRIENDS) |
+| `room_invitees(exclude)` | | online friends and crewmates for room invites (ROOMS_CLIENT.md → Room invites) |
+
+Signals: `crew_invites_changed`, and `crew_invited(invite)` when a `lobby_event.crew_invite` arrives on the attached lobby connection (it goes to the front of `crew_invites`). Error texts: `invite_not_found` "That invite is no longer valid.", `not_friends` "You can only invite friends.", `already_member` "They're already in your crew.", `crew_invites_limit` "Too many invites waiting. Try later."; the crew page answers `already_in_crew` on JOIN with "Leave your crew first to join another.".
+
+**The crew page.** In a crew, INVITE FRIENDS (top of the right column, beside the caption; any member) turns the list into your friends who are not in the crew, with presence, each with INVITE or a disabled INVITED; MEMBERS goes back. "Invite sent to name#1234." confirms. Without a crew, the invites waiting for you list under JOIN A CREW (gold CREW INVITES): `Night Riders [NR]`, `FROM Dusty#1234`, JOIN and DECLINE. In a crew they show as a gold line under the invite code (`NIGHT RIDERS [NR] INVITES YOU · LEAVE YOUR CREW TO JOIN`; `2 CREW INVITES · ...`). The invite code with COPY and SHARE (where the browser has a share sheet) and NEW CODE (owner, officers) are unchanged. **The online hub** shows the waiting crew invites as a gold line over FRIENDS / CREW (`NIGHT RIDERS [NR] INVITES YOU`, `2 CREW INVITES`), reloaded each time the hub opens and live on the lobby connection; CREW opens the page that answers them. The title and runs show a note toast (ROOMS_CLIENT.md → Room invites).
+
+Tests: `tests/net/test_invites_client.gd` (the client calls and the live event), `tests/ui/test_invites_ui.gd` (the crew page through touches; the hub's line). `NetFakeSocial` serves the routes (`add_crew_invite(crew, to, from)` seeds one; crew members carry `status` for members).
 
 ### Presence
 

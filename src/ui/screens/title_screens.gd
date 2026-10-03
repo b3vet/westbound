@@ -20,6 +20,10 @@ extends CanvasLayer
 ## WP8.3: the achievements screen (ACHIEVEMENTS, built on first use), and the achievement
 ## service (AchievementService.ensure: made here until the `Achievements` autoload exists;
 ## the run always builds the title).
+##
+## Protocol 2 (docs/ROOMS_CLIENT.md → Room invites): the InviteToast (its own layer just
+## above) shows room and crew invites on the title and in single-player runs, and keeps the
+## lobby connection open on the title; its JOIN opens the hub and joins by the code.
 
 signal start(mode: StringName)
 ## WP8.2: the garage closed (the run gives the attract drive the selected car and look).
@@ -47,6 +51,8 @@ var first_run: FirstRunScreen
 var garage: GarageScreen
 ## WP8.3: the achievements (built on first use: the first ACHIEVEMENTS).
 var achievements: AchievementsScreen
+## Protocol 2: invites on the title and in single-player runs (built with the title).
+var invite_toast: InviteToast
 
 var _theme: Theme
 var _pinned: bool = false
@@ -85,6 +91,7 @@ func set_screen(full: Rect2, safe: Rect2) -> void:
 	_pinned_full = full
 	_pinned_safe = safe
 	if is_built():
+		invite_toast.set_screen(full, safe)
 		_relayout()
 
 
@@ -214,9 +221,21 @@ func _build() -> void:
 	online_hub.back.connect(open_title)
 	online_hub.loop_practice.connect(func() -> void: _on_play(MODE_LOOP))
 	online_hub.social.connect(_on_social)
+	invite_toast = InviteToast.new()
+	invite_toast.titles = self
+	invite_toast.join_requested.connect(_on_invite_join)
+	add_child(invite_toast)
+	if _pinned:
+		invite_toast.set_screen(_pinned_full, _pinned_safe)
 	get_viewport().size_changed.connect(_relayout)
 	Events.settings_changed.connect(_on_setting_changed)
 	_restyle()
+
+
+## The invite toast's JOIN: the hub, joining the room by the invite's code.
+func _on_invite_join(code: String) -> void:
+	open_hub()
+	online_hub.join_room_invite(code)
 
 
 func _on_play(mode: StringName) -> void:
@@ -287,6 +306,7 @@ func _restyle() -> void:
 	style.setup(_theme, tuning, ts)
 	for s in screens:
 		s.setup(style, tuning)
+	invite_toast.setup(style, tuning, NetTuning.load_default())
 	_relayout()
 
 

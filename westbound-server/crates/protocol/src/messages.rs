@@ -214,6 +214,8 @@ wire_union! {
         QuickJoin(Empty) = 10,
         /// Request the public room list.
         RoomBrowse(Empty) = 11,
+        /// Protocol 2: invite an online friend or crewmate to the room you are seated in.
+        RoomInvite(AccountRef) = 12,
     }
 }
 
@@ -397,6 +399,38 @@ wire_struct! {
 }
 
 wire_struct! {
+    /// Protocol 2: a friend or crewmate invites you to the room they are seated in. Accepted
+    /// with `room_join_code` and the code; declining needs no message.
+    pub struct RoomInvite {
+        pub from: Identity,
+        pub room_id: u32,
+        pub code: Code,
+        pub visibility: Visibility,
+        /// Seated players when the invite was sent.
+        pub players: u8 => range(0, MAX_ROOM_PLAYERS),
+        pub max_players: u8 => range(1, MAX_ROOM_PLAYERS),
+        /// The invite is shown this long (seconds from receipt).
+        pub expires_in_s: u16,
+    }
+}
+
+wire_struct! {
+    /// Protocol 2: a crew invited you (persistent; `GET /api/v1/crews/invites` lists them,
+    /// `POST /api/v1/crews/invites/{invite_id}/accept` or `/decline` answers).
+    pub struct CrewInvite {
+        /// The invite's id (u64 like an account id; JSON: a decimal string).
+        pub invite_id: AccountId,
+        pub crew_tag: CrewTag,
+        /// The crew's name (server-validated: 3–24 characters).
+        pub crew_name: Text,
+        /// The member who sent it.
+        pub from: Identity,
+        /// The invite expires this many seconds from receipt.
+        pub expires_in_s: u32,
+    }
+}
+
+wire_struct! {
     pub struct FriendPresence {
         pub account_id: AccountId,
         pub status: PresenceStatus,
@@ -446,6 +480,10 @@ wire_union! {
         Presence(Presence) = 3,
         RoomList(RoomList) = 4,
         RoomLeft(RoomLeft) = 5,
+        /// Protocol 2 (never sent to version 1 sessions).
+        RoomInvite(RoomInvite) = 6,
+        /// Protocol 2 (never sent to version 1 sessions).
+        CrewInvite(CrewInvite) = 7,
     }
 }
 

@@ -185,6 +185,9 @@ pub struct Metrics {
     pub rooms_handed_over: AtomicU64,
     pub rooms_restored: AtomicU64,
     pub room_create_limited: AtomicU64,
+    /// Protocol 2: room invites delivered, and crew invites sent.
+    pub room_invites: AtomicU64,
+    pub crew_invites: AtomicU64,
     pub admin_requests: AtomicU64,
     pub admin_denied: AtomicU64,
     pub backup_last_success_unix: AtomicU64,
@@ -236,13 +239,14 @@ pub const REPLAY_STATUSES: [&str; 5] = ["pending", "running", "done", "failed", 
 
 /// What the housekeeping deletes, in `wb_housekeeping_rows_deleted_total{table}` order
 /// (`replays_set_aside`: set-aside replay files let go by age).
-pub const HOUSEKEEPING_TABLES: [&str; 6] = [
+pub const HOUSEKEEPING_TABLES: [&str; 7] = [
     "shadow_contacts",
     "admin_log",
     "reports",
     "leaderboard_entries",
     "runs",
     "replays_set_aside",
+    "crew_invites",
 ];
 
 impl Metrics {
@@ -478,7 +482,7 @@ impl Metrics {
     pub fn render_ops(&self, out: &mut String) {
         let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
         let secs = |ms: u64| format!("{}", ms as f64 / MS_PER_SEC);
-        let rows: [(&str, &str, &str, String); 20] = [
+        let rows: [(&str, &str, &str, String); 22] = [
             (
                 "wb_server_draining",
                 "gauge",
@@ -502,6 +506,18 @@ impl Metrics {
                 "counter",
                 "Handed-over rooms recreated by a rejoin by code.",
                 g(&self.rooms_restored).to_string(),
+            ),
+            (
+                "wb_room_invites_total",
+                "counter",
+                "Room invites delivered to an online friend or crewmate.",
+                g(&self.room_invites).to_string(),
+            ),
+            (
+                "wb_crew_invites_total",
+                "counter",
+                "Crew invites sent (new or renewed).",
+                g(&self.crew_invites).to_string(),
             ),
             (
                 "wb_room_create_limited_total",

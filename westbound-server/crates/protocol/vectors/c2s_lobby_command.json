@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "direction": "client_to_server",
   "type": "lobby_command",
   "type_id": 3,
@@ -132,6 +132,15 @@
         "type": "lobby_command"
       },
       "hex": "0301000b"
+    },
+    {
+      "name": "room_invite",
+      "message": {
+        "account_id": "9007199254740993",
+        "kind": "room_invite",
+        "type": "lobby_command"
+      },
+      "hex": "0309000c0100000000002000"
     }
   ]
 }
