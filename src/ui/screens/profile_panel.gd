@@ -29,9 +29,10 @@ extends Control
 ## menu's column stays as it is (N7.2 adds LEADERBOARDS there).
 ##
 ## Touch: the buttons are ScreenButtons (BaseButton: emulated mouse events, so raw touch
-## ids never index anything) at least touch_target_px tall; the text field too. While
-## the field has focus the run's PlayerInput stops reading keys (typing "P" must not
-## unpause the game); it reads them again when the field loses focus or the panel hides.
+## ids never index anything) at least touch_target_px tall; the text field too (a
+## SocialField: with an on-screen keyboard it types in the text entry overlay). While the
+## field has focus the run's PlayerInput stops reading keys (typing "P" must not unpause
+## the game); it reads them again when the field loses focus or the panel hides.
 
 const TEXT_PLAYER := "PLAYER"
 const TEXT_RENAME := "RENAME"
@@ -129,8 +130,6 @@ const LABEL_PX := 16
 const BODY_PX := 16
 ## The rename row: SAVE's share of the column.
 const SAVE_SHARE := 0.3   # lint: allow-number layout proportion
-## Selection highlight opacity in the text field.
-const SELECTION_A := 0.35   # lint: allow-number look
 
 var style: HudStyle
 var tuning: HudTuning
@@ -139,6 +138,8 @@ var session: NetSession
 var hub: PlayerInput:
 	set(value):
 		hub = value
+		if name_edit != null:
+			name_edit.hub = value
 		if friends != null:
 			friends.hub = value
 			crew.hub = value
@@ -194,7 +195,6 @@ var friends: FriendsPanel
 var crew: CrewPanel
 var report: ReportDialog
 
-var _keys_muted: bool = false
 var _area: Rect2 = Rect2()
 
 
@@ -215,8 +215,6 @@ func _init() -> void:
 	name_edit.name = "NameEdit"
 	name_edit.placeholder_text = TEXT_PLACEHOLDER
 	name_edit.text_submitted.connect(func(_t: String) -> void: save())
-	name_edit.focus_entered.connect(_mute_keys.bind(true))
-	name_edit.focus_exited.connect(_mute_keys.bind(false))
 	add_child(name_edit)
 	save_button = _button(TEXT_SAVE, ScreenButton.Kind.PRIMARY, save)
 	rename_note = _text("", ScreenText.Face.BODY, BODY_PX, ScreenText.Ink.MUTED)
@@ -369,14 +367,12 @@ func open() -> void:
 
 func _exit_tree() -> void:
 	_connect(false)
-	_mute_keys(false)
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_VISIBILITY_CHANGED and not is_visible_in_tree():
 		if name_edit != null and name_edit.has_focus():
 			name_edit.release_focus()
-		_mute_keys(false)
 
 
 # ---------------------------------------------------------------- Actions
@@ -817,26 +813,7 @@ static func _rename_hint(s: NetSession, p: NetProfile) -> String:
 
 
 func _style_edit() -> void:
-	if style == null or tuning == null:
-		return
-	var border := UiTheme.border_px(tuning)
-	var pad := tuning.spacing_grid_px * 2.0
-	var normal := UiTheme.box(tuning.control_bevel_px, border, style.panel_fill, style.edge_idle)
-	var focus := UiTheme.box(tuning.control_bevel_px, border, Color(style.ink, 1.0), style.accent)
-	var off := UiTheme.box(tuning.control_bevel_px, border, style.panel_fill, Color(style.muted, SELECTION_A))
-	for b: StyleBoxFlat in [normal, focus, off]:
-		b.content_margin_left = pad
-		b.content_margin_right = pad
-	name_edit.add_theme_stylebox_override(&"normal", normal)
-	name_edit.add_theme_stylebox_override(&"focus", focus)
-	name_edit.add_theme_stylebox_override(&"read_only", off)
-	name_edit.add_theme_font_override(&"font", style.body)
-	name_edit.add_theme_font_size_override(&"font_size", maxi(1, roundi(float(tuning.font_screen_button_px) * style.ts)))
-	name_edit.add_theme_color_override(&"font_color", style.text)
-	name_edit.add_theme_color_override(&"font_placeholder_color", style.muted)
-	name_edit.add_theme_color_override(&"font_uneditable_color", style.muted)
-	name_edit.add_theme_color_override(&"caret_color", style.accent)
-	name_edit.add_theme_color_override(&"selection_color", Color(style.accent, SELECTION_A))
+	SocialUi.style_edit(name_edit, style, tuning)
 
 
 ## Lays the panel out in `area` (panel-local px), or again in the last area.
@@ -997,11 +974,3 @@ static func _line(t: ScreenText, x: float, y: float, w: float) -> float:
 static func _place(c: Control, at: Vector2, sz: Vector2) -> void:
 	c.position = at
 	c.size = sz
-
-
-func _mute_keys(on: bool) -> void:
-	if on == _keys_muted:
-		return
-	_keys_muted = on
-	if hub != null and is_instance_valid(hub):
-		hub.set_process_input(not on)

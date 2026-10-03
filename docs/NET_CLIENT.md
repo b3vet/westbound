@@ -689,7 +689,7 @@ Both sources merge the same way: later entries replace earlier ones (`apply_pres
 
 ### On-screen keyboards
 
-`SocialField` (the friend code, crew name, tag and invite code, and now the rename field): native iOS / Android open the OS keyboard from `LineEdit` (`virtual_keyboard_enabled`). The web export has `html/experimental_virtual_keyboard=false`, so `DisplayServer` has no virtual keyboard there; and even with it on, Godot focuses its hidden input a frame after the tap, outside the gesture, which iOS Safari ignores. So on a touch-screen web page (`NetTuning.web_text_prompt`) a tap on the field opens the browser's `window.prompt` (through `NetJsBridge`; always shows the keyboard, including iOS Safari) and fills the field; SEND / CREATE / JOIN then work as usual. Desktop web and native type in place. While a field has focus the run's `PlayerInput` reads no keys. COPY uses `navigator.clipboard` (with an `execCommand('copy')` fallback) inside the tap on the web, `DisplayServer.clipboard_set` natively; SHARE shows only where `navigator.share` exists (mobile browsers). Native share sheets need a plugin (not in v1).
+`SocialField` (the friend code, crew name, tag and invite code, the rename field and the room / party code): native iOS / Android (an OS on-screen keyboard on a touch screen, `NetTuning.text_entry_overlay`) type in the text entry overlay, a bar at the top of the screen that the keyboard can't cover (docs/SCREENS.md → Social → Text fields). The web export has `html/experimental_virtual_keyboard=false`, so `DisplayServer` has no virtual keyboard there; and even with it on, Godot focuses its hidden input a frame after the tap, outside the gesture, which iOS Safari ignores. So on a touch-screen web page (`NetTuning.web_text_prompt`) a tap on the field opens the browser's `window.prompt` (through `NetJsBridge`; always shows the keyboard, including iOS Safari) and fills the field; SEND / CREATE / JOIN then work as usual. Desktop web and desktop native type in place. While a field has focus the run's `PlayerInput` reads no keys. COPY uses `navigator.clipboard` (with an `execCommand('copy')` fallback) inside the tap on the web, `DisplayServer.clipboard_set` natively; SHARE shows only where `navigator.share` exists (mobile browsers). Native share sheets need a plugin (not in v1).
 
 ### Tuning (`data/tuning/net.tres`, N9.2 fields)
 
@@ -703,6 +703,7 @@ Both sources merge the same way: later entries replace earlier ones (`apply_pres
 | `crew_board_around` | 1 | not in spec (the standing's `limit`) |
 | `social_note_s` | 3 | not in spec ("Code copied." note) |
 | `web_text_prompt` | true | not in spec |
+| `text_entry_overlay` | true | not in spec (owner request 2026-10-03: the OS keyboard hides the fields) |
 
 ### Tests
 

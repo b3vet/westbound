@@ -298,7 +298,8 @@ Pause → SETTINGS → ACCOUNT → **FRIENDS** / **CREW**. The social screens si
 | `src/ui/screens/report_dialog.gd` | `ReportDialog` | The reusable report dialog (friends, crew, N7.2's boards, N5's room menu) |
 | `src/ui/screens/social_row.gd` | `SocialRow` | A list row: presence dot, `name` `#tag` `[CREW]`, a status line, up to two buttons |
 | `src/ui/screens/social_actions.gd` | `SocialActions` | An action sheet with confirm steps (the question in hot text, CONFIRM / CANCEL) |
-| `src/ui/screens/social_field.gd` | `SocialField` | Text field: on-screen keyboards (the web prompt), key muting |
+| `src/ui/screens/social_field.gd` | `SocialField` | Text field: on-screen keyboards (the web prompt, the text entry overlay), key muting |
+| `src/ui/screens/text_entry_overlay.gd` | `TextEntryOverlay` | The bar at the top of the screen a field is typed in when an OS keyboard would cover it |
 | `src/ui/screens/social_ui.gd` | `SocialUi` | Name fitting, button widths, field look, web clipboard / share / prompt |
 | `src/ui/screens/dev/social_preview.tscn` | | Snap scene |
 
@@ -308,14 +309,41 @@ Pause → SETTINGS → ACCOUNT → **FRIENDS** / **CREW**. The social screens si
 
 **Report.** A faceted card over the tab's area: REPORT PLAYER, `name#tag`, the note line; the six reasons as option buttons (CHEATING, OFFENSIVE NAME, OFFENSIVE CREW, HARASSMENT, GRIEFING, OTHER); SEND REPORT → "Report for harassment?" with REPORT / BACK → "Report sent. Thank you." with DONE. A 429 shows "Report limit reached. Try again in 24 h." and keeps SEND off until the wait ends (also when reopened). Other screens: `add_child(dialog)`, `setup(style, tuning)`, `layout(area)`, `open_for(client, account_id, full_name, context)`, and hide their own content while it shows (`visibility_changed`).
 
-**Rules.** Every button and field is at least `touch_target_px` (88) tall; names that don't fit are shortened with "..." (never a question or an error: confirm questions shorten the name inside them). Everything is under the pause screen, so nothing draws during gameplay (`RunScreens.visible_item_count() == 0`). While a field has focus the run's `PlayerInput` stops reading keys. Text fields on a touch-screen web page open the browser's prompt (see docs/NET_CLIENT.md → On-screen keyboards).
+**Rules.** Every button and field is at least `touch_target_px` (88) tall; names that don't fit are shortened with "..." (never a question or an error: confirm questions shorten the name inside them). Everything is under the pause screen, so nothing draws during gameplay (`RunScreens.visible_item_count() == 0`). While a field has focus (or its text entry overlay is open) the run's `PlayerInput` stops reading keys. Text fields on a touch-screen web page open the browser's prompt (see docs/NET_CLIENT.md → On-screen keyboards); with an OS keyboard they open the text entry overlay (below).
+
+### Text fields
+
+Every text field is a `SocialField`: the friend code, the crew name, tag and invite code, the rename field, and the online hub's JOIN BY CODE (room or party code). Owner request (2026-10-03): on a landscape phone the OS keyboard covers the lower half of the screen, where most fields sit. A tap types in one of three ways, the first that applies:
+
+| Mode | When (`-1` automatic) | Test override | What a tap does |
+| --- | --- | --- | --- |
+| Web prompt | the web build on a touch screen and `NetTuning.web_text_prompt` | `prompt_mode` 0 / 1 | the browser's `window.prompt` fills the field (unchanged; the browser places it) |
+| Text entry overlay | `DisplayServer.has_feature(FEATURE_VIRTUAL_KEYBOARD)` and `DisplayServer.is_touchscreen_available()` (native iOS / Android) and `NetTuning.text_entry_overlay` | `entry_mode` 0 / 1 | opens the overlay |
+| In place | otherwise (desktop native and web, a mouse or keys) | | types into the field, as before |
+
+**The overlay** (`TextEntryOverlay`, a CanvasLayer at layer 90, above every screen and toast; one per field, made on first use). Any focus of the field opens it: a tap, or keys and pads (a deferred call, never inside a focus change); the field itself never opens the OS keyboard in this mode (`virtual_keyboard_enabled` off), and a read-only field (busy) never opens it. It shows the game dimmed (ink at `screen_dim_pct`; the dim takes every touch, so nothing behind can be tapped) and an opaque faceted bar with an accent edge `2 × spacing_grid_px` under the top of the safe area (the same insets as the HUD: `HudLayout.canvas_safe_rect`), as wide as the safe area: the field's prompt in caps (its `prompt_message`, else the placeholder; shortened with "..." only if it can't fit), a large LineEdit in the fields' look (`SocialUi.style_edit`, `touch_target_px` tall) and CANCEL / DONE (ScreenButtons). The LineEdit takes the focus and starts editing at once, so the OS keyboard opens and types into it; it starts with the field's text, the caret at the end, and copies the field's `max_length`, `secret`, `secret_character`, `virtual_keyboard_type` and placeholder. The fields have no typing filters: callers normalise on submit (`NetRoomSession.normalize_code`, the server's rules), so the overlay's answer goes through the same path as typed text. When the OS reports a keyboard height (`DisplayServer.virtual_keyboard_get_height()`, polled while open), the bar moves up to stay above it, never above the canvas (`TextEntryOverlay.bar_top`); on phones it fits above it with room to spare (about 170 of 720 canvas px at 125 % text).
+
+- **DONE** writes the text back (`SocialField.take_text`, shared with the web prompt: trimmed, cut to `max_length`, caret at the end, `text_changed`) and closes; the player then taps the screen's action button (JOIN, SEND, CREATE, SAVE), as after the web prompt.
+- **The keyboard's return key** (`text_submitted`) does the same and then emits the field's `text_submitted`, which is what Enter in the field does today (JOIN, SEND, CREATE, SAVE).
+- **CANCEL, a tap on the dim, Esc, the pad's B and Android back** (`ui_cancel` in `_input`, before any screen; `NOTIFICATION_WM_GO_BACK_REQUEST`) close it with the field untouched.
+- Closing releases the focus and hides the OS keyboard. Hiding the field (or freeing it) cancels.
+- **Keys:** the field keeps the run's `PlayerInput` muted while its overlay is open (the focus moves to the overlay's LineEdit, the mute stays), and gives the keys back when it closes. The rename field now mutes through `SocialField` too (ProfilePanel sets its `hub`).
+- **Pad:** the overlay is a modal for PadNav (the dim takes touches over the screen), so the D-pad moves between CANCEL and DONE only, and an unhandled B presses CANCEL.
+- **Text size:** the caption, the LineEdit and the buttons follow the text-size setting (the field's `HudStyle`); menus don't follow `controls_scale` (that sizes the driving controls), so the overlay doesn't either.
+
+```
+tools/snap.sh src/ui/screens/dev/social_preview.tscn --size=1688x780 --social=crew_none --text_entry=name --safe_insets=87,0,87,39
+tools/snap.sh src/ui/screens/dev/party_preview.tscn --size=1334x750 --party=code --text_entry=1 --text_scale=1.25
+```
+
+Tuning: `NetTuning.text_entry_overlay` (default on; off types in place everywhere). Layout reuses `HudTuning` (`spacing_grid_px`, `touch_target_px`, `font_screen_body_px`, `font_screen_button_px`, `screen_dim_pct`). Tests: `tests/ui/test_text_entry.gd`.
 
 ```
 tools/snap.sh src/ui/screens/dev/social_preview.tscn --renderer=both --sweep=social:friends,sheet,confirm,error,blocked,crew,member,crew_confirm,crew_none,crew_error,report,report_confirm,report_sent,report_limited
 tools/snap.sh src/ui/screens/dev/social_preview.tscn --size=2496x1320 --text_scale=1.25 --social=crew
 ```
 
-**Tests:** `tests/ui/test_social_screens.gd` (tabs, rows and presence, the JOIN seam, add / accept / cancel with errors inline, remove / block confirms, the blocked list, paging, offline, report flow and rate limit, crew create / join errors, the role UI per role, crew confirms, copy, the web prompt, key muting, the pause-menu path and zero draw items when hidden) and `tests/ui/test_social_text_fit.gd` (every state with 16-W names and 24-W crew names, every note text shown whole, touch targets and safe area, both text sizes, both hands, 1280x720 and a notched 1560x720).
+**Tests:** `tests/ui/test_social_screens.gd` (tabs, rows and presence, the JOIN seam, add / accept / cancel with errors inline, remove / block confirms, the blocked list, paging, offline, report flow and rate limit, crew create / join errors, the role UI per role, crew confirms, copy, the web prompt, key muting, the pause-menu path and zero draw items when hidden), `tests/ui/test_text_entry.gd` (the text entry overlay: modes, write-back and submit, every cancel path, key muting, the pad, the keyboard height, a crew join through it, text fit at both text sizes on 667x375 and 844x390 phones) and `tests/ui/test_social_text_fit.gd` (every state with 16-W names and 24-W crew names, every note text shown whole, touch targets and safe area, both text sizes, both hands, 1280x720 and a notched 1560x720).
 
 
 ## Title (WP8.5)
