@@ -51,7 +51,8 @@ use protocol::handshake::{
 };
 use protocol::{
     decode_client_frame, AccountId, ClientMsg, CrewTag, DecodeError, ErrorCode, ErrorMsg,
-    FrameBuilder, Identity, LobbyCommand, LobbyEvent, MapHash, Pong, RoomList, ServerMsg, Text,
+    FrameBuilder, Identity, LobbyCommand, LobbyEvent, MapHash, Pong, RoomInvite, RoomList,
+    ServerMsg, Text,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -385,14 +386,20 @@ impl Conn<'_> {
                 let Some(a) = authed else {
                     return Step::Close(CloseReason::Error);
                 };
-                self.establish(a, hello.client_build, &welcome)
+                self.establish(a, hello.client_build, hello.protocol_version, &welcome)
             }
             Action::Reject(m) => self.reject(&m, true),
             _ => Step::Close(CloseReason::Error),
         }
     }
 
-    fn establish(&mut self, a: auth::Authed, client_build: u32, welcome: &ServerMsg) -> Step {
+    fn establish(
+        &mut self,
+        a: auth::Authed,
+        client_build: u32,
+        protocol_version: u16,
+        welcome: &ServerMsg,
+    ) -> Step {
         let sessions = &self.state.sessions;
         let account = AccountId(a.account_id as u64);
         let (handle, kick_rx) = SessionHandle::new(
@@ -401,6 +408,7 @@ impl Conn<'_> {
             a.token_version,
             self.out.tx.clone(),
         );
+        let handle = handle.with_protocol(protocol_version);
         let replaced = sessions.register(handle.clone());
         if replaced.is_none() {
             self.state.presence.on_online(account);
@@ -411,6 +419,7 @@ impl Conn<'_> {
             account = a.account_id,
             session = handle.session_id,
             client_build,
+            protocol_version,
             replaced = replaced.is_some(),
             "session established"
         );
@@ -773,6 +782,101 @@ impl Conn<'_> {
         }
     }
 
+    /// `room_invite {account}` (protocol 2; docs/SERVER.md → "Room invites"): the seated
+    /// player invites an online friend or crewmate to their room. The target gets
+    /// `lobby_event.room_invite` on their own connection; refusals are non-fatal errors with
+    /// the reason as the detail. Checked in this order, so nothing about a stranger's
+    /// presence leaks: the seat, yourself, the relationship (friend or crewmate, no block
+    /// either way), online (and a client that decodes the event), already in the room, the
+    /// room full, then the registry (a repeat while showing, the per-minute limit).
+    async fn room_invite(&mut self, target: AccountId) -> Step {
+        use crate::social::room_invites as ri;
+        let Some(session) = self.session.clone() else {
+            return Step::Close(CloseReason::Error);
+        };
+        let me = session.account_id;
+        let Some(room_id) = self.seat().map(|l| l.room_id) else {
+            return self.reply_step(&error_msg(
+                ErrorCode::NotInRoom,
+                false,
+                ri::DETAIL_NOT_SEATED,
+            ));
+        };
+        let refuse = |code: ErrorCode, detail: &str| error_msg(code, false, detail);
+        if target == me {
+            return self.reply_step(&refuse(ErrorCode::NotAllowed, ri::DETAIL_SELF));
+        }
+        let related = match self.state.db.acquire().await {
+            Ok(mut conn) => {
+                crate::social::can_invite(&mut conn, me.0 as i64, target.0 as i64).await
+            }
+            Err(e) => Err(e),
+        };
+        match related {
+            Ok(true) => {}
+            Ok(false) => {
+                return self.reply_step(&refuse(ErrorCode::NotAllowed, ri::DETAIL_NOT_RELATED))
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "database error checking a room invite");
+                return self.reply_step(&refuse(ErrorCode::Internal, ri::DETAIL_UNAVAILABLE));
+            }
+        }
+        let Some(to) = self.state.sessions.get(target) else {
+            return self.reply_step(&refuse(ErrorCode::NotAllowed, ri::DETAIL_OFFLINE));
+        };
+        if !to.takes_invites() {
+            return self.reply_step(&refuse(ErrorCode::NotAllowed, ri::DETAIL_OLD_CLIENT));
+        }
+        let Some(info) = self.state.rooms.info(room_id) else {
+            return self.reply_step(&error_msg(
+                ErrorCode::NotInRoom,
+                false,
+                ri::DETAIL_NOT_SEATED,
+            ));
+        };
+        if self.state.rooms.seat_of(target) == Some(room_id) {
+            return self.reply_step(&refuse(ErrorCode::NotAllowed, ri::DETAIL_ALREADY_HERE));
+        }
+        if info.players() >= info.max_players {
+            return self.reply_step(&refuse(ErrorCode::RoomFull, ri::DETAIL_ROOM_FULL));
+        }
+        let now = self.state.clock.now();
+        if let Err(r) = self.state.room_invites.record(me, target, room_id, now) {
+            return self.reply_step(&r.to_msg());
+        }
+        let from = match self.identity().await {
+            Ok((ident, _)) => ident,
+            Err(step) => return step,
+        };
+        let msg = ServerMsg::LobbyEvent(LobbyEvent::RoomInvite(RoomInvite {
+            from,
+            room_id,
+            code: info.code.clone(),
+            visibility: info.visibility,
+            players: info.players().min(protocol::messages::MAX_ROOM_PLAYERS),
+            max_players: info.max_players,
+            expires_in_s: self.state.room_invites.params().ttl_secs,
+        }));
+        match protocol::encode_frame(std::slice::from_ref(&msg)) {
+            Ok(frame) => {
+                to.send_frame(frame);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "room invite failed to encode");
+                return self.reply_step(&refuse(ErrorCode::Internal, ri::DETAIL_UNAVAILABLE));
+            }
+        }
+        Metrics::inc(&self.metrics().room_invites);
+        tracing::info!(
+            account = me.0,
+            target = target.0,
+            room = room_id,
+            "room invite"
+        );
+        Step::Continue
+    }
+
     fn reply_step(&mut self, msg: &ServerMsg) -> Step {
         match self.reply(msg) {
             Ok(()) => Step::Continue,
@@ -825,6 +929,8 @@ impl Conn<'_> {
                 | LobbyCommand::PartyJoin(_)
                 | LobbyCommand::PartyLeave(_)
                 | LobbyCommand::PartyKick(_) => return self.party_command(cmd).await,
+                // Protocol 2: invite a friend or crewmate to this room.
+                LobbyCommand::RoomInvite(a) => return self.room_invite(a.account_id).await,
             },
             ClientMsg::RoomHostCommand(c) => match self.seat() {
                 Some(link) => {

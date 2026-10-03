@@ -290,6 +290,14 @@ report_context_max_bytes = 1024
 # how long a member whose connection ended keeps their place (a new session takes it back).
 party_max_members = 8
 party_member_hold_ms = 15000
+# Room invites (protocol 2): how long an invite shows (10-3600 s; a repeat invite of the same
+# player to the same room is refused meanwhile), and invites per player per rolling minute.
+room_invite_ttl_secs = 120
+room_invites_per_minute = 10
+# Crew invites: they expire after this many hours (1-8760), and a crew may have at most
+# this many waiting at once.
+crew_invite_ttl_hours = 168
+crew_max_pending_invites = 32
 
 [replays]
 # Replay uploads and the verification queue (docs/SERVER.md → "Replays and verification").

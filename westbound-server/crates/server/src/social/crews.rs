@@ -230,6 +230,9 @@ pub async fn disband_rows(conn: &mut SqliteConnection, crew_id: i64) -> sqlx::Re
     sqlx::query!("DELETE FROM crew_members WHERE crew_id = ?", crew_id)
         .execute(&mut *conn)
         .await?;
+    sqlx::query!("DELETE FROM crew_invites WHERE crew_id = ?", crew_id)
+        .execute(&mut *conn)
+        .await?;
     let done = sqlx::query!("DELETE FROM crews WHERE id = ?", crew_id)
         .execute(&mut *conn)
         .await?;
@@ -318,6 +321,10 @@ pub struct CrewMember {
     pub full_name: String,
     pub role: Role,
     pub joined_at: i64,
+    /// Presence (`offline`, `online`, `in_room`) for the viewer's own crew (room invites
+    /// list online crewmates); `null` for anyone else's crew.
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 /// `GET /api/v1/crews/{id}` and every crew write's answer.
@@ -376,6 +383,7 @@ pub async fn view(
                 tag,
                 role: Role::parse(&r.role).unwrap_or(Role::Member),
                 joined_at: r.joined_at,
+                status: None,
             }
         })
         .collect();
@@ -469,14 +477,27 @@ async fn view_or_404(
     crew_id: i64,
     viewer: i64,
 ) -> ApiResult<CrewView> {
-    view(
+    let mut v = view(
         conn,
         crew_id,
         Some(viewer),
         state.config.social.crew_max_members,
     )
     .await?
-    .ok_or_else(crew_not_found)
+    .ok_or_else(crew_not_found)?;
+    if v.your_role.is_some() {
+        // A member sees who of the crew is online (room invites, protocol 2).
+        let ids: Vec<i64> = v
+            .members
+            .iter()
+            .filter_map(|m| m.account_id.parse().ok())
+            .collect();
+        let presence = state.presence.statuses(&ids);
+        for (m, p) in v.members.iter_mut().zip(&presence) {
+            m.status = Some(crate::presence::status_str(p.status).to_string());
+        }
+    }
+    Ok(v)
 }
 
 fn invalidate_season(state: &AppState) {
@@ -560,15 +581,31 @@ pub async fn join(state: &AppState, me: i64, code: &str) -> ApiResult<CrewView> 
         .fetch_optional(&mut *tx)
         .await?
         .ok_or_else(bad_code)?;
-    if membership(&mut tx, me).await?.is_some() {
+    let v = join_tx(&mut tx, state, me, crew_id, now).await?;
+    tx.commit().await?;
+    invalidate_season(state);
+    Ok(v)
+}
+
+fn crew_full() -> ApiError {
+    ApiError::new(StatusCode::CONFLICT, "crew_full", "That crew is full.")
+}
+
+/// Makes `me` a member of `crew_id` inside the caller's transaction (join by code, an
+/// accepted invite): `already_in_crew`, `crew_full`; recomputes the crew's season score and
+/// drops the crew's invite to `me`.
+async fn join_tx(
+    conn: &mut SqliteConnection,
+    state: &AppState,
+    me: i64,
+    crew_id: i64,
+    now: i64,
+) -> ApiResult<CrewView> {
+    if membership(&mut *conn, me).await?.is_some() {
         return Err(already_in_crew());
     }
-    if member_count(&mut tx, crew_id).await? >= i64::from(state.config.social.crew_max_members) {
-        return Err(ApiError::new(
-            StatusCode::CONFLICT,
-            "crew_full",
-            "That crew is full.",
-        ));
+    if member_count(&mut *conn, crew_id).await? >= i64::from(state.config.social.crew_max_members) {
+        return Err(crew_full());
     }
     sqlx::query!(
         "INSERT INTO crew_members (account_id, crew_id, role, joined_at)
@@ -577,14 +614,18 @@ pub async fn join(state: &AppState, me: i64, code: &str) -> ApiResult<CrewView> 
         crew_id,
         now
     )
-    .execute(&mut *tx)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM crew_invites WHERE crew_id = ? AND account_id = ?",
+        crew_id,
+        me
+    )
+    .execute(&mut *conn)
     .await?;
     let season = Period::at(PeriodKind::Season, now);
-    leaderboards::recompute_crew(&mut tx, state.boards.config(), crew_id, &season, now).await?;
-    let v = view_or_404(&mut tx, state, crew_id, me).await?;
-    tx.commit().await?;
-    invalidate_season(state);
-    Ok(v)
+    leaderboards::recompute_crew(conn, state.boards.config(), crew_id, &season, now).await?;
+    view_or_404(conn, state, crew_id, me).await
 }
 
 /// Leaves the crew (an owner's crew passes on, or is disbanded when they were alone).
@@ -762,6 +803,345 @@ pub async fn admin_rename(
     .await?;
     tx.commit().await?;
     Ok((name, tag))
+}
+
+// ------------------------------------------------------------------------------------------
+// Crew invites (the owner's request: "there is no way to invite my friends to my crew")
+// ------------------------------------------------------------------------------------------
+
+/// A crew invite as the invitee sees it (`GET /api/v1/crews/invites`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrewInviteView {
+    pub invite_id: String,
+    pub crew_id: String,
+    pub crew_name: String,
+    pub crew_tag: String,
+    pub member_count: u32,
+    pub max_members: u32,
+    /// The member who sent it (`null` once their account is gone; such invites are
+    /// deleted with the account, so only a race shows it).
+    pub from: Option<super::Player>,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+/// A crew's waiting invite as its members see it (`GET /api/v1/crews/{id}/invites`,
+/// `POST /api/v1/crews/{id}/invites`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentInviteView {
+    pub invite_id: String,
+    /// The invitee.
+    pub player: super::Player,
+    pub from: Option<super::Player>,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+
+fn invite_not_found() -> ApiError {
+    ApiError::new(
+        StatusCode::NOT_FOUND,
+        "invite_not_found",
+        "That crew invite is no longer valid.",
+    )
+}
+
+/// The crew invite's lifetime in seconds.
+fn invite_ttl_secs(state: &AppState) -> i64 {
+    i64::from(state.config.social.crew_invite_ttl_hours) * 3_600
+}
+
+/// Invites `target` (an accepted friend of `me`) to `crew_id`. Any member may invite: every
+/// member already sees and shares the invite code (SERVER.md → Crews), so an invite gives
+/// no new power. A second invite renews the first (`200`); a new one answers `201`.
+/// Refusals: `cannot_invite_self`; `not_in_crew`; `player_not_found`; `not_friends` (no
+/// accepted friendship, or a block either way: blocking ends the friendship, and the answer
+/// does not reveal which); `already_member`; `crew_full`; `crew_invites_limit` (the crew's
+/// `social.crew_max_pending_invites`). The invitee, when online on a protocol 2 client, gets
+/// `lobby_event.crew_invite` at once.
+pub async fn invite(
+    state: &AppState,
+    me: i64,
+    crew_id: i64,
+    target: i64,
+) -> ApiResult<(StatusCode, SentInviteView)> {
+    if target == me {
+        return Err(ApiError::bad_request(
+            "cannot_invite_self",
+            "You are already in your crew.",
+        ));
+    }
+    let now = state.clock.now();
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    my_membership(&mut tx, me, crew_id).await?;
+    let Some(player) = super::player(&mut tx, target).await? else {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "player_not_found",
+            "No such player.",
+        ));
+    };
+    let friends = super::friend_ids(&mut tx, me).await?.unwrap_or_default();
+    if !friends.contains(&target) || super::is_blocked(&mut tx, me, target).await? {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "not_friends",
+            "You can only invite friends to your crew.",
+        ));
+    }
+    if membership(&mut tx, target)
+        .await?
+        .is_some_and(|m| m.crew_id == crew_id)
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "already_member",
+            "That player is already in your crew.",
+        ));
+    }
+    if member_count(&mut tx, crew_id).await? >= i64::from(state.config.social.crew_max_members) {
+        return Err(crew_full());
+    }
+    let existing = sqlx::query_scalar!(
+        r#"SELECT id AS "id!: i64" FROM crew_invites WHERE crew_id = ? AND account_id = ?"#,
+        crew_id,
+        target
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let pending = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "n!: i64" FROM crew_invites
+           WHERE crew_id = ? AND expires_at > ? AND account_id != ?"#,
+        crew_id,
+        now,
+        target
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    if pending >= i64::from(state.config.social.crew_max_pending_invites) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "crew_invites_limit",
+            "Your crew has too many invites waiting. Try again when some are answered.",
+        ));
+    }
+    let expires = now + invite_ttl_secs(state);
+    let invite_id = sqlx::query_scalar!(
+        r#"INSERT INTO crew_invites (crew_id, account_id, inviter_id, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (crew_id, account_id) DO UPDATE
+             SET inviter_id = excluded.inviter_id, created_at = excluded.created_at,
+                 expires_at = excluded.expires_at
+           RETURNING id AS "id!: i64""#,
+        crew_id,
+        target,
+        me,
+        now,
+        expires
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    let from = super::player(&mut tx, me).await?;
+    let crew = sqlx::query!("SELECT name, tag FROM crews WHERE id = ?", crew_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    let (ident, _) = crate::rooms::identity_of(&mut tx, protocol::AccountId(me as u64)).await?;
+    tx.commit().await?;
+    crate::metrics::Metrics::inc(&state.metrics.crew_invites);
+    tracing::info!(
+        account_id = me,
+        crew_id,
+        target,
+        invite_id,
+        renewed = existing.is_some(),
+        "crew invite"
+    );
+    notify_invite(state, target, invite_id, &crew.name, &crew.tag, ident);
+    let status = if existing.is_some() {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((
+        status,
+        SentInviteView {
+            invite_id: invite_id.to_string(),
+            player,
+            from,
+            created_at: now,
+            expires_at: expires,
+        },
+    ))
+}
+
+/// `lobby_event.crew_invite` to the invitee's live session (protocol 2 clients only).
+fn notify_invite(
+    state: &AppState,
+    target: i64,
+    invite_id: i64,
+    crew_name: &str,
+    crew_tag: &str,
+    from: protocol::Identity,
+) {
+    let Some(session) = state.sessions.get(protocol::AccountId(target as u64)) else {
+        return;
+    };
+    if !session.takes_invites() {
+        return;
+    }
+    let msg =
+        protocol::ServerMsg::LobbyEvent(protocol::LobbyEvent::CrewInvite(protocol::CrewInvite {
+            invite_id: protocol::AccountId(invite_id as u64),
+            crew_tag: protocol::CrewTag::new(crew_tag).unwrap_or_default(),
+            crew_name: protocol::Text(crew_name.to_owned()),
+            from,
+            expires_in_s: u32::try_from(invite_ttl_secs(state)).unwrap_or(u32::MAX),
+        }));
+    match protocol::encode_frame(std::slice::from_ref(&msg)) {
+        Ok(frame) => {
+            session.send_frame(frame);
+        }
+        Err(e) => tracing::error!(error = %e, "crew invite failed to encode"),
+    }
+}
+
+/// The invites waiting for `me`, newest first: unexpired, and none from a player blocked
+/// either way.
+pub async fn invites_for(state: &AppState, me: i64) -> ApiResult<Vec<CrewInviteView>> {
+    let now = state.clock.now();
+    let mut conn = state.db.acquire().await?;
+    let rows = sqlx::query!(
+        r#"SELECT i.id AS "id!: i64", i.crew_id, i.inviter_id, i.created_at, i.expires_at,
+                  c.name, c.tag,
+                  (SELECT COUNT(*) FROM crew_members m WHERE m.crew_id = i.crew_id) AS "members!: i64"
+           FROM crew_invites i JOIN crews c ON c.id = i.crew_id
+           WHERE i.account_id = ?1 AND i.expires_at > ?2
+             AND NOT EXISTS (SELECT 1 FROM blocks b
+                             WHERE (b.account_id = ?1 AND b.blocked_id = i.inviter_id)
+                                OR (b.account_id = i.inviter_id AND b.blocked_id = ?1))
+           ORDER BY i.created_at DESC, i.id DESC"#,
+        me,
+        now
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let inviters: Vec<i64> = rows.iter().filter_map(|r| r.inviter_id).collect();
+    let players = super::players(&mut conn, &inviters).await?;
+    let max_members = state.config.social.crew_max_members;
+    Ok(rows
+        .into_iter()
+        .map(|r| CrewInviteView {
+            invite_id: r.id.to_string(),
+            crew_id: r.crew_id.to_string(),
+            crew_name: r.name,
+            crew_tag: r.tag,
+            member_count: u32::try_from(r.members).unwrap_or(0),
+            max_members,
+            from: r.inviter_id.and_then(|id| players.get(&id).cloned()),
+            created_at: r.created_at,
+            expires_at: r.expires_at,
+        })
+        .collect())
+}
+
+/// The crew's waiting (unexpired) invites, for its members, newest first.
+pub async fn sent_invites(
+    state: &AppState,
+    me: i64,
+    crew_id: i64,
+) -> ApiResult<Vec<SentInviteView>> {
+    let now = state.clock.now();
+    let mut conn = state.db.acquire().await?;
+    my_membership(&mut conn, me, crew_id).await?;
+    let rows = sqlx::query!(
+        r#"SELECT id AS "id!: i64", account_id, inviter_id, created_at, expires_at
+           FROM crew_invites WHERE crew_id = ? AND expires_at > ?
+           ORDER BY created_at DESC, id DESC"#,
+        crew_id,
+        now
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut ids: Vec<i64> = rows.iter().map(|r| r.account_id).collect();
+    ids.extend(rows.iter().filter_map(|r| r.inviter_id));
+    let players = super::players(&mut conn, &ids).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            Some(SentInviteView {
+                invite_id: r.id.to_string(),
+                player: players.get(&r.account_id)?.clone(),
+                from: r.inviter_id.and_then(|id| players.get(&id).cloned()),
+                created_at: r.created_at,
+                expires_at: r.expires_at,
+            })
+        })
+        .collect())
+}
+
+/// The invite `invite_id` addressed to `me`, unexpired and not from a player blocked either
+/// way: (crew id, inviter).
+async fn my_invite(
+    conn: &mut SqliteConnection,
+    me: i64,
+    invite_id: i64,
+    now: i64,
+) -> ApiResult<(i64, Option<i64>)> {
+    let r = sqlx::query!(
+        r#"SELECT crew_id, inviter_id FROM crew_invites
+           WHERE id = ? AND account_id = ? AND expires_at > ?"#,
+        invite_id,
+        me,
+        now
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(invite_not_found)?;
+    if let Some(from) = r.inviter_id {
+        if super::is_blocked(conn, me, from).await? {
+            return Err(invite_not_found());
+        }
+    }
+    Ok((r.crew_id, r.inviter_id))
+}
+
+/// Accepts an invite: joins the crew with the join-by-code checks (`already_in_crew`: leave
+/// your crew first; `crew_full`). Accepting an invite to the crew you are already in just
+/// clears it.
+pub async fn accept_invite(state: &AppState, me: i64, invite_id: i64) -> ApiResult<CrewView> {
+    let now = state.clock.now();
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let (crew_id, _) = my_invite(&mut tx, me, invite_id, now).await?;
+    if membership(&mut tx, me)
+        .await?
+        .is_some_and(|m| m.crew_id == crew_id)
+    {
+        sqlx::query!("DELETE FROM crew_invites WHERE id = ?", invite_id)
+            .execute(&mut *tx)
+            .await?;
+        let v = view_or_404(&mut tx, state, crew_id, me).await?;
+        tx.commit().await?;
+        return Ok(v);
+    }
+    let v = join_tx(&mut tx, state, me, crew_id, now).await?;
+    tx.commit().await?;
+    invalidate_season(state);
+    tracing::info!(account_id = me, crew_id, invite_id, "crew invite accepted");
+    Ok(v)
+}
+
+/// Declines (deletes) an invite addressed to `me`.
+pub async fn decline_invite(state: &AppState, me: i64, invite_id: i64) -> ApiResult<()> {
+    let done = sqlx::query!(
+        "DELETE FROM crew_invites WHERE id = ? AND account_id = ?",
+        invite_id,
+        me
+    )
+    .execute(&state.db)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(invite_not_found());
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------------------------------
@@ -949,6 +1329,80 @@ pub async fn post_invite_code(
     Ok(Json(
         rotate_code(&state, auth.account_id, crew_path(&id)?).await?,
     ))
+}
+
+/// `GET /api/v1/crews/invites` answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InviteList {
+    pub invites: Vec<CrewInviteView>,
+}
+
+/// `GET /api/v1/crews/{id}/invites` answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentInviteList {
+    pub invites: Vec<SentInviteView>,
+}
+
+fn invite_path(id: &str) -> ApiResult<i64> {
+    path_id(
+        id,
+        "invite_not_found",
+        "That crew invite is no longer valid.",
+    )
+}
+
+/// `GET /api/v1/crews/invites`: the invites waiting for you.
+pub async fn get_invites(
+    State(state): State<AppState>,
+    auth: Authed,
+) -> ApiResult<Json<InviteList>> {
+    Ok(Json(InviteList {
+        invites: invites_for(&state, auth.account_id).await?,
+    }))
+}
+
+/// `POST /api/v1/crews/{id}/invites` `{"account_id"}`: invite a friend (201; 200 renewed).
+pub async fn post_crew_invite(
+    State(state): State<AppState>,
+    auth: Authed,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<MemberBody>,
+) -> ApiResult<(StatusCode, Json<SentInviteView>)> {
+    let target = body_account_id(&body.account_id)?;
+    let (status, v) = invite(&state, auth.account_id, crew_path(&id)?, target).await?;
+    Ok((status, Json(v)))
+}
+
+/// `GET /api/v1/crews/{id}/invites`: the crew's waiting invites (members).
+pub async fn get_crew_invites(
+    State(state): State<AppState>,
+    auth: Authed,
+    Path(id): Path<String>,
+) -> ApiResult<Json<SentInviteList>> {
+    Ok(Json(SentInviteList {
+        invites: sent_invites(&state, auth.account_id, crew_path(&id)?).await?,
+    }))
+}
+
+/// `POST /api/v1/crews/invites/{invite_id}/accept`: join the crew.
+pub async fn post_accept_invite(
+    State(state): State<AppState>,
+    auth: Authed,
+    Path(id): Path<String>,
+) -> ApiResult<Json<CrewView>> {
+    Ok(Json(
+        accept_invite(&state, auth.account_id, invite_path(&id)?).await?,
+    ))
+}
+
+/// `POST /api/v1/crews/invites/{invite_id}/decline`: 204.
+pub async fn post_decline_invite(
+    State(state): State<AppState>,
+    auth: Authed,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    decline_invite(&state, auth.account_id, invite_path(&id)?).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

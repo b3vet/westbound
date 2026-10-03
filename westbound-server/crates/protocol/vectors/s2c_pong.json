@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "direction": "server_to_client",
   "type": "pong",
   "type_id": 65,

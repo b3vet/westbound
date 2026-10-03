@@ -54,6 +54,9 @@ pub struct SessionHandle {
     pub account_id: AccountId,
     /// `accounts.token_version` of the token the session signed in with.
     pub token_version: i64,
+    /// The protocol version of the session's `Hello` (the lobby sends protocol 2 kinds,
+    /// room and crew invites, only from `protocol::INVITES_PROTOCOL_VERSION` up).
+    pub protocol_version: u16,
     outbound: mpsc::Sender<Message>,
     kick: Arc<watch::Sender<Option<Kick>>>,
 }
@@ -72,11 +75,23 @@ impl SessionHandle {
                 session_id,
                 account_id,
                 token_version,
+                protocol_version: protocol::PROTOCOL_VERSION,
                 outbound,
                 kick: Arc::new(kick),
             },
             kick_rx,
         )
+    }
+
+    /// The same handle for a session that said `version` in its `Hello`.
+    pub fn with_protocol(mut self, version: u16) -> Self {
+        self.protocol_version = version;
+        self
+    }
+
+    /// The session's client decodes the invite events (protocol 2).
+    pub fn takes_invites(&self) -> bool {
+        self.protocol_version >= protocol::INVITES_PROTOCOL_VERSION
     }
 
     /// Queues one binary frame without waiting. A full queue kicks the client

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT crew_id, inviter_id FROM crew_invites\n           WHERE id = ? AND account_id = ? AND expires_at > ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "crew_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_invites",
+            "name": "crew_id"
+          }
+        }
+      },
+      {
+        "name": "inviter_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_invites",
+            "name": "inviter_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "521aa62d03d2ff23463cca31cd9ed98322c2d22401794506944068224acb85bf"
+}

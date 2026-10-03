@@ -3,7 +3,8 @@ extends Control
 ## The online hub's room flows: PRIVATE ROOM (host options), JOIN BY CODE, the ROOM
 ## BROWSER and the joining status (QUICK JOIN and every join); N9.3: the PARTY (create,
 ## join by code, members, kick, invite friends, share the link, leave), a PARTY INVITE
-## (accept, decline) and invite links (a room or a party code). Spec:
+## (accept, decline) and invite links (a room or a party code); protocol 2: a ROOM INVITE
+## (a friend's or crewmate's room: JOIN by its code, DECLINE). Spec:
 ## WESTBOUND_MULTIPLAYER_HANDOFF.md → Rooms, parties and matchmaking (Private rooms: "The
 ## creator gets a code and an invite link ... can change density or time mode"; Time of
 ## day: "the host can pick the cycle, a fixed time of day, or permanent night"; Public
@@ -21,7 +22,7 @@ signal closed()
 ## N9.3: INVITE FRIENDS (the hub opens the friends list).
 signal friends_requested()
 
-enum View { STATUS, CREATE, CODE, BROWSER, PARTY, INVITE }
+enum View { STATUS, CREATE, CODE, BROWSER, PARTY, INVITE, ROOM_INVITE }
 
 const TEXT_QUICK := "QUICK JOIN"
 const TEXT_PRIVATE := "PRIVATE ROOM"
@@ -88,6 +89,12 @@ const TEXT_ACCEPT := "ACCEPT"
 const TEXT_DECLINE := "DECLINE"
 const TEXT_LINK := "INVITE LINK"
 const TEXT_LINK_NONE := "No room or party with that code."
+# Protocol 2: a room invite.
+const TEXT_ROOM_INVITE := "ROOM INVITE"
+const TEXT_ROOM_INVITE_FROM := "%s INVITES YOU TO THEIR ROOM"
+const TEXT_ROOM_INVITE_NOTE := "%s ROOM %s  ·  %d/%d PLAYERS"
+const TEXT_ROOM_PRIVATE := "PRIVATE"
+const TEXT_ROOM_PUBLIC := "PUBLIC"
 ## Browser rows shown at most (the list is fullest first).
 const BROWSER_ROWS := 4
 ## Party member rows: two columns.
@@ -110,6 +117,8 @@ var request_title: String = TEXT_QUICK
 var code_for_party: bool = false
 ## The invite the INVITE view shows (its code).
 var invite_code: String = ""
+## Protocol 2: the room invite the ROOM_INVITE view shows (its room code).
+var room_invite_code: String = ""
 ## An invite link being followed: tried as a room code, then as a party code.
 var link_code: String = ""
 ## Web glue for copy / share (tests swap in a mock).
@@ -302,6 +311,46 @@ func open_invite(code: String = "") -> void:
 	_open(View.INVITE, TEXT_INVITE)
 
 
+## Protocol 2: the ROOM_INVITE view for the newest room invite (or `code`'s).
+func open_room_invite(code: String = "") -> void:
+	var inv := _room_invite(code)
+	if inv == null:
+		return
+	inv.hub_card = true
+	room_invite_code = inv.code
+	_open(View.ROOM_INVITE, TEXT_ROOM_INVITE)
+
+
+## JOIN on a room invite: the join by its code (refusals such as a full room show on the
+## joining status, as for any join by code).
+func accept_room_invite() -> void:
+	join_room_invite(room_invite_code)
+
+
+## Joins the room an invite is for (also the title toast's JOIN, through the hub).
+func join_room_invite(code: String) -> void:
+	if code.is_empty() or rooms == null:
+		return
+	room_invite_code = ""
+	rooms.session.decline_room_invite(code)
+	_start(TEXT_ROOM_INVITE, TEXT_JOINING % code, func() -> void: rooms.join_code(code))
+
+
+## DECLINE: forgotten here (declining needs no message).
+func decline_room_invite() -> void:
+	if not room_invite_code.is_empty() and rooms != null:
+		rooms.session.decline_room_invite(room_invite_code)
+	room_invite_code = ""
+	close()
+
+
+func _room_invite(code: String) -> NetRoomInvites.Invite:
+	if rooms == null or rooms.session == null:
+		return null
+	var list := rooms.session.room_invites
+	return list.newest() if code.is_empty() else list.find(code)
+
+
 func create_party() -> void:
 	status.text = TEXT_CREATING_PARTY
 	status.set_ink(ScreenText.Ink.ACCENT)
@@ -423,6 +472,9 @@ func _back() -> void:
 	if view == View.INVITE:
 		decline_invite()
 		return
+	if view == View.ROOM_INVITE:
+		decline_room_invite()
+		return
 	close()
 
 
@@ -465,6 +517,8 @@ func _action() -> void:
 				create_party()
 		View.INVITE:
 			accept_invite()
+		View.ROOM_INVITE:
+			accept_room_invite()
 
 
 static func status_for(heading: String) -> String:
@@ -543,7 +597,7 @@ func _connect(s: NetRoomSession, on: bool) -> void:
 		return
 	var pairs: Array = [[s.joined, _on_joined], [s.join_failed, _on_failed], [s.room_list, _on_list],
 		[s.state_changed, _on_state], [s.party_changed, _on_party], [s.lobby_error, _on_lobby_error],
-		[s.party_left, _on_party_left]]
+		[s.party_left, _on_party_left], [s.room_invites_changed, _on_room_invites]]
 	for p: Array in pairs:
 		var sig: Signal = p[0]
 		var c: Callable = p[1]
@@ -608,6 +662,13 @@ func _on_party() -> void:
 		return
 	if view == View.PARTY:
 		_refresh()
+
+
+## A room invite on show expired: the panel closes.
+func _on_room_invites() -> void:
+	if view == View.ROOM_INVITE and _room_invite(room_invite_code) == null:
+		room_invite_code = ""
+		close()
 
 
 func _on_party_left(_reason: String, message: String) -> void:
@@ -679,10 +740,18 @@ func _refresh() -> void:
 			status.set_ink(ScreenText.Ink.GOLD)
 			note.text = TEXT_INVITE_NOTE
 			action_button.text = TEXT_ACCEPT
+		View.ROOM_INVITE:
+			var rinv := _room_invite(room_invite_code)
+			if rinv != null:
+				status.text = TEXT_ROOM_INVITE_FROM % rinv.from_name
+				note.text = TEXT_ROOM_INVITE_NOTE % [TEXT_ROOM_PUBLIC if rinv.is_public() else TEXT_ROOM_PRIVATE,
+					rinv.code, rinv.players, rinv.max_players]
+			status.set_ink(ScreenText.Ink.GOLD)
+			action_button.text = TEXT_JOIN
 	var failed := view == View.STATUS and status.ink == ScreenText.Ink.HOT
 	action_button.visible = (view != View.STATUS or failed) and not (view == View.PARTY and in_party)
 	back_button.text = TEXT_CANCEL if view == View.STATUS and not failed else (
-			TEXT_DECLINE if view == View.INVITE else TEXT_BACK)
+			TEXT_DECLINE if view == View.INVITE or view == View.ROOM_INVITE else TEXT_BACK)
 	_fill_rows()
 	_fill_members()
 	_layout()

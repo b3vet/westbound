@@ -7,15 +7,19 @@ extends Control
 ## ... The creator is host: they can kick players and change density or time mode"),
 ## Quick chat ("A small wheel of preset phrases ... Plus a horn and a few emotes shown on
 ## the nametag. Rate-limited, and muted per player from the room menu"), Client changes
-## (Room menu: invite, crew total, mute players, host settings, leave).
-## docs/ROOMS_CLIENT.md → Room HUD, Host settings (N9.3). WP N5.2, N9.3.
+## (Room menu: invite, crew total, mute players, host settings, leave); the owner's request
+## "there is no way to invite my friends or crew into a private room in online mode".
+## docs/ROOMS_CLIENT.md → Room HUD, Host settings (N9.3), Room invites. WP N5.2, N9.3.
 ##
 ## Three tabs on one panel: CHAT (a 3 x 3 grid: the six phrases, HONK, two emotes),
 ## PLAYERS (a button per player, a tap mutes / unmutes them; LEAVE ROOM; N6.2: the session
 ## crew total beside it, spec: "shown in the room menu") and ROOM (INVITE: the link with
 ## COPY LINK and SHARE; the host of a private room: TRAFFIC and TIME OF DAY, sent as
 ## `room_host_command`s, and REMOVE A PLAYER: PLAYERS then takes a tap, and a second tap
-## within `confirm_tap_s`, to kick). Every button is a ScreenButton at least
+## within `confirm_tap_s`, to kick) and INVITE (protocol 2: the link row again, then the
+## online friends and online crew members not in the room, deduplicated; a tap sends
+## `room_invite`, the player shows INVITED for `room_invite_resend_s`, and the server's
+## refusal shows in hot text). Every button is a ScreenButton at least
 ## touch_target_px tall: emulated mouse events, never a raw touch index. Chat, mute and
 ## leave are intents RoomHud forwards; host commands go to the session. Built once; hidden
 ## = `visible = false`.
@@ -25,7 +29,7 @@ signal mute_pressed(player_id: int)
 signal leave_pressed()
 signal closed()
 
-enum Tab { CHAT, PLAYERS, ROOM }
+enum Tab { CHAT, PLAYERS, ROOM, INVITE }
 
 const TEXT_CHAT := "CHAT"
 const TEXT_PLAYERS := "PLAYERS"
@@ -57,6 +61,16 @@ const TEXT_PUBLIC_RULES := "PUBLIC ROOM  ·  NORMAL TRAFFIC ON THE WORLD CLOCK"
 const TEXT_KICK_MODE := "REMOVE A PLAYER"
 const TEXT_TAP_KICK := "TAP TO REMOVE"
 const TEXT_TAP_AGAIN := "TAP AGAIN TO REMOVE"
+# Protocol 2: the INVITE tab.
+const TEXT_INVITE_TAB := "INVITE"
+const TEXT_INVITE_HINT := "ONLINE FRIENDS AND CREW  ·  ANYONE ELSE: THE LINK"
+const TEXT_INVITE_NONE := "NO FRIENDS OR CREW ONLINE  ·  SHARE THE LINK"
+const TEXT_INVITE_OFFLINE := "SIGN IN TO INVITE FRIENDS  ·  SHARE THE LINK"
+const TEXT_INVITE_SENT := "INVITE SENT TO %s"
+const TEXT_TAP_INVITE := "TAP TO INVITE"
+const TEXT_INVITED := "INVITED"
+const TEXT_FRIEND := "FRIEND"
+const TEXT_CREWMATE := "CREW"
 const DENSITY_LABELS: Array[String] = ["LIGHT", "NORMAL", "RUSH HOUR"]
 const TIME_LABELS: Array[String] = ["CYCLE", "MORNING", "GOLDEN", "NIGHT"]
 const TIME_CYCLE := 0
@@ -82,6 +96,8 @@ var invite_url: String = ""
 var bridge := NetJsBridge.new()
 ## PLAYERS removes instead of muting (the host's REMOVE A PLAYER).
 var kick_mode: bool = false
+## Protocol 2: who INVITE lists (null: NetSocialClient.of(NetSession.current)).
+var social: NetSocialClient
 
 var panel: ScreenPanel
 var title: ScreenText
@@ -89,6 +105,7 @@ var sub: ScreenText
 var chat_tab: ScreenButton
 var players_tab: ScreenButton
 var room_tab: ScreenButton
+var invite_tab: ScreenButton
 var close_button: ScreenButton
 var leave_button: ScreenButton
 ## N6.2: the session crew total (PLAYERS, beside LEAVE ROOM).
@@ -108,6 +125,12 @@ var time_label: ScreenText
 var density_buttons: Array[ScreenButton] = []
 var time_buttons: Array[ScreenButton] = []
 var kick_button: ScreenButton
+## Protocol 2: the INVITE tab.
+var invite_note: ScreenText
+var invite_buttons: Array[ScreenButton] = []
+## Account id and full name per invite button ("" = unused).
+var invite_ids: Array[String] = []
+var invite_names: Array[String] = []
 
 var _items: Array[Dictionary] = []
 var _version: int = -1
@@ -115,6 +138,13 @@ var _kick_armed: int = -1
 var _kick_until_us: int = 0
 var _title_full: String = ""
 var _sub_full: String = ""
+## Protocol 2: account id → when its INVITED state ends (usec).
+var _invited_until: Dictionary = {}
+var _invites_dirty: bool = true
+var _last_invited: String = ""
+var _bound_social: NetSocialClient
+## INVITE is showing since its list was loaded (a new visit loads it again).
+var _invite_loaded: bool = false
 
 
 func _init() -> void:
@@ -132,6 +162,7 @@ func _init() -> void:
 	chat_tab = _button(TEXT_CHAT, ScreenButton.Kind.OPTION, func() -> void: show_tab(Tab.CHAT))
 	players_tab = _button(TEXT_PLAYERS, ScreenButton.Kind.OPTION, func() -> void: show_tab(Tab.PLAYERS))
 	room_tab = _button(TEXT_ROOM_TAB, ScreenButton.Kind.OPTION, func() -> void: show_tab(Tab.ROOM))
+	invite_tab = _button(TEXT_INVITE_TAB, ScreenButton.Kind.OPTION, func() -> void: show_tab(Tab.INVITE))
 	close_button = _button(TEXT_CLOSE, ScreenButton.Kind.NORMAL, close)
 	for i in NetRoomChat.PHRASE_TEXT.size():
 		_items.append(NetRoomChat.phrase_item(i))
@@ -173,6 +204,17 @@ func _init() -> void:
 		b.align = HORIZONTAL_ALIGNMENT_CENTER
 		time_buttons.append(b)
 	kick_button = _button(TEXT_KICK_MODE, ScreenButton.Kind.DANGER, start_kick)
+	# Protocol 2: INVITE.
+	invite_note = _label("", 16, ScreenText.Ink.MUTED)
+	invite_note.name = "InviteNote"
+	for i in INVITE_SLOTS:
+		var k := i
+		var b := _button("", ScreenButton.Kind.NORMAL, func() -> void: invite_player(k))
+		b.name = "Invitee%d" % i
+		b.align = HORIZONTAL_ALIGNMENT_LEFT
+		invite_buttons.append(b)
+		invite_ids.append("")
+		invite_names.append("")
 
 
 func _button(label: String, kind: ScreenButton.Kind, action: Callable) -> ScreenButton:
@@ -193,7 +235,11 @@ func setup(s: HudStyle, hud_tuning: HudTuning, net_tuning: NetTuning, room_sessi
 	style = s
 	hud = hud_tuning
 	net = net_tuning
+	if session != null and session.room_invite_failed.is_connected(_on_invite_failed):
+		session.room_invite_failed.disconnect(_on_invite_failed)
 	session = room_session
+	if session != null:
+		session.room_invite_failed.connect(_on_invite_failed)
 	panel.fill_alpha = 1.0 / maxf(s.panel_fill.a, 0.01)   # opaque: nothing reads through it
 	panel.setup(s)
 	for c in panel.get_children():
@@ -213,6 +259,7 @@ func open(which: Tab = Tab.CHAT) -> void:
 
 
 func close() -> void:
+	_invite_loaded = false
 	kick_mode = false
 	_kick_armed = -1
 	if visible:
@@ -225,6 +272,7 @@ func is_open() -> bool:
 
 
 func show_tab(which: Tab) -> void:
+	var entering_invite := which == Tab.INVITE and not _invite_loaded
 	if which != Tab.PLAYERS and kick_mode:
 		kick_mode = false
 		_kick_armed = -1
@@ -234,6 +282,10 @@ func show_tab(which: Tab) -> void:
 	chat_tab.selected = which == Tab.CHAT
 	players_tab.selected = which == Tab.PLAYERS
 	room_tab.selected = which == Tab.ROOM
+	invite_tab.selected = which == Tab.INVITE
+	_invite_loaded = which == Tab.INVITE
+	if entering_invite:
+		_load_invitees()
 	for b in chat_buttons:
 		b.visible = which == Tab.CHAT
 	for i in player_buttons.size():
@@ -241,10 +293,14 @@ func show_tab(which: Tab) -> void:
 	leave_button.visible = which == Tab.PLAYERS
 	crew_total.visible = which == Tab.PLAYERS
 	var room := which == Tab.ROOM
+	var linked := room or which == Tab.INVITE
 	var host := room and _can_host()
-	for c: CanvasItem in [link_text, link_note, copy_button, host_note]:
-		c.visible = room
-	share_button.visible = room and SocialUi.can_share(bridge)
+	for c: CanvasItem in [link_text, link_note, copy_button]:
+		c.visible = linked
+	share_button.visible = linked and SocialUi.can_share(bridge)
+	invite_note.visible = which == Tab.INVITE
+	for i in invite_buttons.size():
+		invite_buttons[i].visible = which == Tab.INVITE and not invite_ids[i].is_empty()
 	for c: CanvasItem in [density_label, time_label, kick_button]:
 		c.visible = host
 	for b: ScreenButton in density_buttons + time_buttons:
@@ -266,6 +322,8 @@ func refresh() -> void:
 	if _kick_armed >= 0 and Time.get_ticks_usec() >= _kick_until_us:
 		_kick_armed = -1
 		_version = -1
+	if tab == Tab.INVITE:
+		_refresh_invites()
 	if r.version == _version:
 		return
 	_version = r.version
@@ -299,6 +357,7 @@ func refresh() -> void:
 		b.disabled = m.player_id == r.you
 		k += 1
 	_refresh_room()
+	_invites_dirty = true
 	show_tab(tab)
 
 
@@ -470,7 +529,7 @@ func _layout() -> void:
 	title.size = title.get_combined_minimum_size()
 	sub.position = Vector2(pad, pad + title.size.y)
 	sub.size = sub.get_combined_minimum_size()
-	var tabs: Array[ScreenButton] = [chat_tab, players_tab, room_tab]
+	var tabs: Array[ScreenButton] = [chat_tab, players_tab, room_tab, invite_tab]
 	var tw := (inner - g * float(tabs.size() - 1)) / float(tabs.size())
 	for i in tabs.size():
 		tabs[i].size = Vector2(tw, th)
@@ -479,6 +538,8 @@ func _layout() -> void:
 	var h := top
 	if tab == Tab.ROOM:
 		h = _layout_room(pad, top, inner, th, g)
+	elif tab == Tab.INVITE:
+		h = _layout_invite(pad, top, inner, th, g)
 	else:
 		var cw := (inner - g * float(cols - 1)) / float(cols)
 		var list: Array[ScreenButton] = chat_buttons if tab == Tab.CHAT else player_buttons
@@ -541,6 +602,8 @@ func _layout_room(pad: float, top: float, inner: float, th: float, g: float) -> 
 	link_note.size = ns
 	link_note.position = Vector2(nx, y + (th - ns.y) * 0.5)
 	y += th + g
+	if tab == Tab.INVITE:
+		return y
 	if host_note.visible:
 		host_note.size = host_note.get_combined_minimum_size()
 		host_note.position = Vector2(pad, y)
@@ -560,5 +623,157 @@ func _layout_room(pad: float, top: float, inner: float, th: float, g: float) -> 
 	return y
 
 
+# ---------------------------------------------------------------- INVITE (protocol 2)
+
+func _social() -> NetSocialClient:
+	if social != null:
+		return social
+	return NetSocialClient.of(NetSession.current)
+
+
+## Opening INVITE: the friends (with presence) and the crew (members with presence) again.
+func _load_invitees() -> void:
+	var c := _social()
+	_bind_social(c)
+	_invites_dirty = true
+	_set_invite_note("", ScreenText.Ink.MUTED, false)
+	if c == null or not c.available():
+		return
+	c.refresh_friends()
+	c.refresh_crew()
+
+
+func _bind_social(c: NetSocialClient) -> void:
+	if c == _bound_social:
+		return
+	if _bound_social != null:
+		for sig: Signal in [_bound_social.friends_changed, _bound_social.crew_changed]:
+			if sig.is_connected(_mark_invites):
+				sig.disconnect(_mark_invites)
+		if _bound_social.presence_changed.is_connected(_mark_presence):
+			_bound_social.presence_changed.disconnect(_mark_presence)
+	_bound_social = c
+	if c != null:
+		c.friends_changed.connect(_mark_invites)
+		c.crew_changed.connect(_mark_invites)
+		c.presence_changed.connect(_mark_presence)
+
+
+func _mark_invites() -> void:
+	_invites_dirty = true
+
+
+func _mark_presence(_account_id: String) -> void:
+	_invites_dirty = true
+
+
+## The INVITE list from the social client: online friends and crewmates not in the room.
+func _refresh_invites() -> void:
+	var now := Time.get_ticks_usec()
+	for id: String in _invited_until.keys():
+		if now >= int(_invited_until[id]):
+			_invited_until.erase(id)
+			_invites_dirty = true
+	if not _invites_dirty:
+		return
+	_invites_dirty = false
+	var c := _social()
+	_bind_social(c)
+	var list: Array[NetSocialPlayer] = []
+	if c != null and c.available():
+		var exclude := {}
+		if session != null:
+			for m in session.room.members:
+				exclude[m.account_id] = true
+		list = c.room_invitees(exclude)
+	for i in invite_buttons.size():
+		var b := invite_buttons[i]
+		if i >= list.size():
+			invite_ids[i] = ""
+			invite_names[i] = ""
+			b.visible = false
+			continue
+		var p := list[i]
+		invite_ids[i] = p.account_id
+		invite_names[i] = p.full_name
+		var invited := _invited_until.has(p.account_id)
+		var friend := c.friend(p.account_id) != null
+		b.text = p.full_name
+		b.note = "%s  ·  %s" % [TEXT_FRIEND if friend else TEXT_CREWMATE, TEXT_INVITED if invited else TEXT_TAP_INVITE]
+		b.selected = invited
+		b.disabled = invited
+		b.visible = tab == Tab.INVITE
+	if invite_note.get_meta(&"result", false):
+		pass
+	elif c == null or not c.available():
+		_set_invite_note(TEXT_INVITE_OFFLINE, ScreenText.Ink.MUTED, false)
+	elif list.is_empty():
+		_set_invite_note(TEXT_INVITE_NONE, ScreenText.Ink.MUTED, false)
+	else:
+		_set_invite_note(TEXT_INVITE_HINT, ScreenText.Ink.MUTED, false)
+	_layout()
+
+
+func _set_invite_note(t: String, ink: ScreenText.Ink, result: bool) -> void:
+	invite_note.text = t
+	invite_note.set_ink(ink)
+	invite_note.set_meta(&"result", result)
+
+
+## A tap on an invitee: `room_invite`, INVITED for `room_invite_resend_s`.
+func invite_player(k: int) -> void:
+	if k < 0 or k >= invite_ids.size() or invite_ids[k].is_empty() or session == null:
+		return
+	var id := invite_ids[k]
+	if _invited_until.has(id):
+		return
+	var name_text := invite_names[k]
+	if not session.room_invite(id):
+		return
+	_last_invited = id
+	_invited_until[id] = Time.get_ticks_usec() + roundi(net.room_invite_resend_s * USEC_PER_S)
+	_set_invite_note(TEXT_INVITE_SENT % name_text, ScreenText.Ink.ACCENT, true)
+	_invites_dirty = true
+	_refresh_invites()
+
+
+## The server refused the last invite: its reason in hot text; the player can be tried
+## again.
+func _on_invite_failed(_code: String, message: String) -> void:
+	_invited_until.erase(_last_invited)
+	_set_invite_note(message.to_upper(), ScreenText.Ink.HOT, true)
+	_invites_dirty = true
+	if visible and tab == Tab.INVITE:
+		_refresh_invites()
+
+
+## INVITE from `top`: the link row (as ROOM), the note, then the invitees in two columns.
+func _layout_invite(pad: float, top: float, inner: float, th: float, g: float) -> float:
+	var y := _layout_room(pad, top, inner, th, g)
+	SocialUi.fit_text(invite_note, invite_note.text, inner)
+	var ns := invite_note.get_combined_minimum_size()
+	invite_note.size = ns
+	invite_note.position = Vector2(pad, y)
+	y += ns.y + g
+	var cw := (inner - g) * 0.5
+	var k := 0
+	for b in invite_buttons:
+		if not b.visible:
+			continue
+		@warning_ignore("integer_division")
+		var row := k / PLAYER_COLS
+		b.position = Vector2(pad + float(k % PLAYER_COLS) * (cw + g), y + float(row) * (th + g))
+		b.size = Vector2(cw, th)
+		var i := invite_buttons.find(b)
+		SocialUi.fit_button(b, invite_names[i], hud)
+		k += 1
+	@warning_ignore("integer_division")
+	var rows := (k + PLAYER_COLS - 1) / PLAYER_COLS
+	return y + float(rows) * (th + g)
+
+
 ## COPY LINK and SHARE: at least this share of the panel's inner width.
 const TAB_SHARE := 0.15   # lint: allow-number layout proportion
+## Protocol 2: invitee buttons on INVITE (two columns; more online players than this are
+## left out, friends first).
+const INVITE_SLOTS := 6

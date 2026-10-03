@@ -414,6 +414,23 @@ const PATH := "res://data/tuning/net.tres"
 ## A kick in the room menu or the party panel waits for a second tap this long.
 @export var confirm_tap_s: float = 3.0   # not in spec
 
+@export_group("Invites (protocol 2)")
+## Room invites (docs/ROOMS_CLIENT.md → Room invites): a refusal arriving this long after a
+## `room_invite` is that invite's answer (shown on the room menu's INVITE tab).
+@export var room_invite_answer_s: float = 5.0   # not in spec
+## Room invites kept at once (the newest replaces the oldest).
+@export var room_invites_max: int = 4   # not in spec
+## The room menu shows a player INVITED (and won't send again) this long: the server's
+## `social.room_invite_ttl_secs`, inside which it refuses a repeat anyway.
+@export var room_invite_resend_s: float = 120.0   # not in spec
+## The invite toast over the title (with JOIN) and a single-player run (a note only).
+@export var invite_toast_s: float = 8.0   # not in spec
+@export var invite_toast_width_px: float = 560.0   # not in spec
+## The lobby connection opens on the title too (signed in), so room and crew invites reach
+## a player who has not opened the online hub; a failed one is tried again this often.
+@export var lobby_on_title: bool = true   # not in spec
+@export var lobby_title_retry_s: float = 15.0   # not in spec
+
 @export_group("Sign-in and cloud save (N11)")
 ## N11 (docs/NET_CLIENT.md → Sign in with Apple / Google): the provider config
 ## (`GET /auth/providers`) is fetched again after this long.

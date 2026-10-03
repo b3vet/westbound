@@ -10,7 +10,8 @@ use futures_util::{SinkExt, StreamExt};
 use protocol::handshake::DETAIL_BANNED;
 use protocol::{
     decode_server_frame, encode_frame, AccessToken, AccountId, ClientMsg, ErrorCode, Hello,
-    LobbyCommand, MapHash, Ping, PlayerState, ServerMsg, Welcome, MAX_FRAME_LEN, PROTOCOL_VERSION,
+    LobbyCommand, MapHash, Ping, PlayerState, ServerMsg, Welcome, MAX_FRAME_LEN,
+    MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
 };
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::Message;
@@ -229,7 +230,7 @@ async fn wrong_protocol_versions() {
     // An older client must update; a newer one is ahead of this deploy.
     refused(
         &s,
-        hello(PROTOCOL_VERSION - 1, BUILD, MAP, &token),
+        hello(MIN_SUPPORTED_PROTOCOL_VERSION - 1, BUILD, MAP, &token),
         ErrorCode::UpdateRequired,
     )
     .await;
@@ -243,7 +244,10 @@ async fn wrong_protocol_versions() {
     // frozen prefix (peek_hello_version).
     for (version, code) in [
         (PROTOCOL_VERSION + 1, ErrorCode::ServerOutdated),
-        (PROTOCOL_VERSION - 1, ErrorCode::UpdateRequired),
+        (
+            MIN_SUPPORTED_PROTOCOL_VERSION - 1,
+            ErrorCode::UpdateRequired,
+        ),
     ] {
         let mut frame = encode_frame(&[hello(version, BUILD, MAP, &token)])
             .unwrap()

@@ -37,6 +37,7 @@ use crate::rooms::Rooms;
 use crate::sessions::Sessions;
 use crate::shutdown::Drain;
 use crate::social::parties::{Parties, PartyParams};
+use crate::social::room_invites::{RoomInviteParams, RoomInvites};
 use crate::tick::{MonotonicTickClock, TickClock};
 use crate::{accounts, leaderboards, profile, runs, ws};
 
@@ -78,6 +79,8 @@ pub struct AppState {
     pub rooms: Arc<Rooms>,
     /// Parties (N9.3): in memory; the gateway's party commands and the party moves.
     pub parties: Arc<Parties>,
+    /// Room invites (protocol 2): the per-sender limit and the invites still showing.
+    pub room_invites: Arc<RoomInvites>,
     /// N10.2: the planned-restart drain (notice, handover, close 1012).
     pub drain: Arc<Drain>,
     /// N10.2: background writes that must finish before the database closes (the rooms'
@@ -144,6 +147,7 @@ impl AppState {
             PartyParams::from_config(&config),
             Arc::new(move |c| room_codes.find_code(c).is_some()),
         ));
+        let room_invites = Arc::new(RoomInvites::new(RoomInviteParams::from_config(&config)));
         let boards = Arc::new(Leaderboards::new(
             db.clone(),
             config.leaderboards.clone(),
@@ -189,6 +193,7 @@ impl AppState {
             map,
             replay_jobs: Arc::new(Notify::new()),
             parties,
+            room_invites,
             rooms,
             drain: Arc::new(Drain::default()),
             background,
@@ -379,6 +384,21 @@ fn social_router(state: &AppState) -> Router<AppState> {
         .route("/api/v1/crews", social(post(crews::post_crew)))
         .route("/api/v1/crews/mine", get(crews::get_mine))
         .route("/api/v1/crews/join", social(post(crews::post_join)))
+        // Crew invites: the invitee's list and answers; a member's invite and the crew's
+        // waiting invites.
+        .route("/api/v1/crews/invites", get(crews::get_invites))
+        .route(
+            "/api/v1/crews/invites/{id}/accept",
+            social(post(crews::post_accept_invite)),
+        )
+        .route(
+            "/api/v1/crews/invites/{id}/decline",
+            post(crews::post_decline_invite),
+        )
+        .route(
+            "/api/v1/crews/{id}/invites",
+            social(post(crews::post_crew_invite)).get(crews::get_crew_invites),
+        )
         .route(
             "/api/v1/crews/{id}",
             get(crews::get_crew).delete(crews::delete_crew),

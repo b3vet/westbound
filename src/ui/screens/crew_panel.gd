@@ -15,6 +15,14 @@ extends Control
 ## roles, paged; MORE on a member opens their sheet with only the actions your role allows
 ## (NetCrew.allowed_actions: MAKE OFFICER / MAKE MEMBER / MAKE OWNER / KICK, each
 ## confirmed) plus REPORT and BACK.
+##
+## Crew invites (the owner's request "there is no way to invite my friends to my crew";
+## docs/NET_CLIENT.md → Crew invites): in a crew, INVITE FRIENDS (any member: every member
+## shares the code already) turns the right column into your friends who are not in the
+## crew, each with INVITE (INVITED once the crew's invite waits; MEMBERS goes back).
+## Without a crew, the invites waiting for you list under JOIN A CREW: "<crew> [TAG]", who
+## sent it, JOIN and DECLINE. In a crew they show as a gold line (leave your crew to take
+## one).
 
 signal report_requested(player: NetSocialPlayer, context: Dictionary)
 
@@ -82,6 +90,28 @@ const A_DISBAND := &"disband"
 const A_MORE := &"more"
 const A_REPORT := &"report"
 const A_BACK := &"back"
+const A_INVITE := &"invite"
+const A_ACCEPT_INVITE := &"accept_invite"
+const A_DECLINE_INVITE := &"decline_invite"
+# Crew invites.
+const TEXT_INVITE_FRIENDS := "INVITE FRIENDS"
+const TEXT_SHOW_MEMBERS := "MEMBERS"
+const TEXT_INVITE_CAPTION := "INVITE FRIENDS"
+const TEXT_INVITE_NONE := "NO FRIENDS TO INVITE YET"
+const LABEL_INVITE := "INVITE"
+const LABEL_INVITED := "INVITED"
+const TEXT_INVITE_SENT := "Invite sent to %s."
+const TEXT_INVITES_CAPTION := "CREW INVITES"
+const TEXT_INVITE_FROM := "FROM %s"
+const TEXT_INVITE_FROM_NONE := "AN INVITE FOR YOU"
+const LABEL_JOIN_INVITE := "JOIN"
+const LABEL_DECLINE := "DECLINE"
+const TEXT_INVITE_DECLINED := "Invite declined."
+const TEXT_LEAVE_FIRST := "Leave your crew first to join another."
+const TEXT_PENDING_ONE := "%s INVITES YOU  ·  LEAVE YOUR CREW TO JOIN"
+const TEXT_PENDING_MANY := "%d CREW INVITES  ·  LEAVE YOUR CREW TO JOIN"
+## Incoming invite rows shown at most (no crew).
+const INVITE_ROWS_MAX := 3
 
 const LABEL_PX := 16
 const BODY_PX := 16
@@ -137,6 +167,14 @@ var page_text: ScreenText
 var prev_button: ScreenButton
 var next_button: ScreenButton
 var sheet: SocialActions
+## Crew invites: the right column lists friends to invite (in a crew).
+var inviting: bool = false
+var invite_toggle: ScreenButton
+var invites_caption: ScreenText
+var pending_line: ScreenText
+## The invites waiting for you (no crew): one row each.
+var invite_rows: Array[SocialRow] = []
+var invite_row_ids: Array[String] = []
 
 var _body: Rect2 = Rect2()
 var _header: Rect2 = Rect2()
@@ -187,6 +225,11 @@ func _init() -> void:
 	page_text.tabular = true
 	prev_button = _button(TEXT_PREV, ScreenButton.Kind.NORMAL, func() -> void: turn(-1))
 	next_button = _button(TEXT_NEXT, ScreenButton.Kind.NORMAL, func() -> void: turn(1))
+	invite_toggle = _button(TEXT_INVITE_FRIENDS, ScreenButton.Kind.NORMAL, toggle_inviting)
+	invite_toggle.name = "InviteFriends"
+	invites_caption = _text(TEXT_INVITES_CAPTION, ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.GOLD)
+	pending_line = _text("", ScreenText.Face.LABEL, LABEL_PX, ScreenText.Ink.GOLD)
+	pending_line.name = "PendingInvites"
 	sheet = SocialActions.new()
 	sheet.name = "MemberSheet"
 	sheet.chosen.connect(_on_member_action)
@@ -230,7 +273,7 @@ func setup(s: HudStyle, t: HudTuning) -> void:
 			(c as ScreenPanel).setup(s)
 		elif c is SocialField:
 			SocialUi.style_edit(c as SocialField, s, t)
-	for r in rows:
+	for r in rows + invite_rows:
 		r.setup(s, t)
 	sheet.setup(s, t)
 	crew_actions.setup(s, t)
@@ -256,7 +299,8 @@ func bind(c: NetSocialClient) -> void:
 func _connect(on: bool) -> void:
 	if client == null:
 		return
-	var sigs: Array[Signal] = [client.crew_changed, client.standing_changed]
+	var sigs: Array[Signal] = [client.crew_changed, client.standing_changed, client.crew_invites_changed,
+		client.friends_changed]
 	for sig in sigs:
 		if on and not sig.is_connected(refresh):
 			sig.connect(refresh)
@@ -268,6 +312,7 @@ func _connect(on: bool) -> void:
 func open() -> void:
 	page = 0
 	selected = null
+	inviting = false
 	_actions_key = ""
 	busy = false
 	_note_left = 0.0
@@ -282,13 +327,113 @@ func open() -> void:
 	load_crew()
 
 
-## GET /crews/mine, then the season standing.
+## GET /crews/mine, then the season standing; the crew invites waiting for you.
 func load_crew() -> void:
 	if client == null or not client.available():
 		return
+	client.refresh_crew_invites()
 	await client.refresh_crew()
 	if client.crew != null:
 		await client.refresh_standing()
+
+
+# ---------------------------------------------------------------- Crew invites
+
+## INVITE FRIENDS / MEMBERS: the right column's two lists (in a crew).
+func toggle_inviting() -> void:
+	inviting = not inviting
+	page = 0
+	selected = null
+	if inviting and client != null and client.available():
+		client.refresh_friends()
+		client.refresh_crew_sent()
+	refresh()
+
+
+## INVITE on a friend: the crew's invite (any member).
+func invite_friend(p: NetSocialPlayer) -> void:
+	if client == null or busy or p == null:
+		return
+	busy = true
+	var r: NetApiResult = await client.invite_to_crew(p.account_id)
+	busy = false
+	if r.ok:
+		_set_note(note, TEXT_INVITE_SENT % p.full_name, ScreenText.Ink.ACCENT)
+		_note_left = client.tuning.social_note_s
+	else:
+		_set_note(note, NetSocialClient.error_text(r), ScreenText.Ink.HOT)
+		_note_left = 0.0
+	refresh()
+
+
+## JOIN on an invite waiting for you: joins that crew.
+func accept_invite(invite_id: String) -> void:
+	if client == null or busy:
+		return
+	busy = true
+	_set_note(join_note, TEXT_WORKING, ScreenText.Ink.MUTED)
+	var r: NetApiResult = await client.accept_crew_invite(invite_id)
+	busy = false
+	if r.ok:
+		join_note.text = TEXT_JOIN_HINT
+		join_note.set_ink(ScreenText.Ink.MUTED)
+		_set_note(note, TEXT_JOINED, ScreenText.Ink.ACCENT)
+		await client.refresh_standing()
+	else:
+		var t := TEXT_LEAVE_FIRST if r.error == "already_in_crew" else NetSocialClient.error_text(r)
+		_set_note(join_note, t, ScreenText.Ink.HOT)
+	refresh()
+
+
+## DECLINE on an invite waiting for you.
+func decline_invite(invite_id: String) -> void:
+	if client == null or busy:
+		return
+	busy = true
+	var r: NetApiResult = await client.decline_crew_invite(invite_id)
+	busy = false
+	if r.ok:
+		_set_note(join_note, TEXT_INVITE_DECLINED, ScreenText.Ink.MUTED)
+	else:
+		_set_note(join_note, NetSocialClient.error_text(r), ScreenText.Ink.HOT)
+	refresh()
+
+
+func _invite_row(i: int) -> SocialRow:
+	while invite_rows.size() <= i:
+		var r := SocialRow.new()
+		r.name = "Invite%d" % invite_rows.size()
+		r.button_pressed.connect(_on_invite_row_button)
+		add_child(r)
+		if style != null:
+			r.setup(style, tuning)
+		invite_rows.append(r)
+		invite_row_ids.append("")
+	return invite_rows[i]
+
+
+func _on_invite_row_button(row: SocialRow, index: int) -> void:
+	var i := invite_rows.find(row)
+	if i < 0 or index >= row.actions.size():
+		return
+	match row.actions[index]:
+		A_ACCEPT_INVITE:
+			accept_invite(invite_row_ids[i])
+		A_DECLINE_INVITE:
+			decline_invite(invite_row_ids[i])
+
+
+## The invite row for `crew_id` (tests).
+func invite_row_of(crew_id: String) -> SocialRow:
+	if client == null:
+		return null
+	for i in invite_rows.size():
+		if not invite_rows[i].visible:
+			continue
+		for inv in client.crew_invites:
+			if inv.invite_id == invite_row_ids[i] and inv.crew_id == crew_id:
+				return invite_rows[i]
+	return null
 
 
 func _process(delta: float) -> void:
@@ -395,10 +540,15 @@ func _on_crew_action(id: StringName) -> void:
 		_result(r, ok_text)
 
 
-## A member row's button (MORE: the member's sheet).
+## A member row's button (MORE: the member's sheet); INVITE on a friend's row.
 func _on_row_button(row: SocialRow, index: int) -> void:
-	if index < row.actions.size() and row.actions[index] == A_MORE and row.player != null:
-		select(row.player)
+	if index >= row.actions.size() or row.player == null:
+		return
+	match row.actions[index]:
+		A_MORE:
+			select(row.player)
+		A_INVITE:
+			invite_friend(row.player)
 
 
 ## Opens `m`'s sheet with the actions your role allows.
@@ -506,6 +656,21 @@ func refresh() -> void:
 		x.visible = in_crew and not sheet_on
 	share_button.visible = in_crew and not sheet_on and SocialUi.can_share(bridge)
 	members_caption.visible = in_crew
+	invite_toggle.visible = in_crew
+	invite_toggle.text = TEXT_SHOW_MEMBERS if inviting else TEXT_INVITE_FRIENDS
+	invite_toggle.disabled = busy
+	if not in_crew:
+		inviting = false
+	var waiting := client.crew_invites.size() if client != null else 0
+	invites_caption.visible = no_crew and waiting > 0
+	pending_line.visible = in_crew and not sheet_on and waiting > 0
+	if waiting == 1:
+		pending_line.text = TEXT_PENDING_ONE % client.crew_invites[0].crew_text()
+	elif waiting > 1:
+		pending_line.text = TEXT_PENDING_MANY % waiting
+	if not no_crew:
+		for r in invite_rows:
+			r.visible = false
 	note.visible = in_crew or not note.text.is_empty()
 	if in_crew:
 		tag_text.text = TEXT_TAG % c.tag
@@ -513,7 +678,10 @@ func refresh() -> void:
 		season_text.text = _season_text()
 		code_text.text = c.invite_code
 		rotate_button.visible = rotate_button.visible and NetCrew.can_rotate_code(c.your_role)
-		members_caption.text = TEXT_MEMBERS_CAPTION % [c.member_count, c.max_members]
+		if inviting:
+			members_caption.text = TEXT_INVITE_NONE if client.crew_invitable().is_empty() else TEXT_INVITE_CAPTION
+		else:
+			members_caption.text = TEXT_MEMBERS_CAPTION % [c.member_count, c.max_members]
 		var key := "%s/%s/%s" % [c.crew_id, c.your_role, c.name]
 		if key != _actions_key:
 			_actions_key = key
@@ -546,6 +714,8 @@ static func _role_text(m: NetSocialPlayer, mine: bool) -> String:
 func _members() -> Array[NetSocialPlayer]:
 	if client == null or client.crew == null:
 		return []
+	if inviting:
+		return client.crew_invitable()
 	return client.crew.members
 
 
@@ -563,6 +733,22 @@ func _row(i: int) -> SocialRow:
 			r.setup(style, tuning)
 		rows.append(r)
 	return rows[i]
+
+
+## A friend's row on INVITE FRIENDS: presence, INVITE or INVITED.
+func _fill_friend_row(row: SocialRow, p: NetSocialPlayer) -> void:
+	row.kind = &"invite_friend"
+	row.selected = false
+	row.dot = SocialRow.Dot.IN_ROOM if p.in_room() else (SocialRow.Dot.ONLINE if p.is_online() else SocialRow.Dot.OFFLINE)
+	var invited := client != null and client.crew_invited_ids.has(p.account_id)
+	var status := FriendsPanel.SUB_IN_ROOM if p.in_room() else (FriendsPanel.SUB_ONLINE if p.is_online() else FriendsPanel.SUB_OFFLINE)
+	row.set_texts(p.display_name, p.tag_text(), p.crew_tag, status)
+	if invited:
+		row.set_buttons([LABEL_INVITED], [A_INVITE])
+		row.buttons[0].disabled = true
+	else:
+		row.set_buttons([LABEL_INVITE], [A_INVITE], [ScreenButton.Kind.PRIMARY])
+		row.buttons[0].disabled = busy
 
 
 ## The member row for `account_id` on this page (tests).
@@ -620,10 +806,45 @@ func _layout_forms(lx: float, rx: float, cw: float, top: float) -> void:
 	y += th
 	SocialUi.fit_text(join_note, join_note.text, cw)
 	SocialUi.place(join_note, Vector2(rx, y), join_note.get_combined_minimum_size())
+	y += join_note.get_combined_minimum_size().y
 	if note.visible:
-		y += join_note.get_combined_minimum_size().y
 		SocialUi.fit_text(note, note.text, cw)
 		SocialUi.place(note, Vector2(rx, y), note.get_combined_minimum_size())
+		y += note.get_combined_minimum_size().y
+	_layout_invites(rx, cw, y + g)
+
+
+## The invites waiting for you under JOIN A CREW: "<crew> [TAG]", FROM name, JOIN, DECLINE.
+func _layout_invites(x: float, w: float, top: float) -> void:
+	var list: Array[NetCrew.Invite] = client.crew_invites if client != null else []
+	var y := top
+	if invites_caption.visible:
+		var cs := invites_caption.get_combined_minimum_size()
+		SocialUi.place(invites_caption, Vector2(x, y), cs)
+		y += cs.y
+	var th := tuning.touch_target_px
+	var g := tuning.spacing_grid_px
+	var fit := maxi(floori((_body.end.y - y + g) / (th + g)), 0)
+	var n := mini(mini(list.size(), INVITE_ROWS_MAX), fit) if invites_caption.visible else 0
+	for i in maxi(invite_rows.size(), n):
+		if i >= n:
+			if i < invite_rows.size():
+				invite_rows[i].visible = false
+			continue
+		var row := _invite_row(i)
+		var inv := list[i]
+		invite_row_ids[i] = inv.invite_id
+		row.visible = true
+		row.kind = &"crew_invite"
+		row.dot = SocialRow.Dot.NONE
+		row.set_texts(inv.crew_name, "", inv.crew_tag,
+				TEXT_INVITE_FROM % inv.from_name if not inv.from_name.is_empty() else TEXT_INVITE_FROM_NONE,
+				ScreenText.Ink.GOLD)
+		row.set_buttons([LABEL_JOIN_INVITE, LABEL_DECLINE], [A_ACCEPT_INVITE, A_DECLINE_INVITE],
+				[ScreenButton.Kind.PRIMARY, ScreenButton.Kind.NORMAL])
+		for b in row.buttons:
+			b.disabled = busy
+		row.layout(Rect2(x, y + float(i) * (th + g), w, th))
 
 
 func _layout_crew(lx: float, rx: float, cw: float, top: float) -> void:
@@ -677,13 +898,21 @@ func _layout_crew(lx: float, rx: float, cw: float, top: float) -> void:
 	SocialUi.fit_text(note, note.text, cw)
 	SocialUi.place(note, Vector2(lx, y), note.get_combined_minimum_size())
 	y += nh + g
+	if pending_line.visible:
+		SocialUi.fit_text(pending_line, pending_line.text, cw)
+		SocialUi.place(pending_line, Vector2(lx, y), pending_line.get_combined_minimum_size())
+		y += pending_line.get_combined_minimum_size().y + g
 	if crew_actions.visible:
 		crew_actions.layout(Rect2(lx, y, cw, _body.end.y - y))
 	# Members, paged.
 	var my := top
-	SocialUi.fit_text(members_caption, members_caption.text, cw)
-	SocialUi.place(members_caption, Vector2(rx, my), members_caption.get_combined_minimum_size())
-	my += members_caption.get_combined_minimum_size().y
+	# The caption with INVITE FRIENDS / MEMBERS at the row's right end.
+	var tw := SocialUi.button_width(invite_toggle, tuning)
+	SocialUi.place(invite_toggle, Vector2(rx + cw - tw, my), Vector2(tw, th))
+	SocialUi.fit_text(members_caption, members_caption.text, cw - tw - g)
+	var mcs := members_caption.get_combined_minimum_size()
+	SocialUi.place(members_caption, Vector2(rx, my + (th - mcs.y) * 0.5), mcs)
+	my += th + g
 	page_size = maxi(1, floori((_body.end.y - my + g) / (th + g)))
 	var list := _members()
 	page = clampi(page, 0, _pages() - 1)
@@ -700,6 +929,10 @@ func _layout_crew(lx: float, rx: float, cw: float, top: float) -> void:
 		var mine := m.account_id == me
 		row.visible = true
 		row.player = m
+		if inviting:
+			_fill_friend_row(row, m)
+			row.layout(Rect2(rx, my + float(i) * (th + g), cw, th))
+			continue
 		row.kind = &"member"
 		row.selected = selected != null and selected.account_id == m.account_id
 		row.dot = SocialRow.Dot.NONE

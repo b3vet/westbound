@@ -23,6 +23,10 @@ extends RunScreen
 ##     connection opens while the hub shows (presence, party, invites); an invite opens
 ##     its card; a party move (the leader took the party to a room) goes to the run; the
 ##     friends list's JOIN / INVITE seams; invite links (`?room=` / `--room=`).
+##   - Protocol 2 (docs/ROOMS_CLIENT.md → Room invites; NET_CLIENT.md → Crew invites): a
+##     room invite opens its card (ROOM INVITE: JOIN by its code, DECLINE) once, and the
+##     ROOMS panel's note says who invites you while one waits; crew invites waiting for you
+##     show as a gold line over FRIENDS / CREW (CREW answers them).
 ## Emits intents only (loop_practice, social, back, room_ready).
 
 signal loop_practice()
@@ -58,6 +62,10 @@ const TEXT_PARTY_LEAD := "%d/%d  ·  YOU LEAD"
 const TEXT_PARTY_MEMBER := "%d/%d  ·  %s LEADS"
 const TEXT_PARTY_INVITES := "%s INVITES YOU"
 const TEXT_FRIEND_ROOM := "FRIEND'S ROOM"
+# Protocol 2: invites waiting.
+const TEXT_ROOM_INVITES := "%s INVITES YOU TO A ROOM"
+const TEXT_CREW_INVITES := "%s INVITES YOU"
+const TEXT_CREW_INVITES_MORE := "%d CREW INVITES"
 ## Base sizes (canvas px at 100% text size).
 const STATUS_PX := 16
 const CAPTION_PX := 20
@@ -94,6 +102,12 @@ var party_button: ScreenButton
 var party_line: ScreenText
 ## The party line's whole text (the line shows it shortened to its room).
 var party_text: String = TEXT_PARTY_NONE
+## Protocol 2: the newest crew invite over FRIENDS / CREW (gold; hidden without one).
+var crew_line: ScreenText
+var crew_text: String = ""
+## The social client whose crew invites the hub shows (null: NetSocialClient.of(session)).
+var social_client: NetSocialClient
+var _bound_social: NetSocialClient
 ## The session whose signals the hub follows (party, invites, party moves).
 var _bound: NetRoomSession
 var _party_version: int = -1
@@ -143,6 +157,10 @@ func _init() -> void:
 			func() -> void: social.emit(ProfilePanel.View.CREW), self)
 	friends_button = _button(TEXT_FRIENDS, ScreenButton.Kind.NORMAL,
 			func() -> void: social.emit(ProfilePanel.View.FRIENDS), self)
+	crew_line = ScreenText.make("", ScreenText.Face.LABEL, NOTE_PX, ScreenText.Ink.GOLD)
+	crew_line.name = "CrewInviteLine"
+	crew_line.visible = false
+	add_child(crew_line)
 	# N5.2: the room flows' panel, over everything else on the hub.
 	lobby = RoomLobbyPanel.new()
 	lobby.joined.connect(_on_room_joined)
@@ -212,6 +230,7 @@ func open() -> void:
 	if r != null and r.available():
 		r.connect_lobby()
 	_bind_session()
+	_bind_social()
 	var i := 0
 	for c: Control in [title, status, rooms_panel, loop_caption, loop_button, friends_button, crew_button, boards_button]:
 		slide_in(c, -tuning.screen_slide_px, tuning.screen_fade_in_s, float(i) * tuning.results_row_stagger_s)
@@ -238,9 +257,14 @@ func refresh() -> void:
 		b.disabled = not why.is_empty()
 		b.note = "" if why.is_empty() else (TEXT_OFF if _rooms() == null else TEXT_UNAVAILABLE)
 	_refresh_party()
+	_refresh_crew_invites()
+	var rinv := _bound.room_invites.newest() if _bound != null and why.is_empty() else null
 	if not room_message.is_empty():
 		rooms_note.text = room_message
 		rooms_note.set_ink(ScreenText.Ink.HOT)
+	elif rinv != null:
+		rooms_note.text = TEXT_ROOM_INVITES % rinv.from_name
+		rooms_note.set_ink(ScreenText.Ink.GOLD)
 	elif not why.is_empty():
 		rooms_note.text = why
 		rooms_note.set_ink(ScreenText.Ink.MUTED)
@@ -334,6 +358,13 @@ func join_friend(friend: NetSocialPlayer) -> void:
 		lobby.join_room(friend.room_id, TEXT_FRIEND_ROOM)
 
 
+## Protocol 2: the title toast's JOIN: the hub, then the join by the invite's code.
+func join_room_invite(code: String) -> void:
+	_show_hub()
+	if _open_lobby():
+		lobby.join_room_invite(code)
+
+
 ## The friends list's INVITE: a party invite to an online friend (a party is made first
 ## when there is none).
 func invite_friend(friend: NetSocialPlayer) -> void:
@@ -399,7 +430,7 @@ func _bind_session() -> void:
 
 func _signal_pairs(s: NetRoomSession) -> Array:
 	return [[s.party_changed, _on_party_changed], [s.party_invited, _on_party_invited],
-		[s.joined, _on_session_joined]]
+		[s.joined, _on_session_joined], [s.room_invites_changed, _on_party_changed]]
 
 
 ## A room snapshot nobody asked for (the party leader moved the party) is taken while the
@@ -435,6 +466,12 @@ func _on_session_joined(_room: NetRoomState) -> void:
 func _process(_delta: float) -> void:
 	if _party_version >= 0 and _bound != null and _bound.party.version != _party_version and visible:
 		refresh()
+	# Protocol 2: a room invite not shown here yet opens its card (once) while nothing else
+	# is open over the hub.
+	if visible and _bound != null and not lobby_open() and not leaderboards_open():
+		var rinv := _bound.room_invites.next_for_hub()
+		if rinv != null and _rooms_unavailable().is_empty() and _open_lobby():
+			lobby.open_room_invite(rinv.code)
 	if NetInviteLink.peek().is_empty():
 		return
 	var r := _rooms()
@@ -453,6 +490,41 @@ func _title_showing() -> bool:
 	var ts := get_parent()
 	var title_node := ts.get(&"title") as Control if ts != null else null
 	return title_node != null and title_node.is_visible_in_tree()
+
+
+# ---------------------------------------------------------------- Crew invites (protocol 2)
+
+func _social_client() -> NetSocialClient:
+	if social_client != null:
+		return social_client
+	return NetSocialClient.of(_session())
+
+
+## Follows the crew invites (reloaded each time the hub opens; live ones arrive on the
+## lobby connection).
+func _bind_social() -> void:
+	var c := _social_client()
+	if c != _bound_social:
+		if _bound_social != null and _bound_social.crew_invites_changed.is_connected(refresh):
+			_bound_social.crew_invites_changed.disconnect(refresh)
+		_bound_social = c
+		if c != null:
+			c.crew_invites_changed.connect(refresh)
+	if c != null and c.available():
+		c.refresh_crew_invites()
+
+
+## The gold line over FRIENDS / CREW: the newest crew invite, or how many wait.
+func _refresh_crew_invites() -> void:
+	var c := _bound_social
+	var n := c.crew_invites.size() if c != null else 0
+	crew_line.visible = n > 0
+	if n == 1:
+		crew_text = TEXT_CREW_INVITES % c.crew_invites[0].crew_text()
+	elif n > 1:
+		crew_text = TEXT_CREW_INVITES_MORE % n
+	else:
+		crew_text = ""
 
 
 func _session() -> NetSession:
@@ -566,9 +638,16 @@ func _layout() -> void:
 		b.position = Vector2(a.end.x - sw, y)
 		b.size = Vector2(sw, th)
 		y -= g
+	# Protocol 2: the crew invite line over the column, right-aligned.
+	SocialUi.fit_text(crew_line, crew_text, sw * CREW_LINE_WIDTH)
+	var cls := crew_line.get_combined_minimum_size()
+	crew_line.size = cls
+	crew_line.position = Vector2(a.end.x - cls.x, y - cls.y)
 
 
 ## Layout proportions of the menu width: BACK, a room button, the right column.
 const BACK_WIDTH := 0.5   # lint: allow-number layout proportion
 const ROOM_WIDTH := 0.75   # lint: allow-number layout proportion
 const SIDE_WIDTH := 0.7   # lint: allow-number layout proportion
+## The crew invite line may run this many column widths to the left.
+const CREW_LINE_WIDTH := 1.6   # lint: allow-number layout proportion

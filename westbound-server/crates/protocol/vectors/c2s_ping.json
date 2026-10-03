@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "direction": "client_to_server",
   "type": "ping",
   "type_id": 2,

@@ -423,12 +423,95 @@ tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --seconds=2.
 tools/snap.sh src/ui/screens/dev/party_preview.tscn --size=2496x1320 --text_scale=1.25 --party=lead
 ```
 
+## Room invites (protocol 2)
+
+The owner's request: "there is no way to invite my friends or crew into a private room in online mode, there needs to be". Spec: Rooms, parties and matchmaking (Private rooms: the code and the invite link; Friends and presence; Crews), Client changes (Room menu: invite). Wire: PROTOCOL.md §4 (`lobby_command.room_invite`, `lobby_event.room_invite`, version 2); server: SERVER.md → Room invites.
+
+| File | Class | What |
+| --- | --- | --- |
+| `src/net/rooms/room_invites.gd` | `NetRoomInvites` | The room invites waiting (newest first, one per code, at most `room_invites_max`, dropped at their `expires_in_s`), and where each was shown (`hub_card`, `toast_title`, `toast_run`) |
+| `src/net/rooms/room_session.gd` | `NetRoomSession` | `room_invite(account_id)` (only while seated); `room_invited`, `room_invites_changed`, `room_invite_failed(code, message)`; `accept_room_invite(code)` (the join by code), `decline_room_invite(code)` (nothing sent) |
+| `src/net/rooms/rooms_service.gd` | `NetRooms` | `room_invite`, `accept_room_invite` |
+| `src/net/social_client.gd` | `NetSocialClient` | `room_invitees(exclude)`: online friends, then online crewmates (`GET /crews/mine` now carries each member's presence), deduplicated, without this player and the room's members |
+| `src/ui/hud/room_menu.gd` | `RoomMenu` | INVITE, the fourth tab |
+| `src/ui/screens/room_lobby_panel.gd` | `RoomLobbyPanel` | ROOM INVITE (the card) |
+| `src/ui/screens/online_hub_screen.gd` | `OnlineHubScreen` | Opens the card; the gold note on ROOMS; `join_room_invite(code)` |
+| `src/ui/screens/invite_toast.gd` | `InviteToast` | The toast on the title and in single-player runs; the lobby connection on the title |
+| `src/ui/screens/title_screens.gd` | `TitleScreens` | Builds the toast; its JOIN opens the hub |
+
+**Sending (the room menu's INVITE tab).** CHAT / PLAYERS / ROOM / INVITE. INVITE shows the link row of ROOM (INVITE `domain/r/CODE`, COPY LINK, SHARE where the browser has a share sheet) for anyone else, a note, and up to six players in two columns: `name#1234` with `FRIEND · TAP TO INVITE` or `CREW · TAP TO INVITE` (online friends first, then online crewmates; a crewmate who is also a friend once; nobody already in the room). Opening the tab reloads the friends (presence keeps updating on the room connection) and the crew (members' presence). A tap sends `room_invite`; the button turns `INVITED` (disabled) for `room_invite_resend_s` (the server's 120 s repeat window) and the note says `INVITE SENT TO name#1234`. The server answers only a refusal: a non-fatal `error` within `room_invite_answer_s` of the invite is its answer (`room_invite_failed`), shown in hot text with the server's reason (`THAT PLAYER IS OFFLINE.`, `YOU CAN ONLY INVITE FRIENDS AND CREW MEMBERS.`, `YOUR ROOM IS FULL.`, `TOO MANY INVITES...`), and the player can be tried again. Notes: `ONLINE FRIENDS AND CREW · ANYONE ELSE: THE LINK`, `NO FRIENDS OR CREW ONLINE · SHARE THE LINK`, `SIGN IN TO INVITE FRIENDS · SHARE THE LINK`. Any seated player may invite (not only the host); public rooms too (an invite is the room's code, like the link).
+
+**Receiving.** A `lobby_event.room_invite` lands in `NetRoomSession.room_invites` wherever the player is, as long as the lobby connection is up:
+
+- **The online hub:** the card opens once (ROOM INVITE: gold `Dusty#1234 INVITES YOU TO THEIR ROOM`, `PRIVATE ROOM K7QX2M · 3/8 PLAYERS`, DECLINE / JOIN) as soon as nothing else is open over the hub (arriving, or waiting when the hub opens). JOIN joins by the code through the joining status (refusals such as a full room or a room that closed show there with TRY AGAIN, as for a typed code); DECLINE (or Esc) forgets it. While one waits, the ROOMS panel's note says `Dusty#1234 INVITES YOU TO A ROOM` in gold. An expired invite closes its card.
+- **The title** (and the garage, achievements, first-run screens): the invite toast, top-right under the profile chip: the gold line, the room line, LATER and JOIN. JOIN opens the hub and joins by the code (one tap); LATER leaves it for the hub's card. Shown once on the title; it goes when the invite expires or the player leaves the title.
+- **A single-player run** (and its pause and results): the toast where the achievement toast goes (HudAchievementLayer.place), text only (`OPEN ONLINE AFTER THIS RUN TO JOIN`), no buttons and no touches, for `invite_toast_s`. **The run is never interrupted**; the invite still gets its title toast and its hub card afterwards (if it has not expired: 120 s by default).
+- **In a room:** nothing on the room HUD (the same deviation as party invites); the invite waits for the hub.
+- **Crew invites** (`lobby_event.crew_invite`, NET_CLIENT.md → Crew invites) toast the same way as a note (`NIGHT RIDERS [NR] INVITES YOU TO THEIR CREW · FROM Dusty#1234 · ANSWER ON THE CREW PAGE`) on the title and in runs; the hub shows them as its gold line over CREW.
+
+**The lobby connection on the title.** Invites only reach a running game with its lobby connection up (spec: push notifications while the app is closed are out of scope for v1). N9.3 opened it with the hub; now the toast also opens it while the title shows and the player is signed in (`lobby_on_title`, retried every `lobby_title_retry_s`), so a player who never opened ONLINE gets invites and shows as online to friends. It stays up through runs, as after a hub visit. Turning `lobby_on_title` off restores the N9.3 behaviour (invites after the first hub visit only).
+
+**Tuning** (`data/tuning/net.tres`, "Invites (protocol 2)", none in spec): `room_invite_answer_s` 5, `room_invites_max` 4, `room_invite_resend_s` 120 (matches the server's `room_invite_ttl_secs`), `invite_toast_s` 8, `invite_toast_width_px` 560, `lobby_on_title` true, `lobby_title_retry_s` 15.
+
+**Tests.**
+
+| File | Covers |
+| --- | --- |
+| `tests/net/test_invites_client.gd` | the codec's new kinds round trip (and refuse 17 players); `room_invite` only from a room; a refusal within the answer window is the invite's (the server's detail), later ones are lobby errors; incoming invites kept newest first, one per code, capped, expired, declined without a message, accepted with `room_join_code`; `NetRoomInvites` bookkeeping; crew invites (list, accept, decline, leave first, invite a friend, INVITED, the live event) and `room_invitees` (deduplicated, offline and room members left out) |
+| `tests/ui/test_invites_ui.gd` | through iOS-style touch ids: the room menu's INVITE tab (the list, a tap sending `room_invite`, INVITED, the refusal in hot text, presence updates, nobody online, signed out) and its text fit at 100 % / 125 % on 1280x720 and a notched 1560x720 with six 16-W names; the hub's card (DECLINE sends nothing, JOIN joins by the code and hands the room to the run, the gold note); the title toast's JOIN through the hub, LATER leaving it for the hub's card; a run's note (no buttons, no touches, gone after `invite_toast_s`, then the title's JOIN toast; a crew invite's note); the hub's crew invite line; the crew page (NET_CLIENT.md → Crew invites) |
+| `tests/net/fake_invite_server.gd` | The scripted server plus `room_invite` and pushing both events (not a test file) |
+
+### Live check
+
+`tests/net/live_invites_check.gd`: five throwaway device accounts on a running server (it refuses the production host). A and B (and A and E) become friends, A and C share a crew; A creates a private room and invites B (B joins by the invite's code into A's room) and C (a crewmate, no friend); a stranger, a repeat and a player already in the room are refused with the server's reason; A invites E to the crew (E hears `lobby_event.crew_invite` at once, lists it, accepts), the crew's members show as online, B declines one; the accounts are deleted at the end.
+
+```sh
+# the server (this branch, its own target dir), dev env, a scratch directory: see "Live check" above
+tools/godot.sh --headless --path . --script res://tests/net/live_invites_check.gd -- http://127.0.0.1:18731
+```
+
+Against `westbound-server` at this branch (dev env), 2026-10-03:
+
+```
+accounts                   ok    A 1, B 2, C 3, D 4, E 5
+friends                    ok    SunsetCoyote#3645 + QuietRover#0550, SwiftDrifter#2981
+crew                       ok    Live Crew 1 [L1]: A owner, C member
+lobby connections          ok    5 sockets, protocol 2
+A creates a room           ok    room 1 code ENY49F (private)
+invite reaches B           ok    from SunsetCoyote#3645, code ENY49F
+B joins by its code        ok    room 1, 2/8
+crewmate C invited         ok    NimbleBison#9743 (no friend, same crew)
+stranger refused           ok    You can only invite friends and crew members.
+repeat refused             ok    You already invited that player. Give them a moment.
+already here refused       ok    That player is already in this room.
+crew invite sent           ok    invite 1
+E hears at once            ok    lobby_event.crew_invite Live Crew 1 [L1] from SunsetCoyote
+E's list                   ok    1 waiting
+not a friend refused       ok    not_friends
+E accepts                  ok    3/16 members
+crew presence              ok    3 of 3 members online for A
+B declines                 ok
+LIVE_INVITES ok (0 failed)
+```
+
+The server logged `room invite account=1 target=2 room=1`, `room invite account=1 target=3 room=1`, `crew invite ... renewed=false` ×2 and `crew invite accepted`; `/metrics` showed `wb_room_invites_total 2`, `wb_crew_invites_total 2`. `live_party_check.gd` still passes against the same server (protocol 2 client).
+
+### Snaps
+
+```
+tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --sweep=party:card,toast,crew_line
+tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --seconds=2.5 --sweep=party:room_invites
+tools/snap.sh src/ui/screens/dev/social_preview.tscn --renderer=both --sweep=social:crew_invite_friends,crew_invites,crew_pending
+tools/snap.sh src/ui/screens/dev/social_preview.tscn --size=2496x1320 --text_scale=1.25 --social=crew_invites
+```
+
 ## Deviations and open questions
 
 - **Pause in a room** still pauses the local run (the tree): no states go up, so the others see the car fade after 250 ms; the seat is kept (the socket stays up). A room-aware pause (the car keeps driving under the menu) is left open.
 - **Host settings in the room:** done in N9.3 (the room menu's ROOM tab, see Parties → Host settings).
 - **Invite links / party:** N9.3 (see Parties). Until the server streams traffic, the room's density does not change the local director.
 - **Remote players as IDM leaders for network cars** (the server has them as participants): not added. N4.3's `NetworkTrafficSource` models one participant (the local player, index `_P` in its sorted order); remote players would need extra participant entries in its sort and leader search (`src/net/traffic/**`, N4.3's file). The per-car bias and the corrections cover the difference meanwhile. Hook: `RunRoom._draw_remotes` already samples every remote at the room clock.
-- **Party invites inside a room** (N9.3) wait for the hub: the room HUD (`room_hud.gd`, N5.2's file, not this WP's) does not show them. A line on the chat feed ("Dusty#1234 INVITES YOU") would be a small follow-up there.
+- **Party invites inside a room** (N9.3) wait for the hub: the room HUD (`room_hud.gd`, N5.2's file, not this WP's) does not show them. A line on the chat feed ("Dusty#1234 INVITES YOU") would be a small follow-up there. Room and crew invites (protocol 2) wait the same way.
+- **Room invites from the room lobby panel:** the hub's lobby panel is never open while seated (a join hands the room to the run), so sending invites lives in the room menu's INVITE tab only; the panel shows the invitee's ROOM INVITE card.
 - **A party move while not on the hub** (a single-player run, the title) is declined by the client (the seat is left again); the member can QUICK JOIN later, which goes to the leader's room.
 - **Presence over the room socket:** wired in N9.3 (`NetRooms.setup` attaches `NetSocialClient` to the room connection; the friends list polls only while it is down).

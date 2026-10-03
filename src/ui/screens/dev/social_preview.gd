@@ -11,8 +11,11 @@ extends Node
 ##   tools/snap.sh src/ui/screens/dev/social_preview.tscn --size=2496x1320 --text_scale=1.25 --social=crew
 ##
 ## snap_setup options: --social=friends|sheet|confirm|error|blocked|crew|member|
-## crew_confirm|crew_none|crew_error|report|report_confirm|report_sent|report_limited
-## (default friends), --text_scale=1|1.25, --hand=right|left, --sky_t=<0..1>.
+## crew_confirm|crew_none|crew_error|report|report_confirm|report_sent|report_limited|
+## crew_invite_friends|crew_invites|crew_pending (default friends), --text_scale=1|1.25,
+## --hand=right|left, --sky_t=<0..1>.
+##
+## Crew invites (protocol 2): --sweep=social:crew_invite_friends,crew_invites,crew_pending
 
 const RUN_SCENE := preload("res://src/run/run.tscn")
 const SNAP_SEED := 20260929
@@ -78,6 +81,9 @@ func snap_setup(args: Dictionary) -> void:
 				cp.select(cp.client.crew.members[2])
 			else:
 				cp.crew_actions.press(CrewPanel.A_LEAVE)
+		"crew_invite_friends":
+			cp.toggle_inviting()
+			await cp.invite_friend(cp.client.crew_invitable()[0])
 		"crew_error":
 			cp.name_field.text = "Rude Boys"
 			cp.tag_field.text = "RB"
@@ -129,7 +135,16 @@ func _seed_world(me: String, what: String) -> void:
 	fake.block_pair(me, rival)
 	var other := fake.make_crew(ids[1], "Sundowners", "SUN")
 	fake.crew_scores[other] = RIVAL_SCORE
-	if what == "crew_none" or what == "crew_error":
+	if what == "crew_invites" or what == "crew_pending":
+		var kings := fake.make_crew(ids[5], "Coastline Kings", "CK")
+		fake.add_crew_invite(other, me, ids[1])
+		fake.add_crew_invite(kings, me, ids[5])
+	if what == "crew_invite_friends":
+		for pair: Array in [["Kestrel", 31], ["Mira", 2718]]:
+			var id := fake.add_player(String(pair[0]), int(pair[1]))
+			fake.befriend(me, id)
+			fake.set_presence(id, "online")
+	if what == "crew_none" or what == "crew_error" or what == "crew_invites":
 		return
 	var cid := fake.make_crew(me, "Night Riders", "NR")
 	fake.add_member(cid, ids[0], NetCrew.OFFICER)

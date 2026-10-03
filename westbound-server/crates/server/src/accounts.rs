@@ -405,13 +405,14 @@ pub async fn delete_with_grant(
                 "refresh_tokens={refresh_tokens} runs={runs} \
                  leaderboard_entries={leaderboard_entries} replays={replays} \
                  friends={} blocks={} crew_memberships={} crew_transferred={} \
-                 crew_disbanded={} reports_kept={} cloud_saves={cloud_saves} \
+                 crew_disbanded={} crew_invites={} reports_kept={} cloud_saves={cloud_saves} \
                  identity_links={identity_links} device_secrets={device_secrets}",
                 social.friends,
                 social.blocks,
                 social.crew_memberships,
                 social.crew_transferred,
                 social.crew_disbanded,
+                social.crew_invites,
                 social.reports_kept
             ),
         )

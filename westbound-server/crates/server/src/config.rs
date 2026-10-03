@@ -494,6 +494,15 @@ pub struct SocialConfig {
     /// A party member whose connection ended keeps their place this long; a new session
     /// takes it back (not in spec).
     pub party_member_hold_ms: u64,
+    /// Room invites (protocol 2): how long an invite shows on the invitee's screen, and how
+    /// long a repeat invite of the same player to the same room is refused (not in spec).
+    pub room_invite_ttl_secs: u32,
+    /// Room invites one player may send in any rolling minute (spec: "rate-limited").
+    pub room_invites_per_minute: u32,
+    /// Crew invites expire this many hours after they were sent (not in spec).
+    pub crew_invite_ttl_hours: u32,
+    /// Pending (unexpired) invites a crew may have out at once (not in spec).
+    pub crew_max_pending_invites: u32,
 }
 
 /// Replay uploads, the verification queue and replay retention (N8.1; docs/SERVER.md →
@@ -862,6 +871,11 @@ const MIN_ADMIN_LOG_DAYS: u32 = 30;
 const MIN_BOARD_PERIOD_DAYS: u32 = 8;
 const MIN_INVITE_CODE_LEN: u32 = 6;
 const MAX_INVITE_CODE_LEN: u32 = 16;
+/// Room invites show 10 s to an hour (the wire carries u16 seconds).
+const MIN_ROOM_INVITE_TTL_SECS: u32 = 10;
+const MAX_ROOM_INVITE_TTL_SECS: u32 = 3_600;
+/// Crew invites live at most a year.
+const MAX_CREW_INVITE_TTL_HOURS: u32 = 8_760;
 /// A report's `context` must fit in a request body.
 const MIN_REPORT_CONTEXT_BYTES: u32 = 2;
 const MAX_REPORT_CONTEXT_BYTES: u32 = 4_096;
@@ -1278,6 +1292,10 @@ impl Default for SocialConfig {
             report_context_max_bytes: 1_024,
             party_max_members: 8,
             party_member_hold_ms: 15_000,
+            room_invite_ttl_secs: 120,
+            room_invites_per_minute: 10,
+            crew_invite_ttl_hours: 168,
+            crew_max_pending_invites: 32,
         }
     }
 }
@@ -2093,6 +2111,8 @@ impl Config {
             ("crew_max_members", s.crew_max_members),
             ("reports_per_day", s.reports_per_day),
             ("party_max_members", s.party_max_members),
+            ("room_invites_per_minute", s.room_invites_per_minute),
+            ("crew_max_pending_invites", s.crew_max_pending_invites),
         ] {
             if v == 0 {
                 errs.push(format!("social.{name} must be at least 1"));
@@ -2102,6 +2122,17 @@ impl Config {
             errs.push(format!(
                 "social.party_max_members must be 1..={}",
                 protocol::messages::MAX_PARTY_MEMBERS
+            ));
+        }
+        if !(MIN_ROOM_INVITE_TTL_SECS..=MAX_ROOM_INVITE_TTL_SECS).contains(&s.room_invite_ttl_secs)
+        {
+            errs.push(format!(
+                "social.room_invite_ttl_secs must be {MIN_ROOM_INVITE_TTL_SECS}..={MAX_ROOM_INVITE_TTL_SECS}"
+            ));
+        }
+        if !(1..=MAX_CREW_INVITE_TTL_HOURS).contains(&s.crew_invite_ttl_hours) {
+            errs.push(format!(
+                "social.crew_invite_ttl_hours must be 1..={MAX_CREW_INVITE_TTL_HOURS}"
             ));
         }
         if !(MIN_INVITE_CODE_LEN..=MAX_INVITE_CODE_LEN).contains(&s.crew_invite_code_len) {

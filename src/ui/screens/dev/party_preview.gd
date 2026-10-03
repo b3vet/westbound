@@ -13,8 +13,13 @@ extends Node
 ##   tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --sweep=party:none,lead,member,kick,invite,link,hub,room_host,room_player
 ##   tools/snap.sh src/ui/screens/dev/party_preview.tscn --size=2496x1320 --text_scale=1.25 --party=lead
 ##
-## snap_setup options: --party=none|lead|member|kick|invite|link|hub|room_host|room_player
-## (default lead), --text_scale=1|1.25, --hand=right|left, --sky_t=<0..1>.
+## Protocol 2 (room and crew invites, docs/ROOMS_CLIENT.md → Room invites):
+##   tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --sweep=party:card,toast,crew_line
+##   tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --seconds=2.5 --sweep=party:room_invites
+##
+## snap_setup options: --party=none|lead|member|kick|invite|link|hub|room_host|room_player|
+## card|toast|crew_line|room_invites (default lead), --text_scale=1|1.25,
+## --hand=right|left, --sky_t=<0..1>.
 
 const RUN_SCENE := preload("res://src/run/run.tscn")
 const SNAP_SEED := 20260929
@@ -55,6 +60,7 @@ func snap_setup(args: Dictionary) -> void:
 	rooms.set_process(false)
 	add_child(rooms)
 	hub.rooms = rooms
+	hub._bind_session()
 	var p := rooms.session.party
 	p.me = "2"
 	match what:
@@ -65,6 +71,20 @@ func snap_setup(args: Dictionary) -> void:
 		"invite":
 			p.add_invite({"from": {"account_id": "1", "display_name": "Dusty", "name_tag": 1234}, "code": CODE},
 				0.0, 4)
+		"card", "toast":
+			rooms.session.room_invites.add({"from": {"account_id": "1", "display_name": "Dusty", "name_tag": 1234},
+				"code": CODE, "room_id": 12, "visibility": "private", "players": 3, "max_players": 8,
+				"expires_in_s": 600}, 0.0, 4)
+		"crew_line":
+			var sc := _social()
+			var inv := NetCrew.Invite.new()
+			inv.invite_id = "9"
+			inv.crew_name = "Night Riders"
+			inv.crew_tag = "NR"
+			inv.from_name = "Dusty#1234"
+			sc.crew_invites.append(inv)
+			hub.social_client = sc
+			hub.open()
 	hub.refresh()
 	match what:
 		"none", "lead", "member":
@@ -77,7 +97,43 @@ func snap_setup(args: Dictionary) -> void:
 		"link":
 			hub._open_lobby()
 			hub.lobby.follow_link(CODE)
+		"card":
+			hub._process(0.0)
+		"toast":
+			run.title.open_title()
+			run.title.invite_toast.rooms = rooms
+			run.title.invite_toast.advance(0.0)
 	run.title.finish_animations()
+
+
+## A social client with online friends and crewmates, no server (previews only).
+func _social() -> NetSocialClient:
+	var t := NetTuning.load_default()
+	var sc := NetSocialClient.new(NetApi.new(NetFakeSocial.new(), t, "https://preview.invalid/api/v1"), t)
+	var names: Array[Array] = [["Dusty", 1234], ["Şahin 34", 42], ["LoneWolf", 7], ["WWWWWWWWWWWWWWWW", 8888]]
+	for i in names.size():
+		var f := NetSocialPlayer.new()
+		f.account_id = str(100 + i)
+		f.display_name = String(names[i][0])
+		f.tag = int(names[i][1])
+		f.full_name = "%s#%04d" % [f.display_name, f.tag]
+		f.status = NetSocialPlayer.ONLINE
+		sc.friends.append(f)
+	sc.friends_loaded = true
+	var crew := NetCrew.new()
+	crew.crew_id = "5"
+	crew.name = "Night Riders"
+	crew.tag = "NR"
+	for pair: Array in [["Mira", 2718], ["Kestrel", 31]]:
+		var m := NetSocialPlayer.new()
+		m.account_id = "2%s" % pair[1]
+		m.display_name = String(pair[0])
+		m.tag = int(pair[1])
+		m.full_name = "%s#%04d" % [m.display_name, m.tag]
+		m.status = NetSocialPlayer.ONLINE
+		crew.members.append(m)
+	sc.crew = crew
+	return sc
 
 
 func _party(p: NetParty, leader: String) -> void:
@@ -101,5 +157,10 @@ func _room_menu(what: String, args: Dictionary) -> void:
 		rs.room.version += 1
 	var menu := run.room.hud.menu
 	menu.invite_url = LINK
-	menu.open(RoomMenu.Tab.ROOM)
+	if what == "room_invites":
+		menu.social = _social()
+		menu.open(RoomMenu.Tab.INVITE)
+		menu.refresh()
+	else:
+		menu.open(RoomMenu.Tab.ROOM)
 	run.room.frame(0.0)

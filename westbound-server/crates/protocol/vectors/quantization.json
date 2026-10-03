@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "rounding": "half_away_from_zero",
   "fields": [
     {

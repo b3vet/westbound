@@ -131,7 +131,7 @@ N10.3 adds housekeeping for the small data volume (see "Housekeeping (N10.3)" an
 | `GET /api/v1/save`, `PUT /api/v1/save` | public | N11 cloud save: see "Cloud save" |
 | `GET /api/v1/boards/{board}`, `POST /api/v1/runs`, `POST /api/v1/runs/legacy` | public | Leaderboards and run submissions: see "Leaderboards & runs API" |
 | `POST /api/v1/runs/{run_id}/replay` | public | The replay upload (binary body): see "Replays and verification" |
-| `/api/v1/friends*`, `/api/v1/blocks*`, `/api/v1/presence`, `/api/v1/crews*`, `/api/v1/reports` | public | Friends, blocks, presence, crews, reports: see "Social API" |
+| `/api/v1/friends*`, `/api/v1/blocks*`, `/api/v1/presence`, `/api/v1/crews*`, `/api/v1/reports` | public | Friends, blocks, presence, crews (and crew invites: `/api/v1/crews/invites*`, `/api/v1/crews/{id}/invites`), reports: see "Social API" |
 | `GET /metrics` | **localhost only** `127.0.0.1:9090` | Prometheus text: `wb_ws_connections`, `wb_ws_frames_in_total` / `_out_total`, bytes, close reasons, the gateway's `wb_ws_sessions`, `wb_ws_handshakes_total{result}`, `wb_ws_messages_in_total{type}`, `wb_ws_rate_limited_total{type}`, `wb_ws_kicks_total{reason}` (see "Realtime gateway → Metrics"), `wb_http_requests_total{class}`, `wb_http_rate_limited_total`, `wb_accounts_created_total`, `wb_auth_logins_total`, `wb_auth_refreshes_total`, `wb_auth_refresh_reuse_total`, backups, `wb_build_info`; the rooms' metrics; N10.2's database, queue, backup, restart, admin, log and process metrics (see "Operations (N10.2) → Metrics added"); N10.1: `process_resident_memory_peak_bytes`, the shadow contacts (see "Rooms → Metrics") |
 | `/admin/v1/*` | **localhost only** `127.0.0.1:9091`, only with `WB_ADMIN__TOKEN` | N10.2: the admin API (bearer token): stats, live rooms, room close, notices, kicks. See "Operations (N10.2) → Admin API" |
 | `GET /admin/stats` | **localhost only** (the metrics listener) | N10.1: the admin stats view, JSON (see "Load test, shadow collisions and admin stats"); the same as `GET /admin/v1/stats/full` on the admin API |
@@ -190,6 +190,7 @@ Every command reads the same config: `--config` or `WB_CONFIG`, then the `WB_*` 
   - `0006` (N10.1) creates `shadow_contacts` (see "Load test, shadow collisions and admin stats → Shadow collisions").
   - `0007` (N10.3) moves set-aside replay jobs (`failed` with `"unverifiable": true`) to the new status `set_aside` (see "Replays and verification → The queue").
   - `0008` (N11) creates `identity_links`, `device_secrets` and `cloud_saves` (see "Sign in with Apple / Google → Tables" and "Cloud save").
+  - `0009` creates `crew_invites` (see "Social API → Crew invites").
 
 Queries written with `sqlx::query!` are checked at compile time against `westbound-server/.sqlx/`, and CI builds with `SQLX_OFFLINE=true`. After you add or change a `query!`, or change the schema, regenerate that data:
 
@@ -240,7 +241,7 @@ WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban 
 
    | # | Check | Error |
    | --- | --- | --- |
-   | 1 | `protocol_version` below / above `1..=1` | `update_required` / `server_outdated` |
+   | 1 | `protocol_version` below / above `1..=2` (protocol 2 added room and crew invites; a version 1 client is still welcome but never sent a version 2 kind: PROTOCOL.md §6) | `update_required` / `server_outdated` |
    | 2 | `client_build` below `gateway.min_client_build` | `update_required` |
    | 3 | `map_hash` not accepted (below) | `map_mismatch` |
    | 4 | `access_token` (carried in `Hello`, u16-prefixed): empty, bad signature, wrong issuer/audience, expired, account gone, or token version revoked | `auth_failed` |
@@ -256,6 +257,7 @@ WP N2.3, in `crates/server/src/`: `gateway.rs` (the connection loop and the ban 
    - `lobby_command.presence_subscribe` → friends presence (N9.1; see "Social API → Presence").
    - `room_create`, `room_join_code`, `room_join_id`, `quick_join`, `room_leave`, `room_browse` → the rooms registry (N5.1; see "Rooms").
    - Party commands (`party_*`) → non-fatal `not_allowed` ("Parties are not available yet.") until N9.
+   - Protocol 2: `room_invite` → the seated player's room invite (see "Room invites").
    - A seated session's `player_state`, `run_event`, `hit_report`, `quick_chat` and `room_host_command` → its room task (a non-blocking `try_send` into the room's bounded queue; a full queue drops the message, `wb_room_dropped_total{reason="queue_full"}`). Outside a room: `room_host_command` and `room_leave` answer a non-fatal `not_in_room`, the rest is dropped quietly.
    - `score_claim` → dropped until N6.
    - A second `Hello`, or an undecodable frame → fatal `malformed`.
@@ -298,7 +300,7 @@ Each client → server type has a token bucket (`ws_rate_limits.<type>_per_sec`,
 | Type | Per second | Burst | Why |
 | --- | --- | --- | --- |
 | `ping` | 2 | 5 | the client pings every 2 s |
-| `lobby_command` | 5 | 10 | |
+| `lobby_command` | 5 | 10 | room invites have their own per-sender limit too (`social.room_invites_per_minute`) |
 | `player_state` | 25 | 40 | 20 Hz uploads plus jitter bunching |
 | `score_claim` | 10 | 20 | about 2 a second, more in trains |
 | `hit_report` | 5 | 10 | |
@@ -1005,7 +1007,7 @@ Measured on this dev box: a 4-minute replay verifies in 10–20 s and peaks at a
 
 ## Social API
 
-WP N9.1, in `crates/server/src/`: `social/` (`mod.rs`: the shared reads `friend_ids`, `crew_of`, `crew_snapshot`, `is_blocked`, player summaries and the account-deletion hook; `friends.rs`: requests, the friends list, blocks, presence reads; `crews.rs`: crews, roles, invite codes; `reports.rs`), `presence.rs` (the presence registry), and the gateway's `presence_subscribe` handling. Spec: multiplayer handoff → "Rooms, parties and matchmaking → Friends and presence", "Crews (persistent)", "Moderation", "Leaderboards → Loop crew", "Data model (SQLite)", "Accounts → Account deletion". Tests: `tests/social.rs` (every route and error, blocking, caps, crews, boards, deletion, reports, admin), `tests/presence.rs` (real WebSockets), `tests/cli.rs` (the admin binary).
+WP N9.1, in `crates/server/src/`: `social/` (`mod.rs`: the shared reads `friend_ids`, `crew_of`, `crew_snapshot`, `is_blocked`, player summaries and the account-deletion hook; `friends.rs`: requests, the friends list, blocks, presence reads; `crews.rs`: crews, roles, invite codes; `reports.rs`), `presence.rs` (the presence registry), and the gateway's `presence_subscribe` handling. Spec: multiplayer handoff → "Rooms, parties and matchmaking → Friends and presence", "Crews (persistent)", "Moderation", "Leaderboards → Loop crew", "Data model (SQLite)", "Accounts → Account deletion". Tests: `tests/social.rs` (every route and error, blocking, caps, crews, boards, deletion, reports, admin), `tests/presence.rs` (real WebSockets), `tests/cli.rs` (the admin binary), `tests/crew_invites.rs` (crew invites: every route and error, renewal, the pending cap, any member inviting friends only, blocks, crew full, already in a crew, expiry and the housekeeping pass, removal on join / disband / account deletion of either side, the live event to protocol 2 sessions only, member presence).
 
 Public rooms, Quick Join, the room browser and quick chat came with N5.1. Parties, invites, blocked players kept out of Quick Join and the invite links are N9.3: see "Parties (N9.3)" and "Invite links and deep links".
 
@@ -1106,7 +1108,30 @@ All routes are under `/api/v1`, need `Authorization: Bearer`, and use the error 
     "role": "member", "joined_at": 1790000300}]}
 ```
 
-Members are listed owner first, then officers, then members, each by join time. `invite_code` and `your_role` are `null` for non-members.
+Members are listed owner first, then officers, then members, each by join time. `invite_code` and `your_role` are `null` for non-members. Each member also carries `status` (`offline`, `online`, `in_room`, from the gateway's sessions and the rooms) when you are a member of that crew (the client's room invite list shows online crewmates), else `null`.
+
+### Crew invites
+
+The owner's request "there is no way to invite my friends to my crew". A crew member invites a **friend**; the invite waits (persistent, so an offline friend sees it later) until it is accepted, declined or expires. Spec: Crews (persistent) ("You join by an invite code": an invite brings the crew to the friend instead of the code), Friends and presence (blocking).
+
+- **Who may invite: any member.** Every member already sees and shares the invite code (above), so an invite gives no new power; restricting invites to the owner and officers would only make members share the code by hand instead.
+- **Whom:** an accepted friend of the sender, not blocked either way (blocking ends the friendship; the refusal is the same `not_friends` and does not reveal a block), not already in this crew. Someone in another crew can be invited; accepting asks them to leave theirs first (`already_in_crew`, as the join by code).
+- **One invite per crew and player.** Inviting again renews it (`200`, a fresh expiry, the new sender); a new one answers `201`. A crew has at most `social.crew_max_pending_invites` (32) unexpired invites out.
+- **Expiry:** `social.crew_invite_ttl_hours` (168, 7 days) after the (last) invite. Every read ignores expired rows; the daily housekeeping pass deletes them.
+- **Accepting** joins with the join-by-code checks (`already_in_crew`, `crew_full`, the Loop crew recompute) and deletes the invite. Accepting an invite to the crew you are already in just clears it. An invite whose sender is blocked either way is hidden from the list and refused (`invite_not_found`).
+- **Removed** on accept, decline, a join by code to that crew, disbanding (also `ON DELETE CASCADE`), and account deletion of either the invitee or the sender (`social::on_account_delete`).
+- **Live:** when the invitee has a gateway session on a protocol 2 client, they get `lobby_event.crew_invite {invite_id, crew_tag, crew_name, from, expires_in_s}` at once (PROTOCOL.md §4); otherwise they see it in `GET /crews/invites` (the crew page, the online hub).
+- **Limits:** `POST /crews/{id}/invites` and `/crews/invites/{id}/accept` are social writes (`rate_limits.social_per_hour`), on top of the account limit. `wb_crew_invites_total` counts invites sent.
+
+| Route | Answer | Errors |
+| --- | --- | --- |
+| `POST /crews/{id}/invites` `{"account_id"}` | `201` (new) / `200` (renewed) `{"invite_id", "player", "from", "created_at", "expires_at"}` | 400 `cannot_invite_self`, `invalid_body`; 403 `not_friends`; 404 `not_in_crew` (you), `player_not_found`; 409 `already_member`, `crew_full`, `crew_invites_limit` |
+| `GET /crews/{id}/invites` | `{"invites": [{"invite_id", "player", "from", "created_at", "expires_at"}]}`: the crew's unexpired invites, newest first (members only: INVITED in the client) | 404 `not_in_crew` |
+| `GET /crews/invites` | `{"invites": [{"invite_id", "crew_id", "crew_name", "crew_tag", "member_count", "max_members", "from", "created_at", "expires_at"}]}`: the invites waiting for you, newest first | |
+| `POST /crews/invites/{invite_id}/accept` | the crew (you joined) | 404 `invite_not_found` (unknown, expired, not yours, or the sender is blocked either way); 409 `already_in_crew`, `crew_full` |
+| `POST /crews/invites/{invite_id}/decline` | `204` | 404 `invite_not_found` |
+
+`player` and `from` are the player objects of "Friends" (`from` is `null` only in a race with the sender's account deletion).
 
 ### Reports
 
@@ -1123,6 +1148,7 @@ Members are listed owner first, then officers, then members, each by join time. 
 
 - It deletes `friends` rows on either side (friendships and pending requests) and `blocks` both ways.
 - It deletes the `crew_members` row. A crew the account owned passes on as in "Succession", or is disbanded when empty. The crew's current-season Loop crew score is recomputed without the account.
+- It deletes the `crew_invites` to the account and the ones it sent (`admin_log` detail `crew_invites=`).
 - **Reports are kept.** Their deleted side (`reporter_id` or `target_id`) is set to NULL (the foreign keys also say `ON DELETE SET NULL`). The moderation record (reason, context, time, handled) stays useful, for example to spot a pattern of reports about a player who deletes and recreates accounts, while nothing points at the deleted account. `admin reports` shows the side as `deleted`.
 - `admin_log`'s `account_delete` detail adds `friends=`, `blocks=`, `crew_memberships=`, `crew_transferred=`, `crew_disbanded=` and `reports_kept=` (counts only).
 
@@ -1151,6 +1177,10 @@ Migration `0004_social.sql`:
 - `crew_members`: `account_id` (primary key: one crew per account), `crew_id` (cascades with the crew), `role` (`owner` / `officer` / `member`), `joined_at`. Indexed by (`crew_id`, `joined_at`).
 - `reports`: `id`, `reporter_id` and `target_id` (`ON DELETE SET NULL`), `reason` (checked enum), `context` (JSON), `created_at`, `handled`, `handled_at`. Indexed by (`reporter_id`, `created_at`) for the limit, (`handled`, `created_at`) for the admin list, and `target_id`.
 
+Migration `0009_crew_invites.sql`:
+
+- `crew_invites`: `id` (the invite id; AUTOINCREMENT: an answered invite's id is never reused), `crew_id` (cascades with the crew), `account_id` (the invitee; cascades), `inviter_id` (`ON DELETE SET NULL`; the account deletion deletes the row first), `created_at`, `expires_at`. UNIQUE (`crew_id`, `account_id`): one invite per crew and player. Indexed by (`account_id`, `expires_at`) for the invitee's list, `inviter_id` for the deletion, and `expires_at` for the housekeeping pass.
+
 ### Configuration
 
 `[social]`:
@@ -1166,6 +1196,10 @@ Migration `0004_social.sql`:
 | `report_context_max_bytes` | `1024` | Largest report `context` (compact JSON; 2–4096) |
 | `party_max_members` | `8` | N9.3: members per party, the leader included (spec: up to 8; ≤ 16 on the wire) |
 | `party_member_hold_ms` | `15000` | N9.3: a member whose connection ended keeps their place this long (not in spec) |
+| `room_invite_ttl_secs` | `120` | Room invites: how long an invite shows on the invitee's screen, and how long a repeat invite of the same player to the same room is refused (10–3600; not in spec) |
+| `room_invites_per_minute` | `10` | Room invites one player may send in any rolling minute (refused ones don't count; spec: rate-limited) |
+| `crew_invite_ttl_hours` | `168` | Crew invites expire this long after the (last) invite (1–8760; not in spec) |
+| `crew_max_pending_invites` | `32` | Unexpired invites one crew may have out at once (not in spec) |
 
 `[rate_limits]`: `social_per_hour` / `social_burst` (`60` / `20`), the social writes per account.
 
@@ -1197,6 +1231,31 @@ WP N9.3, in `crates/server/src/social/parties.rs` (the registry), the gateway's 
 **Concurrency.** One `std::sync::Mutex` over parties, codes, account → party and the follow channels; held for map updates and non-blocking `try_send`s (session queues, follow channels), never across an `.await`. Lock order: parties, then the session registry. The rooms registry and the presence hub are never taken under it (the gateway reads the leader's seat before or after).
 
 **Tests:** `social::parties::tests` (lifecycle, leader passing, refusals, invites, the follow orders, holds), `rooms::tests::a_party_is_one_crew_in_a_public_room`, `tests/parties.rs` (real sockets: create / join / kick / leave and refusals; invites to online friends only, blocks for party joins and Quick Join; **Quick Join fitting a party of three**: a public room with 2 free seats is skipped and a new one made, the party one crew, a solo player then joins the fullest room with a crew of their own; the leader moving the party into a private room and on to a public one, a member joining the party while the leader is seated following at once, a member going alone leaving the party; a dropped member's place held and the state after the reconnect's `Welcome`), `tests/gateway.rs` (a party command outside a party).
+
+## Room invites (protocol 2)
+
+The owner's request "there is no way to invite my friends or crew into a private room in online mode". In `crates/server/src/gateway.rs` (`room_invite`), `social/room_invites.rs` (the in-memory limit and the invites still showing) and `social::can_invite`. Spec: Rooms, parties and matchmaking (Private rooms: "The creator gets a code and an invite link"; Friends and presence: "a blocked player ... cannot invite you"; Crews). Wire: `lobby_command.room_invite {account_id}` → the target's `lobby_event.room_invite {from, room_id, code, visibility, players, max_players, expires_in_s}` (PROTOCOL.md §4, version 2).
+
+- **Who:** any player **seated** in a room (host or not; private or public: an invite is only the room's code, the same key as the link) invites an **online friend or member of their crew**. The invitee accepts with `room_join_code` and the code (so `room_full`, `room_not_found` and the party rules of a join by code apply); declining needs no message. The sender gets no acknowledgement; refusals are non-fatal `error`s with the reason as `detail` (the client shows it).
+- **Checks, in order** (nothing about a stranger's presence leaks: the relationship comes before online):
+
+  | Check | Refusal (`code`, `detail`) |
+  | --- | --- |
+  | seated in a room | `not_in_room`, "Join a room before inviting players to it." |
+  | not yourself | `not_allowed`, "You can't invite yourself." |
+  | an accepted friend or in the same crew, and no block either way (a crewmate who blocked you stays in the crew) | `not_allowed`, "You can only invite friends and crew members." |
+  | online (a live gateway session) | `not_allowed`, "That player is offline." |
+  | their client speaks protocol 2 | `not_allowed`, "That player's game needs an update to get room invites." |
+  | not already in this room | `not_allowed`, "That player is already in this room." |
+  | the room has a free seat | `room_full`, "Your room is full." |
+  | not invited to this room within `social.room_invite_ttl_secs` (120 s) | `not_allowed`, "You already invited that player. Give them a moment." |
+  | at most `social.room_invites_per_minute` (10) sent in any rolling minute | `rate_limited`, "Too many invites. Wait a minute and try again." |
+  | (a database error) | `internal`, "Invites are unavailable right now. Try again." |
+
+- **Expiry:** the event carries `expires_in_s` = `room_invite_ttl_secs`; the client drops the invite after it. The server forgets the pair after it (a repeat is then allowed). Nothing to delete: invites live in memory only (the registry drops expired entries on every call).
+- **Concurrency:** one `std::sync::Mutex` in `RoomInvites`, held for the map updates only. The event goes to the target's bounded outbound queue (`SessionHandle::send_frame`; a full queue kicks that client, as for every lobby push).
+- **Metrics / logs:** `wb_room_invites_total` (delivered); `room invite` INFO line (account, target, room).
+- **Tests:** `social::room_invites::tests` (the repeat window, the rolling minute, expiry), `tests/room_invites.rs` (real sockets: a friend and a crewmate get the invite and join by its code, any seated player may invite; every refusal above, a protocol 1 client welcomed but never sent the event; the per-minute limit; a repeat allowed once expired, with a manual clock).
 
 ## Invite links and deep links
 
@@ -2066,6 +2125,7 @@ What lives on the volume and what caps it:
 2. `admin_log` older than `admin_log_days` (365);
 3. handled `reports` older than `reports_days` (365); unhandled ones stay;
 4. `leaderboard_entries` of Daily Drive days and Journey weeks older than `board_periods_days` (90; the period containing that day stays); Loop seasons and all-time boards stay. The running server drops its board cache after;
+4b. expired `crew_invites` (no retention to configure: every read ignores them already; `wb_housekeeping_rows_deleted_total{table="crew_invites"}`);
 5. `runs` older than `runs_days` (90) that hold no board entry, walking the table by id. Kept whatever their age: legacy uploads (their row is the once-per-board rule), runs still `pending` (waiting for their replay), runs whose replay file is still there. A run's idempotent answer is only needed for minutes. Consequence: after a removal (`admin remove-run`) or a `recompute`, a board can only fall back to runs from the last 90 days or ones that hold another entry;
 6. the dated backups down to their count, other copies past their age (as at startup);
 7. `room-handover.json` once it has expired;

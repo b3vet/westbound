@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "direction": "server_to_client",
   "type": "lobby_event",
   "type_id": 67,
@@ -209,6 +209,61 @@
         "type": "lobby_event"
       },
       "hex": "4302000501"
+    },
+    {
+      "name": "room_invite",
+      "message": {
+        "code": "ABC234",
+        "expires_in_s": 120,
+        "from": {
+          "account_id": "42",
+          "display_name": "Dusty",
+          "name_tag": 1234
+        },
+        "kind": "room_invite",
+        "max_players": 8,
+        "players": 3,
+        "room_id": 12,
+        "type": "lobby_event",
+        "visibility": "private"
+      },
+      "hex": "432100062a00000000000000054475737479d2040c000000064142433233340003087800"
+    },
+    {
+      "name": "room_invite_edges",
+      "message": {
+        "code": "ZZZZZZ",
+        "expires_in_s": 65535,
+        "from": {
+          "account_id": "9223372036854775807",
+          "display_name": "東京ドリフト",
+          "name_tag": 9999
+        },
+        "kind": "room_invite",
+        "max_players": 16,
+        "players": 16,
+        "room_id": 4294967295,
+        "type": "lobby_event",
+        "visibility": "public"
+      },
+      "hex": "432e0006ffffffffffffff7f12e69db1e4baace38389e383aae38395e383880f27ffffffff065a5a5a5a5a5a011010ffff"
+    },
+    {
+      "name": "crew_invite",
+      "message": {
+        "crew_name": "Gece Sürücüleri",
+        "crew_tag": "NR",
+        "expires_in_s": 604800,
+        "from": {
+          "account_id": "77",
+          "display_name": "Zoë",
+          "name_tag": 7
+        },
+        "invite_id": "9007199254740993",
+        "kind": "crew_invite",
+        "type": "lobby_event"
+      },
+      "hex": "433200070100000000002000024e5212476563652053c3bc72c3bc63c3bc6c6572694d00000000000000045a6fc3ab0700803a0900"
     }
   ]
 }
