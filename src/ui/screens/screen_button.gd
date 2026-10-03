@@ -12,6 +12,13 @@ extends BaseButton
 ## (HudMesh, one draw call) with the label on top; it redraws only when its look
 ## changes. Touch: BaseButton takes the mouse events Godot emulates from touches, so
 ## raw touch ids (large on iOS Safari) never index anything here.
+##
+## Gamepad and keys (owner request, 2026-10-03; docs/CONTROLS.md → Menus with a gamepad):
+## focusable (FOCUS_ALL) and in PadNav.BUTTON_GROUP, so PadNav can move a visible focus
+## through any screen; the focused button draws an accent ring FOCUS_GAP px outside its
+## edge and presses on A / Enter (BaseButton's ui_accept). A click or tap focuses a
+## control with hidden focus (the engine's pointer rule); this button lets go of such a
+## focus at once, so after a tap the keys reach the screens exactly as before.
 
 enum Kind { NORMAL, PRIMARY, DANGER, OPTION }
 
@@ -24,6 +31,9 @@ const PRESS_SHIFT := 2.0   # lint: allow-number look
 const CHEVRON_EM := 1.25   # lint: allow-number glyph proportion
 const CHEVRON_W := 0.55   # lint: allow-number glyph proportion
 const CHEVRON_STROKE := 0.32   # lint: allow-number glyph proportion
+## The focus ring: this far outside the edge, this wide.
+const FOCUS_GAP := 5.0   # lint: allow-number look
+const FOCUS_RING_W := 2.5   # lint: allow-number look
 
 var style: HudStyle
 var kind: Kind = Kind.NORMAL
@@ -51,15 +61,18 @@ var redraws: int = 0
 
 var _mesh := HudMesh.new()
 var _chev := PackedVector2Array()
+var _ring := PackedVector2Array()
 
 
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	focus_mode = Control.FOCUS_NONE
+	focus_mode = Control.FOCUS_ALL
 	action_mode = BaseButton.ACTION_MODE_BUTTON_RELEASE
+	add_to_group(PadNav.BUTTON_GROUP)
 	_chev.resize(HudDraw.CHAMFER_POINTS)
-	button_down.connect(queue_redraw)
-	button_up.connect(queue_redraw)
+	_ring.resize(HudDraw.CHAMFER_POINTS)
+	button_down.connect(_on_button_edge)
+	button_up.connect(_on_button_edge)
 	mouse_entered.connect(queue_redraw)
 	mouse_exited.connect(queue_redraw)
 
@@ -88,6 +101,39 @@ func font_px() -> int:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_RESIZED:
 		queue_redraw()
+	elif what == NOTIFICATION_FOCUS_ENTER:
+		queue_redraw()
+		_drop_hidden_focus()
+	elif what == NOTIFICATION_FOCUS_EXIT:
+		queue_redraw()
+
+
+## A press or release by A / Enter on the focused button is this button's: the event
+## stops here (BaseButton leaves it unhandled, and the screen's own ui_accept, e.g. the
+## title's PLAY, would act on it too). Pointer events are handled by the GUI anyway.
+func _on_button_edge() -> void:
+	queue_redraw()
+	if is_inside_tree():
+		get_viewport().set_input_as_handled()
+
+
+## Focus from a click or tap (hidden): let it go, the pointer pressed us already.
+func _drop_hidden_focus() -> void:
+	if is_inside_tree() and has_focus() and not has_focus(true):
+		release_focus()
+
+
+## The focus ring shows (focus from the pad or the keys).
+func focus_shown() -> bool:
+	return has_focus(true)
+
+
+## Adds the focus ring around `r` to `mesh` while the focus shows (subclasses that draw
+## their own face call it too).
+func focus_ring(mesh: HudMesh, r: Rect2) -> void:
+	if focus_shown() and style != null:
+		HudDraw.chamfer(r.grow(FOCUS_GAP), style.bevel_control + FOCUS_GAP * 0.5, _ring)
+		mesh.edge(_ring, HudDraw.CHAMFER_POINTS, FOCUS_RING_W, style.accent)
 
 
 func _draw() -> void:
@@ -97,7 +143,7 @@ func _draw() -> void:
 	var s := style
 	var mode := get_draw_mode()
 	var down := mode == DRAW_PRESSED or mode == DRAW_HOVER_PRESSED
-	var hover := mode == DRAW_HOVER
+	var hover := mode == DRAW_HOVER or focus_shown()
 	var off := Vector2(PRESS_SHIFT, PRESS_SHIFT) if down else Vector2.ZERO
 	var r := Rect2(off, size - Vector2(PRESS_SHIFT, PRESS_SHIFT))
 	var fill := s.panel_fill
@@ -142,6 +188,7 @@ func _draw() -> void:
 				s.tuning.accent_tab_size_px), s.accent)
 	if kind == Kind.PRIMARY and not disabled:
 		_chevron(r, cap, pad, ink)
+	focus_ring(_mesh, r)
 	_mesh.flush(self)
 	var tw := HudDraw.text_width(s.label, text, fs)
 	var x := r.position.x + pad

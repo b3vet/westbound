@@ -92,6 +92,8 @@ const SNAP_FINALE_M := 5.0   # lint: allow-number dev snap position, not tuning
 const SNAP_FEATURE_LEGS := 8
 ## tools/snap.sh runs use this seed unless --seed is given.
 const SNAP_SEED := 20260929
+## Snaps: the touch id of the --look_back finger (iOS-style).
+const SNAP_LOOK_TOUCH := 1_893_457_201
 ## After the physics car (tick) and before the camera rig (100).
 const PHYSICS_PRIORITY := 50
 ## N3.2: the loop test mode (RunLoop).
@@ -152,6 +154,8 @@ var finale := RunFinale.new()
 var warmup := RunWarmup.new()
 var sky: SkyRig
 var hub: PlayerInput
+## Gamepad / keyboard menu navigation (owner request, 2026-10-03).
+var pad_nav: PadNav
 var rig: CameraRig
 var car: PlayerCar
 var registry: TrafficRegistry
@@ -303,6 +307,13 @@ func _ready() -> void:
 	adapter = $RunEvents
 	hub.camera_cycle_requested.connect(rig.cycle_mode)
 	hub.pause_requested.connect(toggle_pause)
+	# Gamepad / keys through every menu (docs/CONTROLS.md → Menus with a gamepad). First
+	# child: its _unhandled_input (B pressing a BACK button) runs after every screen's.
+	pad_nav = PadNav.new()
+	pad_nav.name = "PadNav"
+	pad_nav.controls = tuning.controls
+	add_child(pad_nav)
+	move_child(pad_nav, 0)
 
 	origin = FloatingOrigin.new()
 	origin.name = "FloatingOrigin"
@@ -719,7 +730,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var tap := (event is InputEventScreenTouch and (event as InputEventScreenTouch).pressed) \
 		or (event is InputEventMouseButton and (event as InputEventMouseButton).pressed) \
-		or (event is InputEventKey and (event as InputEventKey).pressed)
+		or (event is InputEventKey and (event as InputEventKey).pressed) \
+		or (event is InputEventJoypadButton and event.is_action_pressed(&"ui_accept"))
 	if tap:
 		skip()
 
@@ -1711,6 +1723,13 @@ func snap_setup(args: Dictionary) -> void:
 			if n != null:
 				n.set(&"visible", false)
 	rig.snap_to_target()
+	if bool(args.get("look_back", false)):
+		# Look back held (a finger on the LOOK BACK button): the rear view (owner request).
+		var ev := InputEventScreenTouch.new()
+		ev.index = SNAP_LOOK_TOUCH
+		ev.position = hub.layout.look_rect.get_center()
+		ev.pressed = true
+		hub.handle_pointer(ev, 0.0)
 
 
 ## Dev (snaps, WP8.5): the title's attract drive after --s / --sky_t: --shot=orbit|pass

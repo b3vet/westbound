@@ -7,11 +7,11 @@ extends WBTest
 ## has a .gdignore, so it is not a Godot resource). A missing directory fails every test.
 
 const VECTOR_DIR := "westbound-server/crates/protocol/vectors/"
-const EXPECTED_MESSAGE_VECTORS := 87
-const EXPECTED_C2S := 39
-const EXPECTED_S2C := 48
+const EXPECTED_MESSAGE_VECTORS := 91
+const EXPECTED_C2S := 40
+const EXPECTED_S2C := 51
 const EXPECTED_FRAMES := 3
-const EXPECTED_INVALID := 36
+const EXPECTED_INVALID := 37
 const EXPECTED_QUANT := 69
 const FUZZ_SEED := 20260929
 const FUZZ_ROUNDS := 12

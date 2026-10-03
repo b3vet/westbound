@@ -1,6 +1,6 @@
 # Westbound Online: realtime protocol
 
-The wire contract between the Godot client (`src/net/codec.gd`) and the server (`westbound-server/crates/protocol`). It implements [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Networking protocol. **Protocol version 1.** This document and `crates/protocol/src/messages.rs` freeze after N2: changes need an orchestrator decision, a `PROTOCOL_VERSION` bump and regenerated golden vectors.
+The wire contract between the Godot client (`src/net/codec.gd`) and the server (`westbound-server/crates/protocol`). It implements [`WESTBOUND_MULTIPLAYER_HANDOFF.md`](../WESTBOUND_MULTIPLAYER_HANDOFF.md) → Networking protocol. **Protocol version 2** (version 2, 2026-10-03, room and crew invites: `lobby_command.room_invite`, `lobby_event.room_invite` / `crew_invite`; the server still takes version 1 clients, §6). This document and `crates/protocol/src/messages.rs` freeze after N2: changes need an orchestrator decision, a `PROTOCOL_VERSION` bump and regenerated golden vectors.
 
 ## 1. Connection
 
@@ -156,6 +156,7 @@ Sizes are payload bytes (add 3 for the header). Field order is wire order.
 | 9 | `room_leave` | — |
 | 10 | `quick_join` | — (the whole party moves together) |
 | 11 | `room_browse` | — (answered by `lobby_event.room_list`) |
+| 12 | `room_invite` | `account_id` (v2: an online friend or crew member, to the room you are seated in; accepted with `room_join_code`; refusals are non-fatal `error`s whose `detail` says why, SERVER.md → Room invites) |
 
 `room_host_command` kinds: 0 `kick` {`player_id` u16}, 1 `set_density` {`density` enum}, 2 `set_time_mode` {`time_mode` enum, `fixed_cycle_ms` u32}.
 
@@ -186,7 +187,7 @@ Chat item kinds: 0 `phrase` {`phrase` enum}, 1 `horn` {}, 2 `emote` {`emote` u8,
 
 **TrafficIntentEntry** (14): `car_id` u16 · `kind` enum `intent_kind` · `start_tick` u32 (blinker / effect start) · `move_start_tick` u32 (lane changes: lateral move start, ≥ 1.0 s after `start_tick`; other kinds: equal to `start_tick`) · `target_lane` u8 (0–7; lane changes only, else 0) · `duration_ms` u16 (move duration, or the effect's duration for hazard, horn and hard brake).
 
-`lobby_event` kinds: 0 `party_state` {`code`, `leader` account_id, `members` list 1–16 of Identity} · 1 `party_left` {`reason` enum} · 2 `party_invite` {`from` Identity, `code`} · 3 `presence` {`friends` list 0–128 of {`account_id`, `status` enum, `room_id` u32 (0 = none), `joinable` bool}} · 4 `room_list` {`rooms` list 0–64 of {`room_id` u32, `players` u8 (0–16), `max_players` u8 (1–16), `density` enum, `night` bool}} · 5 `room_left` {`reason` enum}.
+`lobby_event` kinds: 0 `party_state` {`code`, `leader` account_id, `members` list 1–16 of Identity} · 1 `party_left` {`reason` enum} · 2 `party_invite` {`from` Identity, `code`} · 3 `presence` {`friends` list 0–128 of {`account_id`, `status` enum, `room_id` u32 (0 = none), `joinable` bool}} · 4 `room_list` {`rooms` list 0–64 of {`room_id` u32, `players` u8 (0–16), `max_players` u8 (1–16), `density` enum, `night` bool}} · 5 `room_left` {`reason` enum} · **v2:** 6 `room_invite` {`from` Identity, `room_id` u32, `code`, `visibility` enum, `players` u8 (0–16), `max_players` u8 (1–16), `expires_in_s` u16 (the invite shows this long from receipt)} · 7 `crew_invite` {`invite_id` account_id (u64, JSON a decimal string), `crew_tag` crew_tag, `crew_name` text, `from` Identity, `expires_in_s` u32} (the crew invite's id for `POST /api/v1/crews/invites/{invite_id}/accept`; SERVER.md → Crew invites). The server never sends kinds 6 and 7 to a session whose `Hello` said version 1 (§6).
 
 `room_event` kinds: 0 `join` {Member} · 1 `leave` {`player_id` u16, `reason` enum} · 2 `host_change` {`player_id` u16} · 3 `kick` {`player_id` u16} · 4 `settings` {`tick` u32, `settings` RoomSettings, `clock` RoomClock} · 5 `crew` {RoomCrew: a crew was added or its session total changed} · 6 `connection` {`player_id` u16, `connected` bool: seat held / reconnected}.
 
@@ -206,8 +207,8 @@ Any other message before `Hello` → `handshake_required`. A second `Hello`, or 
 
 ## 6. Versioning rules
 
-- `PROTOCOL_VERSION` (u16, currently **1**) is bumped for **any** wire change: a new message or union kind, a new enum value or flag bit, a new or reordered field, a changed scale, cap or string rule. Adding an enum value is a breaking change, because old decoders reject unknown values.
-- The server accepts `MIN_SUPPORTED_PROTOCOL_VERSION ..= PROTOCOL_VERSION` (both 1 today: an exact match). Supporting two versions at once is out of scope for v1; deploy the server first, then release clients.
+- `PROTOCOL_VERSION` (u16, currently **2**) is bumped for **any** wire change: a new message or union kind, a new enum value or flag bit, a new or reordered field, a changed scale, cap or string rule. Adding an enum value is a breaking change, because old decoders reject unknown values.
+- The server accepts `MIN_SUPPORTED_PROTOCOL_VERSION ..= PROTOCOL_VERSION` (**1..=2**). Version 2 only **added** union kinds (`lobby_command` 12, `lobby_event` 6 and 7) and no enum value, flag or field, so a version 1 client's messages are valid version 2 messages. The one rule that keeps a version 1 client working: the server sends a version 2 kind only to sessions whose `Hello` said at least `INVITES_PROTOCOL_VERSION` (2) (`SessionHandle::takes_invites`). A version 1 client therefore never gets an invite (a room invite to it is refused with "That player's game needs an update to get room invites."; a crew invite waits in its HTTP list), and everything else works as before. `Welcome.protocol_version` says 2; version 1 clients do not check it. Deploy the server first, then release clients. A later change that is not purely additive raises `MIN_SUPPORTED_PROTOCOL_VERSION`, and old clients get the frozen `update_required`.
 - **Frozen forever**, so any client and server can always say "please update" to each other:
   - the framing (`[u8 type][u16 length][payload]`, little-endian);
   - `hello` = `0x01` with `protocol_version` u16 as its first two payload bytes;
@@ -262,7 +263,7 @@ The JSON form is what `codec.gd` decodes into (a Dictionary) and encodes from:
 | `invalid.json` | frames the decoder must reject: `{name, direction, hex, error}` where `error` is the kind from §10 |
 | `quantization.json` | the per-field rules and `{field, physical, wire, back, error}` samples, including halves, clamps, wraps and rejections |
 
-Totals: 87 message vectors (39 client → server, 48 server → client), 3 frames, 36 invalid frames, 69 quantization samples.
+Totals: 91 message vectors (40 client → server, 51 server → client), 3 frames, 37 invalid frames, 69 quantization samples. Version 2 added `lobby_command.room_invite`, `lobby_event.room_invite` (typical and range edges), `lobby_event.crew_invite`, and the invalid `room_invite_players_over_16` (`out_of_range`); every file's `protocol_version` reads 2.
 
 **Regenerate:** `cd westbound-server && cargo run -p protocol --bin gen_vectors`. The `golden_vectors` test fails if the committed files drift from the generator, and independently checks that every vector's bytes decode to its JSON and its JSON encodes to its bytes. The GDScript codec must do the same for every vector.
 
@@ -307,6 +308,7 @@ Both stay under the 10 KB/s downstream budget. A typical tick is `player_states`
 - **Lane-change state at spawn** is carried inline (phase, target, move-start tick, duration), so a car that appears mid-maneuver needs no extra message.
 - **Hit reaction** (swerve, brake, hazards) is expressed with the existing intents (`hard_brake`, `hazard`) plus corrections; no separate kind.
 - **Lobby sub-payloads** (§4) are minimal: invites are accepted by `party_join` with the invite's code; declining needs no message; presence is a subscription; the room browser is a request/response.
+- **Room and crew invites (v2, 2026-10-03).** A room invite carries the room's code: accepting is the ordinary `room_join_code` (the same join as a typed code or the `/r/<code>` link, with its `room_full` / `room_not_found` answers); declining needs no message. It also carries what the invitee's card shows (who, private or public, players, max) and `expires_in_s` (relative: the client has no shared wall clock). The sender gets no acknowledgement; a refusal is a non-fatal `error` with the reason in `detail` (no new error codes: `not_allowed`, `not_in_room`, `room_full`, `rate_limited`, `internal`). A crew invite is persistent and lives in the HTTP API; `lobby_event.crew_invite` only tells an online invitee at once (its `invite_id` answers it over HTTP). `crew_name` uses the `text` string rule (crew names are server-validated, 3–24 characters).
 - **Ids.** Room ids are u32 (0 = none in presence); player and car ids are u16 per room; account ids are u64 capped at `i64::MAX`.
 - **Map hash** is a 32-byte SHA-256, checked in `Hello` (before auth) rather than on each room join: one server, one map.
 - **Clock sync** uses the room tick plus a 1/65536 fraction instead of wall time.

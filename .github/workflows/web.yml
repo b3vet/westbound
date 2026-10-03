@@ -142,6 +142,9 @@ jobs:
       - name: Stale page reloads once
         run: node tools/web_smoke/smoke.mjs --timeout 90000 --stale --settle 6000 --screenshot build/web_smoke_stale.png
 
+      - name: Gamepad drives the menus and a run (fake Xbox pad at index 1)
+        run: node tools/web_smoke/smoke.mjs --timeout 90000 --gamepad --settle 6000 --screenshot build/web_smoke_gamepad.png
+
       - name: Daily Drive determinism (native vs wasm, 180 s)
         run: tools/determinism/compare.sh --seconds=180 --no-export
 

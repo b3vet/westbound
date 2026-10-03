@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM crew_invites WHERE crew_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5e5eebb36f50fbee12b503dda2b8a97936896093f40fc1406cda2d798163b4b3"
+}

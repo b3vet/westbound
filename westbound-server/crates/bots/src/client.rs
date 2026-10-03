@@ -55,6 +55,18 @@ impl BotClient {
         client_build: u32,
         bot: RoomBot,
     ) -> anyhow::Result<Self> {
+        Self::connect_as(url, token, map_hash, client_build, bot, PROTOCOL_VERSION).await
+    }
+
+    /// `connect` saying `protocol_version` in its `Hello` (an older client, in tests).
+    pub async fn connect_as(
+        url: &str,
+        token: &str,
+        map_hash: MapHash,
+        client_build: u32,
+        bot: RoomBot,
+        protocol_version: u16,
+    ) -> anyhow::Result<Self> {
         let (ws, _) = tokio_tungstenite::connect_async(url)
             .await
             .with_context(|| format!("connecting {url}"))?;
@@ -71,7 +83,7 @@ impl BotClient {
             sent_bytes: 0,
         };
         let hello = ClientMsg::Hello(Hello {
-            protocol_version: PROTOCOL_VERSION,
+            protocol_version,
             client_build,
             map_hash,
             access_token: AccessToken::new(token).context("access token")?,

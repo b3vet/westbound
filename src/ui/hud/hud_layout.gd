@@ -173,7 +173,8 @@ static func fallback_px_per_cm(full_rect: Rect2) -> float:
 	return PlayerInput.canvas_px_per_cm(Tuning.load_default().controls, full_rect.size, Vector2i.ZERO)
 
 
-## The touch controls' rects: the joined gas column (pedal + boost cap) and the brake.
+## The touch controls' rects: the joined gas column (pedal + boost cap), the brake and
+## the LOOK BACK button above the gas column.
 static func pedal_rects(controls: ControlsLayout) -> Array[Rect2]:
 	var out: Array[Rect2] = []
 	if controls == null:
@@ -184,6 +185,8 @@ static func pedal_rects(controls: ControlsLayout) -> Array[Rect2]:
 		out.append(controls.gas_rect)
 	if controls.has(controls.brake_rect):
 		out.append(controls.brake_rect)
+	if controls.has(controls.look_rect):
+		out.append(controls.look_rect)
 	return out
 
 

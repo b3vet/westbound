@@ -72,7 +72,8 @@ screens.countdown_hold.connect(hold_countdown)
     4. QUIT: its edge turns hot when pressed. It is furthest from the thumb.
 
   Each is at least `touch_target_px` (88) tall and `menu_button_width_px` wide.
-- **Input.** The tree is paused, so every screen has `PROCESS_MODE_ALWAYS`; tweens bound to them keep running. Esc, P or Start toggles the pause through the hub. Enter or Space resumes.
+- **Input.** The tree is paused, so every screen has `PROCESS_MODE_ALWAYS`; tweens bound to them keep running. Esc, P or Start toggles the pause through the hub. Enter or Space resumes. B (ui_cancel) goes back one level: the account to the settings, the settings to the menu, the menu resumes.
+- **Gamepad (every screen).** D-pad / left stick / arrows move a visible focus ring between the buttons, A presses, B backs out, LB / RB switch tabs, with no per-screen code (`PadNav`, docs/CONTROLS.md → Menus with a gamepad). The results take B as MENU.
 - **QUIT** goes back to the title (`run.enter_menu()`, WP8.5).
 
 ### Settings
@@ -338,7 +339,7 @@ The game boots into the title: the run's MENU state over the attract drive (docs
 - **Profile chip (top-right):** the session's `name#tag` (PLAYER before a sign-in) and its status word (ONLINE, CONNECTING, OFFLINE, ...; ONLINE OFF without a session) after a status diamond (accent online, gold connecting, hot suspended / refused, muted otherwise). It follows `status_changed` / `profile_changed`. It never reaches the logo: the name is shortened with "..." to the room right of it (and `title_chip_max_width_px`). A tap opens ACCOUNT (or the settings without a session).
 - **SETTINGS:** the pause menu's settings view: SETTINGS (at `font_title_px`) top-left, DONE and ACCOUNT top-right, the SettingsPanel (GAME / CONTROLS / AUDIO pages, WP8.1) or the ProfilePanel (ACCOUNT / FRIENDS / CREW) under them, over the dim. Settings are saved when DONE closes the view or a run starts.
 - **LEADERBOARDS:** the existing LeaderboardsScreen over the title (BACK / Esc comes back).
-- **Keys:** Enter plays; Esc closes the settings view.
+- **Keys:** Enter plays; Esc closes the settings view. A gamepad moves a focus ring (PLAY first) and presses with A; B backs out of the settings and the account view (docs/CONTROLS.md → Menus with a gamepad).
 - **Text size:** 100% / 125% (`text_scale`), restyled live; touch targets do not scale. Not mirrored for left-handed play (the title has no thumb-side control column; the band and logo anchor left).
 
 ### Online hub
@@ -363,6 +364,8 @@ A refusal shows the server's reason in hot text ("No room with that code.", "Tha
 ### Party (N9.3)
 
 Docs: [ROOMS_CLIENT.md](ROOMS_CLIENT.md) → Parties. The ROOMS panel has a third column: PARTY over the party's line (`NO PARTY YET`, `3/8 · YOU LEAD`, `3/8 · Dusty#1234 LEADS`, gold `Dusty#1234 INVITES YOU`; shortened with "..."). PARTY opens RoomLobbyPanel's PARTY view (a waiting invite's card first): without a party CREATE PARTY / JOIN PARTY (a code field) / BACK; in one, `PARTY K7QX2M`, the members in two columns (LEADER, YOU; the leader removes with two taps: TAP AGAIN TO REMOVE), who picks the room, INVITE FRIENDS (the account view on FRIENDS), SHARE LINK (or COPY LINK), LEAVE PARTY, BACK. An invite arriving while the hub shows opens PARTY INVITE (gold `name#tag INVITES YOU`, DECLINE, ACCEPT). The friends list gets INVITE on online friends and a live JOIN ("FRIEND'S ROOM · JOINING ROOM 12..."). An invite link (`?room=` / `--room=`) opens the hub with INVITE LINK · JOINING K7QX2M... (a room, else the party). The room menu (ROOMS_CLIENT.md → Room HUD) gets a ROOM tab: the invite link with COPY LINK / SHARE, and for the host TRAFFIC, TIME OF DAY and REMOVE A PLAYER. Snaps: `tools/snap.sh src/ui/screens/dev/party_preview.tscn --renderer=both --sweep=party:none,lead,member,kick,invite,link,hub` (and `--seconds=2.5 --sweep=party:room_host,room_player`). Tests: `tests/ui/test_party_ui.gd`, `tests/ui/test_room_menu_host.gd` (flows through iOS-style touch ids and text fit at both text sizes on 1280x720 and a notched 1560x720).
+
+**Room and crew invites (protocol 2).** Docs: [ROOMS_CLIENT.md](ROOMS_CLIENT.md) → Room invites, [NET_CLIENT.md](NET_CLIENT.md) → Crew invites. The room menu gets a fourth tab, INVITE: the link row, then up to six online friends and crewmates (`FRIEND · TAP TO INVITE`, `CREW · TAP TO INVITE`, then `INVITED`), the server's refusal in hot text. A room invite opens a ROOM INVITE card on the hub (gold `name#tag INVITES YOU TO THEIR ROOM`, `PRIVATE ROOM K7QX2M · 3/8 PLAYERS`, DECLINE / JOIN) and a toast on the title (top-right under the profile chip: LATER / JOIN) or, as a note without buttons, in a single-player run (where the achievement toast goes). The hub shows waiting crew invites as a gold line over FRIENDS / CREW; the crew page has INVITE FRIENDS (INVITE / INVITED) and, without a crew, the invites waiting for you (JOIN / DECLINE). Tests: `tests/ui/test_invites_ui.gd`.
 
 
 ### Flow
@@ -421,7 +424,7 @@ Car select, paint and rims on a turntable, and the driver level. Spec: UI → Sc
 ### Behaviour
 
 - **A tap on an unlocked item selects it** (the car; or the selected car's paint or rims) and saves it (end of the frame); the next run and the attract car use it. **A tap on a locked item previews it** on the turntable and names what unlocks it; nothing is selected or written. A new tab (or DONE) drops the preview.
-- **Keys:** Esc and Enter = DONE; Left / Right step through the tab's items (select or preview); Up / Down change the tab (wrapping).
+- **Keys:** Esc and Enter = DONE; Left / Right step through the tab's items (select or preview); Up / Down change the tab (wrapping). The gamepad's D-pad and left stick do the same (no focus ring here: `pad_focus = false`), A / B = DONE, LB / RB change the tab.
 - **Touch:** ScreenButtons and the turntable read the mouse events Godot emulates from touches, never a raw touch index. A drag on the turntable turns the car.
 - **Cost:** nothing exists before the first GARAGE; closed = `visible = false` and the turntable's viewport stops rendering. Under the title's layer, so nothing draws in gameplay (`TitleScreens.visible_item_count() == 0`).
 - **Reduced motion:** fades only, and the turntable holds its idle spin.
@@ -457,7 +460,7 @@ The achievements, their progress and what is hidden. Spec: Garage and progressio
 ### Behaviour
 
 - Reads the save's unlocked ids and the service's progress (a snapshot of the save and the garage when no service runs); never writes.
-- **Keys:** Esc and Enter = DONE; Left / Right change the tab (wrapping). **Touch:** ScreenButtons (emulated mouse events, never a raw touch index); the cards take no touches.
+- **Keys:** Esc and Enter = DONE; Left / Right change the tab (wrapping); the gamepad's D-pad and stick too, A / B = DONE, LB / RB change the tab. **Touch:** ScreenButtons (emulated mouse events, never a raw touch index); the cards take no touches.
 - **Cost:** nothing exists before the first ACHIEVEMENTS; closed = `visible = false` under the title's layer, so nothing draws in gameplay (`TitleScreens.visible_item_count() == 0`).
 - **Text size:** 100% / 125%; every title and line shows whole at both sizes on 1280×720 and a notched 1560×720 (tested).
 

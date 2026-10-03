@@ -24,6 +24,10 @@ extends Control
 ## Braking by drag (WP9.3, color is never the only cue): the thumb also gets a hot ring,
 ## the gyro hold-brake's shape, in both drag visuals.
 ##
+## Look back (owner request, 2026-10-03): the LOOK BACK hold button above the gas
+## column, drawn like the pedals (faceted panel, neon edge, a down chevron for "behind"
+## over the label); filled with the accent while a finger holds it.
+##
 ## Accent: follows the SkyRig (accent_changed) when there is one; set_accent() for
 ## anything else; falls back to the color script's run-start accent.
 ## Colors below are the design system's until ui/theme.tres exists (WP4.3).
@@ -35,6 +39,7 @@ const COLOR_HOT := Color("#ff5a4d")
 const LABEL_GAS := "GAS"
 const LABEL_BRAKE := "BRAKE"
 const LABEL_BOOST := "BOOST"
+const LABEL_LOOK := "LOOK BACK"
 ## Octagon: faceted ring and dot (low-poly style instead of a smooth circle).
 const FACETS := 8
 ## Wheel spokes (screen angles, +y down, at zero rotation): right, left, bottom.
@@ -82,6 +87,7 @@ var _shown_hold: float = 0.0
 var _shown_hold_pos: Vector2 = Vector2.ZERO
 var _shown_steer: float = 0.0
 var _shown_visual: StringName = &""
+var _shown_look: bool = false
 var _redraws: int = 0
 
 
@@ -186,6 +192,7 @@ func _draw() -> void:
 	var idle_a := Units.pct_to_frac(_controls.overlay_idle_alpha_pct)
 	_draw_gas_column(l, idle_a)
 	_draw_control(l.brake_rect, LABEL_BRAKE, hub.pedal_brake > 0.0, COLOR_HOT, idle_a, hub.pedal_brake)
+	_draw_look_back(l, idle_a)
 
 	var dot_r := _controls.overlay_dot_radius_px * _scale()
 	var edge := _hud.neon_border_px
@@ -266,6 +273,33 @@ func _draw_gas_column(l: ControlsLayout, idle_alpha: float) -> void:
 	_label(Rect2(cap.position.x, cap.position.y + font_px * 0.5, cap.size.x, cap.size.y),
 			LABEL_BOOST, boost_text)
 	_label(l.gas_rect, LABEL_GAS, accent if pressed else Color(COLOR_TEXT, idle_alpha))
+
+
+## LOOK BACK: a chamfered panel and edge, a down chevron (behind) over the label; the
+## accent fill and edge while held.
+func _draw_look_back(l: ControlsLayout, idle_alpha: float) -> void:
+	var r := l.look_rect
+	if not l.has(r):
+		return
+	var pressed := hub.look_pressed
+	var box := _box_pressed if pressed else _box_idle
+	box.bg_color = Color(COLOR_PANEL, 1.0 if pressed else idle_alpha)
+	draw_style_box(box, r)
+	if pressed:
+		_box_fill.bg_color = Color(accent, Units.pct_to_frac(_controls.overlay_ring_alpha_pct))
+		draw_style_box(_box_fill, r)
+	var w := _hud.neon_border_px
+	_chamfer(r, _hud.control_bevel_px)
+	draw_polyline(_poly, accent if pressed else Color(COLOR_LINE, idle_alpha), w, true)
+	var ink := accent if pressed else Color(COLOR_TEXT, idle_alpha)
+	var font_px := _controls.overlay_label_px * _scale()
+	var cx := r.get_center().x
+	var top := r.position.y + r.size.y * 0.5 - font_px
+	_chevron[0] = Vector2(cx - font_px * 0.5, top)
+	_chevron[1] = Vector2(cx, top + font_px * 0.5)
+	_chevron[2] = Vector2(cx + font_px * 0.5, top)
+	draw_polyline(_chevron, ink, w, true)
+	_label(Rect2(r.position.x, r.position.y + font_px * 0.5, r.size.x, r.size.y), LABEL_LOOK, ink)
 
 
 ## Faceted low-poly steering wheel: rim ring (quads between two n-gons), three spokes,
@@ -383,7 +417,7 @@ func _changed() -> bool:
 			or d.active != _shown_drag \
 			or (d.active and (d.anchor != _shown_anchor or d.thumb != _shown_thumb
 				or d.brake != _shown_drag_brake or d.steer != _shown_steer)) \
-			or hub.drag_visual != _shown_visual \
+			or hub.drag_visual != _shown_visual or hub.look_pressed != _shown_look \
 			or hub.gas_pressed != _shown_gas or hub.boost_pressed != _shown_boost \
 			or hub.pedal_brake != _shown_pedal_brake or hub.hold_brake != _shown_hold \
 			or (hub.hold_brake > 0.0 and hub.hold_pos != _shown_hold_pos)
@@ -395,6 +429,7 @@ func _changed() -> bool:
 		_shown_drag_brake = d.brake
 		_shown_steer = d.steer
 		_shown_visual = hub.drag_visual
+		_shown_look = hub.look_pressed
 		_shown_gas = hub.gas_pressed
 		_shown_boost = hub.boost_pressed
 		_shown_pedal_brake = hub.pedal_brake

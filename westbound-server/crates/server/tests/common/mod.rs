@@ -124,6 +124,22 @@ pub async fn start_with_tick_clock(
     serve(server, dir)
 }
 
+/// A server whose wall clock is `clock` (a `ManualClock`: expiries over real sockets).
+pub async fn start_with_clock(
+    tweak: impl FnOnce(&mut Config),
+    clock: Arc<dyn westbound_server::clock::Clock>,
+) -> TestServer {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = test_config(&dir);
+    tweak(&mut cfg);
+    cfg.validate().expect("tweaked test config is valid");
+    let pool = db::connect(&cfg.db).await.unwrap();
+    db::migrate(&pool).await.unwrap();
+    let state = AppState::with_clock(cfg, pool, clock).unwrap();
+    let server = Server::bind_state(state).await.unwrap();
+    serve(server, dir)
+}
+
 fn serve(server: Server, dir: TempDir) -> TestServer {
     let addr = server.local_addr();
     let metrics_addr = server.metrics_addr().unwrap();

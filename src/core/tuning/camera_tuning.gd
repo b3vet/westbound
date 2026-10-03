@@ -134,6 +134,20 @@ extends Resource
 @export var finale_swing_look_ahead_m: float = 6.0   # not in spec
 @export var finale_swing_ease_frac: float = 0.3   # not in spec
 
+@export_group("Look back")
+## Look back (owner request, 2026-10-03; docs/CONTROLS.md → Look back): while the player
+## holds it, every mode shows one rear view: the eye look_back_ahead_m in front of the car
+## and look_back_height_m up, looking back past the car (the player's car low in the
+## frame) at a point look_back_look_behind_m behind it, look_back_look_height_m up, with
+## look_back_fov_deg. Blends in and out over look_back_blend_s (0 = a cut both ways).
+## View only: it never touches the car, traffic or scoring.
+@export var look_back_ahead_m: float = 6.5   # not in spec
+@export var look_back_height_m: float = 3.0   # not in spec
+@export var look_back_look_behind_m: float = 22.0   # not in spec
+@export var look_back_look_height_m: float = 0.6   # not in spec
+@export var look_back_fov_deg: float = 62.0   # not in spec
+@export var look_back_blend_s: float = 0.0   # not in spec: a cut, like a glance in the mirror
+
 @export_group("Menu attract")
 ## The title's attract drive (WP8.5, spec Cameras → Scripted cameras → Menu: "a slow
 ## drive-by of the selected car on the road"; docs/RUN.md → Title and attract). The car

@@ -18,6 +18,61 @@ extends RefCounted
 ##
 ## Nobody kicks themselves or changes their own role.
 
+## A crew invite waiting for this player (`GET /crews/invites`, or the live
+## `lobby_event.crew_invite`): accepted with `POST /crews/invites/{id}/accept` (the
+## join-by-code checks), declined with `/decline`. docs/SERVER.md → Crew invites.
+class Invite:
+	var invite_id: String = ""
+	var crew_id: String = ""
+	var crew_name: String = ""
+	var crew_tag: String = ""
+	## 0 when unknown (a live event carries no size).
+	var member_count: int = 0
+	var max_members: int = 0
+	var from_account: String = ""
+	## `name#1234` of the member who sent it ("" when unknown).
+	var from_name: String = ""
+	## Unix seconds (0 when unknown).
+	var expires_at: int = 0
+
+	## "Night Riders [NR]".
+	func crew_text() -> String:
+		return "%s [%s]" % [crew_name, crew_tag] if not crew_tag.is_empty() else crew_name
+
+	## From the API's JSON (null without an invite id).
+	static func from_dict(v: Variant) -> Invite:
+		if not (v is Dictionary):
+			return null
+		var d: Dictionary = v
+		var inv := Invite.new()
+		inv.invite_id = NetApiResult.as_id(d.get("invite_id"))
+		if inv.invite_id.is_empty():
+			return null
+		inv.crew_id = NetApiResult.as_id(d.get("crew_id"))
+		inv.crew_name = NetSocialPlayer._str(d.get("crew_name"))
+		inv.crew_tag = NetSocialPlayer._str(d.get("crew_tag"))
+		inv.member_count = NetSocialPlayer._int(d.get("member_count"))
+		inv.max_members = NetSocialPlayer._int(d.get("max_members"))
+		inv.expires_at = NetSocialPlayer._int(d.get("expires_at"))
+		var from := NetSocialPlayer.from_dict(d.get("from"))
+		if from != null:
+			inv.from_account = from.account_id
+			inv.from_name = from.full_name
+		return inv
+
+	## From `lobby_event.crew_invite` (vector JSON; `now_unix` + `expires_in_s`).
+	static func from_event(msg: Dictionary, now_unix: int) -> Invite:
+		var inv := Invite.new()
+		inv.invite_id = String(msg.get("invite_id", ""))
+		inv.crew_name = String(msg.get("crew_name", ""))
+		inv.crew_tag = String(msg.get("crew_tag", ""))
+		var from: Dictionary = msg.get("from", {})
+		inv.from_account = String(from.get("account_id", ""))
+		inv.from_name = "%s#%04d" % [String(from.get("display_name", "")), int(from.get("name_tag", 0))]
+		inv.expires_at = now_unix + int(msg.get("expires_in_s", 0))
+		return inv
+
+
 const OWNER := "owner"
 const OFFICER := "officer"
 const MEMBER := "member"

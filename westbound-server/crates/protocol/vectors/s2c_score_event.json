@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "direction": "server_to_client",
   "type": "score_event",
   "type_id": 75,

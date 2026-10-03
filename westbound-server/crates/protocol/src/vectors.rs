@@ -426,6 +426,12 @@ pub fn client_samples() -> Vec<(&'static str, ClientMsg)> {
         ("room_leave", lobby(LobbyCommand::RoomLeave(Empty {}))),
         ("quick_join", lobby(LobbyCommand::QuickJoin(Empty {}))),
         ("room_browse", lobby(LobbyCommand::RoomBrowse(Empty {}))),
+        (
+            "room_invite",
+            lobby(LobbyCommand::RoomInvite(AccountRef {
+                account_id: AccountId(9_007_199_254_740_993),
+            })),
+        ),
         ("typical", ClientMsg::PlayerState(state_typical())),
         ("max", ClientMsg::PlayerState(state_max())),
         ("min", ClientMsg::PlayerState(state_min())),
@@ -742,6 +748,40 @@ pub fn server_samples() -> Vec<(&'static str, ServerMsg)> {
             "room_left",
             lobby_ev(LobbyEvent::RoomLeft(RoomLeft {
                 reason: RoomLeftReason::Kicked,
+            })),
+        ),
+        (
+            "room_invite",
+            lobby_ev(LobbyEvent::RoomInvite(RoomInvite {
+                from: ident(42, "Dusty", 1_234),
+                room_id: 12,
+                code: code("ABC234"),
+                visibility: Visibility::Private,
+                players: 3,
+                max_players: 8,
+                expires_in_s: 120,
+            })),
+        ),
+        (
+            "room_invite_edges",
+            lobby_ev(LobbyEvent::RoomInvite(RoomInvite {
+                from: ident(MAX_ACCOUNT_ID, "東京ドリフト", 9_999),
+                room_id: u32::MAX,
+                code: code("ZZZZZZ"),
+                visibility: Visibility::Public,
+                players: MAX_ROOM_PLAYERS,
+                max_players: MAX_ROOM_PLAYERS,
+                expires_in_s: u16::MAX,
+            })),
+        ),
+        (
+            "crew_invite",
+            lobby_ev(LobbyEvent::CrewInvite(CrewInvite {
+                invite_id: AccountId(9_007_199_254_740_993),
+                crew_tag: CrewTag("NR".to_owned()),
+                crew_name: Text("Gece Sürücüleri".to_owned()),
+                from: ident(77, "Zoë", 7),
+                expires_in_s: 604_800,
             })),
         ),
         (
@@ -1523,6 +1563,23 @@ fn invalid_file() -> InvalidFile {
                 type_id::LOBBY_COMMAND,
                 &lobby_cmd_body(&LobbyCommand::PartyInvite(AccountRef {
                     account_id: AccountId(u64::MAX),
+                })),
+            ),
+            "out_of_range",
+        ),
+        v(
+            "room_invite_players_over_16",
+            s,
+            raw(
+                type_id::LOBBY_EVENT,
+                &lobby_body(&LobbyEvent::RoomInvite(RoomInvite {
+                    from: ident(1, "abc", 1),
+                    room_id: 1,
+                    code: code("ABC234"),
+                    visibility: Visibility::Private,
+                    players: MAX_ROOM_PLAYERS + 1,
+                    max_players: 8,
+                    expires_in_s: 1,
                 })),
             ),
             "out_of_range",

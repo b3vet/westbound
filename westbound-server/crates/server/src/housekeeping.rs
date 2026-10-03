@@ -13,6 +13,7 @@
 //! - **The daily pass** (`housekeeping.time_utc`, after the nightly backup; also
 //!   `admin housekeeping`): deletes, in batches of `batch_rows` with a pause between them,
 //!   `shadow_contacts` rows, `admin_log` rows and handled reports past their retention,
+//!   expired crew invites,
 //!   leaderboard entries of Daily Drive days and Journey weeks that ended long ago, and runs
 //!   that hold no entry any more; prunes the dated backups to their count and ages out
 //!   other copies (manual backups, restore leftovers, stray `.tmp`); removes an expired
@@ -209,6 +210,8 @@ pub struct DailyReport {
     pub reports: u64,
     pub leaderboard_entries: u64,
     pub runs: u64,
+    /// Expired crew invites.
+    pub crew_invites: u64,
     /// Dated backups beyond `backup.retention_days`, and other copies aged out.
     pub backups_removed: u64,
     pub other_files_removed: u64,
@@ -228,12 +231,14 @@ impl DailyReport {
             .map_or("no".to_string(), |(b, a)| format!("{b}->{a}"));
         format!(
             "shadow_contacts={} admin_log={} reports={} leaderboard_entries={} runs={} \
-             backups_removed={} other_files_removed={} handover_removed={} vacuum={vacuum} errors={}",
+             crew_invites={} backups_removed={} other_files_removed={} handover_removed={} \
+             vacuum={vacuum} errors={}",
             self.shadow_contacts,
             self.admin_log,
             self.reports,
             self.leaderboard_entries,
             self.runs,
+            self.crew_invites,
             self.backups_removed,
             self.other_files_removed,
             self.handover_removed,
@@ -249,6 +254,7 @@ impl DailyReport {
             ("reports", self.reports),
             ("leaderboard_entries", self.leaderboard_entries),
             ("runs", self.runs),
+            ("crew_invites", self.crew_invites),
         ] {
             m.count_deleted(table, n);
         }
@@ -513,6 +519,19 @@ pub async fn run_daily(db: &SqlitePool, cfg: &Config, now: i64) -> DailyReport {
     match prune_runs(db, h, now).await {
         Ok(n) => r.runs = n,
         Err(e) => r.errors.push(format!("pruning runs: {e}")),
+    }
+    // Expired crew invites (every read ignores them already; no retention to configure).
+    match delete_batches(
+        db,
+        h,
+        "DELETE FROM crew_invites WHERE id IN
+           (SELECT id FROM crew_invites WHERE expires_at <= ?1 LIMIT ?2)",
+        now,
+    )
+    .await
+    {
+        Ok(n) => r.crew_invites = n,
+        Err(e) => r.errors.push(format!("pruning crew invites: {e}")),
     }
     prune_files(cfg, now, &mut r);
     match prune_handover(&cfg.db.path, now).await {

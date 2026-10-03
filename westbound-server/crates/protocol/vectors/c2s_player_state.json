@@ -1,5 +1,5 @@
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "direction": "client_to_server",
   "type": "player_state",
   "type_id": 4,

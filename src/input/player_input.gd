@@ -25,6 +25,15 @@ extends Node
 ## the same way (proportional to its height on the pedal) and switches to gas only
 ## when clearly on the gas column.
 ##
+## Look back (owner request, 2026-10-03): held while a finger is on the LOOK BACK button
+## (above the gas column; captured until it lifts, so gas and look back can be held at
+## once with two fingers), B or gamepad B is held, or the right stick is pushed back.
+## Emits look_back_changed and Events.look_back_changed on each change; never while the
+## tree is paused. View only (the camera rig listens): no VehicleInput field changes.
+##
+## A boost edge left over from a menu (gamepad A presses the focused button and is also
+## boost) is dropped when a countdown starts.
+##
 ## Per-event and per-tick code allocates nothing (packed per-finger arrays sized once).
 
 signal camera_cycle_requested()
@@ -33,6 +42,8 @@ signal mute_toggled()
 ## The high beams were switched (plan D8: a manual toggle, visual only; it never
 ## touches scoring or traffic). Also relayed on Events.high_beam_changed.
 signal high_beam_changed(on: bool)
+## Look back started (true) or ended (false). Also relayed on Events.look_back_changed.
+signal look_back_changed(on: bool)
 
 const DRAG := ControlsLayout.DRAG
 const GYRO := ControlsLayout.GYRO
@@ -120,6 +131,10 @@ var boost_pressed: bool = false
 var pedal_brake: float = 0.0
 var hold_brake: float = 0.0
 var hold_pos: Vector2 = Vector2.ZERO
+## A finger holds the LOOK BACK button (the overlay lights it).
+var look_pressed: bool = false
+## Look back in effect (touch, key, button or right stick; never while paused).
+var look_back: bool = false
 
 var _boost_pending: bool = false
 var _screen_set: bool = false
@@ -169,11 +184,22 @@ func _enter_tree() -> void:
 	add_to_group(GROUP)
 	if not Events.settings_changed.is_connected(_on_setting_changed):
 		Events.settings_changed.connect(_on_setting_changed)
+	if not Events.game_state_changed.is_connected(_on_game_state_changed):
+		Events.game_state_changed.connect(_on_game_state_changed)
 
 
 func _exit_tree() -> void:
 	if Events.settings_changed.is_connected(_on_setting_changed):
 		Events.settings_changed.disconnect(_on_setting_changed)
+	if Events.game_state_changed.is_connected(_on_game_state_changed):
+		Events.game_state_changed.disconnect(_on_game_state_changed)
+	_set_look_back(false)
+
+
+## A run's countdown starts: no boost left over from the menus (gamepad A is also boost).
+func _on_game_state_changed(_from: StringName, to: StringName) -> void:
+	if to == Game.COUNTDOWN:
+		_boost_pending = false
 
 
 func _notification(what: int) -> void:
@@ -292,10 +318,12 @@ func release_all() -> void:
 	boost_pressed = false
 	pedal_brake = 0.0
 	hold_brake = 0.0
+	look_pressed = false
 	_boost_pending = false
 	steer = 0.0
 	throttle = 0.0
 	brake = 0.0
+	_set_look_back(false)
 
 
 ## One physics tick: ramps, filters, then the combined outputs.
@@ -357,6 +385,7 @@ func handle_key_event(event: InputEvent) -> void:
 
 func _handle_keys(event: InputEvent) -> void:
 	var edges := keys.handle_event(event)
+	_update_look_back()
 	if edges == 0:
 		return
 	if edges & KeysGamepad.EDGE_BOOST and not get_tree().paused:
@@ -394,6 +423,8 @@ func _down(slot: int, pos: Vector2, time_s: float) -> void:
 		ControlsLayout.Zone.BRAKE:
 			_flicks[slot].start(pos, time_s)
 			_set_pedal_brake(slot, pos)
+		ControlsLayout.Zone.LOOK:
+			pass   # held until it lifts, wherever it slides
 	_refresh_touch_state()
 
 
@@ -478,8 +509,11 @@ func _refresh_touch_state() -> void:
 	var boost := false
 	var pb := 0.0
 	var hb := 0.0
+	var look := false
 	for i in SLOTS:
 		match _zone[i]:
+			ControlsLayout.Zone.LOOK:
+				look = true
 			ControlsLayout.Zone.GAS:
 				gas = true
 				if _in_cap[i] == 1:
@@ -494,6 +528,22 @@ func _refresh_touch_state() -> void:
 	boost_pressed = boost
 	pedal_brake = pb
 	hold_brake = hb
+	look_pressed = look
+	_update_look_back()
+
+
+## Look back from every source; emits on a change.
+func _update_look_back() -> void:
+	var paused := is_inside_tree() and get_tree().paused
+	_set_look_back((look_pressed or keys.look_back) and not paused)
+
+
+func _set_look_back(on: bool) -> void:
+	if on == look_back:
+		return
+	look_back = on
+	look_back_changed.emit(on)
+	Events.look_back_changed.emit(on)
 
 
 # ---------------------------------------------------------------- Layout

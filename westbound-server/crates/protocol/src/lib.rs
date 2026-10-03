@@ -24,9 +24,16 @@ pub mod vectors;
 mod proptests;
 
 /// Wire protocol version, sent in `Hello` and `Welcome`. Bumped on any wire change.
-pub const PROTOCOL_VERSION: u16 = 1;
-/// Oldest client protocol this build accepts (see `handshake`).
+/// Version 2 (room and crew invites) added `lobby_command.room_invite` and
+/// `lobby_event.room_invite` / `crew_invite` (docs/PROTOCOL.md §6).
+pub const PROTOCOL_VERSION: u16 = 2;
+/// Oldest client protocol this build accepts (see `handshake`). Version 1 clients keep
+/// working: version 2 only added union kinds, and the server never sends a version 2 kind
+/// to a session that said version 1 in its `Hello` ([`INVITES_PROTOCOL_VERSION`]).
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: u16 = 1;
+/// First protocol version whose clients decode `lobby_event.room_invite` and
+/// `lobby_event.crew_invite`. Older sessions are never sent either.
+pub const INVITES_PROTOCOL_VERSION: u16 = 2;
 /// Largest frame (one WebSocket message) in either direction: 16 KB.
 pub const MAX_FRAME_LEN: usize = 16 * 1024;
 /// `[u8 type][u16 length]`.

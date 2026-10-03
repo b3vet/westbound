@@ -17,9 +17,10 @@ Every layout produces the same `VehicleInput`: `steer` −1..1 (+ right), `throt
 | `src/input/gravity_source.gd` | `GravitySource`: where tilt comes from (native `Input.get_gravity()`), screen-frame rotation |
 | `src/input/web_motion_source.gd` | `WebMotionSource`: the web build's own `devicemotion` bridge and iOS permission |
 | `src/input/throttle_input.gd` | `ThrottleInput`: auto/manual throttle, brake priority, brake-pedal mapping |
-| `src/input/keys_gamepad.gd` | `KeysGamepad`: runtime input actions, key ramp, stick and triggers, edge keys |
+| `src/input/keys_gamepad.gd` | `KeysGamepad`: runtime input actions, key ramp, stick and triggers, edge keys, look back (B, pad B, right stick back) |
+| `src/ui/pad_nav.gd` | `PadNav`: gamepad and keyboard navigation of every menu (focus, A / B, LB / RB tabs, the left stick and repeats); see [Menus with a gamepad](#menus-with-a-gamepad) |
 | `src/input/controls_layout.gd` | `ControlsLayout`: where each touch control sits (hit-testing and drawing share it) |
-| `src/ui/controls_overlay.gd/.tscn` | `ControlsOverlay`: anchor ring and thumb dot or the steering wheel, the joined gas + boost control, the brake pedal |
+| `src/ui/controls_overlay.gd/.tscn` | `ControlsOverlay`: anchor ring and thumb dot or the steering wheel, the joined gas + boost control, the brake pedal, the LOOK BACK button |
 | `src/input/dev/input_preview.tscn` | Dev scene: raw and mapped values per source, layout, visual and size buttons, the overlay |
 | `src/input/dev/controls_snap.tscn` | Snap wrapper: the real drive scene (`car_drive.tscn`) with a scripted layout and fingers, for phone-size screenshots |
 
@@ -30,7 +31,9 @@ class_name PlayerInput extends Node          # one per run; group PlayerInput.GR
 signal camera_cycle_requested()               # C / gamepad Y / request_camera_cycle() (HUD button)
 signal pause_requested()                      # P / Esc / gamepad Start
 signal mute_toggled()                         # M
+signal look_back_changed(on: bool)            # look back held / let go (also Events.look_back_changed)
 var steer: float; var throttle: float; var brake: float
+var look_back: bool                           # B / pad B / right stick back / the LOOK BACK button; never while paused
 func consume_boost() -> bool                  # edge: true once per request
 func set_layout(steering_mode: StringName, throttle_mode: StringName, left_handed: bool) -> void
 func use_settings() -> void                   # follow Settings again (the default)
@@ -56,6 +59,7 @@ func _init(hub: PlayerInput) -> void          # update() copies the hub; allocat
 | **Drag** | Drag zone = whole screen. One thumb: left/right steers, down brakes, flick up boosts | Drag zone = left half. The gas column bottom-right (gas pedal with the boost cap on top), the brake pedal beside it, inward |
 | **Gyro** | Tilt steers. Touch and hold anywhere brakes; swipe up boosts | Brake pedal bottom-left, the gas column bottom-right |
 
+- **LOOK BACK (owner request, 2026-10-03).** A hold button just above the gas column in every layout (the auto layouts put it where the gas column's cap would be): see [Look back](#look-back).
 - **Gas column (plan D9).** One thumb per side: the boost cap sits directly on top of the gas pedal, same width, as one joined control (see [Gas and boost](#gas-and-boost-one-thumb)). There is no separate boost button in any layout.
 - **Left-handed** mirrors every rect across the safe area's centre (the manual drag zone is the other half, from the middle to the safe area's side).
 - **Safe areas.** Pedals sit inside the safe area (`ScreenInsets.canvas_safe_rect`: the engine's `DisplayServer.get_display_safe_area()` or, on the web, the page's insets; converted to canvas pixels), with `controls_margin_cm` (0.4) to its edge. WP9.7: on a phone the left inset is at least `min_left_inset_cm` (0.7 cm; with the margins, clear of the Dynamic Island / camera cutout), and the **drag zone spans the safe area's width** (full height): a thumb landing under the cutout does not steer. The drag visual (ring and dot, or the wheel) is drawn shifted sideways just enough to stay inside the safe width (`ControlsLayout.drag_visual_offset`); the anchor and the steering stay under the thumb. The gyro hold zone stays the whole screen. docs/WEB.md → Landscape only (also: the rotated portrait web page and its gyro angle).
@@ -68,6 +72,7 @@ func _init(hub: PlayerInput) -> void          # update() copies the hub; allocat
 | Brake (`brake_width_cm` × `brake_height_cm`) | 1.2 × 1.8 | 1.3 wide column (drag), 2.2 × 2.6 (gyro) |
 | Gap gas ↔ brake (`controls_gap_cm`, drag + manual) | 0.3 | 0.3 |
 | Margin to the safe-area edge (`controls_margin_cm`, not scaled) | 0.4 | 0.5 |
+| LOOK BACK (`look_back_width_cm` × `look_back_height_cm`), `look_back_gap_cm` above the cap | 1.3 × 0.9, 0.35 gap; never above 100 % | new |
 
   The scale also applies to the gap, the capture and re-arm distances, the ring, dot, wheel and labels. The margin stays, so the controls stay in the corner.
 - **Physical scale.** Native mobile uses `DisplayServer.screen_get_dpi()`, converted from window to canvas pixels. On web and desktop the DPI is unknown or in CSS inches, which are not physical on phones, so the canvas height is taken to be `fallback_screen_height_cm` (6.8 cm, a phone in landscape). The snaps therefore show the phone proportions.
@@ -142,6 +147,8 @@ Plan D9 (owner, M2: "a single finger for a single side"). Per finger (touch slot
 - **Mixing.** The larger magnitude of keyboard and stick wins. The same rule then applies between touch steering and keys/pad.
 - **Triggers.** Analog, with the same dead zone: RT = gas, LT = brake.
 - **Edges.** Shift or A = boost, C or Y = camera, P, Esc or Start = pause, M = mute.
+- **Look back.** Hold B (keyboard) or gamepad B, or push the right stick down (back) past `gamepad_look_back_stick_pct` (60 %); it lets go below `gamepad_look_back_release_pct` (40 %). See [Look back](#look-back).
+- **Every pad.** Each gamepad binding matches every device (`KeysGamepad.ALL_DEVICES`, the InputMap's all-devices id). The stick and triggers are read from any device too. See [Web gamepad](#web-gamepad).
 
 ### Settings
 
@@ -167,8 +174,58 @@ Plan D9 (owner, M2: "a single finger for a single side"). Per finger (touch slot
 | `wb_pause` | P, Esc, gamepad Start |
 | `wb_mute` | M |
 | `wb_high_beam` | H, gamepad X (high beams on/off: `toggle_high_beam()`, visual only) |
+| `wb_look_back` | physical B, gamepad B (held; the right stick is read by axis) |
+| `wb_tab_prev` / `wb_tab_next` | PageUp / PageDown, gamepad LB / RB (menus: the top row of tabs) |
+| `wb_room_menu` | gamepad View / Back (rooms: opens or closes the room menu) |
+| `ui_accept` (engine's, plus) | gamepad A |
+| `ui_cancel` (engine's, plus) | gamepad B |
+| `ui_up` / `ui_down` / `ui_left` / `ui_right` (engine's) | the engine's D-pad bindings stay; its left-stick axes are removed (PadNav turns the stick into presses) |
+
+Every gamepad event above is bound with device −1 (all devices); `register_actions()` also widens any older device-0 binding of a `wb_*` action. `PadNav.register_actions()` (called from `KeysGamepad.register_actions()` and `PadNav._ready`) adds the `ui_*` and menu bindings.
 
 WASD are physical keys (the same positions on AZERTY and similar layouts). The left stick X and both triggers are read by axis (`JOY_AXIS_LEFT_X`, `JOY_AXIS_TRIGGER_RIGHT`, `JOY_AXIS_TRIGGER_LEFT`) to stay analog.
+
+## Look back
+
+Owner request (2026-10-03): "a look back button especially when playing online to see my crew members, it can be placed just above the gas pedal."
+
+- **Input.** `PlayerInput.look_back` is true while any source holds it: a finger on the LOOK BACK button (touch), B (keyboard), gamepad B, or the right stick pushed back. Never while the tree is paused (the pause edge releases everything). Each change emits `PlayerInput.look_back_changed` and `Events.look_back_changed(active)`.
+- **Touch.** `ControlsLayout.look_rect`, `Zone.LOOK`: centred over the gas column, `look_back_gap_cm` above its boost cap, `look_back_width_cm` × `look_back_height_cm`, mirrored for left hands, inside the safe area. It hit-tests before every other zone (in drag + auto it is carved out of the drag zone). It is sized by `controls_scale` up to 100 % only; with large controls it gets shorter (down to `look_back_min_height_cm`), then closer to the cap (down to `look_back_min_gap_cm`), rather than start less than `look_back_top_clear_cm` (2.45 cm) from the safe area's top, where the HUD's lives and buttons and the achievement toast sit. A look-back finger is captured until it lifts (it slides anywhere without turning into gas), and it has its own touch slot (TouchSlots), so the right thumb holds the gas while another finger holds LOOK BACK. The HUD keeps clear of it like a pedal (`HudLayout.pedal_rects`).
+- **Camera.** `CameraRig` listens to `Events.look_back_changed` (`set_look_back()`). Every mode (chase, far, hood, overhead, cockpit) shows one rear view: the eye `look_back_ahead_m` (6.5 m) ahead of the car and `look_back_height_m` (3 m) up, looking back past the car at a point `look_back_look_behind_m` (22 m) behind it, `look_back_look_height_m` up, at `look_back_fov_deg` (62°). The player's car sits low in the frame and the cars and crewmates behind are in view; the room's nametags project through the same camera, so they show over them. A cut both ways by default (`look_back_blend_s` = 0; a positive value blends the pose and FOV), with the physics interpolation reset. The springs keep following underneath, so letting go restores the mode's pose exactly. In the cockpit, the cockpit steps aside and the car's body shows while looking back. Ignored during the title's attract drive (and invisible during the crash cinematic, which has its own camera). Known limit: the world keeps road meshes `chunk_keep_behind_m` (150 m) and roadside props `roadside_behind_m` (60 m) behind the car, so the far roadside in the rear view is bare (RoadTuning; raising them costs draw calls and memory).
+- **View only.** Nothing the simulation reads changes: `VehicleInput` is the same (`tests/input/test_look_back.gd`), and a whole run with look back toggled has the same `Run.trace_hash` trace as one without (`tests/integration/test_look_back_determinism.gd`). No `client_build` bump.
+- **Overlay.** A chamfered panel like the pedals, a down chevron ("behind") over LOOK BACK; the accent fill and edge while held.
+
+## Menus with a gamepad
+
+Owner request (2026-10-03): play the web build with an Xbox controller. `PadNav` (one per run, the run's first child) does it for every screen with no per-screen code; it works on `ScreenButton`s, which are focusable (`FOCUS_ALL`) and draw an accent ring `FOCUS_GAP` px outside their edge while they hold *visible* focus.
+
+| Pad | Keys | In menus |
+| --- | --- | --- |
+| D-pad, left stick | arrows | move the focus to the nearest button that way (the first press shows the focus on the screen's default button) |
+| A | Enter, Space | press the focused button (with no focus: the screen's own Enter, e.g. PLAY) |
+| B | Esc | back: the screen's own handler (hub BACK, pause: account → settings → menu → resume, results → MENU, lobby / room menu close, garage / achievements DONE), else the scope's BACK / CLOSE / CANCEL / NOT NOW / NO / DONE button |
+| LB / RB | PageUp / PageDown | the scope's top row of tabs (settings pages, account / friends / crew, room menu tabs; the garage and achievements their own) |
+| Start | P, Esc | pause / resume (in a run) |
+| View / Back | | the room menu (in a room) |
+
+- **Scope.** The `ScreenButton`s a pointer could press now: visible, enabled, taking touches (the results' skip guard counts), not in a closing screen, not under a later sibling that takes touches over them (a modal panel such as the room lobby over the hub), in the highest CanvasLayer that has any. The focus never leaves it. A scope is navigated only inside a `RunScreen` with `pad_focus` (the garage and the achievements set it false: their arrows step items and tabs) or a modal panel (a Control taking touches over most of the screen, like the room menu). The gameplay HUD's buttons (the room HUD's ROOM and REJOIN CREW) never take the focus, so A stays boost while driving.
+- **Default focus.** `RunScreen.pad_default_focus()`, else the scope's PRIMARY button (PLAY, LOOP PRACTICE, RESUME, RETRY, DRIVE, DONE), else the top-left one.
+- **Following.** While the pad or the keys drive the menus (`PadNav.active`), a screen that opens gets its default focus within `SCAN_S` (0.1 s), and a focus left under a new modal panel moves into it. A touch or a click ends that: the focus goes, as before. A tap or click never leaves focus behind on a `ScreenButton` (the engine gives clicks a hidden focus; the button lets go of it), so keys after a tap reach the screens exactly as before.
+- **Stick and repeats.** The left stick becomes four directions with hysteresis (`pad_nav_stick_pct` 50 %, released below `pad_nav_release_pct` 30 %), each a synthesized `ui_*` press (an `InputEventAction`), so a screen's own handler sees the stick like the D-pad. A held D-pad direction or stick repeats after `pad_nav_repeat_delay_s` (0.4 s), then every `pad_nav_repeat_s` (0.12 s).
+- **A in a menu is also boost.** A boost edge left from a menu press is dropped when a countdown starts (`PlayerInput`), so PLAY or RETRY on A never launches the run with a boost.
+- **Crash.** A skips the crash like a tap or a key.
+- **Text fields.** While a LineEdit has focus, keys go to it (arrows move the caret, Esc is the field's); the pad still moves the focus.
+
+## Web gamepad
+
+Finding (2026-10-03, an Xbox controller on macOS Chrome / Safari): the engine side works; the game's bindings did not.
+
+1. **Godot 4.7's web joypads.** `library_godot_input.js` lists pads from `navigator.getGamepads()` and adds one on `gamepadconnected` (browsers report a pad only after its first button press), with Godot's device id = the browser's `Gamepad.index`. A pad with `mapping == "standard"` (Chrome and Safari give an Xbox pad that mapping) maps through the controller DB's `standard` entry: A b0, B b1, X b2, Y b3, LB b4, RB b5, View b8, Start b9, the D-pad b12–b15, the sticks a0–a3, and the triggers (b6, b7) as `JOY_AXIS_TRIGGER_LEFT/RIGHT` with values 0..1.
+2. **What was broken.** Every `wb_*` gamepad binding was made with `InputEventJoypadButton.new()`, whose `device` is 0, and an InputMap event with device 0 only matches device 0. A browser's first pad is not always index 0 (a reconnect, a second pad, another HID game device on the Mac), and then A, Y, X and Start did nothing (the stick and triggers, read by axis, still worked). And the menus could not be driven by a pad: `ui_accept` and `ui_cancel` have no gamepad buttons in 4.7 (only the D-pad and the left stick are on the engine's `ui_*` directions), and every `ScreenButton` was `FOCUS_NONE`, so the D-pad had nothing to move and a pad could not even start a run from the title.
+3. **Fixed.** All-device bindings (above), `PadNav` and focusable `ScreenButton`s; the game prints `pad: connected <device> <name> (mapped | unknown mapping)` when a pad arrives (the browser console shows what the pad reported).
+4. **Checked in headless Chromium.** `node tools/web_smoke/smoke.mjs --gamepad` (docs/WEB.md): a fake standard-mapping Xbox pad at index 1 connects at the title; the game reports it, a D-pad press shows the focus on PLAY, A starts a run (DRIVE first on a fresh save's chooser), RT and the stick drive, Start pauses with RESUME focused, B resumes.
+
+**Owner check (Mac, Xbox controller, web build):** press a pad button once on the title (the browser lists the pad only then), D-pad to a button, A; Start pauses, B backs out, hold B (or push the right stick down) to look back.
 
 ## Overlay
 
@@ -243,7 +300,8 @@ The layouts' own feel dynamics (80 ms release, 60 ms gyro filter, 0.15 s key ram
 
 - **Flick:** the measurement window (40 ms) and the one-boost-per-flick re-arm (50%).
 - **Gyro:** the sensor-present threshold (2 m/s²).
-- **Gamepad:** the stick/trigger dead zone (12%), and Start = pause.
+- **Gamepad:** the stick/trigger dead zone (12%), and Start = pause; the menu bindings (A / B / D-pad / LB / RB / View), the stick's menu thresholds and repeats (`pad_nav_*`), and look back on B and the right stick (`gamepad_look_back_*`).
+- **Look back:** the button's size, gap and clearances (`look_back_*` in ControlsTuning), the rear view's pose, FOV and blend (`look_back_*` in CameraTuning), keyboard B.
 - **Screen:** the fallback screen height (6.8 cm) when the DPI is unknown.
 - **Pedals:** sizes, margins, gaps, the brake pedal's 20% floor at its bottom edge, the joined gas + boost column with its capture (0.6 cm) and re-arm (0.25 cm) distances (plan D9).
 - **Look settings:** `controls_scale` (0.6–1.6) and `drag_visual` = ring | wheel (plan D10), with the wheel's size (2.4 cm), max angle (135°), facets and proportions.

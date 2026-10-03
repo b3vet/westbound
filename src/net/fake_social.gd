@@ -13,6 +13,8 @@ extends NetFakeAccounts
 ##   set_presence(id, status, room_id, joinable)
 ##   make_crew(owner, name, tag) -> crew id, add_member(crew, id, role)
 ##   crew_scores[crew_id] = season score (the Loop crew board)
+##   add_crew_invite(crew, to, from) -> invite id; crew_invites (each: id, crew, account,
+##   inviter, created_at, expires_at); crew_invite_ttl_s, crew_max_pending_invites
 ##   reports (each: reporter, target, reason, context), caps (max_friends, ...)
 ## Profanity: NetFakeAccounts.blocked substrings also reject crew names and tags.
 
@@ -31,6 +33,8 @@ var max_incoming_requests: int = 100
 var max_blocks: int = 500
 var crew_max_members: int = 16
 var reports_per_day: int = 10
+var crew_invite_ttl_s: int = 7 * S_PER_DAY
+var crew_max_pending_invites: int = 32
 
 ## {id, a, b, requester, status ("pending"/"accepted"), created_at, accepted_at}
 var friendships: Array[Dictionary] = []
@@ -45,10 +49,14 @@ var crew_members: Dictionary = {}
 ## crew id -> Loop crew season score (0 / absent: not on the board)
 var crew_scores: Dictionary = {}
 var reports: Array[Dictionary] = []
+## Crew invites (docs/SERVER.md → Crew invites): {id, crew, account, inviter, created_at,
+## expires_at}.
+var crew_invites: Array[Dictionary] = []
 
 var _next_request: int = 1
 var _next_crew: int = 1
 var _next_report: int = 1
+var _next_invite: int = 1
 var _code_serial: int = 0
 
 
@@ -99,6 +107,19 @@ func make_crew(owner: String, crew_name: String, crew_tag: String) -> String:
 func add_member(crew_id: String, id: String, role: String = "member") -> void:
 	now_s += 1.0
 	crew_members[id] = {"crew": crew_id, "role": role, "joined_at": int(now_s)}
+
+
+## A crew invite from `from` to `to` (no checks); its id.
+func add_crew_invite(crew_id: String, to: String, from: String) -> String:
+	var id := str(_next_invite)
+	_next_invite += 1
+	for row in crew_invites:
+		if row["crew"] == crew_id and row["account"] == to:
+			crew_invites.erase(row)
+			break
+	crew_invites.append({"id": id, "crew": crew_id, "account": to, "inviter": from,
+			"created_at": int(now_s), "expires_at": int(now_s) + crew_invite_ttl_s})
+	return id
 
 
 func full_name_of(id: String) -> String:
@@ -358,6 +379,8 @@ func _crews(me: String, method: int, parts: PackedStringArray, b: Dictionary) ->
 		return _ok(200, _crew_view(String((crew_members[me] as Dictionary)["crew"]), me))
 	if parts.size() == 2 and parts[1] == "join" and post:
 		return _join_crew(me, b)
+	if parts.size() >= 2 and parts[1] == "invites":
+		return _my_invites(me, method, parts)
 	if parts.size() < 2:
 		return _err(404, "not_found")
 	var crew_id := parts[1]
@@ -374,6 +397,11 @@ func _crews(me: String, method: int, parts: PackedStringArray, b: Dictionary) ->
 			return _err(403, "not_permitted")
 		_disband(crew_id)
 		return NetHttpResponse.make(204)
+	if parts.size() == 3 and parts[2] == "invites":
+		if method == HTTPClient.METHOD_GET:
+			return _ok(200, {"invites": _sent_invites(crew_id)})
+		if post:
+			return _invite(me, crew_id, b)
 	if parts.size() != 3 or not post:
 		return _err(404, "not_found")
 	match parts[2]:
@@ -432,7 +460,109 @@ func _join_crew(me: String, b: Dictionary) -> NetHttpResponse:
 	if _members_of(found).size() >= crew_max_members:
 		return _err(409, "crew_full")
 	add_member(found, me)
+	_drop_invites(found, me)
 	return _ok(200, _crew_view(found, me))
+
+
+# ---------------------------------------------------------------- Crew invites
+
+func _live_invite(row: Dictionary) -> bool:
+	return int(row["expires_at"]) > int(now_s) and not _blocked_either(String(row["account"]),
+			String(row["inviter"]))
+
+
+func _invite(me: String, crew_id: String, b: Dictionary) -> NetHttpResponse:
+	var v: Variant = b.get("account_id")
+	if not (v is String):
+		return _err(400, "invalid_body")
+	var target := String(v)
+	if target == me:
+		return _err(400, "cannot_invite_self")
+	if not accounts.has(target):
+		return _err(404, "player_not_found")
+	var row := _row_between(me, target)
+	if row.is_empty() or row["status"] != "accepted" or _blocked_either(me, target):
+		return _err(403, "not_friends")
+	var tm: Dictionary = crew_members.get(target, {})
+	if not tm.is_empty() and tm["crew"] == crew_id:
+		return _err(409, "already_member")
+	if _members_of(crew_id).size() >= crew_max_members:
+		return _err(409, "crew_full")
+	var renewed := false
+	var pending := 0
+	for r in crew_invites:
+		if r["crew"] != crew_id or int(r["expires_at"]) <= int(now_s):
+			continue
+		if r["account"] == target:
+			renewed = true
+		else:
+			pending += 1
+	if pending >= crew_max_pending_invites:
+		return _err(409, "crew_invites_limit")
+	var id := add_crew_invite(crew_id, target, me)
+	var inv := crew_invites[crew_invites.size() - 1]
+	return _ok(200 if renewed else 201, {"invite_id": id, "player": _player(target), "from": _player(me),
+			"created_at": inv["created_at"], "expires_at": inv["expires_at"]})
+
+
+func _sent_invites(crew_id: String) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for r in crew_invites:
+		if r["crew"] == crew_id and int(r["expires_at"]) > int(now_s) and accounts.has(r["account"]):
+			out.append({"invite_id": r["id"], "player": _player(String(r["account"])),
+					"from": _player_or_null(String(r["inviter"])),
+					"created_at": r["created_at"], "expires_at": r["expires_at"]})
+	return out
+
+
+func _my_invites(me: String, method: int, parts: PackedStringArray) -> NetHttpResponse:
+	if parts.size() == 2 and method == HTTPClient.METHOD_GET:
+		var out: Array[Dictionary] = []
+		for i in range(crew_invites.size() - 1, -1, -1):
+			var r := crew_invites[i]
+			if r["account"] != me or not _live_invite(r) or not crews.has(r["crew"]):
+				continue
+			var cr: Dictionary = crews[r["crew"]]
+			out.append({"invite_id": r["id"], "crew_id": r["crew"], "crew_name": cr["name"],
+					"crew_tag": cr["tag"], "member_count": _members_of(String(r["crew"])).size(),
+					"max_members": crew_max_members,
+					"from": _player_or_null(String(r["inviter"])),
+					"created_at": r["created_at"], "expires_at": r["expires_at"]})
+		return _ok(200, {"invites": out})
+	if parts.size() != 4 or method != HTTPClient.METHOD_POST:
+		return _err(404, "not_found")
+	var row := {}
+	for r in crew_invites:
+		if r["id"] == parts[2] and r["account"] == me:
+			row = r
+	match parts[3]:
+		"decline":
+			if row.is_empty():
+				return _err(404, "invite_not_found")
+			crew_invites.erase(row)
+			return NetHttpResponse.make(204)
+		"accept":
+			if row.is_empty() or not _live_invite(row) or not crews.has(row["crew"]):
+				return _err(404, "invite_not_found")
+			var crew_id := String(row["crew"])
+			if crew_members.has(me):
+				if (crew_members[me] as Dictionary)["crew"] == crew_id:
+					crew_invites.erase(row)
+					return _ok(200, _crew_view(crew_id, me))
+				return _err(409, "already_in_crew")
+			if _members_of(crew_id).size() >= crew_max_members:
+				return _err(409, "crew_full")
+			add_member(crew_id, me)
+			_drop_invites(crew_id, me)
+			return _ok(200, _crew_view(crew_id, me))
+	return _err(404, "not_found")
+
+
+func _drop_invites(crew_id: String, account: String) -> void:
+	for i in range(crew_invites.size() - 1, -1, -1):
+		var r := crew_invites[i]
+		if r["crew"] == crew_id and (account.is_empty() or r["account"] == account):
+			crew_invites.remove_at(i)
 
 
 func _leave(me: String, crew_id: String) -> Dictionary:
@@ -488,6 +618,7 @@ func _member_action(me: String, role: String, crew_id: String, action: String,
 
 
 func _disband(crew_id: String) -> void:
+	_drop_invites(crew_id, "")
 	for id in _members_of(crew_id):
 		crew_members.erase(id)
 	crews.erase(crew_id)
@@ -523,6 +654,9 @@ func _crew_view(crew_id: String, me: String) -> Dictionary:
 		members.append(m)
 	var mine: Dictionary = crew_members.get(me, {})
 	var member: bool = not mine.is_empty() and mine["crew"] == crew_id
+	for m in members:
+		# Presence for the viewer's own crew (room invites list online crewmates).
+		m["status"] = _presence_of(String(m["account_id"]))["status"] if member else null
 	return {"crew_id": crew_id, "name": cr["name"], "tag": cr["tag"], "owner_id": cr["owner"],
 			"created_at": cr["created_at"], "member_count": ids.size(), "max_members": crew_max_members,
 			"invite_code": cr["code"] if member else null, "your_role": mine["role"] if member else null,
@@ -585,6 +719,12 @@ func _report(me: String, b: Dictionary) -> NetHttpResponse:
 
 
 # ---------------------------------------------------------------- Helpers
+
+func _player_or_null(id: String) -> Variant:
+	if accounts.has(id):
+		return _player(id)
+	return null
+
 
 func _player(id: String) -> Dictionary:
 	var acc: Dictionary = accounts[id]

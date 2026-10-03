@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO crew_invites (crew_id, account_id, inviter_id, created_at, expires_at)\n           VALUES (?, ?, ?, ?, ?)\n           ON CONFLICT (crew_id, account_id) DO UPDATE\n             SET inviter_id = excluded.inviter_id, created_at = excluded.created_at,\n                 expires_at = excluded.expires_at\n           RETURNING id AS \"id!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_invites",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f1d2043f0e610df499f170cd1034e40f3254880845ea3f1f1a590afa3972b658"
+}

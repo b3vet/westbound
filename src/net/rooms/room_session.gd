@@ -27,6 +27,12 @@ extends RefCounted
 ## while `accept_follows`), and a dropped lobby connection reconnecting while the server
 ## holds the party place. Spec: Rooms, parties and matchmaking → Parties.
 ##
+## Protocol 2 (docs/ROOMS_CLIENT.md → Room invites): `room_invite(account_id)` invites an
+## online friend or crewmate to the room this client is seated in (a refusal arriving within
+## `room_invite_answer_s` is its answer: `room_invite_failed`); a `lobby_event.room_invite`
+## lands in `room_invites` (`room_invited`), accepted by joining its code. Spec: Rooms,
+## parties and matchmaking → Private rooms, Friends and presence; the owner's request.
+##
 ## Placements (PROTOCOL.md §12): the server puts this client's own id in player_states with
 ## run_state `protected`; each placement tick is taken once (has_placement / take_placement)
 ## and the client teleports there. Everyone else's states go to `remotes`.
@@ -65,6 +71,12 @@ signal party_left(reason: String, message: String)
 ## N9.3: a refused lobby command outside a join (party commands, a party move that could
 ## not follow): the protocol's error code and the player text.
 signal lobby_error(code: String, message: String)
+## Protocol 2: a friend or crewmate invited this player to their room (`room_invites`).
+signal room_invited(invite: NetRoomInvites.Invite)
+## Protocol 2: the room invites changed (one came, was answered or expired).
+signal room_invites_changed()
+## Protocol 2: the server refused this client's `room_invite` (its detail is the reason).
+signal room_invite_failed(code: String, message: String)
 
 enum State { IDLE, CONNECTING, LOBBY, JOINING, IN_ROOM, RECONNECTING, FAILED }
 enum Request { NONE, QUICK_JOIN, CREATE, CODE, ID, BROWSE }
@@ -100,6 +112,9 @@ const _TEXT := {
 }
 ## Error codes that answer party commands, never a join in progress.
 const PARTY_ERRORS: Array[String] = ["party_not_found", "party_full", "blocked"]
+## Error codes that can answer a `room_invite` (docs/SERVER.md → Room invites).
+const INVITE_ERRORS: Array[String] = ["not_allowed", "rate_limited", "not_in_room", "room_full",
+		"internal"]
 
 var tuning: NetTuning
 var client: NetClient
@@ -138,12 +153,18 @@ var traffic_streamed: bool = false
 var last_frame_bytes: int = 0
 ## N9.3: the party and the invites waiting for an answer.
 var party := NetParty.new()
+## Protocol 2: room invites waiting for an answer.
+var room_invites := NetRoomInvites.new()
+## Room invites this client sent (stats, tests).
+var room_invites_sent: int = 0
 ## N9.3: a room snapshot this client did not ask for while in the lobby is a party move
 ## (the leader took the party to a room): taken as a join when true (the hub sets it while
 ## it shows), else that seat is left again.
 var accept_follows: bool = false
 
 var _pending_lobby: Array[Dictionary] = []
+## A refusal before this time (usec) answers the last `room_invite` (0 = none waiting).
+var _invite_answer_until_us: int = 0
 ## Party place held by the server: a dropped lobby connection retries until this time
 ## (0 = not retrying).
 var _lobby_retry_until_us: int = 0
@@ -262,6 +283,37 @@ func decline_invite(code: String) -> void:
 	party.drop_invite(code)
 	if party.version != v:
 		party_changed.emit()
+
+
+# ---------------------------------------------------------------- Room invites (protocol 2)
+
+## Invites an online friend or crewmate to the room this client is seated in. False (and
+## nothing sent) outside a room. A refusal comes back as `room_invite_failed`.
+func room_invite(account_id: String) -> bool:
+	if state != State.IN_ROOM or not client.is_ready() or account_id.is_empty():
+		return false
+	var err := client.send_messages([{"type": "lobby_command", "kind": "room_invite",
+		"account_id": account_id}])
+	if err != "":
+		room_invite_failed.emit(err, text_for(err))
+		return false
+	room_invites_sent += 1
+	_invite_answer_until_us = time.now_usec() + roundi(tuning.room_invite_answer_s * USEC_PER_S)
+	return true
+
+
+## Declining a room invite needs no message: it is forgotten here.
+func decline_room_invite(code: String) -> void:
+	var v := room_invites.version
+	room_invites.drop(code)
+	if room_invites.version != v:
+		room_invites_changed.emit()
+
+
+## Accepts a room invite: the join by its code (the same join as a typed code or a link).
+func accept_room_invite(code: String) -> void:
+	decline_room_invite(code)
+	join_code(code)
 
 
 ## Opens the lobby connection without a request (the party panel, presence).
@@ -499,6 +551,8 @@ func set_muted(player_id: int, on: bool) -> void:
 func poll() -> void:
 	client.poll()
 	var now := time.now_usec()
+	if not room_invites.is_empty() and room_invites.expire(float(now) / USEC_PER_S):
+		room_invites_changed.emit()
 	if _party_check:
 		# The Welcome's frame carried no party_state: the server has no party for us.
 		_party_check = false
@@ -668,9 +722,16 @@ func _lost(now: int) -> void:
 		left.emit(client.failure_reason, client.failure_message)
 
 
-func _on_server_error(code: String, fatal: bool, _detail: String) -> void:
+func _on_server_error(code: String, fatal: bool, detail: String) -> void:
 	if fatal:
 		return   # NetClient fails; poll() sees it
+	if _invite_answer_until_us > 0 and INVITE_ERRORS.has(code) and state == State.IN_ROOM:
+		# Protocol 2: the answer to this client's room_invite (the server's detail says why).
+		var answered := time.now_usec() <= _invite_answer_until_us
+		_invite_answer_until_us = 0
+		if answered:
+			room_invite_failed.emit(code, detail if not detail.is_empty() else text_for(code))
+			return
 	if PARTY_ERRORS.has(code) or (state != State.JOINING and state != State.RECONNECTING):
 		# N9.3: a party command's refusal, or a party move that could not follow.
 		lobby_error.emit(code, text_for(code))
@@ -770,6 +831,11 @@ func _on_message(msg: Dictionary) -> void:
 						tuning.party_invites_max)
 					party_changed.emit()
 					party_invited.emit(inv)
+				"room_invite":
+					var rinv := room_invites.add(msg, float(time.now_usec()) / USEC_PER_S,
+						tuning.room_invites_max)
+					room_invites_changed.emit()
+					room_invited.emit(rinv)
 		"run_result":
 			if state == State.IN_ROOM:
 				run_result.emit(msg)

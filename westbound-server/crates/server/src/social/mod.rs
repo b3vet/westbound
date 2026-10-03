@@ -10,6 +10,9 @@
 //! - `reports`: player reports with the per-account daily limit.
 //! - `parties` (N9.3): in-memory parties (create, join, invite, leave, kick, the leader
 //!   moving the party between rooms, member holds on disconnect).
+//! - `room_invites` (protocol 2): the in-memory side of inviting a friend or crewmate to
+//!   your room (the per-sender limit, the invites still showing).
+//! - `crews` also holds crew invites (persistent: `crew_invites`).
 //!
 //! This module holds the shared reads: [`friend_ids`] (the friends board view and presence),
 //! [`crew_of`] / [`crew_snapshot`] (the Loop crew board, N6's multiplayer runs),
@@ -20,6 +23,7 @@ pub mod crews;
 pub mod friends;
 pub mod parties;
 pub mod reports;
+pub mod room_invites;
 
 use std::collections::HashMap;
 
@@ -87,6 +91,34 @@ pub async fn is_blocked(conn: &mut SqliteConnection, a: i64, b: i64) -> sqlx::Re
     .fetch_one(conn)
     .await?;
     Ok(n > 0)
+}
+
+/// Room invites (protocol 2): whether `a` may invite `b`: `b` is an accepted friend or in
+/// the same crew, and neither blocked the other (spec: "a blocked player ... cannot invite
+/// you"; blocking also removes the friendship, but not a shared crew).
+pub async fn can_invite(conn: &mut SqliteConnection, a: i64, b: i64) -> sqlx::Result<bool> {
+    let (lo, hi) = (a.min(b), a.max(b));
+    let friends = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "n!: i64" FROM friends
+           WHERE account_a = ? AND account_b = ? AND status = 'accepted'"#,
+        lo,
+        hi
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    let crewmates = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "n!: i64" FROM crew_members m1
+           JOIN crew_members m2 ON m2.crew_id = m1.crew_id
+           WHERE m1.account_id = ? AND m2.account_id = ?"#,
+        a,
+        b
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if friends == 0 && crewmates == 0 {
+        return Ok(false);
+    }
+    Ok(!is_blocked(conn, a, b).await?)
 }
 
 /// Whether `blocker` blocked `target` (one direction).
@@ -266,6 +298,8 @@ pub struct SocialDeleteReport {
     pub crew_transferred: bool,
     /// The account was its crew's last member, so the crew was disbanded.
     pub crew_disbanded: bool,
+    /// Crew invites to the account, and the ones it sent.
+    pub crew_invites: u64,
     /// Reports filed by or about the account: kept, with that side nulled.
     pub reports_kept: u64,
 }
@@ -273,6 +307,7 @@ pub struct SocialDeleteReport {
 /// The social part of an account deletion, inside its transaction (`accounts::delete`),
 /// after the account's leaderboard entries are gone:
 /// - friendships and requests, and blocks both ways, are deleted;
+/// - crew invites to the account and the ones it sent are deleted;
 /// - the crew membership goes. A crew the account owned passes to its longest-standing
 ///   officer, else its longest-standing member, and is disbanded when nobody is left; the
 ///   crew's Loop crew score for the current season is recomputed without the account;
@@ -295,6 +330,13 @@ pub async fn on_account_delete(
         .rows_affected(),
         blocks: sqlx::query!(
             "DELETE FROM blocks WHERE account_id = ?1 OR blocked_id = ?1",
+            account_id
+        )
+        .execute(&mut *conn)
+        .await?
+        .rows_affected(),
+        crew_invites: sqlx::query!(
+            "DELETE FROM crew_invites WHERE account_id = ?1 OR inviter_id = ?1",
             account_id
         )
         .execute(&mut *conn)

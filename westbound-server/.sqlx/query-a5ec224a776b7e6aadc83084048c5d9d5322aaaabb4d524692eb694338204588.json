@@ -1,0 +1,105 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.id AS \"id!: i64\", i.crew_id, i.inviter_id, i.created_at, i.expires_at,\n                  c.name, c.tag,\n                  (SELECT COUNT(*) FROM crew_members m WHERE m.crew_id = i.crew_id) AS \"members!: i64\"\n           FROM crew_invites i JOIN crews c ON c.id = i.crew_id\n           WHERE i.account_id = ?1 AND i.expires_at > ?2\n             AND NOT EXISTS (SELECT 1 FROM blocks b\n                             WHERE (b.account_id = ?1 AND b.blocked_id = i.inviter_id)\n                                OR (b.account_id = i.inviter_id AND b.blocked_id = ?1))\n           ORDER BY i.created_at DESC, i.id DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_invites",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "crew_id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_invites",
+            "name": "crew_id"
+          }
+        }
+      },
+      {
+        "name": "inviter_id",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_invites",
+            "name": "inviter_id"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_invites",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "crew_invites",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "name",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "crews",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "tag",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "crews",
+            "name": "tag"
+          }
+        }
+      },
+      {
+        "name": "members!: i64",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a5ec224a776b7e6aadc83084048c5d9d5322aaaabb4d524692eb694338204588"
+}
