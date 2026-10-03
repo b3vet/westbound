@@ -75,6 +75,7 @@ func _init() -> void:
 	super._init()
 	name = "Garage"
 	modal = true
+	pad_focus = false   # the arrows (D-pad, stick) step items and tabs themselves
 	dim = ColorRect.new()
 	dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(dim)
@@ -414,6 +415,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed(&"ui_up") or event.is_action_pressed(&"ui_down"):
 		get_viewport().set_input_as_handled()
 		show_tab(posmod(int(tab) + (-1 if event.is_action_pressed(&"ui_up") else 1), TAB_TEXTS.size()))
+	elif event.is_action_pressed(PadNav.TAB_PREV) or event.is_action_pressed(PadNav.TAB_NEXT):
+		get_viewport().set_input_as_handled()
+		show_tab(posmod(int(tab) + (-1 if event.is_action_pressed(PadNav.TAB_PREV) else 1), TAB_TEXTS.size()))
 
 
 # ---------------------------------------------------------------- Dev (snaps)

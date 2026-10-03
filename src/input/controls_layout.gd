@@ -16,6 +16,9 @@ extends RefCounted
 ##   gyro + auto    hold zone = the whole screen: touch and hold brakes, swipe up boosts
 ##   gyro + manual  brake pedal bottom-left, the gas column bottom-right
 ##   left-handed    every rect mirrored across the safe area's centre
+##   look back      (every layout; owner request 2026-10-03) a hold button just above
+##                  the gas column, as wide as it (the auto layouts: the same spot);
+##                  it takes a finger landing on it before any other zone
 ##
 ## Rects are in canvas pixels, inside the safe area. Sizes come from ControlsTuning in
 ## physical cm, converted with px_per_cm (DPI or the fallback, see PlayerInput), and
@@ -24,7 +27,7 @@ extends RefCounted
 ## camera cutout on the left does not start a drag; drag_visual_offset() keeps the
 ## anchor ring or the wheel inside it too (ScreenInsets: the phone minimum on the left).
 
-enum Zone { NONE, DRAG, HOLD, GAS, BRAKE, BOOST }
+enum Zone { NONE, DRAG, HOLD, GAS, BRAKE, BOOST, LOOK }
 
 const DRAG := &"drag"
 const GYRO := &"gyro"
@@ -46,6 +49,8 @@ var brake_rect: Rect2 = Rect2()
 var boost_rect: Rect2 = Rect2()
 ## The joined gas control: gas pedal + boost cap.
 var gas_control: Rect2 = Rect2()
+## The LOOK BACK hold button, above the gas column (every layout).
+var look_rect: Rect2 = Rect2()
 ## A pedal finger switches pedals only this far outside its own control (canvas px).
 var capture_px: float = 0.0
 ## Below the cap by this much before sliding up boosts again (canvas px).
@@ -67,6 +72,7 @@ func build(tuning: ControlsTuning, full_rect: Rect2, safe_rect: Rect2, pixels_pe
 	brake_rect = Rect2()
 	boost_rect = Rect2()
 	gas_control = Rect2()
+	look_rect = Rect2()
 
 	var manual := throttle == ThrottleInput.MANUAL
 	var cm := px_per_cm * scale
@@ -80,6 +86,17 @@ func build(tuning: ControlsTuning, full_rect: Rect2, safe_rect: Rect2, pixels_pe
 	var right := safe.end.x - margin
 	var bottom := safe.end.y - margin
 
+	# LOOK BACK: above where the gas column's cap sits (also in the auto layouts), at
+	# most its 100 % size; with large controls it gets shorter, then closer to the cap
+	# (down to its minimums), rather than reach into the HUD's top band above it.
+	var look_cm := px_per_cm * minf(scale, 1.0)
+	var look := Vector2(tuning.look_back_width_cm, tuning.look_back_height_cm) * look_cm
+	var look_gap := tuning.look_back_gap_cm * look_cm
+	var cap_top := bottom - pedal.y - cap_h
+	var room := cap_top - (safe.position.y + tuning.look_back_top_clear_cm * px_per_cm)
+	look.y = clampf(room - look_gap, tuning.look_back_min_height_cm * look_cm, look.y)
+	look_gap = clampf(room - look.y, tuning.look_back_min_gap_cm * look_cm, look_gap)
+	look_rect = Rect2(right - pedal.x + (pedal.x - look.x) * 0.5, cap_top - look_gap - look.y, look.x, look.y)
 	if manual:
 		gas_rect = Rect2(right - pedal.x, bottom - pedal.y, pedal.x, pedal.y)
 		boost_rect = Rect2(gas_rect.position.x, gas_rect.position.y - cap_h, pedal.x, cap_h)
@@ -100,12 +117,15 @@ func build(tuning: ControlsTuning, full_rect: Rect2, safe_rect: Rect2, pixels_pe
 		gas_rect = _mirror(gas_rect)
 		brake_rect = _mirror(brake_rect)
 		boost_rect = _mirror(boost_rect)
+		look_rect = _mirror(look_rect)
 	if has(gas_rect):
 		gas_control = gas_rect.merge(boost_rect)
 
 
 ## Which control a touch landing at `pos` belongs to. Buttons and pedals first.
 func zone_at(pos: Vector2) -> Zone:
+	if _hit(look_rect, pos):
+		return Zone.LOOK
 	if _hit(boost_rect, pos):
 		return Zone.BOOST
 	if _hit(gas_rect, pos):

@@ -20,7 +20,7 @@ WP9.2 (plan Phase 9: "web build polish (gyro decision, load time)"). Spec: *Plat
 | `src/platform/web_ui_probe.gd` (`WebUiProbe`) | WP9.7: with `?probe=ui`, prints the visible menu buttons (canvas px) for the smoke test's tap on PLAY. |
 | `tools/export_web.sh` | Exports, then writes `music/<track>.pck` (when needed), `version.json` and the shell's build id and font; prints the engine template used, sizes and the transfer to the title. `--template=auto\|slim\|official` (WP9.9, [Slim engine](#slim-engine)). |
 | `tools/web_template/` | WP9.9: the slim engine template: `build.sh` (pinned build), `westbound.gdbuild` + `detect_classes.gd` (class profile and the check), `verify.sh` + `probe.mjs` + `web_probe.gd`, `web_names.gd`, `web_net.gd` (official vs slim in Chromium), `removed_classes.txt`, `ci_gate.sh` ([Slim engine](#slim-engine)). |
-| `tools/web_smoke/smoke.mjs` | The headless-Chromium smoke test, plus timings, transfer, memory, the audio-unlock test, the caching checks and (WP9.7) phone emulation: `--portrait` / `--landscape` / `--device`, `--tap-play`. |
+| `tools/web_smoke/smoke.mjs` | The headless-Chromium smoke test, plus timings, transfer, memory, the audio-unlock test, the caching checks and (WP9.7) phone emulation: `--portrait` / `--landscape` / `--device`, `--tap-play`; `--gamepad` (a fake standard-mapping pad drives the menus and a run). |
 | `tools/web_smoke/layout_test.mjs` | WP9.7: the shell's rotation math in node (the smoke runs it first; `tests/platform/test_web_layout.gd` runs it when node is installed). |
 | `tools/web_smoke/pck_list.py` | Lists a `.pck` by group and file, raw and gzip. |
 | `tests/platform/test_web_audio.gd` | Unit tests: the unlock state machine, the music hold, the node, the `GameAudio` hook, the music packs (queue, mount, failure). |
@@ -37,6 +37,7 @@ node tools/web_smoke/smoke.mjs --stale                        # custom shell: a 
 node tools/web_smoke/smoke.mjs --portrait --dpr 1             # iPhone 14 portrait: rotated, a tap on PLAY starts a run
 node tools/web_smoke/smoke.mjs --landscape --dpr 1 --audio-loops 60   # drive 60 s: engine/wind loops never pause, stall or restart past their end (docs/AUDIO.md → Loops on the web)
 node tools/web_smoke/smoke.mjs --landscape --dpr 1            # iPhone 14 landscape: not rotated, the same tap
+node tools/web_smoke/smoke.mjs --gamepad                        # a fake Xbox pad (index 1): D-pad + A start a run, Start pauses, B resumes (docs/CONTROLS.md → Web gamepad)
 ```
 
 `--gzip` serves every file gzip-encoded, as GitHub Pages does (checked: Pages sends `content-encoding: gzip` for `.wasm`, `.pck`, `.js` and `.html`, never brotli, with `cache-control: max-age=600`). `--network` uses Chrome DevTools' throttling (`wifi` 30 Mbps / 20 ms, `4g` 9 Mbps / 60 ms, `slow4g` 1.6 Mbps / 150 ms, or `<Mbps>,<rtt ms>`). The timings are page times from navigation start:

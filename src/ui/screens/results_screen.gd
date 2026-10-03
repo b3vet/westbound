@@ -416,9 +416,15 @@ func xp_note_text(max_w: float) -> String:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if visible and accepting and event.is_action_pressed(&"ui_accept"):
+	if not visible or not accepting:
+		return
+	if event.is_action_pressed(&"ui_accept"):
 		get_viewport().set_input_as_handled()
 		retry.emit()
+	elif event.is_action_pressed(&"ui_cancel"):
+		# B / Esc: MENU (the title), as the pad's way out.
+		get_viewport().set_input_as_handled()
+		menu.emit()
 
 
 func _set_shown(v: float) -> void:

@@ -27,6 +27,10 @@ var reduced_motion: bool = false
 ## Modal screens (pause, results, crash) take every touch while open, so nothing reaches
 ## the game under them; they let go the moment they start closing.
 var modal: bool = false
+## Gamepad / keys (PadNav, docs/CONTROLS.md → Menus with a gamepad): false for a screen
+## that takes the arrows itself (the garage steps items, the achievements switch tabs), so
+## no focus moves there; its own ui_* handling does it all.
+var pad_focus: bool = true
 
 var _tweens: Array[Tween] = []
 var _open: bool = false
@@ -80,6 +84,12 @@ func _layout() -> void:
 
 func is_open() -> bool:
 	return _open
+
+
+## The button the pad's focus starts on when this screen is the scope (null: PadNav picks
+## the PRIMARY button, else the top-left one).
+func pad_default_focus() -> Control:
+	return null
 
 
 ## Shows the screen with its entry transition.

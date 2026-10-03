@@ -233,6 +233,19 @@ func _ready() -> void:
 	_relayout()
 
 
+## Gamepad View / Back (PadNav.ROOM_MENU; owner request 2026-10-03): opens the room menu
+## (the pad then moves through it; B closes it), or closes it. The HUD's ROOM button
+## itself never takes the pad's focus (A is boost while driving).
+func _unhandled_input(event: InputEvent) -> void:
+	if not event.is_action_pressed(PadNav.ROOM_MENU) or not room_button.is_visible_in_tree():
+		return
+	get_viewport().set_input_as_handled()
+	if menu.is_open():
+		menu.close()
+	else:
+		menu.open()
+
+
 ## The run (the strip's sector marks; REJOIN CREW only while driving).
 func bind_run(r: Run) -> void:
 	run = r

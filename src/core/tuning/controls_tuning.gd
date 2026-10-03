@@ -29,6 +29,17 @@ extends Resource
 @export_group("Gamepad")
 ## Stick and trigger dead zone; the stick then uses the shared response curve.
 @export var gamepad_dead_zone_pct: float = 12.0   # not in spec: typical stick rest noise
+## Look back from the right stick: pushed down (back) past this share of its travel looks
+## back; it lets go below the release share (hysteresis, no flicker at the threshold).
+@export var gamepad_look_back_stick_pct: float = 60.0   # not in spec
+@export var gamepad_look_back_release_pct: float = 40.0   # not in spec
+## Menus: the left stick moves the focus like the D-pad once past this share of its
+## travel, and counts as released below the release share.
+@export var pad_nav_stick_pct: float = 50.0   # not in spec
+@export var pad_nav_release_pct: float = 30.0   # not in spec
+## Menus: a held D-pad direction or stick repeats after this delay, then at this period.
+@export var pad_nav_repeat_delay_s: float = 0.4   # not in spec
+@export var pad_nav_repeat_s: float = 0.12   # not in spec
 
 @export_group("Screen")
 ## When the screen DPI is unknown (web, desktop, bogus value), the canvas height is
@@ -64,6 +75,20 @@ extends Resource
 ## Brake pedal: a touch at the pedal's bottom edge brakes this much, rising to 100% at
 ## the top ("proportional to how far up the pedal the thumb sits").
 @export var pedal_brake_min_pct: float = 20.0   # not in spec: the bottom edge still brakes
+## The LOOK BACK hold button (owner request, 2026-10-03): just above the gas column, the
+## same width, this gap above the boost cap (in every layout: where the gas column sits
+## in the manual layouts, the same spot in the auto ones). Held = the rear view.
+@export var look_back_width_cm: float = 1.3   # not in spec: as wide as the gas column
+@export var look_back_height_cm: float = 0.9   # not in spec
+@export var look_back_gap_cm: float = 0.35   # not in spec: clear of a thumb on the boost cap
+## The button never grows past its 100 % size, and with large controls it gets shorter
+## (down to look_back_min_height_cm), then closer to the cap (down to
+## look_back_min_gap_cm), rather than start closer than look_back_top_clear_cm
+## to the safe area's top: the HUD's lives and buttons up there and the achievement
+## toast under them (125 % text: 2.42 cm on a 6.8 cm canvas, with the pedal clearance).
+@export var look_back_top_clear_cm: float = 2.45   # not in spec: the HUD's top-right block
+@export var look_back_min_height_cm: float = 0.6   # not in spec
+@export var look_back_min_gap_cm: float = 0.15   # not in spec
 
 @export_group("Player settings")
 ## Sensitivity, dead zone and curve settings are multipliers of the tuned values,
@@ -140,3 +165,19 @@ func pedal_brake_min_frac() -> float:
 
 func wheel_visual_max_rad() -> float:
 	return deg_to_rad(wheel_visual_max_deg)
+
+
+func gamepad_look_back_frac() -> float:
+	return Units.pct_to_frac(gamepad_look_back_stick_pct)
+
+
+func gamepad_look_back_release_frac() -> float:
+	return Units.pct_to_frac(gamepad_look_back_release_pct)
+
+
+func pad_nav_stick_frac() -> float:
+	return Units.pct_to_frac(pad_nav_stick_pct)
+
+
+func pad_nav_release_frac() -> float:
+	return Units.pct_to_frac(pad_nav_release_pct)

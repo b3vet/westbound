@@ -249,7 +249,20 @@ func _ready() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not visible or settings_open:
+	if not visible or not is_open():
+		return
+	# B / Esc goes back one level: the account to the settings, the settings to the menu,
+	# the menu resumes (Esc also toggles the pause through the hub).
+	if event.is_action_pressed(&"ui_cancel"):
+		get_viewport().set_input_as_handled()
+		if settings_open and account_open:
+			toggle_account()
+		elif settings_open:
+			close_settings()
+		else:
+			resume.emit()
+		return
+	if settings_open:
 		return
 	if event.is_action_pressed(&"ui_accept"):
 		get_viewport().set_input_as_handled()

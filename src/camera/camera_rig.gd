@@ -69,6 +69,16 @@ extends Node3D
 ## The car's body always shows (the cockpit steps aside), and there is no shake.
 ## Reduced motion (WP9.3) ignores the shots: the rig holds the follow pose of
 ## CameraTuning.attract_reduced_motion_mode (chase) behind the car, with no cuts.
+##
+## Look back (owner request, 2026-10-03; docs/CONTROLS.md → Look back): while the player
+## holds it (Events.look_back_changed from the input hub, or set_look_back()), every mode
+## shows one rear view: the eye ahead of and above the car, looking back past it
+## (CameraTuning.look_back_*), so the cars and crewmates behind are in view (the room's
+## nametags project through this same camera). Blended by look_back_weight() over
+## look_back_blend_s; at 0 s it is a cut both ways (physics interpolation reset). The
+## springs keep following underneath, so release returns to the mode's pose exactly. In
+## the cockpit the car's body shows and the cockpit steps aside while looking back.
+## Ignored during the menu attract. View only, like everything here.
 
 ## Runs after the player car's physics tick (default priority 0).
 const PHYSICS_PRIORITY := 100
@@ -146,6 +156,14 @@ var _attract_look := Vector3.FORWARD
 var _attract_fov: float = 0.0
 var _attract_yaw: float = 0.0
 
+# Look back: held, and how far the view is into the rear pose (0..1).
+var _look_back: bool = false
+var _look_back_w: float = 0.0
+# The mode's pose of the last step, under the rear view (a cut back restores it).
+var _mode_xform := Transform3D.IDENTITY
+var _mode_cam_xform := Transform3D.IDENTITY
+var _mode_fov: float = 0.0
+
 
 func _ready() -> void:
 	if tuning == null:
@@ -180,6 +198,7 @@ func _ready() -> void:
 	Events.boost_started.connect(_on_boost_started)
 	Events.hit.connect(_on_hit)
 	Events.scored.connect(_on_scored)
+	Events.look_back_changed.connect(set_look_back)
 
 
 func _physics_process(delta: float) -> void:
@@ -361,6 +380,41 @@ func set_attract_view(eye: Vector3, look: Vector3, fov_deg: float, yaw_rad: floa
 		_cam.reset_physics_interpolation()
 
 
+## Look back on (the rear view) or off (the mode's view). A cut unless
+## CameraTuning.look_back_blend_s > 0. Ignored while the menu attract has the pose.
+func set_look_back(on: bool) -> void:
+	if on == _look_back:
+		return
+	_look_back = on
+	if tuning != null and tuning.look_back_blend_s > 0.0:
+		return   # advance() blends
+	_look_back_w = 1.0 if on else 0.0
+	_apply_cockpit_view()
+	if not _has_target() or _attract:
+		return
+	if on:
+		_mode_xform = global_transform
+		_mode_cam_xform = _cam.transform
+		_mode_fov = _fov_out
+		_apply_look_back()
+	else:
+		global_transform = _mode_xform
+		_cam.transform = _mode_cam_xform
+		_fov_out = _mode_fov
+		_cam.fov = _mode_fov
+	reset_physics_interpolation()
+	_cam.reset_physics_interpolation()
+
+
+func is_look_back() -> bool:
+	return _look_back
+
+
+## How far the view is into the rear view (0 = the mode's, 1 = looking back).
+func look_back_weight() -> float:
+	return 0.0 if _attract else _look_back_w
+
+
 ## Places everything at its goal with no spring lag (spawn, mode change, retry).
 func snap_to_target() -> void:
 	if not _has_target():
@@ -387,6 +441,12 @@ func advance(dt: float) -> void:
 		_finale_t += dt
 		if _finale_t >= tuning.finale_swing_s:
 			stop_finale()
+	var target := 1.0 if _look_back else 0.0
+	if _look_back_w != target:
+		var was_on := _look_back_w > 0.0
+		_look_back_w = move_toward(_look_back_w, target, dt / maxf(tuning.look_back_blend_s, dt))
+		if (_look_back_w > 0.0) != was_on:
+			_apply_cockpit_view()
 	_update(dt, false)
 
 
@@ -561,7 +621,7 @@ static func _relative_xform(ancestor: Node3D, n: Node3D) -> Transform3D:
 ## Shows the cockpit and hides the target's body in cockpit mode; restores otherwise.
 ## G4: a model with its own Interior shows that (and its body) instead.
 func _apply_cockpit_view() -> void:
-	var on := is_cockpit() and _has_target() and not _attract
+	var on := is_cockpit() and _has_target() and not _attract and look_back_weight() <= 0.0
 	var model := _model_of(_target) if on else null
 	var own := model != null and model.has_authored_interior()
 	if on and not own:
@@ -695,6 +755,35 @@ func _update(dt: float, snap: bool) -> void:
 		_apply_finale()
 	if _attract and not attract_still():
 		_apply_attract()
+	elif _look_back_w > 0.0:
+		_mode_xform = global_transform
+		_mode_cam_xform = _cam.transform
+		_mode_fov = _fov_out
+		_apply_look_back()
+
+
+## Blends the camera (this node and the Camera3D) toward the rear view by
+## look_back_weight(): the eye ahead of and above the car, looking back past it.
+func _apply_look_back() -> void:
+	var w := _look_back_w
+	var tp := _target.global_transform
+	var car := tp.origin
+	var psi := _heading.value
+	var fwd := Vector3(sin(psi), 0.0, -cos(psi))
+	var eye := car + fwd * tuning.look_back_ahead_m + Vector3.UP * tuning.look_back_height_m
+	var look := car - fwd * tuning.look_back_look_behind_m + Vector3.UP * tuning.look_back_look_height_m
+	var rear := Basis.looking_at(look - eye, Vector3.UP)
+	var fov := tuning.look_back_fov_deg
+	if w < 1.0:
+		var cur := global_transform * _cam.transform
+		var q := cur.basis.orthonormalized().get_rotation_quaternion().slerp(rear.get_rotation_quaternion(), w)
+		rear = Basis(q)
+		eye = cur.origin.lerp(eye, w)
+		fov = lerpf(_fov_out, fov, w)
+	global_transform = Transform3D(rear, eye)
+	_cam.transform = Transform3D.IDENTITY
+	_fov_out = fov
+	_cam.fov = fov
 
 
 ## The menu attract's pose (WP8.5): the eye looking at the look point, turned by the

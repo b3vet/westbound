@@ -284,7 +284,7 @@ func test_hud_node_follows_the_live_controls_layout() -> void:
 				Settings.set_value(&"controls_scale", scale)
 				hud.advance(1.0 / 60.0)
 				var pedals := HudLayout.pedal_rects(hub.layout)
-				eq(pedals.size(), 2 if throttle == PlayerInput.MANUAL else 0, "gas column + brake")
+				eq(pedals.size(), 3 if throttle == PlayerInput.MANUAL else 1, "gas column + brake + look back")
 				var areas: Array[Rect2] = []
 				areas.append_array(pedals)
 				areas.append_array(HudLayout.thumb_zone_rects(t.hud, full, hub.layout.px_per_cm))
